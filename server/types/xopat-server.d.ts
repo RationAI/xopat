@@ -220,6 +220,21 @@ declare namespace XOpatServer {
         // Identity. Never accept a principal from request input.
         resolvePrincipal(ctx: any): string;
         tryResolvePrincipal(ctx: any): string | null;
+
+        /**
+         * Roles from the VERIFIED token, per `core.roles`. `null` when there is
+         * no verified identity — distinct from `[]` ("signed in, no roles"),
+         * because only the first may fail a capability check closed.
+         *
+         * Prefer the declarative `policy.<method>.capabilities` key over calling
+         * these; reach for them when the answer depends on the record being
+         * touched rather than on the method alone. See src/USER_ROLES.md.
+         */
+        resolveRoles(ctx: any): string[] | null;
+        can(ctx: any, capabilityId: string): boolean;
+        explainCapability(ctx: any, capabilityId: string): {
+            ok: boolean; reason?: string; roles?: string[];
+        };
         requireRpcAuthContext(ctx: any, contextId: string): Promise<{
             contextId: string; matchedKey: string; user: any; principal: string;
         }>;

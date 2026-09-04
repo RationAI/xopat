@@ -9,6 +9,7 @@ const { pathToFileURL } = require("node:url");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
 const {getServerLogging} = require("./logging");
+const roles = require("./roles");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
@@ -889,6 +890,11 @@ class XopatServerRuntime {
             // sibling methods (e.g. buffered + streaming variants of one upstream
             // operation) share one slot pool instead of doubling it.
             concurrencyKey: runtime.concurrencyKey ?? rawPolicy.concurrencyKey,
+            // Role gate, declared per method. Absent on every existing method,
+            // which is the point: this cannot change the behaviour of anything
+            // that has not opted in. See server/node/roles.js.
+            capabilities: Array.isArray(rawPolicy.capabilities) ? rawPolicy.capabilities : null,
+            capabilitiesMode: rawPolicy.capabilitiesMode === "any" ? "any" : "all",
         };
 
         // Read the body only now: the method (and therefore its size limit) is
@@ -919,6 +925,27 @@ class XopatServerRuntime {
             { kind, item, method, contextId: readBodyField(body, "contextId") }
         );
         if (!authResult.ok) return;
+
+        // Capability gate. Deliberately AFTER authentication — a capability is a
+        // statement about a known caller, and answering "forbidden" to an
+        // anonymous request would tell them which methods exist. Deliberately
+        // BEFORE the concurrency gate and the handler, so a refused call costs
+        // no slot and touches no upstream.
+        if (policy.capabilities && policy.capabilities.length) {
+            const verdict = roles.checkCapabilities(
+                { user: authResult.user },
+                policy.capabilities,
+                policy.capabilitiesMode,
+                core,
+            );
+            if (!verdict.ok) {
+                this.rpcLog.warn(`${kind}/${item.id}/${method} refused: ${verdict.reason}`);
+                return this.#writeJson(res, 403, {
+                    error: "Forbidden",
+                    code: "RPC_CAP_DENIED",
+                });
+            }
+        }
 
         const methodKey = `${kind}/${item.id}/${method}`;
         const gateKey = policy.concurrencyKey ? `${kind}/${item.id}/${policy.concurrencyKey}` : methodKey;

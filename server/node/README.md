@@ -652,6 +652,43 @@ code drifted to `process.env`. Use `XOPAT_SERVER.getStaticModuleConfig(id)` /
 from the snapshot core republishes on every core build. Returns `{}` before the
 first build — treat that as "defaults", never as "configured empty".
 
+### Capability policy (roles)
+
+A method may declare the capabilities its caller must hold. This is the half of
+the roles system that is authorization rather than UI gating: the client decodes
+the token unverified, the server resolves the same `core.roles` rules from the
+token it has already verified.
+
+```js
+export const policy = {
+    deleteEverything: {
+        auth: { public: false, requireSession: true },
+        capabilities: ["myPlugin.crud:thing.delete"],
+        capabilitiesMode: "all",      // or "any"; default "all"
+    },
+};
+```
+
+Checked **after** authentication — a capability is a statement about a known
+caller, and answering "forbidden" to an anonymous request would enumerate
+methods — and **before** the concurrency gate, so a refused call costs no slot
+and reaches no upstream. Refusal is `403` with code `RPC_CAP_DENIED`.
+
+Two things worth knowing:
+
+- **Declaring nothing changes nothing.** Existing methods are untouched, which
+  is what makes this safe to add to a running deployment.
+- **It fails closed on identity.** A capability-declaring method with no verified
+  identity is refused, unlike the browser, which answers `true` for ids it does
+  not know so that one deployment's config cannot lock another's UI.
+
+For decisions that depend on the record being touched rather than the method,
+call `XOPAT_SERVER.resolveRoles(ctx)` / `XOPAT_SERVER.can(ctx, id)` in the
+handler. Resolution lives in `server/node/roles.js`, which borrows the browser's
+own resolver (`src/classes/user-roles-core.ts`) rather than copying it; the two
+are pinned together by `test/suites/unit/server-roles-parity.test.mjs`. Full
+spec: [`src/USER_ROLES.md`](../../src/USER_ROLES.md).
+
 ### Runtime policy API
 
 Each RPC method may optionally define a runtime section.

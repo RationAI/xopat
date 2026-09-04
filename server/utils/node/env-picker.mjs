@@ -110,7 +110,7 @@ async function askMany(ask, prompt, options) {
     console.log(`\n${c.bold(prompt)}`);
     render(options, { allowSkip: true });
     const answer = (await ask(c.dim("  [numbers, comma-separated, Enter for none] "))).trim();
-    if (!answer) return [];
+    if (!answer || answer === "-") return [];
     return answer.split(/[\s,]+/)
         .map((token) => options[Number(token) - 1] ?? options.find((o) => o.id === token))
         .filter(Boolean);
@@ -140,7 +140,11 @@ export async function pickInteractively() {
                 const extras = await askMany(
                     ask, "Layer anything else on top?",
                     fragments.filter((f) => !f.meta.dimension && f.meta.role !== "base"));
-                return finish(ask, [chosen.id, ...extras.map((e) => e.id)]);
+                // `await`, not a bare return: an unawaited promise leaves the
+                // try/finally immediately, so `rl.close()` would fire while
+                // finish() is still on a prompt — closing stdin under it and
+                // raising Aborted outside the catch that handles it.
+                return await finish(ask, [chosen.id, ...extras.map((e) => e.id)]);
             }
             console.log(c.dim("\ncomposing from scratch — one question per dimension\n"));
         }
@@ -172,7 +176,7 @@ export async function pickInteractively() {
             fragments.filter((f) => !f.meta.dimension && f.meta.role !== "base" && !excluded.has(f.id)));
         selected.push(...extras.map((e) => e.id));
 
-        return finish(ask, selected);
+        return await finish(ask, selected);
     } catch (e) {
         if (e instanceof Aborted) {
             console.log(c.dim("\naborted — nothing composed"));

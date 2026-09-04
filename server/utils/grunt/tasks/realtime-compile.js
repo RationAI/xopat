@@ -61,6 +61,21 @@ async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs,
     });
 }
 
+/**
+ * cssnano is ~70 % of this merge (measured: 1228 ms vs 372 ms on baseline +
+ * 17 deltas), and the merge runs on every save.
+ *
+ * It stays ON by default anyway, because `outFile` is `src/libs/tailwind.min.css`
+ * - a tracked file that the deployment serves as-is. The tailwind CLI is never
+ * invoked with `--minify` here (see runTailwind: it only ever passes
+ * `--no-minify`), so cssnano is the ONLY thing minifying that artifact. Turning
+ * it off makes every dev session leave an unminified file under a `.min.css`
+ * name, ready to be committed.
+ *
+ * Set `twinc.minifyMerge: false` in the Gruntfile to trade that for the speed,
+ * on the understanding that `src/libs/tailwind.min.css` must then be rebuilt
+ * before it is committed.
+ */
 async function postcssMergeAndMinify({ inputs, outFile, minify }) {
     const css = inputs.map((p) => fs.readFileSync(p, "utf8")).join("\n");
     const plugins = [discardDuplicates(), mergeRules()];
@@ -87,7 +102,32 @@ module.exports = function (grunt) {
         const minify     = cfg.minify !== false; // default true
         const mmOpts     = { windows: false };
 
-        const watchGlobs = process.env.WATCH_PATTERN ? [absPosix(root, process.env.WATCH_PATTERN)] :
+        /**
+         * Split on top-level commas, ignoring commas inside a `{a,b}` group.
+         *
+         * WATCH_PATTERN used to be a single glob, so covering two directories
+         * meant a brace group - and `glob-parent` on `{a,b}/**` gives up and
+         * returns the repo root. chokidar then walked the whole checkout:
+         * 13k directories / 111k files, minutes of startup on a network or
+         * cloud-synced drive, to watch two folders. A comma list keeps each
+         * root intact. Matching still uses the full globs, so brace groups
+         * inside one entry keep working.
+         */
+        function splitPatterns(value) {
+            const out = [];
+            let depth = 0, current = "";
+            for (const ch of value) {
+                if (ch === "{") depth++;
+                else if (ch === "}") depth--;
+                if (ch === "," && depth === 0) { out.push(current); current = ""; continue; }
+                current += ch;
+            }
+            out.push(current);
+            return out.map((s) => s.trim()).filter(Boolean);
+        }
+
+        const watchGlobs = process.env.WATCH_PATTERN ?
+            splitPatterns(process.env.WATCH_PATTERN).map((g) => absPosix(root, g)) :
             (cfg.watch || []).map((g) => absPosix(root, g));
         const ignoreGlobs = (cfg.ignore || []).map((g) => absPosix(root, g));
         if (!watchGlobs.length) return grunt.fail.fatal("[twinc-merge] Provide twinc.watch globs.");
@@ -101,6 +141,53 @@ module.exports = function (grunt) {
         let manifest = exists(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
         const chunkPathFor = (fileAbsPosix) => path.join(cacheDir, `delta-${hash(fileAbsPosix)}.css`);
 
+        // Atomic: two watchers on one checkout, or a Ctrl+C mid-write, must not
+        // leave a half-written manifest that throws on the next startup.
+        function writeManifest() {
+            const tmp = `${manifestPath}.${process.pid}.tmp`;
+            fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+            fs.renameSync(tmp, manifestPath);
+        }
+
+        function dropAllDeltas(reason) {
+            // Sweep the directory, not just the manifest. A delta whose manifest
+            // entry was lost - two watchers overwriting manifest.json, a crash
+            // between the chunk write and the manifest write - is unreachable
+            // debris that nothing else ever deletes.
+            let count = 0;
+            try {
+                for (const name of fs.readdirSync(cacheDir)) {
+                    if (!/^delta-.*\.css$/.test(name)) continue;
+                    try { fs.unlinkSync(path.join(cacheDir, name)); count++; } catch {}
+                }
+            } catch {}
+            manifest = {};
+            writeManifest();
+            if (count) grunt.log.ok(`[twinc-merge] Dropped ${count} delta(s): ${reason}.`);
+        }
+
+        /**
+         * Deltas whose source no longer exists.
+         *
+         * The `unlink` handler only sees deletions that happen while the watcher
+         * is running. A branch switch, a `git clean`, or a rename done from an
+         * editor while this was down leaves the delta behind forever, and every
+         * later save pays to merge it.
+         */
+        function pruneOrphanDeltas() {
+            let dropped = 0;
+            for (const src of Object.keys(manifest)) {
+                if (exists(src)) continue;
+                try { fs.unlinkSync(path.join(cacheDir, manifest[src])); } catch {}
+                delete manifest[src];
+                dropped++;
+            }
+            if (dropped) {
+                writeManifest();
+                grunt.log.ok(`[twinc-merge] Pruned ${dropped} delta(s) whose source is gone.`);
+            }
+        }
+
         async function fullBuildOnce() {
             // 1) One-time full build to OUTFILE (uses config's default content)
             grunt.log.writeln("[twinc-merge] Full build (one-time)...");
@@ -109,6 +196,13 @@ module.exports = function (grunt) {
             // 2) Snapshot this as our baseline
             fs.copyFileSync(outFile, baselineCss);
             fs.writeFileSync(stateFile, JSON.stringify({ createdAt: Date.now() }, null, 2));
+
+            // 3) A fresh baseline scans the same sources the deltas were built
+            //    from, so every existing delta is now redundant. Keeping them
+            //    made .dev-cache grow without bound across sessions - hundreds of
+            //    files, tens of MB - and the merge cost grows with it, on every
+            //    single save. This is the only place that can safely reset it.
+            dropAllDeltas("subsumed by the new baseline");
             grunt.log.ok("[twinc-merge] Baseline created.");
         }
 
@@ -206,7 +300,12 @@ module.exports = function (grunt) {
 
         async function buildDeltaFor(fileAbsPosix, chunkPath) {
             // Build utilities-only for that single file (fast)
-            const tmp = path.join(cacheDir, "utils.input.css");
+            //
+            // Per-pid: this file is created, handed to tailwind, then unlinked.
+            // Under a shared name a second watcher on the same checkout deletes
+            // it out from under the first one mid-build, which surfaces as a
+            // random "input file not found" or a silently empty delta.
+            const tmp = path.join(cacheDir, `utils.input.${process.pid}.css`);
 
             if (!fs.existsSync(tmp)) {
                 const srcCss = path.resolve(root, "src/assets/tailwind-spec.css");
@@ -233,7 +332,9 @@ module.exports = function (grunt) {
             // Merge baseline + all current deltas, remove duplicates, write to outFile
             const inputs = [baselineCss, ...Object.keys(manifest).sort().map((f) => path.join(cacheDir, manifest[f]))]
                 .filter((p) => exists(p));
-            await postcssMergeAndMinify({ inputs, outFile, minify });
+            // `minifyMerge` defaults ON - see postcssMergeAndMinify for why, and
+            // for what you are accepting if you turn it off.
+            await postcssMergeAndMinify({ inputs, outFile, minify: cfg.minifyMerge !== false });
             grunt.log.ok(`[twinc-merge] Merged baseline + ${inputs.length - 1} delta(s) -> ${toPosix(outFile)}`);
         }
 
@@ -242,6 +343,9 @@ module.exports = function (grunt) {
 
         async function ensureInitialOnce() {
             await rebuildUI();
+            // Cheap, and it runs before the first merge: whatever survives here
+            // is paid for on every save until the next full build.
+            pruneOrphanDeltas();
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) {
                 if (lockExistsRecent()) { grunt.log.writeln("[twinc-merge] Full build in progress/recent; skipping."); return; }
                 fs.writeFileSync(LOCK, String(Date.now()));
@@ -298,6 +402,8 @@ module.exports = function (grunt) {
             let pendingNeedsUI = false;
             let pendingMergeOnly = false;
             let pendingNeedsCore = false;
+            /** One retry per failure streak; cleared by any cycle that completes. */
+            let rearmedAfterFailure = false;
 
             function queueDelta(fileAbsPosix) {
                 pendingFiles.add(fileAbsPosix);
@@ -331,13 +437,23 @@ module.exports = function (grunt) {
                 pendingMergeOnly = false;
 
                 try {
+                    // The JS bundle and the CSS write to different outputs and
+                    // neither reads the other, so start esbuild first and let it
+                    // run alongside the Tailwind work below. It used to be last,
+                    // which meant a .ts edit that touched no class names still
+                    // waited out the whole CSS pass before the code it changed
+                    // was rebuilt. Failures are reported per item inside, so this
+                    // promise settles rather than rejecting.
+                    const workspaces = detectAndRebuildWorkspaceElements(files)
+                        .catch((e) => grunt.log.error(`[twinc-merge] Workspace rebuild failed: ${e.message}`));
+
                     // rebuild deltas for queued files
                     for (const f of files) {
                         const chunk = chunkPathFor(f);
                         await buildDeltaFor(f, chunk);
                         manifest[f] = path.relative(cacheDir, chunk);
                     }
-                    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+                    writeManifest();
 
                     // merge baseline + deltas (also when only unlink happened)
                     await mergeAll();
@@ -351,9 +467,30 @@ module.exports = function (grunt) {
                         await rebuildCore();
                     }
 
-                    await detectAndRebuildWorkspaceElements(files);
+                    await workspaces;
+                    // A cycle that got all the way here refreshes the retry
+                    // budget, so a later unrelated failure is still retried once.
+                    rearmedAfterFailure = false;
                 } catch (e) {
                     grunt.log.error(e.message);
+                    // Re-arm the work this cycle claimed but did not finish.
+                    //
+                    // The flags are consumed at the top, before anything that can
+                    // throw — and the UI/core rebuilds run LAST. So a failure
+                    // anywhere earlier (a Tailwind delta, the merge) silently ate
+                    // the core rebuild, and because the flag was already cleared
+                    // no later cycle retried it: the dev server kept happily
+                    // rebuilding CSS and the UI bundle while `src/dist` stayed
+                    // hours stale, which reads as "my code change did nothing".
+                    //
+                    // Bounded to ONE retry per failure streak: `finally`
+                    // reschedules whenever a flag is pending, so unconditional
+                    // re-arming would spin forever on a persistent error.
+                    if (!rearmedAfterFailure && (needUI || needCore)) {
+                        rearmedAfterFailure = true;
+                        if (needUI) pendingNeedsUI = true;
+                        if (needCore) pendingNeedsCore = true;
+                    }
                     if (retry && e.message?.includes("ENOENT")) {
                         if (await ensureInitialOnce()) {
                             await runBuildCycle(false);
@@ -391,7 +528,7 @@ module.exports = function (grunt) {
                         if (rel) {
                             try { fs.unlinkSync(path.join(cacheDir, rel)); } catch {}
                             delete manifest[file];
-                            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+                            writeManifest();
                         }
                         if (file.includes('/ui/')) pendingNeedsUI = true;
                         queueMergeOnly();

@@ -16,6 +16,7 @@ const i18n = require('../../src/libs/i18next.min');
 
 const utils = require('./utils');
 const { getCore } = require("../templates/javascript/core");
+const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
 
@@ -229,6 +230,15 @@ function normalizeFrameAncestors(value) {
  */
 let EXPOSE_SCHEME_ROUTES = DEV_MODE;
 
+/**
+ * `core.server.secure.examples` — sessions this deployment publishes as
+ * ready-to-open URLs in the startup banner. Server-only by construction (the
+ * `server.secure` strip), printed unconditionally: a deployment that bothered to
+ * declare what can be opened should say so in production too. See
+ * `server/node/examples.js`.
+ */
+let PUBLISHED_EXAMPLES = {};
+
 (function bootStorageConfig() {
     try {
         const core = getCore(constants.ABSPATH, PROJECT_PATH,
@@ -305,6 +315,9 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
         }
 
         if (core?.CORE?.server?.exposeSchemeRoutes === true) EXPOSE_SCHEME_ROUTES = true;
+
+        const examples = core?.CORE?.server?.secure?.examples || core?.CORE_SECURE?.examples;
+        if (examples && typeof examples === "object") PUBLISHED_EXAMPLES = examples;
     } catch (e) {
         logger.warn?.('[storage] could not pre-read storage config; using defaults:', e?.message || e);
         setStorageConfig({});
@@ -1969,4 +1982,35 @@ function onListening() {
     logger.info(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
     logger.info(`                                      or sent the data using HTTP POST`);
     logger.info(`  The session description is available in src/README.md`);
+    printPublishedExamples(url);
+}
+
+/**
+ * Print `core.server.secure.examples` as ready-to-open URLs.
+ *
+ * Nothing declared prints nothing — no empty header. A malformed record prints a
+ * warning and the rest still print: the whole point is answering "what can I open
+ * here", so one bad entry must not take the answer down with it.
+ */
+function printPublishedExamples(url) {
+    let entries;
+    try {
+        entries = buildExampleEntries(constants.ABSPATH, PUBLISHED_EXAMPLES, url);
+    } catch (e) {
+        logger.warn?.('[examples] could not build example sessions:', e?.message || e);
+        return;
+    }
+    if (!entries.length) return;
+
+    logger.info(`  Example sessions published by this deployment:`);
+    for (const entry of entries) {
+        logger.info(`    [${entry.id}] ${entry.name}`);
+        if (entry.description) logger.info(`      ${entry.description}`);
+        if (entry.url) {
+            logger.info(`      ${entry.url}`);
+        } else {
+            logger.warn?.(`      unavailable: ${entry.warning}`
+                + (entry.source ? ` (${entry.source})` : ""));
+        }
+    }
 }
