@@ -134,8 +134,85 @@ function refreshVisualizationDropdowns(cfg: any): void {
 type Attachment = {
     renderer: any;
     onVizChange: (e: any) => void;
+    onProgramUsed: (e: any) => void;
+    onProgramFailed: (e: any) => void;
     timer: any;
+    /** Last configuration that actually linked, from `renderer.getVisualizationSnapshot()`. */
+    lastGood: { order: string[]; shaders: Record<string, any> } | null;
+    /** Set while re-applying `lastGood`, so the failure path cannot re-enter. */
+    recovering: boolean;
 };
+
+function removeRendererHandlers(att: Attachment): void {
+    try {
+        att.renderer.removeHandler?.("visualization-change", att.onVizChange);
+        att.renderer.removeHandler?.("program-used", att.onProgramUsed);
+        att.renderer.removeHandler?.("shader-program-failed", att.onProgramFailed);
+    } catch (e) {
+        /* renderer may already be disposed */
+    }
+}
+
+/** JSON-safe `{order, shaders}` of the renderer's current configuration, or null. */
+function snapshotVisualization(renderer: any): { order: string[]; shaders: Record<string, any> } | null {
+    if (typeof renderer?.getVisualizationSnapshot !== "function") return null;
+    try {
+        const snapshot = renderer.getVisualizationSnapshot();
+        return snapshot && snapshot.shaders && Object.keys(snapshot.shaders).length ? snapshot : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Re-apply the last configuration that linked, after `shader-program-failed`.
+ *
+ * The usual cause is the fragment uniform budget: one layer or one
+ * colormap/advanced-slider control too many, which the library's pre-check
+ * names in the thrown error. Without this the viewport keeps drawing the old
+ * program while the layer list, the config and any session export describe the
+ * one that failed to build.
+ */
+async function recoverFromProgramFailure(viewer: any, att: Attachment, e: any): Promise<void> {
+    const log = appContext()?.log?.("app.visualization");
+    const detail = {
+        key: e?.key,
+        source: e?.source,
+        shaderIds: e?.shaderIds,
+        error: String(e?.error || ""),
+        recoverable: !!att.lastGood,
+    };
+    log ? log.error("Shader program build failed.", detail)
+        : console.error("[live-config-sync] shader program build failed.", detail);
+
+    const drawer = viewer?.drawer;
+    const lastGood = att.lastGood;
+    if (!lastGood || typeof drawer?.overrideConfigureAll !== "function") {
+        Dialogs.show($.t("error.shaderProgramFailed"), 15000, Dialogs.MSG_WARN);
+        return;
+    }
+
+    att.recovering = true;
+    if (att.timer !== null) {
+        clearTimeout(att.timer);
+        att.timer = null;
+    }
+    try {
+        await drawer.overrideConfigureAll(lastGood.shaders, lastGood.order);
+        // The structural config still describes the configuration that failed;
+        // the debounced write-back was suppressed on purpose, so reconcile it
+        // with what the renderer actually runs now.
+        try { UTILITIES.syncViewerConfigFromRenderer?.(viewer); }
+        catch (syncError) { console.warn("[live-config-sync] post-recovery config sync failed:", syncError); }
+        Dialogs.show($.t("error.shaderProgramFailedRestored"), 15000, Dialogs.MSG_WARN);
+    } catch (recoveryError) {
+        log ? log.error("Restoring the last working visualization failed.", { error: String(recoveryError) })
+            : console.error("[live-config-sync] restoring the last working visualization failed.", recoveryError);
+        Dialogs.show($.t("error.shaderProgramFailed"), 15000, Dialogs.MSG_WARN);
+    } finally {
+        att.recovering = false;
+    }
+}
 
 /**
  * Mount the bridge. Call once after the first open (mirrors
@@ -155,6 +232,10 @@ export function bootstrapLiveConfigSync(): () => void {
         const flush = () => {
             const current = attachments.get(viewer);
             if (current) current.timer = null;
+            // A configuration that failed to link must not reach the structural
+            // config (and from there a session export) — the recovery below is
+            // about to replace it with the last one that did link.
+            if (current?.recovering) return;
             try {
                 mergeViewerLiveIntoConfig(viewer, liveConfig());
             } catch (e) {
@@ -190,8 +271,7 @@ export function bootstrapLiveConfigSync(): () => void {
         if (existing) {
             if (existing.renderer === renderer) return;
             // Drawer was recreated — detach from the stale renderer first.
-            try { existing.renderer.removeHandler?.("visualization-change", existing.onVizChange); }
-            catch (e) { /* stale renderer may already be disposed */ }
+            removeRendererHandlers(existing);
             if (existing.timer !== null) clearTimeout(existing.timer);
             attachments.delete(viewer);
         }
@@ -219,16 +299,40 @@ export function bootstrapLiveConfigSync(): () => void {
             scheduleWriteBack(viewer);
         };
 
+        // The second-pass program linked: whatever the renderer holds now is
+        // known to compile, so it is the state a later failure falls back to.
+        const onProgramUsed = (e: any) => {
+            if (e?.name !== "second-pass") return;
+            const att = attachments.get(viewer);
+            if (!att || att.recovering) return;
+            const snapshot = snapshotVisualization(renderer);
+            if (snapshot) att.lastGood = snapshot;
+        };
+
+        // The library keeps the previously linked program and reports the failure
+        // instead of discarding the configuration, so the viewport still renders
+        // the last good frame — but the renderer's configuration (and the UI) now
+        // describes a program that does not exist. Put both back.
+        const onProgramFailed = (e: any) => {
+            const att = attachments.get(viewer);
+            if (!att || att.recovering) return;
+            void recoverFromProgramFailure(viewer, att, e);
+        };
+
         renderer.addHandler("visualization-change", onVizChange);
-        attachments.set(viewer, { renderer, onVizChange, timer: null });
+        renderer.addHandler("program-used", onProgramUsed);
+        renderer.addHandler("shader-program-failed", onProgramFailed);
+        attachments.set(viewer, {
+            renderer, onVizChange, onProgramUsed, onProgramFailed,
+            timer: null, lastGood: snapshotVisualization(renderer), recovering: false,
+        });
         console.info("[live-config-sync] attached to viewer", viewer?.id ?? "(no id)");
     };
 
     const detach = (viewer: any) => {
         const att = attachments.get(viewer);
         if (!att) return;
-        try { att.renderer.removeHandler?.("visualization-change", att.onVizChange); }
-        catch (e) { /* renderer may already be disposed */ }
+        removeRendererHandlers(att);
         if (att.timer !== null) clearTimeout(att.timer);
         attachments.delete(viewer);
     };

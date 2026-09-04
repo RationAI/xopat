@@ -13,6 +13,8 @@
     "clearDraft": "Clear draft",
     "import": "Import…",
     "export": "Export",
+    "importTemplate": "Load form…",
+    "exportTemplate": "Save form",
     "readOnly": "Read-only"
   },
   "types": {
@@ -175,6 +177,7 @@
     "importNotObject": "The selected file is not a questionnaire document.",
     "importEmpty": "The file contains no questionnaire schema and no answers.",
     "importSchemaRefused": "The questionnaire schema in this file is not usable. {{reason}}",
+    "schemaFieldInvalid": "The questionnaire was not changed: one of its fields is not a valid question.",
     "importSchemaDenied": "You do not have permission to load a questionnaire schema.",
     "importAnswersDenied": "You do not have permission to load pre-filled answers; only the schema was applied.",
     "importAnswersNotObject": "The answers section of this file is malformed and was skipped.",
@@ -182,7 +185,15 @@
     "exportOk": "Questionnaire exported.",
     "exportDenied": "You do not have permission to export this questionnaire.",
     "exportNoSink": "No storage is configured — the questionnaire was downloaded as a file.",
-    "exportFailed": "Export failed. {{reason}}"
+    "exportFailed": "Export failed. {{reason}}",
+    "templateExportOk": "Form saved as a file.",
+    "templateExportDenied": "You do not have permission to edit or save this form.",
+    "templateImportOk": "Form loaded.",
+    "submitOk": "Submitted.",
+    "submitNoSink": "No storage is configured — your answers were downloaded as a file.",
+    "submitDenied": "You do not have permission to submit this questionnaire.",
+    "submitFailed": "Submission failed. {{reason}}",
+    "submitValidationFailed": "Some answers are missing or invalid on \"{{page}}\"."
   },
   "prefs": {
     "title": "Preferences",

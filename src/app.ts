@@ -9,9 +9,11 @@ import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
+import { ViewerInteractionController } from "./classes/app/viewer-interaction-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
+import { initDeploymentKey } from "./classes/app/deployment-key";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
 // currently disabled — see src/SESSION.md. Re-import together with
@@ -22,17 +24,30 @@ import { bootstrapSlideProtocols } from "./classes/slide-protocols";
 import { bootstrapVirtualizationDetectors } from "./classes/virtualization-detectors";
 import { registerVirtualRegionProtocol } from "./classes/virtual-region-protocol";
 import { createApplicationContext } from "./classes/app/application-context";
+import { installI18nNamespace, localizeDom } from "./classes/app/i18n-dom";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
 import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
 import { wireAuthUserMenu } from "./classes/app/auth-user-menu";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
+import { wireSessionLog } from "./classes/app/session-log";
 import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
 import "./classes/playground/playground-service";
+
+// Side-effect imports: OpenSeadragon namespace extensions that used to be
+// standalone <script> tags under `src/external/`. Importing them here folds
+// them into `dist/app.js` — one request instead of three. All three only
+// *install* onto the OSD namespace at load; every consumer (loader.ts's
+// `makeScalebar` / `new OpenSeadragon.Tools(viewer)`, scalebar's use of
+// `ViewportRegistration`) calls them at viewer-creation time, long after this
+// bundle has executed.
+import "./classes/osd/tools";
+import "./classes/osd/viewport-registration";
+import "./classes/osd/scalebar";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -56,9 +71,14 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @private
  */
 export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
-    // The ENV the server just sent, so a stored session captured under a DIFFERENT
-    // deployment can be refused rather than silently replacing it.
-    const savedState = ApplicationLifecycleController.restoreLocalState(ENV);
+    // Identity of the deployment the server just sent. Computed before anything
+    // reads persisted state, from the SERVED configuration — every boot cache is
+    // origin-scoped by the browser, and origins are shared between deployments
+    // (every env file on localhost), so state captured under a different one must
+    // be refused rather than silently replacing this one. Also read by
+    // `parse-input.js` off `window.XOPAT_DEPLOYMENT_KEY`.
+    const deploymentKey = initDeploymentKey(ENV, PLUGINS, MODULES);
+    const savedState = ApplicationLifecycleController.restoreLocalState(deploymentKey);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -80,30 +100,20 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         ENV.client.domain = window.location.origin;
     }
 
-    //Setup language and parse config if function provided
-    function localizeDom() {
-        jqueryI18next.init(i18next, $, {
-            tName: 't', // $.t = i18next.t
-            i18nName: 'i18n', // $.i18n = i18next
-            handleName: 'localize', // $(selector).localize(opts);
-            selectorAttr: 'data-i18n', // data-() attribute
-            targetAttr: 'i18n-target', // data-() attribute
-            optionsAttr: 'i18n-options', // data-() attribute
-            useOptionsAttr: false, // see optionsAttr
-            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
-        });
-        //clean up
-        delete window.jqueryI18next;
-        delete window.i18next;
-        $('body').localize();
+    // Setup language and parse config if function provided.
+    // `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), not jQuery — see
+    // classes/app/i18n-dom.ts and AGENTS.md §3.
+    function bindTranslations() {
+        installI18nNamespace(i18next);
+        localizeDom(document.body);
     }
     if (i18next.isInitialized) {
-        localizeDom();
+        bindTranslations();
     } else {
         I18NCONFIG.fallbackLng = 'en';
         i18next.init(I18NCONFIG, (err: any, t: any) => {
             if (err) throw err;
-            localizeDom();
+            bindTranslations();
         });
     }
     POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost, ENV) as Record<string, unknown>;
@@ -175,24 +185,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     POST_DATA = POST_DATA || {};
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
-    // Configure js-cookie attributes before the IO pipeline's `cookies` KV
-    // driver reads `globalThis.Cookies` (eagerly, at registration). If js-cookie
-    // is unavailable — or the browser refuses cookies outright, as in a
-    // sandboxed iframe where `document.cookie` throws `SecurityError` — the
-    // driver falls back to in-memory storage.
-    if (window.Cookies && XOpatStorageAvailability.cookies) {
-        Cookies.withAttributes({
-            path: ENV.client.js_cookie_path,
-            domain: ENV.client.js_cookie_domain || ENV.client.domain,
-            expires: ENV.client.js_cookie_expire,
-            sameSite: ENV.client.js_cookie_same_site,
-            secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
-        });
-    } else {
+    if (!XOpatStorageAvailability.cookies) {
         console.warn("Cookies are unavailable. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
     // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
+    // it carries the deployment cookie policy (`ENV.client.js_cookie_*`) into
+    // the `cookies` KV driver, which owns `document.cookie` directly.
     // AppCache/AppCookies façades resolve through `window.IO_PIPELINE` on first
     // use, so the pipeline must exist before any `getOption()` call.
     const IO_PIPELINE = bootstrapIOPipeline(ENV, POST_DATA);
@@ -260,6 +259,21 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // Apply session-declared `params.ui.*` initial visibility. Per-viewer
     // wiring (scaleBar / navigator) runs in loader.ts on each `viewer.open`.
     applyInitialUiVisibility();
+
+    // The session was serialized by a DIFFERENT deployment (stale address-bar
+    // hash, a re-submitted POST body, an imported export). It is loaded anyway —
+    // two deployments that differ only cosmetically fingerprint alike, so a
+    // genuinely shared link must keep working — but the user is told, because
+    // the usual symptom is data references that resolve to nothing here.
+    // `parse-input.js` also refuses to write it into the boot cache.
+    if ((CONFIG as any).__foreignDeployment) {
+        Dialogs.show($.t("messages.sessionOtherDeployment"), 12000, Dialogs.MSG_WARN);
+        // One-shot: the config is the object `serializeAppConfig` re-serializes,
+        // so leaving the flag on would re-stamp the session as foreign forever
+        // and repeat the toast on every reload. The next serialization carries
+        // THIS deployment's `__envKey`, which is how the session heals.
+        delete (CONFIG as any).__foreignDeployment;
+    }
 
     /**
      * Replace share button in static preview mode
@@ -331,6 +345,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     });
 
     wireViewerErrorHandlers(VIEWER_MANAGER);
+    // Session timeline (boot / slides opened / auth / end) on the `session`
+    // channel. Silent unless a deployment enables it — see src/LOGGING.md.
+    // Wired here, after VIEWER_MANAGER exists, so the slide records are real.
+    wireSessionLog();
     // Post-init: retire the boot-time blocking error card and route uncaught runtime
     // errors to a non-blocking, deduped, rate-limited toast instead.
     wireGlobalRuntimeErrorHandler();
@@ -357,12 +375,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }
     };
 
-    const installDebugStats = () => {
-        if (!APPLICATION_CONTEXT.getOption("debugMode")) {
-            return;
-        }
-        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })();
-    };
+    // const installDebugStats = () => {
+    //     if (!APPLICATION_CONTEXT.getOption("debugMode")) {
+    //         return;
+    //     }
+    //     (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/libs/stats.js'; document.head.appendChild(script); })();
+    // };
 
     const applicationLifecycle = new ApplicationLifecycleController(
         APPLICATION_CONTEXT,
@@ -376,6 +394,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     viewerInspector.registerUtilities();
     viewerInspector.registerInspectorMenu();
 
+    // FlexDrawer pointer forwarding, enabled per viewer only while a visible shader
+    // layer declares `requiresInteraction()` (e.g. the fisheye lens). Costs nothing
+    // otherwise — see viewer-interaction-controller.ts.
+    const viewerInteraction = new ViewerInteractionController(APPLICATION_CONTEXT);
+    viewerInteraction.registerViewerHooks(VIEWER_MANAGER);
+    viewerInteraction.registerUtilities();
+
     // Track the viewer grid so `region-capture` events can be drawn on the viewer that
     // was read. Cheap when the indicator is off — it only registers grid handlers.
     APPLICATION_CONTEXT.captureIndicator.attachViewerManager(VIEWER_MANAGER);
@@ -387,7 +412,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         visualizations: VisualizationItem[] | undefined = undefined
     ) {
         await applicationLifecycle.beginApplicationLifecycle(data, background, visualizations, initXOpatLayers, PLUGINS);
-        installDebugStats();
+        // installDebugStats();
+
         // Dev-only; both calls are no-ops without debugMode. Capture itself is
         // installed later, when the user actually opens the debug window.
         APPLICATION_CONTEXT.renderDebug.attachViewerManager(VIEWER_MANAGER);
@@ -507,7 +533,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 // NOT underscore-prefixed: `safeStringify` below drops every key
                 // starting with `_`, so a `__deployment` would be silently discarded
                 // and the guard would never fire.
-                deploymentStamp: ApplicationLifecycleController.deploymentStamp(ENV),
+                deploymentStamp: deploymentKey,
             }));
             return true;
         } catch (e) {
@@ -547,9 +573,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         bootstrapLiveConfigSync();
     });
 
-    // Key event handlers - todo create shortcut manager
-    $.extend($.scrollTo.defaults, { axis: 'y' });
-
     // Retrospective faulty-source detection: a source can instantiate fine
     // (its info.json / DZI loads) yet have its individual tile requests fail
     // during viewing. We count *consecutive* per-source failures (reset on any
@@ -571,7 +594,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         const auth = (APPLICATION_CONTEXT as any).auth;
         if (auth?.listContextsNeedingInteraction?.().length) return;
         const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
-        const becameFaulty = registry.recordTileFailure(key, e.message ? String(e.message) : undefined);
+        // Scale the tolerance to the source: a single-tile overlay cannot produce
+        // five failures, so holding it to a pyramid's budget meant it failed in
+        // silence. See `tileFailureBudgetFor`.
+        const budget = ViewerFaultySourceRegistry.tileFailureBudgetFor(e.tiledImage as any, registry.faultyThreshold);
+        const becameFaulty = registry.recordTileFailure(
+            key, e.message ? String(e.message) : undefined, budget);
         if (becameFaulty) {
             /**
              * Fired once when a tile source crosses from healthy to faulty —
@@ -806,6 +834,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 peekState.clear();
             },
         });
+
+        viewerInteraction.registerShortcuts(shortcuts, VIEW_PATH, canvasScope);
 
         // Escape is a contextual dismiss key (like Enter/Delete in widgets) —
         // deliberately NOT in the keymap registry, so it stays a fixed handler.

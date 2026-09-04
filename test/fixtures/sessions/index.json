@@ -1,0 +1,163 @@
+{
+    "$comment": [
+        "The session fixture index. One record per `<id>.json` next to this file.",
+        "",
+        "This is the machine-readable half of the library, and the only place a",
+        "session's requirements are stated: `npm run fixtures:urls` reads it to decide",
+        "what it can print, `docs/site/scripts/generate-fixtures.mjs` renders the docs",
+        "catalogue from it, and `test/MANUAL_TESTING.md` links deployments to it. A",
+        "session with no record here is invisible to all three.",
+        "",
+        "  deployment  the `npm run up:dev -- <preset>` this session is meant for",
+        "  requires    what must exist first: `fixtures` (the fetched slides),",
+        "              `derived` (npm run fixtures:derive), or an env var name",
+        "  demonstrates  what breaking would make this session stop being worth keeping"
+    ],
+
+    "sessions": {
+        "basic-overlay": {
+            "title": "One background, several standard overlay shaders",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "the ordinary case: an H&E background with prediction, annotation and explainability layers stacked over it"
+        },
+        "two-backgrounds": {
+            "title": "Two backgrounds, each bound to a different visualization",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "per-background `visualizationIndex`, `activeBackgroundIndex` opening two at once, and a third entry reusing a data reference"
+        },
+        "multi-view-goals": {
+            "title": "Two active viewers with per-background goals",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "the multi-viewport grid: two viewers, different slides, independent visualization selection"
+        },
+        "grouped-errors": {
+            "title": "Nested `group` shaders over a real failure",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "shader groups, over two genuine inference failure modes rather than invented ones"
+        },
+        "all-shaders": {
+            "title": "Every registered shader layer class, across several visualizations",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "the shader registry: a new layer type that fails to register shows up here first"
+        },
+        "time-series": {
+            "title": "`time-series` wrapper with `series` as data indexes",
+            "group": "visualization",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "the time-series wrapper and its source resolver — the broker owns swap-vs-append"
+        },
+
+        "fluorescence-background": {
+            "title": "Background-side shader array over multichannel TIFF",
+            "group": "multichannel",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "shaders declared on a background rather than in a visualization, one per channel"
+        },
+        "fluorescence-cross-source": {
+            "title": "One background shader array reading two different data entries",
+            "group": "multichannel",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "per-shader `dataReferences` retargeting inside a background array, plus `use_gamma`"
+        },
+        "channel-series": {
+            "title": "`channel-series` wrapper browsing fluorescence channels",
+            "group": "multichannel",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "the channel-series wrapper: one data entry, channels browsed as a series"
+        },
+
+        "viz-flex-multichannel": {
+            "title": "Five channels of one OME-TIFF routed to five shader layers",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures"],
+            "demonstrates": "channel fan-out, plus one layer retargeted at a different `data` entry"
+        },
+        "viz-flex-geojson": {
+            "title": "GeoJSON polygons as a rendered vector layer",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures", "derived"],
+            "demonstrates": "autodetected `GeoJSONTileSource` — a vector layer needs no protocol declaration"
+        },
+        "viz-flex-mvt": {
+            "title": "The same polygons as Mapbox Vector Tiles on a non-square pyramid",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures", "derived"],
+            "demonstrates": "a sparse MVT pyramid over the slide's own pixel space, via the `demo-mvt` factory protocol"
+        },
+        "viz-flex-grid": {
+            "title": "One pixel per 512 px prediction square",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures", "derived"],
+            "demonstrates": "`imageSmoothingEnabled: false` with `pixelScale: 512` — without the latter the overlay is squeezed"
+        },
+        "viz-flex-mask-coarse": {
+            "title": "Truncated mask pyramid: preview injection declines",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures", "derived"],
+            "demonstrates": "coarsest level 1025 px, below `PREVIEW_LEVEL_MIN_COARSEST_PX` — the decline path"
+        },
+        "viz-flex-mask-preview": {
+            "title": "Mask pyramid that triggers `tryInjectPreviewLevel`",
+            "group": "viz-flex",
+            "deployment": "viz-flex-demo",
+            "requires": ["fixtures", "derived"],
+            "demonstrates": "coarsest level 4100 px — injection fires on the overlay layer, not the background"
+        },
+
+        "errors-partial-viz": {
+            "title": "One layer resolves, one does not",
+            "group": "errors",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "partial degradation: a broken shader must not take its visualization or the slide down with it"
+        },
+        "errors-all-invalid": {
+            "title": "Nothing in the session resolves",
+            "group": "errors",
+            "deployment": "webtiff",
+            "requires": [],
+            "demonstrates": "the fully-failed-open path — every background faulty, and the viewer still has to say so rather than hang"
+        },
+        "empty-session": {
+            "title": "Data declared, nothing asked for",
+            "group": "errors",
+            "deployment": "webtiff",
+            "requires": ["fixtures"],
+            "demonstrates": "empty `background` and `visualizations`: `activeBackgroundIndex: []` means nothing open, not everything"
+        },
+
+        "dicom-google-standalone": {
+            "title": "Google Healthcare DICOMweb, derived series auto-discovered",
+            "group": "dicom",
+            "deployment": "googledicom",
+            "requires": ["GOOGLE_DICOM_SERVICE_URL"],
+            "demonstrates": "`derived: \"auto\"` — the plugin finds SEG/parametric series for the source series itself"
+        },
+        "dicom-google-standalone-explicit": {
+            "title": "Google Healthcare DICOMweb, derived series named explicitly",
+            "group": "dicom",
+            "deployment": "googledicom",
+            "requires": ["GOOGLE_DICOM_SERVICE_URL"],
+            "demonstrates": "the explicit `{role, sourceSeriesUID}` shape; the `seriesUID` is a placeholder you fill in from your own store"
+        }
+    }
+}

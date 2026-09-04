@@ -254,6 +254,12 @@ OSDAnnotations.PresetManager = class {
             preset = this._presets.values().next().value;
         } else if (this._context._provideDefaultPresets) {
             preset = this.addPreset('unknown', 'Unknown', '#898989');
+            // `addPreset` returns undefined when the IO rights guard refuses the
+            // create (a role denied `annotations.crud:preset.create`). Dereferencing
+            // it below threw a TypeError out of `handleLeftClickDown` on EVERY
+            // canvas press for such a role. Fall through to the same "no preset"
+            // answer the disabled-defaults branch gives — callers already handle it.
+            if (!preset) return undefined;
         } else {
             return undefined;
         }
@@ -286,7 +292,9 @@ OSDAnnotations.PresetManager = class {
      * @param {OSDAnnotations.AnnotationObjectFactory} [factory] optional factory binding;
      *      defaults to the module's polygonFactory so existing callers are unchanged
      * @event preset-create
-     * @returns {OSDAnnotations.Preset} newly created preset
+     * @returns {OSDAnnotations.Preset|undefined} the new preset, or undefined when
+     *      the create was refused — e.g. a role denied `annotations.crud:preset.create`.
+     *      Callers MUST handle undefined.
      */
     addPreset(id=undefined, categoryName="", color=undefined, factory=undefined) {
         const objFactory = factory || this._context.polygonFactory;
@@ -990,7 +998,7 @@ OSDAnnotations.PresetManager = class {
             gZoom = canvas.computeGraphicZoom(zoom);
 
         //const layerID = this._context.fabric.getActiveLayer()?.id;
-        return $.extend(options, {
+        return OpenSeadragon.extend(options, {
             layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
@@ -1003,7 +1011,7 @@ OSDAnnotations.PresetManager = class {
             return {};
         }
         if (this.commonAnnotationVisuals.modeOutline) {
-            return $.extend({fill: ""},
+            return OpenSeadragon.extend({fill: ""},
                 this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,
@@ -1013,7 +1021,7 @@ OSDAnnotations.PresetManager = class {
             );
         } else {
             //fill is copied as a color and can be potentially changed to more complicated stuff (Pattern...)
-            return $.extend({fill: withPreset.color},
+            return OpenSeadragon.extend({fill: withPreset.color},
                 this.commonAnnotationVisuals,
                 {
                     presetID: withPreset.presetID,

@@ -43,6 +43,23 @@ export class WebTiffTextureSet {
     }
 }
 
+/*
+ * The decoder declares what it presents.
+ *
+ * `header.channelCount` for an image-mode read is the number of lanes actually
+ * emitted (four), not the source band count, as of web-tiff 0.1.0. Before that
+ * it reported three for a colour slide while the packer filled the fourth lane
+ * with `padAlpha`, and since the renderer bounds channel reads by that number —
+ * `osd_channel` returns `0.0` for `channelIndex >= osd_channel_count(source)` —
+ * the implicit `identity` layer sampled `vec4(r, g, b, 0.0)` and the slide
+ * rendered fully transparent. This module carried a 3 -> 4 correction for it;
+ * the decoder is the right place to state it, so the correction is gone.
+ *
+ * `textureSetToImageData` still fills pad lanes itself: that is a different
+ * question (which lanes of a pack carry a channel at all), answered per lane
+ * from `pack.channels`.
+ */
+
 /**
  * `readRegion` takes the resampler as the decoder's own enum, not by name.
  * 3 = box, the right filter for a downscale.
@@ -119,6 +136,15 @@ export function textureSetToImageData(data) {
         const fill = lane === 3 ? 255 : 0;
         for (let i = 0; i < pixels; i++) out[i * 4 + lane] = fill;
     }
+
+    // In `data` mode lane 3 is a measurement like any other — a stacked slide
+    // packs channels 0…3 into one pack — and a canvas would draw the fourth
+    // channel as opacity, making a dim channel erase the tile. Nothing here can
+    // composite four channels anyway (only pack 0 is used), so the fourth is
+    // dropped from the preview rather than allowed to control transparency.
+    if (data.mode === "data" && pack.channels?.[3] >= 0) {
+        for (let i = 0; i < pixels; i++) out[i * 4 + 3] = 255;
+    }
     return new ImageData(out, width, height);
 }
 
@@ -139,6 +165,114 @@ export function textureSetToImageData(data) {
  * receives one — `_outputFor` asks the drawer first and decodes to `rgba8` for
  * it (see below).
  */
+
+/** Interpretations the decoder accepts, as an allowlist. */
+const INTERPRETATIONS = ["auto", "image", "data"];
+
+/** How the pyramid may be resolved. Same three values the decoder declares. */
+const PYRAMID_STRATEGIES = ["auto", "ifd", "subifd"];
+
+/** A channel list longer than this is not a selection, it is an attack. */
+const MAX_CHANNEL_SELECTION = 64;
+
+/**
+ * A channel or plane index, or `undefined` for anything that is not one.
+ *
+ * Deliberately not `Number(value)`: that maps `null`, `[]` and `""` to `0`, which
+ * is a *valid* index — so junk in a session would not be rejected, it would
+ * silently select plane 0. Numeric strings are accepted because a session is
+ * JSON-shaped and hand-authored.
+ *
+ * @param {unknown} value
+ * @return {number|undefined}
+ */
+function indexOrUndefined(value) {
+    if (typeof value === "string") {
+        if (value.trim() === "") return undefined;
+    } else if (typeof value !== "number") {
+        return undefined;
+    }
+    const index = Number(value);
+    return Number.isInteger(index) && index >= 0 ? index : undefined;
+}
+
+/**
+ * Translate a slide's `options` block into the decoder's own option shape.
+ *
+ * The session supplies this (`data[i].options`, or the background entry's), so it
+ * is untrusted by §7 and every value is validated against an allowlist rather
+ * than forwarded. Anything unrecognised is dropped, not passed through: the
+ * decoder's option object is also where the transport and packing preferences
+ * live, and a session must not be able to reach those.
+ *
+ * Two of the four keys can only be honoured at construction time, because the
+ * layout is resolved once when the header is parsed:
+ *
+ * | key | value | decoder | when |
+ * |---|---|---|---|
+ * | `planeIndex` | integer ≥ 0 | `layout.planeIndex` | construction |
+ * | `pyramid` | `"auto"` \| `"ifd"` \| `"subifd"` | `layout.pyramid` | construction |
+ * | `channels` | `number[]` \| `"all"` | `format.channels` | per read |
+ * | `interpretation` | `"auto"` \| `"image"` \| `"data"` | `format.interpretation` | per read |
+ *
+ * `planeIndex` is how a slide opts *out* of channel stacking: unset, every
+ * same-size directory is read as a channel of one tile; set, that one plane is
+ * read and the rest are dropped. So `planeIndex: 0` is not a no-op — on a
+ * five-channel OME-TIFF it is the difference between five channels and one.
+ * (The decoder's older `layout.prefer` is gone: a pyramid and a plane stack are
+ * no longer alternatives, so a `layout` key in a session is dropped like any
+ * other unknown.)
+ *
+ * `channels: "all"` maps to *no* selection, which is already the default. It is
+ * accepted because that is WSI-Service's spelling of it (`image_channels=all`),
+ * and a session that says so should mean the same thing whichever protocol ends
+ * up serving the slide — not be silently inert on one of them.
+ *
+ * @param {object} [options] the slide's `SlideSourceOptions`
+ * @return {{layout?: object, format?: object}} empty when nothing applies
+ */
+export function decoderOptionsFrom(options) {
+    if (!options || typeof options !== "object") return {};
+
+    const layout = {};
+    const format = {};
+
+    const plane = indexOrUndefined(options.planeIndex);
+    if (plane !== undefined) layout.planeIndex = plane;
+    if (PYRAMID_STRATEGIES.includes(options.pyramid)) layout.pyramid = options.pyramid;
+
+    if (INTERPRETATIONS.includes(options.interpretation)) {
+        format.interpretation = options.interpretation;
+    }
+    if (Array.isArray(options.channels)) {
+        const channels = options.channels
+            .map(indexOrUndefined)
+            .filter(c => c !== undefined)
+            .slice(0, MAX_CHANNEL_SELECTION);
+        if (channels.length) format.channels = channels;
+    }
+
+    const result = {};
+    if (Object.keys(layout).length) result.layout = layout;
+    if (Object.keys(format).length) result.format = format;
+    return result;
+}
+
+/**
+ * The subset of {@link decoderOptionsFrom} that a tile read can still honour
+ * once the file is open. `undefined` when there is nothing to override.
+ *
+ * @param {{format?: object}} decoderOptions
+ * @return {object|undefined}
+ */
+function readOverridesFrom(decoderOptions) {
+    const format = decoderOptions.format;
+    if (!format) return undefined;
+    const overrides = {};
+    if (format.channels) overrides.channels = format.channels;
+    if (format.interpretation) overrides.interpretation = format.interpretation;
+    return Object.keys(overrides).length ? overrides : undefined;
+}
 
 /**
  * Build the xOpat tile-source class.
@@ -174,17 +308,11 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
         // depends on the drawer that asked for it (see `_outputFor`), and the
         // core reads that field as a single, fixed answer.
 
-        /**
-         * Opt out of the synthetic preview level (`src/classes/preview-level.ts`).
-         *
-         * It would otherwise trigger on `getThumbnail()` below and renumber the
-         * pyramid — level L becomes L+1 — while `downloadTileStart` indexes the
-         * decoder's own levels, so every tile would be read one level too coarse.
-         * There is nothing to gain either way: a TIFF pyramid's coarsest level is
-         * already a single small tile, which is exactly what the synthetic level
-         * is for.
-         */
-        __noPreviewLevel = true;
+        // `_decoderLevel` is the base class's own (web-tiff >= 0.1.0): every site
+        // that indexes the decoder's level array measures from the finest end, so
+        // a synthetic preview level inserted by `src/classes/preview-level.ts`
+        // cannot silently change which level is read. This module only calls it,
+        // from its own `downloadTileStart` override below.
 
         /**
          * The decoder's own description of the file.
@@ -232,9 +360,63 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
             }
         }
 
+        /**
+         * The same answer under the core tile-source contract name
+         * (`src/tile-source.ts`), so generic consumers do not have to know that
+         * a TIFF decoder produced it. The synthetic preview level reads this:
+         * its tile is an 8-bit raster and must not stand in for half-float packs.
+         * @return {"unorm8"|"float16"|undefined}
+         */
+        getTilePrecision() {
+            return this.getPrecision();
+        }
+
         /** @return {string[]} whatever the layout resolution complained about. */
         getWarnings() {
-            return this._file?.warnings || [];
+            return (this._file?.warnings || []).concat(this._optionWarnings || []);
+        }
+
+        /**
+         * The per-slide `options` block, applied after the fact.
+         *
+         * The core calls this twice for a source it built through the registry —
+         * once before the metadata request and once after the open
+         * (`slide-protocols.ts:615`, `viewer-open-pipeline.ts:1172`), deliberately
+         * with the same object, so that a selection needing metadata can expand on
+         * the second pass. This source is not on that schedule: its header read
+         * starts in its own constructor, so by the time the first call arrives the
+         * layout is usually already resolved.
+         *
+         * That splits the options in two. `channels` and `interpretation` are read
+         * parameters and are honoured from the next tile on. `planeIndex` and
+         * `pyramid` chose the level pyramid and cannot be re-decided
+         * without re-reading the header — so those are passed at construction
+         * (`index.mjs` resolves them through the same {@link decoderOptionsFrom}
+         * and keys its source cache by them), and arriving late is reported rather
+         * than quietly ignored.
+         *
+         * @param {object} [options] the slide's `SlideSourceOptions`
+         */
+        setSourceOptions(options) {
+            const decoderOptions = decoderOptionsFrom(options);
+            this._readOverrides = readOverridesFrom(decoderOptions);
+
+            const layout = decoderOptions.layout;
+            if (!layout) return;
+
+            // Compare against what the file was actually built with, not against
+            // the defaults: the common case by far is the core re-applying the very
+            // options `index.mjs` already constructed this source from, and that
+            // must stay silent.
+            const applied = this._options?.layout || {};
+            const late = Object.keys(layout).filter(key => layout[key] !== applied[key]);
+            if (!late.length || !this._file) return;
+
+            const message = `[webtiff] ${late.join(", ")} arrived after the header was read and ` +
+                "cannot change the level pyramid; set it on the slide's data entry so it applies " +
+                "when the source is built";
+            this._optionWarnings = (this._optionWarnings || []).concat(message);
+            console.warn(message);
         }
 
         /**
@@ -261,6 +443,11 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
             const { header, packs } = await this._file.readRegion({
                 dir: level.dir,
                 subifd: level.subifd,
+                // Without this the card is plane 0 of a plane stack — a grey
+                // DAPI frame for a five-channel slide. With it, `rgba8` answers
+                // the first three channels with an opaque alpha lane, which is
+                // the flat picture this method is for.
+                planes: level.planes,
                 x0: 0,
                 y0: 0,
                 x1: level.width,
@@ -271,9 +458,15 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
                 resample: RESAMPLE_BOX,
             });
 
-            const image = new ImageData(
-                new Uint8ClampedArray(packs[0].data.buffer), header.width, header.height);
-            return imageDataToBlob(image);
+            // Through the shared flattener rather than wrapping `packs[0]`: the
+            // lane rules (padding is not black, a data lane is not opacity) then
+            // live in one place for every canvas-bound path.
+            return imageDataToBlob(textureSetToImageData({
+                width: header.width,
+                height: header.height,
+                mode: header.mode,
+                packs,
+            }));
         }
 
         /**
@@ -339,7 +532,11 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
             const output = this._outputFor(tile);
             const started = this._options?.logLatency ? performance.now() : 0;
 
-            this._file.readTile(tile.level, tile.x, tile.y, {
+            this._file.readTile(this._decoderLevel(tile.level), tile.x, tile.y, {
+                // Channel selection and interpretation, when the slide asked for
+                // either; the decoder falls back to the file's own options for
+                // whatever is absent (see `setSourceOptions`).
+                ...this._readOverrides,
                 output,
                 signal: controller.signal,
             }).then(async ({ header, packs }) => {
@@ -361,6 +558,10 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
                     return;
                 }
 
+                // Wrapped, not flattened: an `rgba8` read is always resolved as
+                // an image by the decoder — three channels and a padded alpha
+                // lane even over a plane stack — so there is no lane to correct
+                // here, and a tile is too hot a path to copy for nothing.
                 const image = new ImageData(
                     new Uint8ClampedArray(packs[0].data.buffer), header.width, header.height);
                 context.finish(await createImageBitmap(image), `${context.src}`, "imageBitmap");

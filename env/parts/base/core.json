@@ -1,0 +1,61 @@
+{
+  "$meta": {
+    "description": "Standalone localhost viewer skeleton — origin, cookies, setup defaults, no data source",
+    "role": "base",
+    "clientKey": "localhost",
+    "defaults": { "XOPAT_NODE_PORT": "9000" }
+  },
+  /**
+   * Everything a deployment needs before it has decided *where slides come
+   * from*. Split out of `env/env.default.json` so the data source became a
+   * choice instead of a copy: `base/core` + `data/wsi-service` reproduces that
+   * file exactly, and `base/core` + any other `data/*` is a deployment nobody
+   * had to hand-write.
+   *
+   * Declared `role: "base"`, so a later layer overriding anything here is a
+   * normal override rather than a conflict.
+   */
+  "core": {
+    "gateway": "/",
+    "active_client": "localhost",
+    "client": {
+      "localhost": {
+        "domain": "http://localhost:<% XOPAT_NODE_PORT:-9000 %>",
+        "path": "/",
+        "headers": {},
+        "js_cookie_expire": 365,
+        "js_cookie_path": "/",
+        "js_cookie_same_site": "",
+        "js_cookie_secure": "",
+        "secureMode": false,
+        "pluginSelectionMode": "<% XOPAT_PLUGIN_SELECTION_MODE:-all %>"
+      }
+    },
+    "setup": {
+      "locale": "en",
+      "theme": "auto",
+      "disablePluginsUi": "<% XOPAT_DISABLE_PLUGINS_UI:-false %>",
+      "scrollRequiresCtrl": "<% XOPAT_SCROLL_REQUIRES_CTRL:-false %>",
+      "bypassCloseConfirmation": "<% XOPAT_BYPASS_CLOSE_CONFIRMATION:-false %>"
+    },
+    /* No gating by default: an empty `definitions` means every capability
+       falls back to its plugin default. `roles/*` fragments replace this. */
+    "roles": {
+      "default": [],
+      "definitions": {}
+    }
+  },
+  "plugins": {
+    /* `enabled` is the whitelist opt-in and is spelled out even where the
+       default mode ("all") would ship the element anyway: `permaLoad` alone
+       does NOT opt a plugin in, so under "whitelist" these entries would
+       otherwise be dropped. */
+    "slide-info": {
+      "enabled": true,
+      "permaLoad": true
+    },
+    "extra-tutorials": {
+      "enabled": true
+    }
+  }
+}

@@ -20,7 +20,9 @@ function sanitizeId(value) {
     return String(value ?? 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-const FA_ICON_MAP = {
+// A few board rows still carry Material-style icon keys from the original
+// markup. Everything else is already a Phosphor class.
+const LEGACY_ICON_MAP = {
     chevron_right: 'ph-caret-right',
     expand_more: 'ph-caret-down',
     visibility: 'ph-eye',
@@ -32,40 +34,22 @@ const FA_ICON_MAP = {
     visibility_lock: 'ph-user-circle-gear',
 };
 
-function faIcon(name, extraClasses = '') {
+function phIcon(name, extraClasses = '') {
     const el = document.createElement('i');
     const key = String(name ?? '').trim();
-    if (key.startsWith('ph-')) {
-        el.className = `ph-light ${key} ${extraClasses}`.trim();
-    } else {
-        const mapped = FA_ICON_MAP[key] || (key.startsWith('fa-') ? key : 'fa-tag');
-        // FA_ICON_MAP values are Phosphor glyphs — they need the `ph-light`
-        // font family, not `fa-solid`, or the codepoint renders blank.
-        const family = mapped.startsWith('ph-') ? 'ph-light' : 'fa-solid';
-        el.className = `${family} ${mapped} ${extraClasses}`.trim();
-    }
+    const mapped = key.startsWith('ph-') ? key : (LEGACY_ICON_MAP[key] || 'ph-tag');
+    el.className = `ph-light ${mapped} ${extraClasses}`.trim();
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
 
+// An object factory reports its icon as a class string that may carry extra
+// tokens; pick the Phosphor glyph out of it and fall back to a neutral tag.
 function factoryIcon(icon, extraClasses = '') {
     const el = document.createElement('i');
-    const tokens = String(icon ?? 'fa-tag').trim().split(/\s+/).filter(Boolean);
-
-    if (tokens.some(t => t.startsWith('ph-'))) {
-        const phName = tokens.find(t => t.startsWith('ph-') && t !== 'ph-light') || 'ph-tag';
-        el.className = ['ph-light', phName, extraClasses].filter(Boolean).join(' ');
-    } else {
-        const hasStyleClass = tokens.some(token =>
-            ['fa-solid', 'fa-regular', 'fa-light', 'fa-thin', 'fa-duotone', 'fa-brands'].includes(token)
-        );
-        const hasIconClass = tokens.some(token => token.startsWith('fa-') && !token.startsWith('fa-rotate'));
-
-        if (!hasStyleClass) tokens.unshift('fa-solid');
-        if (!hasIconClass) tokens.push('fa-tag');
-
-        el.className = [...tokens, extraClasses].filter(Boolean).join(' ').trim();
-    }
+    const tokens = String(icon ?? '').trim().split(/\s+/).filter(Boolean);
+    const name = tokens.find(token => token.startsWith('ph-') && token !== 'ph-light') || 'ph-tag';
+    el.className = ['ph-light', name, extraClasses].filter(Boolean).join(' ');
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
@@ -322,6 +306,10 @@ export class AnnotationBoardPanel {
         if (!root) return;
 
         this._mounted = true;
+        // Force the next render to rebuild: the canvas can have changed while the
+        // panel was unmounted and not listening, so an unchanged `_dataVersion`
+        // says nothing here.
+        this._lastBuiltVersion = -1;
         this.layerLogsEl = root.querySelector(`#${CSS.escape(this.layerLogsId)}`);
         this.bodyEl = root.querySelector(`#${CSS.escape(this.bodyId)}`);
 
@@ -402,6 +390,10 @@ export class AnnotationBoardPanel {
                 event: e,
                 viewer,
                 active,
+                // A right-click on a board row is about that row, so state it
+                // rather than letting the registry read whatever happens to be
+                // selected on the canvas.
+                selection: [active],
                 source: 'board',
             });
         });
@@ -514,11 +506,19 @@ export class AnnotationBoardPanel {
             this._editUiActive = isEditing;
         }
 
-        // Row count is bounded (auto-grouping collapses high-volume presets),
-        // so we always rebuild on render. Cheap relative to scrolling 1000s of
-        // virtualized DOM rows.
-        this._buildRows();
-        this._lastBuiltVersion = this._dataVersion;
+        // The ROW COUNT is bounded (auto-grouping collapses high-volume presets),
+        // but building them is not: `_buildRows` walks every object on the canvas
+        // to find root annotations, so on a slide carrying tens of thousands of
+        // them the build costs the same whether it emits 5 rows or 500.
+        //
+        // Every input the build reads bumps `_dataVersion` — annotation and
+        // selection events, the search query, and the collapse toggles — so an
+        // unchanged version really does mean an unchanged row list. The two
+        // fields were already tracked here and simply never compared.
+        if (this._rows === null || this._dataVersion !== this._lastBuiltVersion) {
+            this._buildRows();
+            this._lastBuiltVersion = this._dataVersion;
+        }
         this._renderRows();
         this._updateDeleteSelectionHeaderButton();
         this._updateActiveLayerVisual(fabric.getActiveLayer?.());
@@ -625,7 +625,11 @@ export class AnnotationBoardPanel {
             }
         };
 
-        for (const entry of this._getBoardEntries()) {
+        // One walk of the canvas for this whole build — shared with
+        // `_getBoardEntries` and reused as `rootById` below.
+        const roots = this._collectRootAnnotations();
+
+        for (const entry of this._getBoardEntries(roots)) {
             if (entry.type === 'layer') {
                 const layer = entry.layer;
                 if (!layer) continue;
@@ -656,15 +660,8 @@ export class AnnotationBoardPanel {
         // unrelated. Single pass over _boardOrder + one pass over canvas
         // objects to catch any annotation that exists on canvas but is
         // missing from _boardOrder (defensive — recovery paths).
-        const isAnn = fabric.isAnnotation?.bind(fabric);
         const boardOrder = fabric.getBoardOrder?.() || [];
-        const rootById = new Map();
-        for (const o of fabric.canvas?.getObjects?.() || []) {
-            if (isAnn?.(o) && this._isRootAnnotation(o)
-                && o.incrementId !== undefined && o.incrementId !== null) {
-                rootById.set(String(o.incrementId), o);
-            }
-        }
+        const rootById = roots.byId;
         const rootAnnotations = [];
         const seenRoot = new Set();
         for (const e of boardOrder) {
@@ -905,7 +902,39 @@ export class AnnotationBoardPanel {
         return ((layer?.name || '') + ' ' + (layer?.label || '') + ' ' + (layer?.id || '')).toLowerCase();
     }
 
-    _getBoardEntries() {
+    /**
+     * The canvas's root-level annotations, walked ONCE.
+     *
+     * `_buildRows` and `_getBoardEntries` both need this set, and the explicit
+     * board-order branch needed it keyed by id as well — three full walks of
+     * `canvas.getObjects()` per render, which on a slide carrying tens of
+     * thousands of annotations is the panel's whole cost, independent of how
+     * few rows the grouping ends up emitting.
+     *
+     * The map is root-only. The id lookup it feeds is gated by
+     * `_isRootAnnotation` at its use site, so a non-root hit was rejected there
+     * anyway — a miss and a rejection produce the same entry list.
+     *
+     * @returns {{list: object[], byId: Map<string, object>}}
+     */
+    _collectRootAnnotations() {
+        const fabric = this.fabric;
+        const list = [];
+        const byId = new Map();
+        if (!fabric) return { list, byId };
+
+        const isAnn = fabric.isAnnotation?.bind(fabric);
+        for (const object of fabric.canvas?.getObjects?.() || []) {
+            if (!isAnn?.(object) || !this._isRootAnnotation(object)) continue;
+            list.push(object);
+            if (object.incrementId !== undefined && object.incrementId !== null) {
+                byId.set(String(object.incrementId), object);
+            }
+        }
+        return { list, byId };
+    }
+
+    _getBoardEntries(roots = this._collectRootAnnotations()) {
         const fabric = this.fabric;
         if (!fabric) return [];
 
@@ -919,24 +948,17 @@ export class AnnotationBoardPanel {
             .sort((a, b) => Number(a.position ?? 0) - Number(b.position ?? 0))
             .map(layer => ({ type: 'layer', layer, id: String(layer.id) }));
 
-        const actualRootAnnotations = (fabric.canvas?.getObjects?.() || [])
-            .filter(object => fabric.isAnnotation?.(object) && this._isRootAnnotation(object))
+        const actualRootAnnotations = roots.list
             .map(object => ({ type: 'annotation', obj: object, id: String(object.incrementId) }));
 
         if (!explicit.length) {
             return [...actualLayers, ...actualRootAnnotations];
         }
 
-        // Explicit-order branch: build a one-shot local Map for validation —
-        // O(N) once, then GC'd. (The wrapper now provides O(1)
-        // findObjectOnCanvasByIncrementId, but the local map keeps this
-        // tight inner loop allocation-free of the wrapper-side fallback.)
-        const annById = new Map();
-        for (const o of fabric.canvas?.getObjects?.() || []) {
-            if (fabric.isAnnotation?.(o) && o.incrementId !== undefined && o.incrementId !== null) {
-                annById.set(String(o.incrementId), o);
-            }
-        }
+        // Explicit-order branch: only `explicit` entries arrive without a
+        // resolved object, so the id lookup comes from the shared root index
+        // rather than a second walk of the canvas.
+        const annById = roots.byId;
 
         const result = [];
         const seen = new Set();
@@ -987,7 +1009,7 @@ export class AnnotationBoardPanel {
 
         const toggleBtn = document.createElement('div');
         toggleBtn.dataset.tplRole = 'toggle';
-        toggleBtn.appendChild(faIcon('chevron_right', 'text-xs opacity-50'));
+        toggleBtn.appendChild(phIcon('chevron_right', 'text-xs opacity-50'));
 
         const info = document.createElement('div');
         info.className = 'flex-1 min-w-0 flex items-center gap-2';
@@ -1052,7 +1074,7 @@ export class AnnotationBoardPanel {
 
         const visBtn = document.createElement('button');
         visBtn.className = 'btn btn-ghost btn-xs btn-square';
-        visBtn.appendChild(faIcon(layer.visible ? 'visibility' : 'visibility_off'));
+        visBtn.appendChild(phIcon(layer.visible ? 'visibility' : 'visibility_off'));
         visBtn.onclick = (e) => { e.stopPropagation(); this.toggleLayerVisibility(layerId); };
         actions.appendChild(visBtn);
 
@@ -1070,7 +1092,7 @@ export class AnnotationBoardPanel {
             const upBtn = document.createElement('button');
             upBtn.className = 'btn btn-ghost btn-xs btn-square';
             upBtn.title = 'Move layer up';
-            upBtn.appendChild(faIcon('ph-arrow-up', 'text-xs'));
+            upBtn.appendChild(phIcon('ph-arrow-up', 'text-xs'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(upBtn) || layer, 'up');
@@ -1079,7 +1101,7 @@ export class AnnotationBoardPanel {
             const downBtn = document.createElement('button');
             downBtn.className = 'btn btn-ghost btn-xs btn-square';
             downBtn.title = 'Move layer down';
-            downBtn.appendChild(faIcon('ph-arrow-down', 'text-xs'));
+            downBtn.appendChild(phIcon('ph-arrow-down', 'text-xs'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(downBtn) || layer, 'down');
@@ -1195,37 +1217,44 @@ export class AnnotationBoardPanel {
         titleEl.textContent = this._getAnnotationDisplayText(object);
         if (isFiltered) titleEl.classList.add('line-through');
 
-        timeEl.textContent = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        // `created` is assigned only on the INTERACTIVE creation path
+        // (`_promoteHelperAnnotation`); nothing on the import path sets it. So an
+        // unguarded `new Date(undefined)` printed the literal "Invalid Date" on
+        // every imported row — EMPAIA, GeoJSON, QuPath, session restore alike.
+        // An unknown time is shown as no time; a convertor that knows the real
+        // one carries it in `created` and gets it rendered here for free.
+        const createdAt = new Date(object.created);
+        timeEl.textContent = Number.isFinite(createdAt.getTime())
+            ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
         areaEl.replaceChildren();
-        // Measurement readers walk factory-specific geometry and can throw on a
+        // One funnel with the canvas pill — `getAnnotationLabel` resolves an
+        // attached value, then a preset's `labelSource`, then geometry, and says
+        // which answered. This row used to re-implement the area-else-length
+        // ladder with its own formatters, which is how it came to show a length
+        // for an Arrow (a type that opts out of measurements on canvas) and how
+        // it would have kept showing an area for a shape whose pill shows a
+        // prediction.
+        //
+        // Label readers walk factory-specific geometry and can throw on a
         // malformed annotation (e.g. a group that imported without children).
         // Isolate the failure to this one row instead of aborting the whole
         // board render — same policy as `initObject` in annotations-canvas.js.
         try {
-            const area = factory?.getArea?.(object);
-            if (Number.isFinite(area) && area > 0) {
-                // ph-bounding-box = area metric (square units).
-                areaEl.append(
-                    faIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
-                    this._formatArea(area)
-                );
+            const { text, source } = this.fabric.getAnnotationLabel?.(object)
+                ?? { text: '', source: '' };
+            if (text) {
+                // ph-bounding-box = area (square units), ph-ruler = length
+                // (linear units, never ²), ph-tag = a value someone attached,
+                // whose units are its own business.
+                const icon = source === 'area' ? 'ph-bounding-box'
+                    : source === 'length' ? 'ph-ruler' : 'ph-tag';
+                areaEl.append(phIcon(icon, 'text-[9px] mr-0.5 align-middle'), text);
             } else {
-                // Fall back to length for 1-D shapes (line, angle) where
-                // `getArea` is unimplemented or returns 0. `_formatLength` uses
-                // `imageLengthToGivenUnits` which formats with linear units
-                // (µm, mm, …) — never ². ph-ruler marks the value as length.
-                const length = factory?.getLength?.(object);
-                if (Number.isFinite(length) && length > 0) {
-                    areaEl.append(
-                        faIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
-                        this._formatLength(length)
-                    );
-                } else {
-                    areaEl.textContent = '—';
-                }
+                areaEl.textContent = '—';
             }
         } catch (e) {
-            console.warn('Annotation board: measurement failed for',
+            console.warn('Annotation board: label failed for',
                 object?.factoryID || object?.type, object?.incrementId, e);
             areaEl.replaceChildren();
             areaEl.textContent = '—';
@@ -1261,7 +1290,7 @@ export class AnnotationBoardPanel {
             upBtn.style.minHeight = '17px';
             upBtn.style.height = '17px';
             upBtn.title = 'Move up';
-            upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
+            upBtn.appendChild(phIcon('ph-caret-up', 'text-[10px]'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(upBtn) || object;
@@ -1273,7 +1302,7 @@ export class AnnotationBoardPanel {
             downBtn.title = 'Move down';
             downBtn.style.minHeight = '17px';
             downBtn.style.height = '17px';
-            downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
+            downBtn.appendChild(phIcon('ph-caret-down', 'text-[10px]'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(downBtn) || object;
@@ -1289,7 +1318,7 @@ export class AnnotationBoardPanel {
             const menuBtn = document.createElement('button');
             menuBtn.className = 'btn btn-ghost btn-xs btn-square';
             menuBtn.title = 'Annotation actions';
-            menuBtn.appendChild(faIcon('ph-dots-three-vertical', 'text-xs'));
+            menuBtn.appendChild(phIcon('ph-dots-three-vertical', 'text-xs'));
             menuBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(menuBtn) || object;
@@ -1390,7 +1419,7 @@ export class AnnotationBoardPanel {
         const upBtn = document.createElement('button');
         upBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         upBtn.title = 'Move group up';
-        upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
+        upBtn.appendChild(phIcon('ph-caret-up', 'text-[10px]'));
         upBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'up');
@@ -1399,7 +1428,7 @@ export class AnnotationBoardPanel {
         const downBtn = document.createElement('button');
         downBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         downBtn.title = 'Move group down';
-        downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
+        downBtn.appendChild(phIcon('ph-caret-down', 'text-[10px]'));
         downBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'down');
@@ -1410,7 +1439,7 @@ export class AnnotationBoardPanel {
         const layerBtn = document.createElement('button');
         layerBtn.className = 'btn btn-ghost btn-xs btn-square';
         layerBtn.title = 'Move group to layer';
-        layerBtn.appendChild(faIcon('ph-stack', 'text-xs'));
+        layerBtn.appendChild(phIcon('ph-stack', 'text-xs'));
         layerBtn.onclick = (e) => {
             e.stopPropagation();
             this._openMoveToLayerMenuForGroup(layerBtn, members);
@@ -1685,12 +1714,13 @@ export class AnnotationBoardPanel {
         container.addEventListener('pointerdown', handler);
     }
 
+    /**
+     * Only the layer aggregate formats here now — a per-row length formatter
+     * lived beside this one until the row started reading `getAnnotationLabel`,
+     * which formats through the factory's own scalebar path.
+     */
     _formatArea(area) {
         return this.viewer?.scalebar?.imageAreaToGivenUnits ? this.viewer.scalebar.imageAreaToGivenUnits(area || 0) : String(area || 0);
-    }
-
-    _formatLength(length) {
-        return this.viewer?.scalebar?.imageLengthToGivenUnits ? this.viewer.scalebar.imageLengthToGivenUnits(length || 0) : String(length || 0);
     }
 
     _computeLayerArea(layer) {

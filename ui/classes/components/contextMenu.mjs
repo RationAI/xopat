@@ -123,17 +123,16 @@ export class ContextMenu extends BaseComponent {
 
     _iconNode(icon, iconCss) {
         // Use inline-flex with centered alignment so the glyph itself —
-        // which varies in natural width between fa-trash, fa-layer-group,
-        // fa-arrows-up-down, fa-shapes, etc. — is always centered inside
+        // which varies in natural width between ph-trash, ph-stack,
+        // ph-arrows-vertical, ph-shapes, etc. — is always centered inside
         // a 20px box. Without this, taller / wider glyphs visibly shift the
         // adjacent label, making the padding between icon and text appear
         // inconsistent across rows.
         const base = "inline-flex items-center justify-center shrink-0";
         const style = "width: 20px; height: 20px; font-size: 16px; line-height: 1;";
         if (!icon) return span({ class: base, style });
-        const isPh = String(icon).trim().startsWith('ph-');
         return span({
-            class: `${base} ${isPh ? 'ph-light' : 'fa-auto'} ${icon}`,
+            class: `${base} ph-light ${icon}`,
             style: `${style} ${iconCss || ""}`,
         });
     }
@@ -184,7 +183,7 @@ export class ContextMenu extends BaseComponent {
                     this._iconNode(item.icon, item.iconCss),
                     span({ class: "whitespace-nowrap" }, item.title || "")
                 ),
-                // Use a Font Awesome chevron rather than the U+25B6 triangle:
+                // Use an icon-font caret rather than the U+25B6 triangle:
                 // some systems render ▶ with emoji presentation (a coloured
                 // raster glyph), which clashes with the rest of the menu.
                 i({ class: "ph-light ph-caret-right opacity-60 ml-2 shrink-0", style: "font-size: 11px;" })

@@ -1,0 +1,47 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "time-series"
+  },
+  "data": [
+    "slides/slide.tif",
+    "slides/annotations.tif",
+    "slides/cancer-inference.tif",
+    "slides/explainability.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "Series reference slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Overlay timeline",
+      "shaders": {
+        "timeline_overlay": {
+          "name": "Timeline overlay",
+          "type": "time-series",
+          "visible": 1,
+          "fixed": false,
+          "seriesRenderer": "identity",
+          "series": [
+            1,
+            2,
+            3
+          ],
+          "params": {
+            "timeline": {
+              "type": "range_input",
+              "default": 0,
+              "min": 0,
+              "step": 1,
+              "title": "Overlay frame"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

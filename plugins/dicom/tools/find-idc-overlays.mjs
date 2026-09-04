@@ -115,6 +115,13 @@ console.log(JSON.stringify({
             // The proxy does not implement QIDO /patients; probing it produces a
             // loud CORS error even though the plugin recovers.
             supportsPatients: false,
+        },
+        // What to open belongs to the browser plugin: `dicom` is the protocol half
+        // and has no default study of its own (plugins/dicom/README.md).
+        "dicom-browser": {
+            enabled: true,
+            permaLoad: true,
+            renderDerivedObjects: true,
             studyUID: best.studyUID,
         },
     },

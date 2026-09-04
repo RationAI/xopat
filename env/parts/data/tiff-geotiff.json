@@ -1,0 +1,37 @@
+{
+  "$meta": {
+    "description": "Raw TIFF from a static file server, decoded by the geotiff module",
+    "dimension": "data",
+    "clientKey": "localhost",
+    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+  },
+  /**
+   * The `geotiff` half of the TIFF pair — same file server, different decoder,
+   * which is the only reason both exist. Compose one or the other against the
+   * same slides to compare them; the `data` dimension refuses both at once.
+   *
+   * Serve the scans folder first:  node tmp/slide-fileserver.mjs
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "default_background_protocol": "tiff",
+        "default_visualization_protocol": "tiff"
+      }
+    },
+    "setup": {
+      "webGlPrecision": "auto"
+    }
+  },
+  "modules": {
+    "geotiff": {
+      "enabled": true,
+      "permaLoad": true,
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>",
+      "autoConfigure": true,
+      "registerSlideProtocol": true
+    },
+    "webtiff": { "enabled": false },
+    "rationai-wsi-tile-source": { "enabled": false }
+  }
+}

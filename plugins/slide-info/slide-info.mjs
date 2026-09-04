@@ -64,14 +64,25 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 ];
                 if (clinical) page.push(this._displaySectionToSpec(clinical));
                 // Technical block is a placeholder filled post-render with a real
-                // <details> node — the menu-pages string→innerHTML path runs a
-                // sanitizer that strips <details>/<summary> (only div-like tags
-                // survive), so a declarative {type:"collapse"} loses its wrapper.
+                // <details> node. Historically the menu-pages body was re-parsed
+                // by the UI layer's untrusted-text allowlist, which has no
+                // <details>/<summary>, so a declarative {type:"collapse"} lost
+                // its wrapper. menu-pages now hands over nodes, but the fill is
+                // kept: it is also what carries the live toggle handlers.
                 const techId = `slide-info-tech-${viewer.id}`;
                 if (technical.length) {
                     page.push({ type: "div", id: techId, extraClasses: "hidden" });
                 }
                 if (!clinical && !technical.length) page.push(this._noMetadataSpec());
+
+                // Slide actions live inside this per-viewer page — no new
+                // top-level menu entry. Placeholder filled post-render because
+                // the JSON path is sanitized and cannot carry a live handler.
+                const downloadId = `slide-info-download-${viewer.id}`;
+                const offersDownload = this._canDownloadSlide(source);
+                if (offersDownload) {
+                    page.push({ type: "div", id: downloadId, extraClasses: "hidden mt-1" });
+                }
 
                 result.page = page;
 
@@ -81,6 +92,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                     || null;
                 if (bg?.id) this._fillSlideLabel(viewer, bg, labelId);
                 if (technical.length) this._fillTechnical(techId, technical);
+                if (offersDownload) this._fillDownloadAction(downloadId, source, viewer);
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
                 result.page = [{
@@ -147,7 +159,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                     class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
                 },
                 van.tags.div({ class: "mb-6 opacity-20" },
-                    new UI.FAIcon({ name: "fa-images", extraClasses: "text-9xl" }).create()
+                    new UI.PhIcon({ name: "ph-images", extraClasses: "text-9xl" }).create()
                 ),
                 van.tags.h2({ class: "text-2xl font-bold mb-2" }, this.t('demo.title')),
                 van.tags.p({ class: "max-w-md mb-6 opacity-70" }, this.t('demo.hint')),
@@ -570,8 +582,108 @@ addPlugin('slide-info', class extends XOpatPlugin {
         });
     }
 
+    /**
+     * Whether a "Download slide" action should be offered for `source`.
+     *
+     * Two independent gates: the optional tile-source capability (only some
+     * protocols can hand back the original file — see `src/tile-source.ts`) and
+     * the plugin capability, which an operator can deny per role. The capability
+     * check is client-side UI gating; the backend still authorizes the fetch.
+     * @private
+     */
+    _canDownloadSlide(source) {
+        if (!this.can('slide-info.download-slide')) return false;
+        try {
+            return typeof source?.canDownloadSlideFile === "function" && source.canDownloadSlideFile();
+        } catch (e) {
+            console.warn("slide-info: canDownloadSlideFile threw", e);
+            return false;
+        }
+    }
+
+    /**
+     * Context-menu entry for downloading the original slide file, or null when
+     * the slide offers none. Shared by the canvas menu and the slide-card menu
+     * so both surfaces gate identically.
+     * @private
+     */
+    _downloadMenuItem(source, viewer, fallbackName) {
+        if (!this._canDownloadSlide(source)) return null;
+        return {
+            title: this.t('info.downloadSlide'),
+            icon: 'ph-download-simple',
+            action: () => UTILITIES.downloadSlideFile(source, { viewer, fallbackName })
+                .catch(() => { /* already reported to the user by the driver */ }),
+        };
+    }
+
+    /**
+     * Canvas right-click entry. The source comes from the event's own viewer —
+     * never `window.VIEWER`, which in a multi-viewport grid is whichever viewport
+     * happens to hold focus.
+     * @private
+     */
+    _registerCanvasMenu() {
+        if (this._canvasMenuRegistered || !globalThis.CanvasContextMenu) return;
+        globalThis.CanvasContextMenu.register(`${this.id}-download`, (ctx) => {
+            const source = ctx.viewer?.world?.getItemAt(0)?.source;
+            const item = this._downloadMenuItem(source, ctx.viewer, this._slideNameFor(ctx.viewer));
+            return item ? [item] : [];
+        }, -10);
+        this._canvasMenuRegistered = true;
+    }
+
+    /**
+     * Display name of the slide open in `viewer`, used as the download's file-name
+     * fallback when neither the server nor the source names the file.
+     * @private
+     */
+    _slideNameFor(viewer) {
+        try {
+            const bg = viewer?.world?.getItemAt(0)?.getConfig?.("background")
+                || viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
+            return bg ? UTILITIES.nameFromBGOrIndex(bg) : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /**
+     * Inject the "Download slide" button into its placeholder in the per-viewer
+     * info page. Same post-render technique as `_fillTechnical`: the menu-pages
+     * JSON path renders to sanitized HTML, which cannot carry a live handler.
+     * @private
+     */
+    _fillDownloadAction(containerId, source, viewer) {
+        let tries = 0;
+        const attempt = () => {
+            const host = document.getElementById(containerId);
+            if (!host) {
+                if (tries++ < 5) requestAnimationFrame(attempt);
+                return;
+            }
+            const fallbackName = this._slideNameFor(viewer);
+            const button = new UI.Button(
+                {
+                    size: UI.Button.SIZE.SMALL,
+                    outline: UI.Button.OUTLINE.ENABLE,
+                    extraClasses: "w-full",
+                    onClick: () => UTILITIES.downloadSlideFile(source, { viewer, fallbackName })
+                        .catch(() => { /* already reported to the user by the driver */ }),
+                },
+                new UI.PhIcon({ name: 'ph-download-simple' }).create(),
+                this.t('info.downloadSlide')
+            );
+            host.innerHTML = "";
+            host.appendChild(UI.BaseComponent.toNode(button));
+            host.classList.remove("hidden");
+        };
+        requestAnimationFrame(attempt);
+    }
+
     async pluginReady() {
         await this._localeReady;
+        this._registerCanvasMenu();
         // Load visited history before first render so already-seen slides show
         // the badge immediately (and resolve the gate for early open events).
         await this._hydrateVisited();

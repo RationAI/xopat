@@ -29,6 +29,19 @@ const {
     setLoggingConfig,
 } = require("./logging");
 
+const roles = require("./roles");
+
+/**
+ * The viewer core config a role decision resolves against.
+ *
+ * Every RPC ctx carries it; a server-route ctx may not, and a role check with
+ * no config resolves against no definitions — which is "nothing is denied", the
+ * same answer an unconfigured deployment gives everywhere else.
+ */
+function resolveCore(ctx) {
+  return ctx?.core || {};
+}
+
 // `auth.js` only depends on ./utils, so this is cycle-free.
 const {
     verifyJwtToken,
@@ -36,6 +49,8 @@ const {
     requireRpcAuthContext,
     resolveVerifierContext,
     RpcAuthContextError,
+    setSessionAllowedProxies,
+    proxyAliasAllowedForSession,
 } = require("./auth");
 
 /**
@@ -419,10 +434,25 @@ function createServerHelpers(runtime) {
     requireSecureValue,
     getRpcAuthConfig,
     getProxyConfig,
+    // Which `/proxy/<alias>` targets a session may reach. Sessions start
+    // unrestricted ('ALL') because they are minted anonymously; an auth module
+    // narrows this on a completed login — `setSessionAllowedProxies(ctx.session,
+    // ["cerit"])`, or 'NONE'. It is UI-independent authorization, enforced in the
+    // proxy handler, and it survives the session write-back.
+    setSessionAllowedProxies,
+    proxyAliasAllowedForSession,
     // Caller identity. Prefer these over reading ctx.user directly — see the
     // "The principal" section of server/node/README.md.
     resolvePrincipal,
     tryResolvePrincipal,
+    // Caller ROLES, resolved from the verified token — the half of the roles
+    // system that is authorization rather than UI gating. Prefer the
+    // declarative `policy.<method>.capabilities` key over calling these; reach
+    // for them when the answer depends on the record being touched (this
+    // annotation's owner) rather than on the method alone.
+    resolveRoles: (ctx) => roles.resolveRoles(ctx, resolveCore(ctx)),
+    can: (ctx, capabilityId) => roles.can(ctx, capabilityId, resolveCore(ctx)).ok,
+    explainCapability: (ctx, capabilityId) => roles.can(ctx, capabilityId, resolveCore(ctx)),
     // Enforce the auth context a RESOURCE requires, mid-request. Unlike the
     // request-time gate this cannot be steered by the caller: the context comes
     // from your record, not from the request body. Main-context spellings
@@ -502,6 +532,9 @@ module.exports = {
   getProxyConfig,
   resolvePrincipal,
   tryResolvePrincipal,
+  resolveRoles: roles.resolveRoles,
+  canRole: roles.can,
+  checkCapabilities: roles.checkCapabilities,
   parseServerTarget,
   resolveServerFile,
   loadServerModuleFromFile,

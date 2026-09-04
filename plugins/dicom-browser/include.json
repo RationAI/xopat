@@ -1,0 +1,43 @@
+{
+  "id": "dicom-browser",
+  "version": "1.0.0",
+  "name": "%meta.name%",
+  "description": "%meta.description%",
+  "author": "Aiosa",
+  "categories": ["Navigation"],
+  "keywords": ["dicom", "dicomweb", "browser", "patients", "studies", "series"],
+  "icon": "ph-folders",
+  // The browsing half of the DICOM integration. The `dicom` plugin is a pure
+  // protocol: it renders what a session declares and nothing more. Loading THIS
+  // plugin is what turns that into an application — a patient/study/series
+  // explorer in the slide switcher, boot-time defaults, and automatic discovery
+  // of derived SEG / Parametric Map overlays.
+  //
+  // Deliberately NOT declared under `modules`/`includes`: cross-plugin ES
+  // imports are forbidden (AGENTS.md §0.5). The coupling is a runtime
+  // `plugin('dicom')` lookup against that plugin's read-only query API, so this
+  // plugin degrades to inert (one console warning) when `dicom` is absent
+  // rather than breaking the load.
+  //
+  // Default study/series/patient to open at boot. These moved here from
+  // `plugins.dicom.*`; that location is still read for one release, with a
+  // warning naming the new key.
+  // "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+  // "seriesUID": "…",
+  // "patientUID": "PAT123",
+  //
+  // Discover DICOM Segmentation / Parametric Map series derived from an opened
+  // slide and render them as overlay shader layers. Discovery costs one QIDO
+  // series listing plus one metadata fetch per SEG/OT candidate per study, so
+  // deployments whose stores hold many unrelated derived objects may want it
+  // off. Deployment-controlled (getStaticMeta), not session-controlled.
+  //
+  // Note this is the *automatic* discovery. A session can always ask for
+  // overlays explicitly with `dataID.derived`, which needs neither this plugin
+  // nor this flag.
+  "renderDerivedObjects": true,
+  // Override the runtime QIDO probe for `/patients`. Set to `false` for cloud
+  // stores that don't implement it (e.g. Google Healthcare). Leave unset to
+  // auto-detect at runtime. Read from `plugins.dicom.supportsPatients` too.
+  // "supportsPatients": false
+}

@@ -27,6 +27,20 @@ remappable commands.** They depend on the context they are pressed in and stay
 as fixed widget-local handlers (e.g. Escape closing dropdowns in `app.ts`,
 Delete/Escape in the annotations key loop). Do not register them.
 
+**A contextual key may drop `requiresCanvasFocus`-style gating when what it acts
+on is unambiguous app state rather than a region of the screen.** Annotation
+Delete is the reference case: it targets the annotation *selection*, which the
+board panel drives just as much as the canvas does, so gating it on canvas hover
+only meant the key died the moment the pointer left the canvas. When you do
+that, the editable-target guard stops being incidental and becomes the *only*
+thing standing between the user and data loss — `e.focusCanvas` was silently
+doubling as a typing check (it goes null whenever an editable element is
+focused, `loader.ts` `getIsViewerFocused`). Test against `INPUT`, `TEXTAREA`,
+`SELECT` and `contentEditable`, falling back to `document.activeElement`; the
+canonical rule is `isEditableTarget` in `shortcut-manager.ts`. Keys that carry a
+side effect beyond their obvious target (annotation Escape also resets the
+drawing mode) should stay scoped.
+
 ## Registering a shortcut
 
 ```js
@@ -71,7 +85,7 @@ what lets the app-bar quick-actions catalogue surface it as a button (see
 - it **bypasses `scope`** (a button click has no canvas focus) and passes
   `event: null`. **A `quickAction` handler must therefore never dereference
   `ctx.event`.** Audit that before setting the flag;
-- `icon` is presentation only (`ph-*`/`fa-*` class or image URL, used by icon
+- `icon` is presentation only (`ph-*` class or image URL, used by icon
   slots). It does *not* imply `quickAction` — an icon in the Keymap panel must
   not silently make a keyboard-only handler clickable.
 

@@ -97,6 +97,9 @@ class DockableWindow extends BaseComponent {
 
         this._isBootstrappingVisibility = false;
         this._deferredInitialVisibilitySync = false;
+        // Set only while replaying the cached state at registration time, so
+        // that replay cannot be mistaken for a request to focus this tab.
+        this._applyingInitialVisibility = false;
         if (!options.visibilityManager && typeof this.visibilityManager.init === "function") {
             this._isBootstrappingVisibility = true;
             this.visibilityManager.init(
@@ -245,6 +248,73 @@ class DockableWindow extends BaseComponent {
         this.visibilityManager?.set?.(true);
     }
 
+    /**
+     * Record a visibility decision that {@link UI.MainLayout} already made and
+     * already persisted — "the layout decided, take note, do not act on it".
+     *
+     * The dock keeps tab visibility in `tab.hidden` + `AppCache v::<tabId>`,
+     * written by `MainLayout._setTabVisibleState`. Without this call the
+     * wrapper's {@link VisibilityManager} never learns about `showTab`/`hideTab`
+     * and its `is()` answers from whatever the cache said at boot — a desync
+     * that silently strands every consumer reading the wrapper.
+     *
+     * Deliberately uses `on()`/`off()` rather than `set()`: the cache write is
+     * the layout's, on the very same key, so `set()` would double-write.
+     *
+     * @param {boolean} visible state the layout just applied
+     * @returns {boolean} true when the wrapper state actually changed
+     *
+     * @note An `onChange` subscriber reached from here must NOT call
+     *   `MainLayout.showTab`/`hideTab` or {@link DockableWindow#open}/`close` —
+     *   those re-enter this path. Subscribe to observe, not to steer.
+     */
+    adoptTabVisibility(visible) {
+        const vm = this.visibilityManager;
+        if (!vm) return false;
+
+        // The load-bearing re-entrancy guard: any layout<->wrapper cycle
+        // terminates in one hop, and the boot-time `_syncMenuTabs` sweep (which
+        // feeds back the state derived from this very manager) is a no-op — so
+        // it cannot fire spurious change handlers nor pop the dock open against
+        // `params.ui.globalMenu = false`.
+        if (vm.is() === !!visible) return false;
+
+        // `_applyCurrentVisibility` early-returns on this latch, so flipping the
+        // flag here cannot bounce back into `showGlobalMenu()`/`showTab()`.
+        this._syncingVisibility = true;
+        try {
+            visible ? vm.on?.() : vm.off?.();
+        } finally {
+            this._syncingVisibility = false;
+        }
+        return true;
+    }
+
+    /**
+     * Whether the window is actually on screen right now, as opposed to merely
+     * flagged visible. In tab mode that means: the wrapper is visible AND the
+     * dock is open AND this is the focused tab — an unfocused tab's content div
+     * carries `display-none`, so its "visible" tab is still invisible.
+     *
+     * @returns {boolean}
+     *
+     * @note This is a synchronous point query and it CAN go stale: tab focus
+     *   changes emit no event ({@link UI.Menu#focus} is silent). A consumer that
+     *   needs push semantics for "am I on screen" should put an
+     *   `IntersectionObserver` on its own node instead of polling this.
+     */
+    isEffectivelyVisible() {
+        const vm = this.visibilityManager;
+        if (!vm?.is?.()) return false;
+
+        if (this.isFloating()) {
+            return !!this._floating?.isOpened?.();
+        }
+
+        const layout = this._layout || globalThis.LAYOUT;
+        return !!layout?.isDockVisible?.() && layout.getFocusedTabId?.() === this._tabId;
+    }
+
     // ---------- BaseComponent override ----------
 
     /**
@@ -358,8 +428,29 @@ class DockableWindow extends BaseComponent {
             }
 
             this._ensureTab();
+
+            if (this._applyingInitialVisibility) {
+                // Registration-time replay of the cached state, not a request to
+                // reveal anything. Routing it through showTab would focus this
+                // tab and so let whichever wrapper registered last override the
+                // tab the user was actually last on.
+                if (visible) layout?.showGlobalMenu?.(false);
+                layout?._applyDockVisibility?.();
+                return;
+            }
+
+            // Reveal THIS tab, not merely the dock: `showGlobalMenu()` alone
+            // pops the dock open on whatever tab happened to be focused, so a
+            // window hidden via `hideTab` stayed hidden while some unrelated
+            // panel appeared. showTab/hideTab also focus, persist and refresh
+            // the View dropdown. Termination: they route into
+            // `_setTabVisibleState → adoptTabVisibility`, which no-ops because
+            // the manager already holds this state — plus we are inside the
+            // `_syncingVisibility` latch.
             if (visible) {
-                layout?.showGlobalMenu?.();
+                layout?.showTab?.(this._tabId);
+            } else {
+                layout?.hideTab?.(this._tabId);
             }
             layout?._applyDockVisibility?.();
         } finally {
@@ -371,7 +462,12 @@ class DockableWindow extends BaseComponent {
     _flushDeferredVisibilitySync() {
         if (!this._deferredInitialVisibilitySync) return;
         this._deferredInitialVisibilitySync = false;
-        this._applyCurrentVisibility();
+        this._applyingInitialVisibility = true;
+        try {
+            this._applyCurrentVisibility();
+        } finally {
+            this._applyingInitialVisibility = false;
+        }
     }
 
     /** @private */

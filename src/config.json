@@ -298,6 +298,7 @@
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
      *   webGlPrecision: ?string,
+     *   webGlPrivateContextBudget: ?number,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
@@ -308,6 +309,7 @@
      *   visualizationInspectorMode: ?string,
      *   visualizationInspectorRadiusPx: ?number,
      *   visualizationInspectorLensZoom: ?number,
+     *   flexInteractionForwarding: ?string,
      *   faultyTileThreshold: ?number
      * }} xoParams
      */
@@ -444,6 +446,16 @@
         // because the offscreen color array doubles in size, per renderer, and every viewer
         // also has a navigator renderer.
         "webGlPrecision": "unorm8",
+        // How many viewer cells may hold their OWN WebGL context. A private context
+        // makes the presentation canvas the WebGL canvas, so the per-frame
+        // readPixels + putImageData transfer a shared context needs disappears
+        // (measured at 18% of wall clock in a profiled session). Counted in cells,
+        // not renderers: a cell costs two contexts because OpenSeadragon gives the
+        // navigator the same drawer options. Cells past the budget fall back to the
+        // one shared context, which is what keeps hosts spawning many viewers
+        // (Jupyter) under the browser's ~16-context cap. 0 disables private
+        // contexts entirely. See src/classes/app/flex-renderer-context.ts.
+        "webGlPrivateContextBudget": 6,
         // Hide the plugin catalogue: the listing that browses available plugins and
         // loads new ones. Plugins that ARE loaded (server-attached, session-declared
         // or client-loaded at boot) keep their menus, view panels and settings.
@@ -456,6 +468,11 @@
         "visualizationInspectorMode": "reveal-inside",
         "visualizationInspectorRadiusPx": 96,
         "visualizationInspectorLensZoom": 2,
+        // FlexDrawer pointer forwarding, required by shaders that read `fr_interaction_*`
+        // state (e.g. the fisheye lens). "auto" enables it per viewer only while such a
+        // visible layer exists; "always" pins it on, "never" pins it off. Forwarding makes
+        // each changed pointer move force a viewer redraw, hence the default.
+        "flexInteractionForwarding": "auto",
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
         "isStaticPreview": false,
         "historySize": 50,
@@ -533,10 +550,50 @@
         // If you have some secret you MUST NOT expose at any cost, do your logics
         // via proxying and use your secrets in the 'secure' part of the server configuration.
         "secure": {
+            // Example sessions this deployment publishes. The server prints them as
+            // ready-to-open URLs in its startup banner (always — not gated on dev mode);
+            // there is deliberately NO client consumer and no /scheme exposure, so an
+            // example naming a private study UID cannot become a discovery endpoint.
+            //
+            // A KEYED OBJECT, never an array: the ENV composer replaces arrays wholesale
+            // and treats a cross-layer array replacement as a fatal conflict, so two
+            // fragments each contributing a list could not compose. Objects deep-merge,
+            // while two layers claiming the same id with different content still fail.
+            //
+            // Each record carries the session inline ("session") or by repo-relative path
+            // ("sessionFile"), plus optional "name" / "description" / "order".
+            // See server/node/examples.js and env/README.md.
+            "examples": {
+                //"dicom-seg-pmap": {
+                //    "name": "DICOM: slide with SEG + parametric map",
+                //    "description": "Nuclei segmentation and a float score map.",
+                //    "order": 10,
+                //    "session": { "data": [], "background": [] }
+                //},
+                //"basic-overlay": {
+                //    "name": "Basic overlay",
+                //    "sessionFile": "test/fixtures/sessions/basic-overlay.json"
+                //}
+            },
             // The server supports url+header configuration for custom proxies. You can
             // - configure module/plugin to use local proxy endpoint
             // - configure the proxy here
             // Request headers belong only here in secure server config, never in viewer/session params.
+            //
+            // SECURITY: an alias that declares "headers" (i.e. injects an operator
+            // credential upstream) MUST also declare "auth" with at least one verifier.
+            // The session + CSRF check the proxy route performs is NOT authorization:
+            // a session is minted to any anonymous page load and the CSRF token is
+            // rendered into that page, so both only prove the request came from this
+            // origin. Without a verifier the alias is an open relay to its upstream,
+            // spending the operator's credential, for every visitor. Such an alias is
+            // REFUSED (500). Two explicit opt-outs, for aliases that are meant to be
+            // public: per alias `"auth": {"enabled": false}`, or the deployment-wide
+            // switch below.
+            //
+            // Deployment-wide escape hatch. Leave it out (default true) unless you
+            // really do want unauthenticated callers spending operator credentials.
+            //"proxyCredentialsRequireAuth": false,
             "proxies": {
               // My proxy service will proxy a resource using token that is NOT exposed on the client.
               //"my-service": {
@@ -657,24 +714,12 @@
     "js": {
         // src/libs      key: source / [sources,list]
         "libs": {
-            "jquery": "jquery.min.js",
-            "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
-            "kinetic": "kinetic-v5.1.0.min.js",
-            "scroll_to": "scrollTo.min.js",
+            "i18n": ["i18next.min.js"],
             "unzip_it": "unzipit.min.js",
             "ajv": "ajv7.min.js",
+            /* Must precede 'render': flex-renderer requires the global noUiSlider. */
+            "nouislider": "nouislider.min.js",
             "render": "flex-renderer/flex-renderer.js"
-        },
-        // src/external  key: source / [sources,list]
-        "external": {
-            "common": [
-                "enjoyhint.js",
-                "js.cookie.js",
-                "osd_tools.js",
-                "viewport-registration.js",
-                "scalebar.js",
-                "nouislider.min.js"
-            ]
         },
         /**
          * Unlike other keys, keys inside 'src' are pre-determined and must be kept:
@@ -721,13 +766,8 @@
     "css": {
         "libs": {
             "primer": "primer_css.css",
-            "fontawesome": "fontawesome/css/v6-all.css",
             "phosphor": "phoshor-icons/style.css",
-            "fa-to-phosphor": "phoshor-icons/fa-overrides.css",
-            "tailwind": "tailwind.min.css"
-        },
-        "external": {
-            "enjoyhint": "enjoyhint.css",
+            "tailwind": "tailwind.min.css",
             "nouislider": "nouislider.css"
         },
         "src": {

@@ -1,5 +1,6 @@
 import { defineDicomSegShader } from './dicom-seg.mjs';
 import { defineDicomParametricShader } from './dicom-parametric.mjs';
+import { defineDicomWindowShader } from './dicom-window.mjs';
 
 let registered = false;
 
@@ -36,12 +37,13 @@ export function registerDicomShaderLayers(t = defaultTranslator) {
     if (!registry || !$.FlexRenderer.ShaderLayer) {
         // WebGL rendering is unavailable (or the renderer failed its capability
         // gate). Overlays simply will not be offered — the slide still opens.
-        console.warn("[dicom] flex-renderer unavailable; SEG/parametric overlays disabled.");
+        console.warn("[dicom] flex-renderer unavailable; SEG/parametric overlays and radiology windowing disabled.");
         return false;
     }
 
     registry.register(defineDicomSegShader($, t));
     registry.register(defineDicomParametricShader($, t));
+    registry.register(defineDicomWindowShader($, t));
     registered = true;
     return true;
 }

@@ -3,8 +3,7 @@
   "icon": "ph-chats-circle",
   "description": "Integration hub for AI chat models",
   "requires": [
-    "@xopat-npm-module/marked",
-    "sanitize-html",
+    "markdown",
     "speech-to-text"
   ],
   "defaultPersonalityId": "pathology-assistant",

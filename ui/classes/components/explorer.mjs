@@ -1429,14 +1429,13 @@ export class Explorer extends BaseComponent {
      *        state; omit for an always-enabled button.
      */
     _btn(iconName, onClick, enabled) {
-        const isPh = String(iconName ?? '').trim().startsWith('ph-');
         const cls = enabled
             ? () => `join-item btn btn-sm${enabled.val ? "" : " btn-disabled"}`
             : "join-item btn btn-sm";
         const b = div({
             class: cls,
             onclick: (e) => { if (enabled && !enabled.val) return; return onClick(e); },
-        }, span({ class: `${isPh ? 'ph-light' : 'fa-auto'} ${iconName}` }));
+        }, span({ class: `ph-light ${iconName}` }));
         return b;
     }
 

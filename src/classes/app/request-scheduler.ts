@@ -10,10 +10,14 @@
  *
  * This scheduler is the single client-side concurrency bound for background
  * traffic. Only the `background` lane is gated; `high`/`normal` requests never
- * enter here (the tile path — `HttpClient.fetchRaw` — is untouched). Background
- * admission is capped per origin so a bounded share of the connection pool is
- * always left for tiles, and the cap drops further while tiles are actively
- * loading:
+ * enter here, which is what keeps the tile hot path free of it. Both
+ * `HttpClient.request` and `HttpClient.fetchRaw` accept `priority` and consult
+ * the scheduler only for the background values — `fetchRaw` is used for BOTH
+ * tile downloads (normal, ungated) and bulk metadata/listing traffic
+ * (background, gated), so the lane is chosen per call, not per method.
+ * Background admission is capped per origin so a bounded share of the
+ * connection pool is always left for tiles, and the cap drops further while
+ * tiles are actively loading:
  *
  *   - busy (any viewer's `imageLoader.jobsInProgress > 0`) → {@link _busyLimit}
  *   - idle                                                 → {@link _idleLimit}

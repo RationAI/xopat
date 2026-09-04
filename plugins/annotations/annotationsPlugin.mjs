@@ -75,6 +75,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
         this.setupQuickDrawShortcuts();
         this.setupActiveTissue();
+        this.setupRightsGating();
         this.initHandlers();
         this.initHTML();
         this.setupTutorials();
@@ -206,10 +207,38 @@ class AnnotationsGUI extends XOpatPlugin {
         this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
     }
 
+    /**
+     * Put annotations in read-only mode when the deployment denies creating them.
+     *
+     * Without this a denied role can still pick a drawing tool and press the
+     * canvas; every press then travels down a path that can only end in a
+     * refusal — and, before the preset fix, in a TypeError. `enableInteraction`
+     * is the module's existing kill-switch: it resets to `Modes.AUTO` and is
+     * checked by every click and key handler, so one call covers the whole
+     * surface rather than disabling buttons one by one (`ToolbarItem` has no
+     * enabled/disabled primitive to drive anyway).
+     *
+     * Reactive: rights can change mid-session without a reload.
+     */
+    setupRightsGating() {
+        const dispose = this.onCapabilityChange("annotations.crud:annotation.create", (enabled) => {
+            // Never re-enable what a deployment switched off for its own reasons
+            // (`enableInteraction(false)` is also used by other features) — only
+            // mirror OUR verdict when it is a denial.
+            if (!enabled) this.context.enableInteraction(false);
+            else if (this.context.disabledInteraction) this.context.enableInteraction(true);
+        });
+        if (typeof dispose === "function") {
+            (this._rightsDisposers = this._rightsDisposers || []).push(dispose);
+        }
+    }
+
     setupActiveTissue(bgImageConfigObject) {
         this.activeTissue = APPLICATION_CONTEXT.referencedName();
         if (!this.activeTissue) {
-            $('#annotations-shared-head').html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
+            const sharedHead = document.getElementById('annotations-shared-head');
+            // Head menu markup is built by the plugin itself, not user input.
+            if (sharedHead) sharedHead.innerHTML = this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue'));
             return false;
         }
         return true;

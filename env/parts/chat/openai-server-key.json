@@ -1,0 +1,49 @@
+{
+  "$meta": {
+    "description": "OpenAI chat with an operator-held key (server-side; never reaches the browser)",
+    "dimension": "chat",
+    "requires": []
+  },
+  /**
+   * `apiKey` is three-state (see `plugins/chat-openai/server.json`): a string is
+   * the operator's key, `""` means "a key is required but none is configured"
+   * (model discovery stays off and the panel shows the bring-your-own-key hint),
+   * and `false` declares the endpoint keyless.
+   *
+   * An UNSET `<% OPENAI_API_KEY %>` resolves to `""` — the middle state — so
+   * this fragment composes for anyone and picks the key up when the variable is
+   * present. That is why `requires` is empty: a missing key degrades to BYOK
+   * rather than breaking the deployment. NEVER put a placeholder *string* here:
+   * it is indistinguishable from a real key, so discovery runs and 401s.
+   *
+   * Login: this fragment says nothing about it. Adding
+   * `plugins.chat-openai.authMode: "jwt"` + `authContext: "core"` is what makes
+   * the provider report `requiresLogin`, and the `auth/*` fragment's
+   * `rpcVerifiers` entry is what enforces it server-side.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-openai": {
+            "providerDefaults": {
+              "apiKey": "<% OPENAI_API_KEY %>"
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-openai": { "enabled": true, "permaLoad": true },
+    /* One conversational provider at a time: two claiming the panel makes any
+       failure ambiguous about which one caused it. */
+    "chat-anthropic": { "enabled": false },
+    "chat-openai-compatible": { "enabled": false }
+  },
+  "modules": {
+    /* Pulled in by chat-openai's own `modules` list; named here so an operator
+       reading the composition can see what the chat actually loads. */
+    "vercel-ai-chat-sdk": { "enabled": true }
+  }
+}

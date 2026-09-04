@@ -177,6 +177,120 @@ function normalizePrincipalUser(raw, meta = {}) {
     };
 }
 
+// ── Proxy access policy ──────────────────────────────────────────────────────
+//
+// Two gates that run BEFORE the verifier set, because neither is about *who* the
+// caller is:
+//
+//  - the per-session alias allowlist answers "may THIS session reach that alias",
+//  - the credential gate answers "may this alias be reached with no auth at all".
+//
+// Both exist because session + CSRF is not authorization. A session is minted to
+// any anonymous page load and the CSRF token is rendered into that page, so those
+// two checks prove same-origin, nothing more. Without the gates below, an alias
+// carrying an operator API key in `proxies.<alias>.headers` is an open relay to
+// its upstream for every visitor.
+
+/** `allowedProxies` sentinel: no per-session restriction (the minting default). */
+const PROXY_ALLOW_ALL = "ALL";
+/** `allowedProxies` sentinel: this session may reach no alias at all. */
+const PROXY_ALLOW_NONE = "NONE";
+
+/**
+ * Whether `session.allowedProxies` permits `alias`.
+ *
+ * Missing / `'ALL'` means unrestricted — narrowing is opt-in, so no existing
+ * deployment changes behaviour by upgrading. An auth module narrows it at login
+ * (see {@link setSessionAllowedProxies}); the field lives in the session's SHARED
+ * half (`session-writeback.js`), so the narrowing persists and every cluster
+ * worker sees it.
+ *
+ * An unrecognised shape denies: the only reason the field is not one of the known
+ * values is that something tried to restrict this session, and a restriction we
+ * cannot read must not be read as "unrestricted".
+ */
+function proxyAliasAllowedForSession(session, alias) {
+    const allowed = session?.allowedProxies;
+    if (allowed === undefined || allowed === null || allowed === PROXY_ALLOW_ALL) return true;
+    if (allowed === PROXY_ALLOW_NONE) return false;
+    if (Array.isArray(allowed)) return allowed.includes(alias);
+    return false;
+}
+
+/**
+ * Narrow (or widen) the aliases a session may reach. For auth modules to call on
+ * a completed login — `XOPAT_SERVER.setSessionAllowedProxies(ctx.session, [...])`.
+ *
+ * Pass an array of aliases, `'ALL'`, or `'NONE'`. Mutates in place, which is what
+ * the deferred write-back picks up; there is no session-set API.
+ */
+function setSessionAllowedProxies(session, aliases) {
+    if (!session || typeof session !== "object") return;
+    if (aliases === PROXY_ALLOW_ALL || aliases === PROXY_ALLOW_NONE) {
+        session.allowedProxies = aliases;
+        return;
+    }
+    if (!Array.isArray(aliases)) {
+        throw new TypeError("setSessionAllowedProxies expects an array of aliases, 'ALL' or 'NONE'.");
+    }
+    session.allowedProxies = aliases.filter(a => typeof a === "string" && a);
+}
+
+/** Does this alias inject operator secrets (API keys) into the upstream request? */
+function proxyCarriesOperatorCredentials(proxyConfig) {
+    const headers = proxyConfig?.headers;
+    return !!headers && typeof headers === "object" && Object.keys(headers).length > 0;
+}
+
+/** Will {@link verifyProxyAuth} actually run a verifier for this alias? */
+function proxyAuthIsEnforced(proxyConfig) {
+    const authCfg = proxyConfig?.auth;
+    if (!authCfg || authCfg.enabled === false) return false;
+    return getVerifierEntries(authCfg.verifiers).length > 0;
+}
+
+/** Aliases whose misconfiguration has already been logged (one per process). */
+const proxyCredentialGateWarned = new Set();
+
+/**
+ * Refuse a credential-bearing alias that enforces no authentication.
+ *
+ * Fails CLOSED by default, and deliberately at the level of *config shape*: the
+ * dangerous combination — "operator API key attached" + "anyone with a session may
+ * call it" — is invisible in a config file until someone reads the proxy handler,
+ * which is how it stays in a deployment for years.
+ *
+ * Two opt-outs, both explicit operator statements rather than omissions:
+ *  - per-alias `auth: {"enabled": false}` — "this one is deliberately public",
+ *  - deployment-wide `server.secure.proxyCredentialsRequireAuth: false`.
+ *
+ * @returns {{ok: true} | {ok: false, message: string}}
+ */
+function checkProxyCredentialGate(alias, proxyConfig, secureConfig) {
+    if (!proxyCarriesOperatorCredentials(proxyConfig)) return { ok: true };
+    if (proxyAuthIsEnforced(proxyConfig)) return { ok: true };
+    // An `auth` block that says `enabled: false` is intent; a missing one is not.
+    if (proxyConfig?.auth && proxyConfig.auth.enabled === false) return { ok: true };
+    if (secureConfig?.proxyCredentialsRequireAuth === false) return { ok: true };
+
+    if (!proxyCredentialGateWarned.has(alias)) {
+        proxyCredentialGateWarned.add(alias);
+        authLog().error(
+            `[proxy] '${alias}' injects operator credentials (proxies.${alias}.headers) but enforces no ` +
+            `authentication, which makes it an open relay to its upstream for every visitor — a session and ` +
+            `a CSRF token are handed to any anonymous page load. Refusing the request. Fix it by configuring ` +
+            `proxies.${alias}.auth.verifiers; declare it deliberately public with ` +
+            `proxies.${alias}.auth = {"enabled": false}; or disable this check deployment-wide with ` +
+            `server.secure.proxyCredentialsRequireAuth: false.`
+        );
+    }
+    // Does not name the alias: this response renders on the viewer's own origin.
+    return {
+        ok: false,
+        message: "Proxy target is misconfigured: a credential-bearing proxy must enforce authentication.",
+    };
+}
+
 async function verifyProxyAuth(req, res, core, alias, proxyConfig, upstream) {
     const authCfg = proxyConfig.auth;
     if (!authCfg || authCfg.enabled === false) {
@@ -705,6 +819,13 @@ registerRpcAuthVerifier("jwt", async ({ req, core, verifierConfig, verifierName,
 module.exports = {
     registerProxyAuthVerifier,
     verifyProxyAuth,
+    proxyAliasAllowedForSession,
+    setSessionAllowedProxies,
+    checkProxyCredentialGate,
+    proxyAuthIsEnforced,
+    proxyCarriesOperatorCredentials,
+    PROXY_ALLOW_ALL,
+    PROXY_ALLOW_NONE,
     registerRpcAuthVerifier,
     verifyRpcAuth,
     runRpcVerifiers,

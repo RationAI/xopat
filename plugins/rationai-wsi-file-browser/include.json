@@ -4,7 +4,7 @@
   "author": "Vendula Penazova",
   "version": "1.0.0",
   "description": "%meta.description%",
-  "categories": ["Data"],
+  "categories": ["Navigation"],
   "keywords": ["wsi", "browser", "files", "rationai"],
   "icon": "ph-folder-open",
   "includes": [

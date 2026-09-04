@@ -1,0 +1,20 @@
+{
+  "$meta": {
+    "description": "No login — every auth broker off, RPCs unauthenticated",
+    "dimension": "auth"
+  },
+  /**
+   * The explicit absence of authentication.
+   *
+   * It exists as a fragment rather than "just omit the auth layer" because the
+   * brokers are not off by default in every element's `include.json`, and two
+   * brokers racing to claim the `core` context is a misconfiguration that
+   * presents as an unexplained login loop. Naming the choice makes it visible
+   * in the composed layer list.
+   */
+  "modules": {
+    "oidc-client-ts": { "enabled": false },
+    "oidc-server-ts": { "enabled": false },
+    "saml-auth": { "enabled": false }
+  }
+}

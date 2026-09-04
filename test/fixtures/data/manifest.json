@@ -1,0 +1,128 @@
+{
+    "$comment": [
+        "Fixture slide catalogue. Read by `test/harness/data/fetch.mjs` (npm run fixtures:fetch),",
+        "by `test/harness/data/derive.mjs` (which turns these into the viz-flex overlays),",
+        "and by `docs/site/scripts/generate-fixtures.mjs`, which renders the docs catalogue page",
+        "from it. One record per file, so a new fixture is one entry rather than an edit in",
+        "three places plus a shell script nobody runs.",
+        "",
+        "`asset` = filename on the release named by `baseUrl`. `url` = an absolute third-party",
+        "location, tried first when present, with `asset` as the mirror if it fails.",
+        "`sha256: null` means not published yet: the fetcher refuses the item and says so.",
+        "Set XOPAT_FIXTURE_BASE to point every `asset` at a mirror without editing this file.",
+        "See README.md next to this file for the publishing procedure."
+    ],
+
+    "baseUrl": "https://github.com/RationAI/xopat/releases/download/data-v1",
+
+    "items": {
+        "LuCa-7color_Scan1.ome.tiff": {
+            "url": "https://downloads.openmicroscopy.org/images/OME-TIFF/2016-06/sub-resolutions/Fluorescence/LuCa-7color_Scan1.ome.tiff",
+            "asset": "LuCa-7color_Scan1.ome.tiff",
+            "sha256": "50cc938e259673c4e62385ceb49c8707cead252566932bf47ed20f2afc5614f0",
+            "bytes": 2085508976,
+            "title": "Fluorescence, 7-channel OME-TIFF",
+            "purpose": "background",
+            "channels": 5,
+            "license": "OME public sample data",
+            "provenance": "Open Microscopy Environment sample data, 2016-06 sub-resolutions set",
+            "usedBy": ["viz-flex-multichannel", "fluorescence-background", "channel-series", "all-shaders"]
+        },
+
+        "slide.tif": {
+            "asset": "slide.tif",
+            "sha256": "e16cb8504910a5cf5f29ea389e22acd7a272caa13b2bfda24c1814e6a2b3e139",
+            "bytes": 683433960,
+            "title": "H&E slide, the cancer-prediction subject",
+            "purpose": "background",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI; the slide every prediction overlay below was inferred over",
+            "usedBy": ["basic-overlay", "time-series", "all-shaders", "multi-view-goals", "viz-flex-multichannel", "viz-flex-geojson", "viz-flex-mvt", "viz-flex-grid", "viz-flex-mask-coarse", "viz-flex-mask-preview"]
+        },
+
+        "cancer-inference.tif": {
+            "asset": "cancer-inference.tif",
+            "sha256": "d2bb3c69e9b4122d6d73ff20d08dc8c2d55937b472b11288fe4770bc16d65249",
+            "bytes": 45970172,
+            "title": "Cancer prediction over slide.tif",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI model output; 512x512 prediction squares",
+            "usedBy": ["basic-overlay", "time-series", "all-shaders", "multi-view-goals", "derive:vector", "derive:mvt", "derive:grid", "derive:pyramid"]
+        },
+
+        "detection.tiff": {
+            "asset": "detection.tiff",
+            "sha256": "9bc018ac1dbf59fd30e7422d52512786ac944bdc606a0837802753067e7fecc3",
+            "bytes": 14552336,
+            "title": "Graded detection map over slide.tif",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI model output; the third class in the derived vector layers",
+            "usedBy": ["derive:vector", "derive:mvt", "derive:grid", "derive:pyramid"]
+        },
+
+        "annotations.tif": {
+            "asset": "annotations.tif",
+            "sha256": "838ae2e3f0c6ffe3f461f3fc37f430dd355c7dfed1f18a8052b16b4f08a3c94d",
+            "bytes": 11811354,
+            "title": "Rasterized annotations for slide.tif (white = annotation)",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI ground-truth annotations, rasterized",
+            "usedBy": ["basic-overlay", "time-series", "all-shaders"]
+        },
+
+        "explainability.tif": {
+            "asset": "explainability.tif",
+            "sha256": "f250fcd3fc1e8f2e9987e795d38c5a28abd54b02ce9a203b9af1454d6811c722",
+            "bytes": 16289712,
+            "title": "Explainability map for the prediction over slide.tif",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI model output",
+            "usedBy": ["basic-overlay", "time-series", "all-shaders"]
+        },
+
+        "slide-errors.tif": {
+            "asset": "slide-errors.tif",
+            "sha256": "aeb2dc6f9b3092342c0e2fe4a02939e931a5686ec22e20486763412b159b5057",
+            "bytes": 676955956,
+            "title": "H&E slide used for the error-overlay sessions",
+            "purpose": "background",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI",
+            "usedBy": ["grouped-errors", "multi-view-goals", "all-shaders"]
+        },
+
+        "channel-error.tif": {
+            "asset": "channel-error.tif",
+            "sha256": "3f3d3f32e42042b816130cdda55fb1324976ef950d7c15058b76db7ae1c3b3d5",
+            "bytes": 50634648,
+            "title": "Inference error caused by a channel offset, over slide-errors.tif",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI; a real failure mode, kept because the error UI needs one",
+            "usedBy": ["grouped-errors", "multi-view-goals", "all-shaders"]
+        },
+
+        "other-error.tif": {
+            "asset": "other-error.tif",
+            "sha256": "1f25ac54f20cda24244f57c5a8050b1013ae2072a1d1f3282aa872ab9caea027",
+            "bytes": 33428440,
+            "title": "Inference error of a second kind, over slide-errors.tif",
+            "purpose": "visualization",
+            "channels": 4,
+            "license": null,
+            "provenance": "RationAI",
+            "usedBy": ["grouped-errors", "multi-view-goals", "all-shaders"]
+        }
+    }
+}

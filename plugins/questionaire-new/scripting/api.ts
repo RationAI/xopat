@@ -23,6 +23,21 @@
  * name must resolve from the namespace ("questionnaire" -> QuestionnaireScriptApi).
  */
 const QUESTIONNAIRE_DTS = `
+/**
+ * PROSE FIELDS ARE MARKDOWN. Every \`description\`, every element \`label\`, page
+ * \`title\` and "content" \`text\` is rendered as markdown (HTML is stripped, not
+ * rendered). Markdown links may point at a slide region:
+ *
+ *     [region 3.6](#xopat-region?viewer=<contextId>&x=<x>&y=<y>&w=<w>&h=<h>)
+ *
+ * with x/y/w/h in level-0 image pixels (the same coordinate space as annotation
+ * coordinates, pathology region \`bounds\`, and \`viewer.frameImageRegion(...)\`);
+ * x,y is the top-left corner, w=0&h=0 means a point. The respondent clicks it and
+ * the viewer navigates there. Use it instead of describing a location in words.
+ *
+ * Option labels, tab labels and validation messages stay plain text — markdown
+ * there is shown literally.
+ */
 export type QuestionnaireOption = { value: string; label: string };
 
 export type QuestionnaireValidation = {
@@ -40,6 +55,12 @@ export type QuestionnaireValidation = {
  * ("select" | "multiselect" | "radio") use \`options\`; "matrix" uses
  * \`rows\`/\`columns\`; "repeat" nests \`elements\`; "content" is a static
  * header/text block (use \`text\`).
+ *
+ * The field names below are the whole vocabulary — this is NOT SurveyJS, so
+ * \`type\`, \`title\`, \`choices\` and \`html\` are not read. A field with a
+ * missing/unknown \`kind\`, a choice field without \`options\`, or a "content"
+ * block without \`text\` is REFUSED: the call throws naming the field, and the
+ * questionnaire on screen is left exactly as it was.
  */
 export type QuestionnaireElement = {
     id?: string;
@@ -50,7 +71,9 @@ export type QuestionnaireElement = {
         | "measurement" | "roi";
     /** Stable machine field key (snake_case). Defaults from id when omitted. */
     name?: string;
+    /** Question label. Markdown (inline only — no headings or lists). */
     label?: string;
+    /** Help text under the label. Markdown, region links allowed. */
     description?: string;
     placeholder?: string;
     width?: "full" | "1/2";
@@ -61,7 +84,7 @@ export type QuestionnaireElement = {
     maxRating?: number;
     /** For content: render as heading or paragraph. */
     variant?: "header" | "text";
-    /** For content: plain text body. */
+    /** For content: markdown body (never HTML). */
     text?: string;
     /** For matrix. */
     rows?: QuestionnaireOption[];
@@ -74,7 +97,9 @@ export type QuestionnaireElement = {
 
 export type QuestionnairePage = {
     id?: string;
+    /** Section heading. Markdown (inline only); also used as the tab label, where it is plain text. */
     title: string;
+    /** Section intro. Markdown, region links allowed. */
     description?: string;
     elements: QuestionnaireElement[];
     /**
@@ -100,6 +125,20 @@ export type PageRecordingBinding = {
     /** Starts by itself when a respondent opens the page. */
     autoplay?: boolean;
     capturedAt?: string;
+    /**
+     * Whether the bound tour is watchable. \`warnings\` is empty when it is; otherwise
+     * each entry names an edit to make in the \`recorder\` namespace. Binding embeds a
+     * COPY, so fix the tour and bind again — and do not report the page as ready while
+     * warnings remain.
+     */
+    tour?: {
+        stepCount: number;
+        keyframeCount: number;
+        narratedCount: number;
+        totalSeconds: number;
+        shortestSeconds: number;
+        warnings: string[];
+    };
 };
 
 /** A viewer slot of a page — a place a tour can be bound to. */
@@ -112,7 +151,9 @@ export type PageViewerSlot = {
 
 export type QuestionnaireSchema = {
     version: 1;
+    /** Form title. Markdown (inline only). */
     title?: string;
+    /** Form intro. Markdown, region links allowed. */
     description?: string;
     pages: QuestionnairePage[];
 };
@@ -139,11 +180,21 @@ export interface QuestionnaireScriptApi extends ScriptApiObject {
 
     /**
      * Replaces the entire questionnaire with the given schema and returns the
-     * normalized result. This is the primary way to build a questionnaire:
+     * normalized result. This is the primary way to BUILD a questionnaire:
      * provide \`{ version: 1, title, pages: [{ title, elements: [...] }] }\`.
      * Requires interactive user consent.
+     *
+     * To ADD to an existing questionnaire, prefer \`addPage\` / \`addElement\`: they touch
+     * one thing, where this puts the whole form through a replacement.
+     *
+     * Round-tripping \`getSchema\` is safe. A page keeps its captured scene and its bound
+     * tours by page \`id\`, even though \`getSchema\` only ever showed you summaries of them
+     * — echo a summary back and the real payload is restored. Clear them deliberately with
+     * \`recordings: []\` or \`scene: null\`; omitting the field keeps what is there. If a
+     * binding could not be carried across (its page id is gone) the returned object has a
+     * \`warnings\` array saying so — surface it rather than reporting the tour as attached.
      */
-    setSchema(schema: QuestionnaireSchema): Promise<QuestionnaireSchema>;
+    setSchema(schema: QuestionnaireSchema): Promise<QuestionnaireSchema & { warnings?: string[] }>;
 
     /** Appends a page and returns the created page. Requires user consent. */
     addPage(page?: Partial<QuestionnairePage>): Promise<QuestionnairePage>;
@@ -251,12 +302,21 @@ export function registerQuestionnaireScriptingApi(): void {
             super(
                 namespace,
                 "Questionnaire",
-                "Build and edit the xOpat questionnaire and read submitted answers. " +
-                "Use setSchema to create a whole questionnaire at once " +
-                "({ version: 1, title, pages: [{ title, elements }] }); the schema " +
-                "shape is described in the type declarations. Editing operations " +
-                "ask the user for permission before applying. " +
-                "A page can also carry the VIEWER SETUP and the RECORDER TOURS a respondent gets when they open " +
+                // Order matters: the chat prompt's compact tier keeps only the first
+                // ~400 characters of this text, so the two facts a caller gets WRONG
+                // without them — which namespace owns tour binding, and that fields are
+                // not SurveyJS-shaped — have to come before the detail.
+                "Build and edit the xOpat questionnaire, and BIND RECORDER TOURS to its pages: " +
+                "bindPageTour, bindPageRecording and listPageViewerSlots live HERE, not on `recorder`. " +
+                "A field is { kind, label, options } — NOT SurveyJS { type, title, choices } — and static " +
+                "text is { kind: \"content\", text }. setSchema({ version: 1, title, pages: [{ title, " +
+                "elements }] }) replaces the whole form. " +
+                "A choice field is kind \"radio\" | \"select\" | \"multiselect\" with options: [{ value, label }]; " +
+                "free text is \"text\" | \"textarea\"; the full schema shape is in the type declarations. " +
+                "A field the viewer cannot render as asked is REFUSED and the questionnaire is left untouched, " +
+                "so read the error and fix that field. Editing operations ask the user for permission before " +
+                "applying. " +
+                "A page can also carry the VIEWER SETUP and the tours a respondent gets when they open " +
                 "it — this is how a questionnaire walks someone through slides. capturePageScene(pageRef) saves " +
                 "the current slides/grid/viewports onto a page and opening the page restores them. " +
                 "bindPageRecording(pageRef, slotIndex, recordingId, {autoplay}) attaches one tour built with the " +
@@ -358,7 +418,23 @@ export function registerQuestionnaireScriptingApi(): void {
                 `Title: ${String(schema?.title ?? "(untitled)")}`,
                 `Pages: ${pages.length}`,
             ]);
-            return plugin.setSchema(schema);
+            const applied = plugin.setSchema(schema);
+            // A binding that could not be carried across is the one thing a caller would
+            // otherwise report success over — the tour snapshot was the only copy, and the
+            // form on screen looks fine without it. Say it in the return value, where the
+            // caller is already looking.
+            const dropped = plugin.lastSchemaDrops ?? [];
+            if (!dropped.length) return applied;
+            return {
+                ...applied,
+                warnings: [
+                    `${dropped.length} recording binding(s) were NOT carried across this replacement, ` +
+                    `because their page id no longer exists: ` +
+                    dropped.map((d: any) => `"${d.recordingName || d.pageId}" (page ${d.pageId}, slot ${d.slotIndex})`)
+                        .join(", ") +
+                    `. Re-bind them with bindPageRecording, and do not report the tour as still attached.`,
+                ],
+            };
         }
 
         async addPage(page?: any): Promise<any> {
@@ -431,7 +507,24 @@ export function registerQuestionnaireScriptingApi(): void {
                 stepCount: binding?.stepCount ?? binding?.steps?.length ?? 0,
                 autoplay: !!binding?.autoplay,
                 capturedAt: binding?.capturedAt,
+                // Binding is the moment a tour stops being a draft and becomes what a
+                // respondent will be shown, and the author is usually a script that has
+                // never watched it. The recorder module owns the verdict so "a good
+                // tour" means the same thing here as it does on playback.
+                ...(binding?.steps ? { tour: this._tourSummary(binding.steps) } : {}),
             };
+        }
+
+        /** The recorder's own tour verdict, or nothing when the module is absent. */
+        _tourSummary(steps: any[]): any {
+            const recorder = (globalThis as any).singletonModule?.("recorder");
+            if (typeof recorder?.summarizeTour !== "function") return undefined;
+            try {
+                return recorder.summarizeTour(steps);
+            } catch {
+                // A quality report must never be the thing that fails a binding.
+                return undefined;
+            }
         }
 
         _slotInfo(slot: any): any {

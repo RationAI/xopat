@@ -85,12 +85,25 @@ export function normalizeScore(raw: number, explicitScale: number | null): { int
     return { interest: clamp(raw / 100), scale: 100 };
 }
 
-/** Fraction of the query's salient words present in `text` (0..1); 0 without a query. */
+/**
+ * Fraction of the query's salient words present in `text` (0..1); 0 without a query.
+ *
+ * This is the LAST-RESORT interest signal — used only when the model produced no score and
+ * answered nothing assessable — which makes it the signal attached to the least informative
+ * fields on the slide. It must therefore not reward the one thing such a field's reply almost
+ * always contains: the question itself, quoted back. A real run scored a region 1.0 because it
+ * said "judging the presence of 'interesting pathological findings' is not possible" — every
+ * query word present, nothing seen — and that region then ranked first in the report.
+ *
+ * So every verbatim occurrence of the query is removed before counting. What remains is the
+ * model's own vocabulary, which is what the overlap was ever meant to measure.
+ */
 export function keywordInterest(text: string, query?: string): number {
     if (!query) return 0;
     const words = query.toLowerCase().split(/\W+/).filter(w => w.length > 2);
     if (!words.length) return 0;
-    const hay = text.toLowerCase();
+    const needle = query.toLowerCase().trim();
+    const hay = needle ? text.toLowerCase().split(needle).join(" ") : text.toLowerCase();
     let hits = 0;
     for (const w of words) if (hay.includes(w)) hits++;
     return Math.min(1, hits / words.length);

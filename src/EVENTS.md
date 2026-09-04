@@ -167,8 +167,17 @@ and ignores OpenSeadragon key event.
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user releases a key. Similar as above.
 
+> **Prefer the shortcut registry.** Register key strokes with
+> `APPLICATION_CONTEXT.shortcuts` ([`SHORTCUTS.md`](SHORTCUTS.md)) — you get declared
+> defaults, conflict detection and user remapping via the Keymap panel. Raw
+> `key-down`/`key-up` handlers are the low-level fallback for cases the registry
+> cannot express (contextual Escape/Enter/Delete inside a widget stays widget-local
+> and is not registered).
+
 #### `io:refused` | e: `{ ctx: IOContext, result: IOResult }`
-Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a **guard** in a `pre-*` phase, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+
+> Guard refusals fire for **every** direction, not just CRUD writes: `ctx.direction` may be `pre-export`, `pre-import` or `pre-read` as well as `pre-create` / `pre-update` / `pre-delete`. A refusal with `code: "W_PERM_DENIED"` is the roles layer (`src/USER_ROLES.md`) — the user lacks the capability, and no sink was contacted.
 
 > `ctx.meta.fromUndo` / `ctx.meta.fromRedo` are reserved keys the auto-history layer sets when replaying a history entry. Subscribers that count refusals "per user action" should filter these out.
 
@@ -209,8 +218,18 @@ if the viewer is not reloaded.
 
 #### `show-demo-page` | e: `{id: string, show: function, htmlError: string|undefined}`
 When the viewer does not open any valid data, it shows a demo page. This event allows to use custom UI to show the demo page.
-If the viewer captures an error during loading, the error message is included.
 The first call wins - other show(...) calls are ignored.
+
+`htmlError` distinguishes the two situations the overlay covers, and consumers
+should branch on its **presence**, not its content: absent means nothing was
+requested (a landing page), present means images were requested and none opened
+(a failure report). The built-in overlay no longer renders that string — it
+builds its own markup and names the images that actually failed, read from
+`__xopatFaultyBackground` and the per-viewer faulty-source registry
+(`src/classes/app/viewer-demo-overlay.ts`). The field stays for back-compat.
+
+Note that an OSD overlay sits under the annotation canvas, so pointer events do
+not reach it: a demo page can inform, but cannot currently offer a button.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
@@ -233,9 +252,12 @@ It exists because those reads never move the user's viewport: without the event 
 way to tell that an analysis/LLM feature looked at the slide, or at which part of it.
 
 * `captureId` is stable across the three phases of one capture.
-* `queued` → the pass is waiting for a background admission slot (it may wait seconds);
-  `start` → it is actually rendering; `end` → finished, `ok`/`error` describe the outcome.
-  A capture that fails before admission emits `queued` and `end` with no `start`.
+* `queued` → the pass is waiting for its turn: off-screen passes are serialized per viewer,
+  and the admitted one still has to take a background scheduler slot, so this may last
+  seconds. `start` → it is actually rendering; `end` → finished, `ok`/`error` describe the
+  outcome. A capture that fails before admission emits `queued` and `end` with no `start`.
+  The interval between `queued` and `start` is the only way to tell a slow render from a
+  long wait for one — a caller that wants to *bound* that wait passes `queueTimeoutMs`.
 * `region` is in **full-resolution (level-0) image pixels of `refIndex`** — the same units
   `visualization.renderRegionPixels` takes. Absent for `kind: "viewport"`, which covers
   whatever is currently on screen.
@@ -255,6 +277,18 @@ history for auditing.
 
 #### `canvas-nonprimary-press`
 #### `canvas-nonprimary-release`
+
+> **Right-click menus go through the registry.** Contribute canvas context-menu
+> items with `window.CanvasContextMenu.register(id, provider)`
+> (`src/classes/app/canvas-context-menu.ts`) — the core aggregates providers,
+> resolves the viewer and opens the drop-down. Never call `DropDown.open`
+> yourself from `nonprimary-release-not-handled`.
+>
+> Providers receive `ctx.selection` — every object the click pertains to. Core
+> owns no object model, so a subsystem that has one publishes it with
+> `registerSelectionResolver(id, viewer => objects[])` (and unregisters on
+> teardown); the registry unions the answers, dedups, and puts `ctx.active`
+> first, once per menu.
 
 
 ### Rendering-Related Events

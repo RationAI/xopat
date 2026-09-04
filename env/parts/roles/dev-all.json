@@ -1,0 +1,163 @@
+{
+  "$meta": {
+    "description": "Developer role matrix — every shipped capability, five roles, no identity provider",
+    "dimension": "roles"
+  },
+  /**
+   * The role fragment for exercising the gates BY HAND. It defines no claim
+   * mapping and no login: `default` puts you in `guest` at boot, and the roles
+   * panel (user menu → Roles, developer mode) switches you between the roles
+   * below without an identity provider in the loop.
+   *
+   *   npm run up:dev -- roles-dev
+   *
+   * Its sibling `roles/guest-pathologist-researcher` is the same idea wired to
+   * real Keycloak groups; both carry `dimension: "roles"`, so exactly one of
+   * them can be layered at a time — which is the point, since two role
+   * catalogues in one deployment would silently merge.
+   *
+   * Every id named below is DECLARED by one of the elements enabled at the
+   * bottom of this file. A role that names an id nobody declared is not an
+   * error and not a gate: `can()` answers `true` for unknown ids, deliberately,
+   * so one deployment's config cannot lock another's UI. That is also why the
+   * enable block is part of this fragment rather than left to the preset.
+   */
+  "core": {
+    /* The role switcher and the effective-permission table are developer-mode
+       affordances (see ui/classes/components/userRolesPanel.mjs). `--dev` runs
+       the asset watcher; it does not flip the CLIENT flag, so this fragment —
+       which exists only to be poked by hand — says so itself. */
+    "setup": {
+      "debugMode": true
+    },
+    "roles": {
+      "default": ["guest"],
+      "definitions": {
+        /* Read-only observer, and the base every other role extends.
+         *
+         * READ THIS BEFORE ADDING A CAPABILITY ANYWHERE IN THE REPO. `deny:
+         * ["*"]` is deny-by-default, which is the right posture — but roles
+         * flatten parents-first (`flattenRoles`), so this deny reaches every
+         * descendant, and a capability declared later is DENIED FOR EVERY ROLE
+         * until it is re-granted below. That is not hypothetical: it is how
+         * `core.scripting.run` was missing from `pathologist`, which killed the
+         * entire LLM workflow with a message that named nothing.
+         *
+         * When you declare a new capability, decide here which roles get it.
+         */
+        "guest": {
+          "label": "Guest (read only)",
+          "deny": ["*"],
+          "grant": [
+            /* Restoring state that already exists IS a read. Denying the
+               imports left a "read only" role unable to see anything at all —
+               and produced a refusal per owner at boot, for work nobody
+               requested. */
+            "*.bundle-import",
+            "annotations.crud:annotation.read",
+            "annotations.crud:preset.read",
+            "slide-scoring.crud:score.read",
+            "recorder.crud:step.read",
+            "recorder.crud:asset.read",
+            "questionaire.crud:answer.read"
+          ]
+        },
+
+        /* Annotates and fills forms. Cannot author a form, and cannot push
+           anything to a configured backend — but CAN still take a local copy,
+           which is the distinction the two routes exist for. Flip
+           `core.io.local-file` into this deny list to close that too. */
+        "pathologist": {
+          "label": "Pathologist",
+          "extends": ["guest"],
+          "grant": [
+            "annotations.*",
+            "questionaire.answer",
+            "questionaire.crud:answer.*",
+            "questionaire.bundle-submit",
+            /* Answering a form and being unable to take those answers away is
+               not a coherent role — the same reasoning as `core.io.local-file`
+               below. Authoring the form itself stays denied. */
+            "questionaire.export.answers",
+            "recorder.*",
+            "slide-info.download-slide",
+            "core.io.local-file",
+            "core.export.file",
+            "core.export.url",
+            /* The assistant IS the pathologist workflow: `pathology.*` is only
+               reachable from a script, and `ScriptingManager.executeScript`
+               refuses before a single line runs. Without this the whole AI path
+               is dead for this role. */
+            "core.scripting.run"
+          ],
+          "deny": [
+            "questionaire.edit",
+            "questionaire.import.schema",
+            "annotations.bundle-export"
+          ]
+        },
+
+        /* Authors forms and scores slides. Reads annotations but never writes
+           them — the deny list names the WRITE directions rather than
+           `annotations.crud:*`, which would also deny `.read` and hide every
+           existing annotation. */
+        "researcher": {
+          "label": "Researcher",
+          "extends": ["guest"],
+          "grant": [
+            "questionaire.*",
+            "slide-scoring.*",
+            "annotations.crud:annotation.read",
+            "annotations.crud:preset.read",
+            "annotations.bundle-import",
+            "core.io.local-file",
+            "core.export.file",
+            "core.export.url",
+            "core.scripting.run"
+          ],
+          "deny": [
+            "annotations.crud:annotation.create",
+            "annotations.crud:annotation.update",
+            "annotations.crud:annotation.delete",
+            "annotations.crud:preset.create",
+            "annotations.crud:preset.update",
+            "annotations.crud:preset.delete"
+          ]
+        },
+
+        /* Everything. The control case: switch to this and the app must behave
+           exactly as it does with no role config at all. */
+        "admin": {
+          "label": "Administrator",
+          "grant": ["*"]
+        },
+
+        /* The local-file knob on its own. Data may still reach whatever the
+           deployment has bound, but nothing leaves as a file or a link —
+           useful for seeing that a denied route does NOT silently fall back to
+           a download. */
+        "no-local": {
+          "label": "No local copies",
+          "extends": ["admin"],
+          "deny": [
+            "core.io.local-file",
+            "core.export.file",
+            "core.export.url",
+            "slide-info.download-slide"
+          ]
+        }
+      }
+    }
+  },
+  "plugins": {
+    "gui_annotations": { "enabled": true, "permaLoad": true },
+    "questionaire": { "enabled": true, "permaLoad": true },
+    "recorder": { "enabled": true, "permaLoad": true },
+    "slide-info": { "enabled": true, "permaLoad": true },
+    "slide-scoring": { "enabled": true, "permaLoad": true }
+  },
+  "modules": {
+    "annotations": { "enabled": true, "permaLoad": true },
+    "recorder": { "enabled": true, "permaLoad": true }
+  }
+}

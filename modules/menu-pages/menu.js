@@ -117,7 +117,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      *   non-traceable generated id is used
      * @property {string} title - required; submenu title shown in the Plugins menu
      * @property {string} [subtitle] - optional tooltip subtitle
-     * @property {string} [icon] - optional Font Awesome icon class
+     * @property {string} [icon] - optional Phosphor icon class, e.g. `ph-gear`
      * @property {[object]} page - array of element specifications
      */
 
@@ -154,7 +154,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     unique,
                     data.title,
                     html.join(""),
-                    data.icon || "fa-fw"
+                    data.icon || ""
                 );
             }
             this._count += config.length;
@@ -232,7 +232,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      * @param {function|false} sanitizer
      * @param {string} id stable menu id (pass the same id across re-renders so the
      *   per-viewer menu updates in place instead of duplicating)
-     * @return {{id: string, title: string, icon: string, body: string}}
+     * @return {{id: string, title: string, icon: string, body: [Node]}}
      */
     _pageToViewerItem(data, sanitizer, id = this.getMenuId(data.id, this._count++)) {
         const html = [];
@@ -244,9 +244,33 @@ window.AdvancedMenuPages = class extends XOpatModule {
         return {
             id,
             title: data.title,
-            icon: data.icon || "fa-cog",
-            body: html.join("")
+            icon: data.icon || "ph-gear",
+            // Nodes, not the joined string. A string body travels into the menu
+            // component as a van.js child, where `BaseComponent.toNode` routes it
+            // through the UNTRUSTED-TEXT renderer: without `SanitizeHtml` loaded
+            // it renders the markup as literal text (and never re-renders), and
+            // with it loaded the allowlist strips `id`, breaking every page that
+            // fills a placeholder post-render. This module already owns the
+            // sanitize decision via `sanitizeConfig`, so parse here — inertly,
+            // through the same helper `USER_INTERFACE.addHtml` and
+            // `FullscreenMenus.setMenu` use for the very same string.
+            body: this._pageBody(html)
         };
+    }
+
+    /**
+     * Turn built page markup into DOM nodes. Wrapped in a single container so
+     * that bare text (a `{type:"html"}` page carrying no tags) survives —
+     * `parseDomNodes` keeps element children only. An empty page stays falsy,
+     * which is what marks a tab as transient (no content panel).
+     * @param {[string]} html
+     * @return {[Node]|string}
+     * @private
+     */
+    _pageBody(html) {
+        const markup = html.join("");
+        if (!markup) return "";
+        return UI.BaseComponent.parseDomNodes(`<div class="w-full">${markup}</div>`);
     }
 
     /**
@@ -347,7 +371,9 @@ window.AdvancedMenuPages = class extends XOpatModule {
         // Compiled UI element aliases
         "div": "Div",
         "button": "Button",
-        "faicon": "FAIcon", "icon": "FAIcon", "fa-auto": "FAIcon",
+        // `faicon`/`fa-auto` are legacy spellings kept so old page declarations
+        // keep parsing; they all build a Phosphor icon now.
+        "faicon": "PhIcon", "icon": "PhIcon", "fa-auto": "PhIcon",
         "phicon": "PhIcon", "ph-icon": "PhIcon", "ph-light": "PhIcon",
         "join": "Join",
         "dropdown": "Dropdown",

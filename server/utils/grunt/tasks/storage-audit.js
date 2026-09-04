@@ -38,7 +38,7 @@ module.exports = function (grunt) {
         ];
         const ignore = [
             // Vendored / generated payloads we do not own.
-            "src/libs/**", "src/dist/**", "src/external/**",
+            "src/libs/**", "src/dist/**",
             "**/dist/**", "**/node_modules/**", "**/.config/**",
             "**/*.min.js", "**/*.workspace.js", "**/*.workspace.mjs",
             "**/*.map", "**/*.d.ts", "**/*.bak.js",
@@ -62,11 +62,15 @@ module.exports = function (grunt) {
             { file: "src/classes/io/outbox-store.ts",
                 why: "IndexedDB outbox; probe-gated inside the try" },
             { file: "src/parse-input.js",
-                why: "bootstrap exception (xoSessionCache) — runs before IO_PIPELINE; probe-gated" },
+                why: "bootstrap exception (xoSessionCache): the pipeline captures POST_DATA by "
+                    + "reference and this function may REPLACE it, so bootstrapIOPipeline must run "
+                    + "after the parse — probe-gated, try/catch'd, deployment-key scoped" },
             { file: "src/classes/app/application-lifecycle-controller.ts",
-                why: "bootstrap exception (__xopat_session__ read) — probe-gated" },
+                why: "bootstrap exception (__xopat_session__ read): this payload CARRIES the ENV "
+                    + "that configures the pipeline, so it can never be one of its consumers — probe-gated" },
             { file: "src/app.ts",
-                why: "bootstrap exception (__xopat_session__ write) — probe-gated" },
+                why: "bootstrap exception (__xopat_session__ write) — the counterpart of the read "
+                    + "above, same reason; probe-gated" },
             { file: "src/classes/scripting-manager.ts",
                 why: "worker sandbox deny-list — string literals that BLOCK these APIs" },
             { file: "modules/speech-to-text/audioCapture.ts",

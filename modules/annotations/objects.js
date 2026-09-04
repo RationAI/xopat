@@ -51,6 +51,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "borderScaleFactor",
         "hasControls",
         "hasBorders",
+        // Selection grab margin (see configure()/hitTolerancePx). copy() paths
+        // — edit-recalculate, translate, cut/paste — build the replacement
+        // straight from these props without re-running configure(), so without
+        // it here every edited annotation would silently lose its tolerance.
+        "padding",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -90,6 +95,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
         // reload and the object would become editable again.
         "readOnly",
     ];
+
+    /**
+     * Preset meta key naming WHICH of an annotation's own meta values fills its
+     * label — the class-level half of the label value slot.
+     *
+     * A preset carrying `labelSource: {value: "Tumor ratio"}` makes every object
+     * of that preset render its `meta["Tumor ratio"]` in the label area, so an
+     * integration can describe a whole class of annotations once instead of
+     * stamping every instance. The instance override `object.displayValue` wins
+     * over it; see {@link getLabelValue}.
+     *
+     * Note `displayValue` is deliberately absent from both property lists above:
+     * it is derived state, re-attached by whoever owns it, and an exported bundle
+     * must not carry a value whose source no longer exists.
+     * @type {string}
+     */
+    static LABEL_SOURCE_META_KEY = "labelSource";
 
     /**
      * Geometry properties.
@@ -198,11 +220,45 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return object from the input parameters (builder-like behaviour)
      */
     configure(object, options) {
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             type: this.type,
             factoryID: this.factoryID,
+            // Selection grab margin. fabric applies `padding` inside
+            // calcLineCoords() AFTER the viewport transform, so it is a
+            // zoom-invariant screen-px margin on `lineCoords` — exactly what
+            // Canvas._checkTarget tests. aCoords are untouched, so the rbush
+            // bboxes in spatial-index.js keep their exact geometry. Without
+            // this an axis-aligned polyline has a bbox only strokeWidth wide
+            // and is impossible to hit. The overlay's precise narrow phase
+            // reads the same value back as its distance tolerance.
+            padding: this.hitTolerancePx(),
         });
         return object;
+    }
+
+    /**
+     * Selection grab margin in screen pixels, applied to every object this
+     * factory configures. Deployment-tuned via the module's `hitTolerancePx`.
+     * @return {number}
+     */
+    hitTolerancePx() {
+        const value = this._context?.hitTolerancePx;
+        return Number.isFinite(value) ? value : 5;
+    }
+
+    /**
+     * The canvas an object belongs to, for zoom/stroke math that must not be
+     * read off whichever viewer happens to be focused (AGENTS.md §6).
+     *
+     * `this._context.fabric` resolves through the *active* viewer, so a factory
+     * configuring an object being imported into a background viewport of a grid
+     * would size it from a foreign zoom. An object already on a canvas knows its
+     * own; the module default is the fallback for the pre-insertion case.
+     * @param {fabric.Object} [object]
+     * @return {fabric.Canvas|undefined}
+     */
+    canvasOf(object) {
+        return object?.canvas || this._context?.fabric?.canvas;
     }
 
     /**
@@ -436,7 +492,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 const iconCenterX = x + padding + iconSize / 2;
 
-                ctx.font = `900 ${iconSize}px "Font Awesome 6 Free"`;
+                ctx.font = `400 ${iconSize}px "Phosphor-Light"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -504,14 +560,17 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     _resolveControlGlyph(icon) {
+        // Canvas text has no cascade, so the CSS icon classes cannot reach
+        // here: the glyph must be the raw Phosphor-Light codepoint, painted
+        // with the matching font family (see the `ctx.font` assignments).
         const map = {
-            'fa-eye': '\uf06e',
-            'fa-eye-slash': '\uf070',
-            'fa-lock': '\uf023',
-            'fa-lock-open': '\uf3c1',
-            'fa-comments': '\uf086',
-            'fa-comment-medical': '\uf7f5',
-            'fa-ellipsis-h': '\uf141',
+            'ph-eye': '\ue220',
+            'ph-eye-slash': '\ue224',
+            'ph-lock': '\ue2fa',
+            'ph-lock-open': '\ue306',
+            'ph-chats': '\ue17c',
+            'ph-chat-teardrop-dots': '\ue176',
+            'ph-dots-three': '\ue1fe',
         };
         return map[icon] || icon || '?';
     }
@@ -609,7 +668,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     : 0;
                 slots.push({
                     id: 'comments',
-                    icon: 'fa-comment-medical',
+                    icon: 'ph-chat-teardrop-dots',
                     countText: n > 0 ? String(n) : '',
                     onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
                 });
@@ -620,12 +679,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // a broken control.
             slots.push(target?.readOnly ? {
                 id: 'lock',
-                icon: 'fa-lock',
+                icon: 'ph-lock',
                 countText: '',
                 onClick: null,
             } : {
                 id: 'lock',
-                icon: target?.private ? 'fa-lock' : 'fa-lock-open',
+                icon: target?.private ? 'ph-lock' : 'ph-lock-open',
                 countText: '',
                 onClick: () => {
                     const wrapper = self._context.fabric;
@@ -634,7 +693,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             });
             slots.push({
                 id: 'more',
-                icon: 'fa-ellipsis-h',
+                icon: 'ph-dots-three',
                 countText: '',
                 onClick: (eventData) => {
                     self._context.raiseEvent('annotation-more-clicked', {
@@ -774,7 +833,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     } else {
                         // Draw icon
                         const iconCenterX = slotStart + ICON_SIZE / 2;
-                        ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
+                        ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
                         ctx.fillStyle = 'black';
@@ -1136,34 +1195,97 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Formatted measurement label for a single object: area when the shape has
-     * one, else length (lines). Formatted through the object's OWN viewer
-     * scalebar (multi-viewport safe) so units match the app scalebar; falls back
-     * to raw px when the slide is uncalibrated. Returns "" when the type opts out
-     * via supportsMeasurements(), nothing is measurable, or the geometry is
-     * transiently invalid (mid-edit). Shared by the selected-object toolbar pill
-     * and the always-on measurement overlay.
+     * What the label area shows for one object, and which rule answered.
+     *
+     * The label pill is a *value slot*, not a measurement readout. Resolution
+     * order, first non-empty wins:
+     *
+     *  1. `target.displayValue` — an instance override. Whatever attached it owns
+     *     the formatting, units and precision; this renders the string verbatim.
+     *  2. the annotation meta value named by its preset's
+     *     {@link LABEL_SOURCE_META_KEY} — a class-level rule, so every object of
+     *     that preset shows the same field of its own metadata.
+     *  3. the geometry measurement: area when the shape has one, else length.
+     *     Unchanged, and what everything not touched by an integration still gets.
+     *
+     * Geometry is formatted through the object's OWN viewer scalebar
+     * (multi-viewport safe), falling back to raw px on an uncalibrated slide.
+     *
+     * Why the attached value is resolved BEFORE `supportsMeasurements()`: that
+     * opt-out means "this shape's extent carries no meaning" (a pointer arrow), a
+     * statement about geometry. It must not suppress a value someone deliberately
+     * attached to the same shape.
+     *
      * @param {fabric.Object} target
-     * @return {string}
+     * @return {{text: string, source: ('value'|'area'|'length'|'')}}
      */
-    getMeasurementLabel(target) {
-        if (!this.supportsMeasurements()) return '';
+    getLabelValue(target) {
+        const attached = this.getAttachedLabelValue(target);
+        if (attached) return { text: attached, source: 'value' };
+
+        if (!this.supportsMeasurements()) return { text: '', source: '' };
         const scalebar = target?.canvas?.__spatialIndex?.wrapper?.viewer?.scalebar;
         try {
             const area = this.getArea?.(target);
             if (typeof area === 'number' && isFinite(area) && area > 0) {
-                return scalebar?.imageAreaToGivenUnits
-                    ? scalebar.imageAreaToGivenUnits(area)
-                    : `${Math.round(area)} px²`;
+                return {
+                    text: scalebar?.imageAreaToGivenUnits
+                        ? scalebar.imageAreaToGivenUnits(area)
+                        : `${Math.round(area)} px²`,
+                    source: 'area',
+                };
             }
             const len = this.getLength?.(target);
             if (typeof len === 'number' && isFinite(len) && len > 0) {
-                return scalebar?.imageLengthToGivenUnits
-                    ? scalebar.imageLengthToGivenUnits(len)
-                    : `${Math.round(len)} px`;
+                return {
+                    text: scalebar?.imageLengthToGivenUnits
+                        ? scalebar.imageLengthToGivenUnits(len)
+                        : `${Math.round(len)} px`,
+                    source: 'length',
+                };
             }
         } catch (e) { /* transient geometry during edit — skip metric */ }
-        return '';
+        return { text: '', source: '' };
+    }
+
+    /**
+     * The value an integration put in this object's label slot, if any.
+     *
+     * Deliberately NOT wrapped in a try/catch: the geometry branch catches because
+     * a shape mid-edit is legitimately invalid for a frame, whereas a throw here
+     * is a bug in whatever attached the value and must surface.
+     *
+     * The preset rule follows the same precedence
+     * `getAnnotationDescription` already uses — the object's own meta is the
+     * value, the preset only names which key to read — so there is one rule for
+     * "where does an annotation's metadata come from", not two.
+     *
+     * @param {fabric.Object} target
+     * @return {string} empty when nothing is attached
+     */
+    getAttachedLabelValue(target) {
+        const direct = target?.displayValue;
+        if (direct !== undefined && direct !== null && direct !== '') return String(direct);
+
+        const preset = this._presets?.get?.(target?.presetID);
+        const key = preset?.getMetaValue?.(
+            OSDAnnotations.AnnotationObjectFactory.LABEL_SOURCE_META_KEY);
+        if (!key) return '';
+        const value = target?.meta?.[key];
+        // `0` and `false` are values a prediction can legitimately take, so test
+        // for absence rather than truthiness. Empty string stays empty.
+        if (value === undefined || value === null || value === '') return '';
+        return String(value);
+    }
+
+    /**
+     * Formatted label text for a single object. Thin wrapper over
+     * {@link getLabelValue} kept as the name every existing caller uses.
+     * @param {fabric.Object} target
+     * @return {string}
+     */
+    getMeasurementLabel(target) {
+        return this.getLabelValue(target).text;
     }
 
     /**
@@ -1422,7 +1544,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // navigation; without writing the new base here, the first pan/zoom
             // reverts the UI-chosen thickness to the stale per-object value.
             ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
-            const canvas = targetCanvas || this._context.fabric.canvas;
+            const canvas = targetCanvas || this.canvasOf(ofObject);
             props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
         }
 
@@ -1574,6 +1696,78 @@ OSDAnnotations.PolygonUtilities = {
         const bbox = this.getBoundingBox(points);
 
         return { diffX: bbox.width, diffY: bbox.height };
+    },
+
+    /**
+     * True (absolute) area of a closed point ring, shoelace formula.
+     * @param {Array<{x: number, y: number}>} points ring, implicitly closed
+     * @return {number} area in squared units of the input coordinate space
+     */
+    polygonArea: function (points) {
+        if (!points || points.length < 3) return 0;
+
+        let total = 0;
+        for (let i = 0, len = points.length; i < len; i++) {
+            const current = points[i];
+            const next = points[i === len - 1 ? 0 : i + 1];
+            total += (current.x * next.y) - (next.x * current.y);
+        }
+        return Math.abs(total) * 0.5;
+    },
+
+    /**
+     * Share of the snapshot a contour has to fill before it counts as a
+     * misdetection on its own. Mirrors the >90% mask rejection already applied
+     * by modules/pathology-foundation (see _maskToPolygonResult).
+     */
+    MAX_VIEWPORT_COVERAGE: 0.9,
+    /** Bbox share of each snapshot dimension considered "spans the viewport". */
+    VIEWPORT_SPAN: 0.95,
+    /** Area/bbox-area ratio above which a contour counts as a rectangle. */
+    VIEWPORT_RECTANGULARITY: 0.9,
+
+    /**
+     * Detect an automated-selection contour that effectively selects the whole
+     * visible viewport. Such a result is never something a user would draw: it
+     * hides the image behind an opaque near-rectangle and carries no
+     * information. Automated tools (magic wand, viewport segmentation) drop it
+     * instead of rendering it.
+     *
+     * Works in the snapshot's own pixel space, since "covers the viewport" is
+     * only meaningful before the contour is mapped to image coordinates.
+     *
+     * @param {Array<{x: number, y: number}>} points contour in snapshot pixels
+     * @param {number} width snapshot width in pixels
+     * @param {number} height snapshot height in pixels
+     * @param {{x: number, y: number}} [origin] snapshot origin, when the
+     *   contour coordinates carry the snapshot offset (defaults to 0,0)
+     * @return {boolean} true when the contour should be discarded
+     */
+    coversViewport: function (points, width, height, origin) {
+        if (!points || points.length < 3) return false;
+        if (!(width > 0) || !(height > 0)) return false;
+
+        const area = this.polygonArea(points);
+        if (area <= 0) return false;
+
+        if (area / (width * height) >= this.MAX_VIEWPORT_COVERAGE) return true;
+
+        // An almost-rectangular blob that spans both dimensions is the classic
+        // flood-fill runaway: it can fall below the coverage limit thanks to
+        // holes/ragged borders while still occluding the entire view.
+        const bbox = this.getBoundingBox(points);
+        const originX = origin ? (origin.x || 0) : 0;
+        const originY = origin ? (origin.y || 0) : 0;
+        if (bbox.width < width * this.VIEWPORT_SPAN || bbox.height < height * this.VIEWPORT_SPAN) {
+            return false;
+        }
+        if (bbox.x > originX + width * (1 - this.VIEWPORT_SPAN)
+            || bbox.y > originY + height * (1 - this.VIEWPORT_SPAN)) {
+            return false;
+        }
+
+        const bboxArea = bbox.width * bbox.height;
+        return bboxArea > 0 && area / bboxArea >= this.VIEWPORT_RECTANGULARITY;
     },
 
     getBoundingBox: function (points) {
@@ -1806,3 +2000,19 @@ OSDAnnotations.PolygonUtilities = {
         return simplified;
     }
 };
+
+/**
+ * Control glyphs are painted straight onto the fabric canvas with
+ * `ctx.fillText`, which neither triggers a webfont load nor waits for one. On a
+ * cold start the Phosphor face may still be pending when the first annotation
+ * renders, and the bubbles would show tofu until something else forced a
+ * repaint. Warm the face once and repaint whatever is already on screen.
+ */
+(function warmAnnotationGlyphFont() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    document.fonts.load('16px "Phosphor-Light"').then(() => {
+        for (const instance of OSDAnnotations.FabricWrapper?.instances?.() || []) {
+            instance.canvas?.requestRenderAll?.();
+        }
+    }).catch(() => { /* font missing: glyphs degrade, nothing else to do */ });
+})();

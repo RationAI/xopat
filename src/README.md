@@ -17,11 +17,15 @@ The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/typ
 4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js`). Convenient for quick links and CI tests.
 5. **Storage fallback** — `localStorage["xoSessionCache"]` (or `sessionStorage["xoSessionCache"]`) restores the last successful session if it is < 30 minutes old. The restored config is marked `__fromLocalStorage: true` so plugins can detect it. Every successful boot writes the current session back to both storages, so an auth-redirect round-trip never loses state.
 
-   **Cache scoping.** The entry carries `__envKey`, a fingerprint of the configuration that decides whether a cached session's data references can still *resolve*: domain/path/name, `active_client`, `slide_protocols`, the default background/visualization protocols, the legacy `image_group_*`/`data_group_*` fields, and the set of enabled plugins and modules (a factory protocol such as `dicom` is registered by a plugin, so a session referencing it is invalid where that plugin is absent). Cosmetic config — themes, UI flags, viewport defaults — is deliberately excluded, or every unrelated tweak would discard the user's session. Without this, two env files served from the same `localhost` replay each other's sessions and shaders fail with *"no protocol resolvable for role visualization"*.
+   **Cache scoping.** The entry carries `__envKey`, the **deployment cache key** (`src/classes/app/deployment-key.ts`) — a fingerprint of the configuration that decides whether a cached session's data references can still *resolve*: domain/path/name/version, `active_client`, `slide_protocols`, the default background/visualization protocols, the legacy `image_group_*`/`data_group_*` fields, and the ids of the plugin and module registries the server actually shipped (a factory protocol such as `dicom` is registered by a plugin, so a session referencing it is invalid where that plugin is absent). Cosmetic config — themes, UI flags, viewport defaults — is deliberately excluded, or every unrelated tweak would discard the user's session. Without this, two env files served from the same `localhost` replay each other's sessions and shaders fail with *"no protocol resolvable for role visualization"*.
+
+   The same key stamps `__xopat_session__` (the one-shot navigation payload, `application-lifecycle-controller.ts`) and names the plugin-autoload cookie (`_plugins.<key>`), so switching `XOPAT_ENV` no longer resurrects the previous deployment's plugins. It is computed once in `initXOpat` from the **served** ENV plus the plugin/module registries and published as `window.XOPAT_DEPLOYMENT_KEY`. It deliberately does **not** scope `kv:*` storage (`AppCache`, `AppCookies`, plugin caches), which stays keyed by `<ownerUid>::<key>`.
 
    **Eviction, not just rejection.** An entry that fails any check — key mismatch (including a missing key, which is evidence of nothing), unparseable JSON, expired, or a configuration that no longer parses — is **removed** from the store it came from, so it stops costing a read on every future boot. The two stores are judged independently and one never evicts the other: `localStorage` is shared across tabs, so another deployment can overwrite it while this tab's `sessionStorage` still holds a valid session. `localStorage` is tried first and capped at 30 minutes; `sessionStorage` is the fallback and is *not* aged out, because it dies with its tab and exists to survive auth redirects. A failed restore leaves `postData` untouched.
 
-   Operators can pin the fingerprint with `client.sessionCacheKey` (or `setup.sessionCacheKey`) to make two deployments share a cache, or to force-separate ones that would otherwise fingerprint alike. `setup.bypassCache: true` disables the restore path entirely. See the `envKey` / cache-restore block in `src/parse-input.js`.
+   **The session carries the key too.** `UTILITIES.serializeAppConfig` stamps `__envKey` on everything the viewer serializes — which covers transports 1-3 above, because they outlive an ENV swap in a way storage does not: `syncSessionToUrl` writes the whole session into the **address bar hash** on every shader edit, and the self-POST rewrite parks the body in the **history entry**, where a reload re-submits it. Both are read *before* the boot cache. A session whose stamp does not match this deployment is still opened — deployments that differ only cosmetically fingerprint alike, so a genuinely shared link keeps working — but it warns (`messages.sessionOtherDeployment`) and is **never written into `xoSessionCache`**. Without that last part the boot cache launders it: one stale hash loads, gets saved under the *new* deployment's key, and is restored legitimately on every later boot. A session with **no** stamp (an embedding app, a demo link, a hand-written config) is accepted unchanged.
+
+   Operators pin the key with `core.client.<active>.cacheKey` (legacy aliases: `client.sessionCacheKey`, `setup.sessionCacheKey`) — a production keeps one key so nothing is ever invalidated, a development deployment gives each env file its own key, or simply relies on the fingerprint. `setup.bypassCache: true` disables the restore path entirely. See `src/classes/app/deployment-key.ts` and the cache-restore block in `src/parse-input.js`.
 
 > A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js` — the `/dev_setup` route, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
 
@@ -83,8 +87,10 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`dataID`** (required) — the underlying `DataID`.
 - **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions` in `src/types/app.d.ts`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
+- **`magnification`** — the image's *native optical magnification* (e.g. `40` for a 40x objective). Omit it (`undefined`) when unknown: the core then guesses one from the pixel size against a whole-slide optics table, and warns that the image looks like a macro image when it cannot. Set it to **`null`** when magnification does not apply to the modality at all — a CT/MR/PT has no objective, and without the explicit `null` every such image opens with a spurious "this is a macro image" warning and a meaningless magnification ladder. A tile source may declare the same field from `getMetadata()`; the data specification wins when both are present.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
+- **`pixelScale`** — how many pixels of the stack's **reference image** (its background) one pixel of this image covers. `2` = half-resolution; `512` = each pixel is one 512-px prediction square. OpenSeadragon normalizes every image in the world to viewport width 1, so an overlay lands on its background only when their aspect ratios match — and an overlay covering a whole number of blocks of a slide whose width is *not* a whole number of blocks never matches: its edge block hangs past the slide, OSD squeezes it back to fit, and every cell ends up slightly small with the error accumulating across the image. Declaring the scale is what lets the overlay overhang instead. Scalar or `{x, y}` (only `x` is used — OSD derives height from the image's own aspect). Meaningless on a background, which *is* the reference. Composes with a virtual-region crop rather than replacing it: the widths multiply. Absent, zero, negative or non-finite means "no opinion" and places the image exactly as before the field existed; session-supplied, so it is range-checked (`src/classes/app/overlay-pixel-scale.ts`).
 - **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
@@ -108,6 +114,7 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay.                                                                                                                                                                                                                                                                                                                                                                    |
 | `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`).                                                                                                                                                                                                                                                                                                                          |
 | `visualizationInspectorRadiusPx` | number | — | Inspector radius.                                                                                                                                                                                                                                                                                                                                                                                |
+| `flexInteractionForwarding` | string | `"auto"` | FlexDrawer pointer forwarding, required by shaders that read `fr_interaction_*` state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a visible layer exists; `"always"` \| `"never"` pin it. Forwarding forces a viewer redraw on every changed pointer move. |
 | `visualizationInspectorLensZoom` | number | — | Lens zoom factor.                                                                                                                                                                                                                                                                                                                                                                                |
 | `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. Runtime canonical shape is an array; an explicit `[]` means "nothing open" (distinct from an absent value, which falls back to this default). |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view.                                                                                                                                                                                                                                                                                          |
@@ -129,12 +136,12 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `grayscale` | bool | `false` | Force grayscale transfer.                                                                                                                                                                                                                                                                                                                                                                        |
 | `tileCache` | bool | `true` | Enable tile caching.                                                                                                                                                                                                                                                                                                                                                                             |
 | `maxImageCacheCount` | number | `1200` | Tile cache size.                                                                                                                                                                                                                                                                                                                                                                                 |
-| `background` | string | — | Hex `#RGB`/`#RGBA` clear color (e.g. fluorescence). Transparent if unset.                                                                                                                                                                                                                                                                                                                        |
+| `backgroundColor` | string | — | Hex `#RGB`/`#RGBA` canvas clear color (e.g. fluorescence). Transparent if unset. Session-wide; a single slide overrides it with `background[i].fill`.                                                                                                                                                                                                                                              |
 | `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions.                                                                                                                                                                                                                                                                                                                                                         |
 | `bypassCookies` | bool | `false` | Skip cookie-backed user state.                                                                                                                                                                                                                                                                                                                                                                   |
 | `bypassCloseConfirmation` | bool | `false` | Avoid browser close confirmation popup in dirty (data modified) state.                                                                                                                                                                                                                                                                                                               |
 | `bypassCache` | bool | `false` | Never reuse cached values.                                                                                                                                                                                                                                                                                                                                                                       |
-| `bypassCacheLoadTime` | bool | `false` | Ignore cache at initial load only — avoids pulling cached content from a foreign session.                                                                                                                                                                                                                                                                                                        |
+| `bypassCacheLoadTime` | bool | `false` | Skip the **cold-load** session restore: a boot with no session of its own does not adopt `xoSessionCache`. Eviction and saving still run, so a boot that arrives *with* a session (auth-redirect return, POST, hash) is unaffected. Deployment-side (`ENV.setup`) — a cold load carries no `params` by definition.                                                                                 |
 | `historySize` | number | `50` | Cap on the history stack (`src/classes/history.ts`).                                                                                                                                                                                                                                                                                                                                             |
 | `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds.                                                                                                                                                                                                                                                                                                                                       |
 | `maxMobileWidthPx` | number | — | Responsive breakpoint.                                                                                                                                                                                                                                                                                                                                                                           |
@@ -182,6 +189,7 @@ Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/
 - **`sessionName`** — overrides `params.sessionName` for this background.
 - **`visualizationIndex`** — index into `visualizations` selected when this background is mounted. Authoritative per-viewer viz binding — the slot's viz follows the bg entry through slot reordering / insertion / deletion. Pass `null` for "no overlay". Legacy `goalIndex` is still accepted on read (folded with a one-time warning).
 - **`options`** — forwarded to the TileSource.
+- **`fill`** — canvas clear color while this background is open, hex `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`. Per-background override of `params.backgroundColor`; unset falls back to it (transparent by default). Use it when one slide in a session needs its own backdrop — a fluorescence slide on black next to a brightfield slide on white. Resolved via `BackgroundConfig.resolveFillColor`; a malformed value is ignored with a console warning. Applied per *viewer* before the shader (re)build, so it also reaches the navigator, the offscreen/standalone drawers (thumbnails, region exports, vision inference images) and the Visualization Playground's sandboxed viewer.
 
 > Legacy fields `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.
 
@@ -190,14 +198,15 @@ Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/
 WebGL composition goals over the data group (`VisualizationItem` in `src/types/app.d.ts`):
 
 - **`shaders`** (required) — map of shader id → layer spec:
-    - **`type`** (required) — `color`, `edge`, `dual-color`, `identity`, `heatmap`, `none`, or any custom-registered shader.
+    - **`type`** (required) — one of the renderer's registered shader types (`identity`, `colormap`, `heatmap`, `bipolar-heatmap`, `gridheatmap`, `edge`, `threshold`, `stain-separation`, `single_channel`, `group`, … ), or any custom-registered shader. Do not hardcode this list: the authoritative, always-current index is `visualization.getSchema()["x-shaderCatalog"]`, which carries each type's name, intent and what it expects from the data.
     - **`dataReferences`** (required) — index array into `data`.
     - **`visible`** — `1`/`0` or boolean.
     - **`name`** — UI label.
     - **`fixed`** — if `false`, user can change the shader type; default `true`.
     - **`params`** — shader-specific defaults; invalid entries fall back silently.
 - **`name`** — goal label.
-- **`goalIndex`** — preferred index when this item is selected.
+
+> Which visualization a viewer slot renders is not stored here — it is the per-background `visualizationIndex` binding above.
 
 > Legacy `protocol` accepted at the visualization level for back-compat — prefer `DataOverride`.
 
@@ -286,11 +295,14 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
     - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
     - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`.
+    - `app/tutorial/` — the interactive tutorial overlay behind `USER_INTERFACE.Tutorials` = `APPLICATION_CONTEXT.tutorials` (see [`TUTORIALS.md`](TUTORIALS.md)).
     - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
     - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).
     - `history.ts`, `user.ts`.
-- `external/` — always-loaded third-party libraries and OSD extensions (scalebar, `osd_tools.js`, EnjoyHint, noUiSlider, …). Tile sources moved to `classes/tile-sources/`.
-- `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
+- `external/` — **gone.** Vendored third-party assets live in `libs/`, first-party OSD extensions in `classes/osd/` (scalebar, `tools.ts`, `viewport-registration.ts`), tile sources in `classes/tile-sources/`. There is no `external` group in `config.json` and no `requireExternal()` on the server.
+- `workers/` — standalone web-worker entry points fetched by URL, never bundled (`registration-worker.js`, used by `classes/osd/viewport-registration.ts`).
+- `libs/` — vendored libraries: i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only.
 - `assets/` — `style.css`, icons, and other static assets.
 - `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).
 
@@ -424,6 +436,48 @@ Ambiently typed, part of the supported runtime surface:
 
 The user-facing controls are registered by `ViewerInspectorController` into the app-bar **Tools** category (`USER_INTERFACE.AppBar.Tools`), not the Edit menu.
 
+### Interaction State (shaders that read the pointer)
+
+Shader layers such as `fisheye-lens` sample screen-space pointer state through the
+`fr_interaction_*` GLSL helpers, fed from `FlexRenderer.setInteractionState(...)`.
+
+Observing the pointer is FlexDrawer's own job: it binds its listeners to the viewer container,
+an ancestor of the Fabric annotation overlay (`canvas.upper-canvas`), so events arrive by
+bubbling regardless of what is stacked on top, and it maintains the whole state — position in
+framebuffer pixels, buttons, drag/click serials. `ViewerInteractionController`
+(`classes/app/viewer-interaction-controller.ts`) only decides **when** that forwarding is worth
+paying for, through `drawer.setInteractionOptions({enabled, viewerInputCaptureMode})`.
+
+The decision is per viewer, re-evaluated after each program build and on every
+`visualization-change`: forwarding goes on when a *visible* layer's class declares
+`static requiresInteraction() === true`. The read is tolerant, so a shader registered by a
+plugin needs no registration here, and a class from an older library build reads as "no". Each
+changed pointer position costs one `forceRedraw`; nothing polls.
+
+A layer may still gate on a **held mouse button** (`fisheye-lens` defaults to the secondary
+button; `buttonMask: -1`, *"None (hover)"*, needs none), and a button held on the canvas is what
+OpenSeadragon turns into a pan. Hence the **`core.view.interactionLens` hold shortcut**
+(default `L`): while held, the drawer switches to `viewerInputCaptureMode: "drag"`, which
+suspends drag/click/flick gestures — wheel zoom keeps working — and restores them on release.
+Outside the hold, OSD input is untouched.
+
+Policy lives in `setup.flexInteractionForwarding` (`"auto"` default | `"always"` | `"never"`),
+with `UTILITIES.setInteractionForwarding(mode)` as the runtime setter. Isolated/playground
+viewers (`classes/app/setup-isolated-viewer.ts`) are outside `VIEWER_MANAGER` and get no
+forwarding unless the controller's `attach(viewer)` is called for them explicitly.
+
+### Recovering a visualization whose program fails to link
+
+A GLSL-regenerating action (layer visibility, type/blend change, reorder, cache clear) can
+produce a fragment program that exceeds the device's uniform budget. The renderer keeps the last
+program that linked and raises **`shader-program-failed`** `{key, error, source, shaderIds,
+snapshot}`. `classes/app/live-config-sync.ts` listens: it caches
+`renderer.getVisualizationSnapshot()` on every successful second-pass build, and on failure
+re-applies that snapshot through `drawer.overrideConfigureAll(shaders, order)`, logs to the
+`app.visualization` channel, and shows `error.shaderProgramFailedRestored`. The debounced
+config write-back is suppressed while recovering, so a configuration that cannot link never
+reaches `APPLICATION_CONTEXT.config` or a session export.
+
 ### Render Debug (dev only)
 
 `APPLICATION_CONTEXT.renderDebug` (`classes/app/render-debug-controller.ts`) records what the renderer was asked to draw and what each pass produced — for the on-screen viewport **and** every off-screen render (region renders, navigator thumbnails, magic wand, raster sampler). With `debugMode` on, open it from **Tools → Diagnostics → Render debug window**.
@@ -444,13 +498,13 @@ APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(drawer, { label: "my-feature",
 
 ### UI
 
-**Use the new UI components** — see [`../ui/README.md`](../ui/README.md) and [`../ui/classes/README.md`](../ui/classes/README.md). Extend `BaseComponent` and rely on Van.js reactivity instead of manual jQuery DOM work. The CORE UI singletons (`AppBar`, `FloatingManager`, `FullscreenMenus`, `GlobalTooltip`, …) are listed in [`../ui/services/README.md`](../ui/services/README.md).
+**Use the new UI components** — see [`../ui/README.md`](../ui/README.md) and [`../ui/classes/README.md`](../ui/classes/README.md). Extend `BaseComponent` and rely on Van.js reactivity instead of manual DOM work. The CORE UI singletons (`AppBar`, `FloatingManager`, `FullscreenMenus`, `GlobalTooltip`, …) are listed in [`../ui/services/README.md`](../ui/services/README.md).
 
 Reuse the existing components before pulling new dependencies. If you need a DaisyUI element that isn't already wrapped, add it under `ui/classes/elements` so other plugins can reuse it.
 
 ### Localization
 
-Driven by `i18next`. Use `$.t('translation_key')` at runtime; `$.i18n` holds the instance. Server-side `i18n` is available with limited capabilities. In spawned child windows, `$.t(...)` works but `jquery-i18next` is not bundled.
+Driven by `i18next`. Use `$.t('translation_key')` at runtime; `$.i18n` holds the instance. Note that `$` is xOpat's i18n namespace, **not jQuery** — it is a plain object and is not callable (`src/classes/app/i18n-dom.ts`). HTML can carry `data-i18n="key"` / `data-i18n="[title]key"`, applied by `localizeDom()` once i18next initialises. Server-side `i18n` is available with limited capabilities. Spawned child windows inherit the opener's `$`.
 
 For plugin localization specifics, see the plugins README.
 
@@ -458,7 +512,7 @@ For plugin localization specifics, see the plugins README.
 
 The two reference backends are the documentation:
 
-- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
+- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts`).
 - **Node** — `server/node/index.js` and [`server/node/README.md`](../server/node/README.md) cover the modern integration story: session-cookie CSRF, RPC for plugins/modules, dev-mode hot reload via `server/utils/node/dev-mode.js`.
 
 ## Further reading

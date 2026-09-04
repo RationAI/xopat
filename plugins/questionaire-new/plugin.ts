@@ -1,5 +1,7 @@
-import { button, el, numberInput, tabStrip, toggleInput } from "./dom";
-import { defaultSchema, makeElement, makePage, normalizeSchema } from "./schema";
+import { button, el, numberInput, richInline, richText, tabStrip, toggleInput } from "./dom";
+import {
+  assertUsableElement, defaultSchema, makeElement, makePage, normalizeSchema, preservePageOpaques,
+} from "./schema";
 import type {
   PluginEventMap,
   QuestionnaireAnswers,
@@ -18,6 +20,7 @@ import type {
   QuestionnaireSceneApplyMode,
   QuestionnaireSchema,
   QuestionnaireSelectElement,
+  QuestionnaireSubmission,
   QuestionnaireValue,
   ViewerLikeRecord,
 } from "./types";
@@ -110,9 +113,12 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _canEdit = true;
   /** Answering gate (`questionaire.answer`) — denied renders the form read-only. */
   private _canAnswer = true;
-  /** Bundle gates (`questionaire.bundle-export` / `.bundle-import`) — no pipeline guard exists for them. */
-  private _canExport = true;
-  private _canImport = true;
+  /**
+   * `questionaire.bundle-submit` — gates handing the filled form in. Separate
+   * from `_canAnswer`: a deployment may let a trainee fill a form for practice
+   * without letting them submit it.
+   */
+  private _canSubmit = true;
   /** `questionaire.crud:answer.read` — gates pulling stored answers back in. */
   private _canReadAnswers = true;
   /** Everything that must be undone on teardown (capability subscriptions, DOM listeners). */
@@ -123,6 +129,14 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _runtimeEl: HTMLElement | null = null;
   /** Coarse undo snapshot of the schema for designer edits. */
   private _persistedSchemaSerialized: string = "";
+  /**
+   * Recording bindings the last schema replacement could not carry forward.
+   *
+   * Kept off the schema itself — it is a report about an operation, not part of the form —
+   * and read by {@link lastSchemaDrops} so a programmatic author cannot report success over
+   * a tour that is now gone.
+   */
+  private _lastSchemaDrops: Array<{ pageId: string; slotIndex: number; recordingName: string }> = [];
   /** Debounce timer coalescing inline text edits into one undo snapshot. */
   private _persistTimer: ReturnType<typeof setTimeout> | null = null;
   /** Debounce timer coalescing answer keystrokes into one draft save. */
@@ -149,27 +163,42 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   /**
-   * Generic IO pipeline integration.
-   *  - Schema + every case's answers → one `bundle-export` / `bundle-import`
-   *    document at GLOBAL scope. Global (not `per-viewer-background`) because
-   *    a user-initiated import always arrives with an empty ctx key, the Export
-   *    button must hand the user ONE document, and this plugin drives slide
-   *    changes itself (page scenes) — slide-bound restores would rewrite the
-   *    answers mid-edit.
-   *  - Per-field answers → `crud:answer` resource with `persistOutbox: true`,
-   *    so unsynced answers survive a reload and can be pulled back in.
-   * The local draft (`this.cache`) is kept for offline-first resume even when
-   * no upstream sink is bound; the resource dispatches upstream only when an
-   * admin binds it.
+   * Generic IO pipeline integration — THREE channels, deliberately distinct:
+   *
+   *  - **State** (`bundle-export` / `bundle-import`): schema + every case's
+   *    answers, GLOBAL scope. This is what a session save/share carries, so it
+   *    must keep the answers — "Export all" downloading a form with the fills
+   *    stripped out is a data loss the user cannot see. Global (not
+   *    `per-viewer-background`) because a user-initiated import always arrives
+   *    with an empty ctx key and this plugin drives slide changes itself (page
+   *    scenes) — slide-bound restores would rewrite the answers mid-edit.
+   *  - **Submission** (`bundle-submit`): ONE respondent's filled form, the
+   *    document a receiving platform actually wants. Separate from the state
+   *    channel so an operator can route it somewhere else (a repo, a REST API)
+   *    and gate it with its own capability.
+   *  - **Template**: the blank form, a plain local file from the toolbar. No IO
+   *    capability — authoring a form is not a persistence channel.
+   *
+   * Per-field answers additionally go to the `crud:answer` resource with
+   * `persistOutbox: true`, so unsynced answers survive a reload. The local
+   * draft (`this.cache`) is kept for offline-first resume even when no upstream
+   * sink is bound; the resource dispatches upstream only when an admin binds it.
    */
   private async _initIOPipeline(): Promise<void> {
     await (this as any).initIO({
       bundleScope: "global",
-      exportBundle: async (_ctx: any) => {
-        // The pipeline mounts NO guard for bundle capabilities (they are only
-        // declared), so the owner enforces them. Returning undefined refuses
-        // without touching a sink — a throw here would toast on every autosave
-        // for a legitimately read-only role.
+      // Declared explicitly: `initIO` auto-registers only the two capabilities
+      // whose hooks it can infer (`bundle-export` / `bundle-import`).
+      capabilities: [{ id: "bundle-submit", kind: "bundle" }],
+      exportBundle: async (ctx: any) => {
+        // The pipeline's rights gate has already refused a denied role before
+        // reaching us (`pre-export`). The check here is defence in depth, and
+        // returns undefined rather than throwing so a read-only role does not
+        // get a toast on every autosave.
+        if (ctx?.capabilityId === "bundle-submit") {
+          if (!this.can("questionaire.bundle-submit")) return undefined;
+          return JSON.stringify(this._buildSubmissionPayload());
+        }
         if (!this.can("questionaire.bundle-export")) return undefined;
         this.flushDraftSave();
         return JSON.stringify(this._buildExportPayload());
@@ -215,6 +244,39 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   /**
+   * The blank form, for the toolbar's template save. No answers by
+   * construction — an author handing a form to respondents must not be able to
+   * leak somebody's fills with it by forgetting a capability.
+   */
+  private _buildTemplatePayload(): { schema: QuestionnaireSchema } {
+    return { schema: clone(this._schema) };
+  }
+
+  /**
+   * ONE respondent's filled form — the document a receiving platform stores.
+   *
+   * Carries only an identity of the schema, not the schema itself: a submission
+   * store wants to group answers by form, and re-shipping the whole definition
+   * with every response makes that a string comparison over kilobytes. A
+   * receiver that needs the definition gets it from the template channel.
+   */
+  private _buildSubmissionPayload(): QuestionnaireSubmission {
+    this.flushDraftSave();
+    this._answersBySlot.set(this._slotKey, this._answers);
+    const [viewerId, backgroundId] = this._slotKey === GLOBAL_SLOT
+      ? [undefined, undefined]
+      : this._slotKey.split("::");
+    return {
+      schema: { id: this._schema.id, title: this._schema.title, version: this._schema.version },
+      slotKey: this._slotKey,
+      viewerId,
+      backgroundId,
+      answers: clone(this._answers),
+      submittedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Refusal carrying a translated `userMessage`, which the pipeline surfaces.
    * Uses plain `$.t` (escaping ON, unlike `tRaw`) — the reason interpolated
    * here can carry payload text, and it lands in an HTML toast sink.
@@ -228,14 +290,17 @@ export class QuestionnairePlugin extends XOpatPlugin {
   /* ── IO: import ───────────────────────────────────────────────────────────── */
 
   /**
-   * Apply an incoming bundle. Everything here is treated as hostile: the payload
-   * may come from a sink, from a peer's exported session, or from a file the
-   * user picked. Schema and answers are gated separately so a deployment can let
-   * a role receive a form without receiving somebody's answers with it.
+   * Apply an incoming STATE bundle — a sink restore, or a session the user (or
+   * a peer) exported. Everything here is treated as hostile. Schema and answers
+   * are gated separately so a deployment can let a role receive a form without
+   * receiving somebody's answers with it.
+   *
+   * The toolbar's "Load form" does NOT come through here: a template load must
+   * only ever change the form, never apply answers riding along in the file.
    */
   private async _importBundle(ctx: any, data: any): Promise<void> {
-    // A sink restore tags the context with its sink id; the caller-supplied
-    // path (IO_PIPELINE.importBundle, i.e. our Import button) does not.
+    // A sink restore tags the context with its sink id; a caller-supplied
+    // payload (`IO_PIPELINE.importBundle`, i.e. a session import) does not.
     const userInitiated = ctx?.meta?.sinkId === undefined;
     if (!this.can("questionaire.bundle-import")) {
       if (userInitiated) throw this._refusal("messages.importDenied");
@@ -420,8 +485,10 @@ export class QuestionnairePlugin extends XOpatPlugin {
       this._canAnswer = enabled;
       this.renderAll();
     });
-    sub("questionaire.bundle-export", (enabled: boolean) => { this._canExport = enabled; this.renderToolbar(); });
-    sub("questionaire.bundle-import", (enabled: boolean) => { this._canImport = enabled; this.renderToolbar(); });
+    // Only the terminal action is refused; the form stays fillable, so the
+    // runtime (not the toolbar) is what re-renders.
+    sub("questionaire.bundle-submit", (enabled: boolean) => { this._canSubmit = enabled; this.renderRuntime(); });
+    sub("questionaire.import.schema", () => this.renderToolbar());
     sub("questionaire.crud:answer.read", (enabled: boolean) => {
       const granted = enabled && !this._canReadAnswers;
       this._canReadAnswers = enabled;
@@ -488,8 +555,24 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   /** Replace the entire questionnaire schema. Returns the normalized result. */
+  /**
+   * Replace the whole questionnaire. `strict`: a programmatic author gets a
+   * refusal naming the bad field instead of a form quietly degraded to blank
+   * text boxes — the schema on screen is left untouched when it throws.
+   *
+   * A page's captured scene and bound tours survive by page `id` even though a caller can
+   * only ever have READ them in summary form (see `preservePageOpaques`); clear them
+   * explicitly with `recordings: []` / `scene: null`. Whatever could not be carried is in
+   * {@link lastSchemaDrops}. To append a page, prefer {@link addPage} — it does not put the
+   * rest of the form through a replacement at all.
+   */
   setSchema(schema: QuestionnaireSchema): QuestionnaireSchema {
-    return this._applySchema(schema, "script-set-schema", { imported: true });
+    return this._applySchema(schema, "script-set-schema", { imported: true, strict: true, authored: true });
+  }
+
+  /** Recording bindings the last schema replacement could not carry forward. */
+  get lastSchemaDrops(): Array<{ pageId: string; slotIndex: number; recordingName: string }> {
+    return this._lastSchemaDrops.map(d => ({ ...d }));
   }
 
   /** Append a page (optionally seeded with caller fields). Returns the created page. */
@@ -517,9 +600,11 @@ export class QuestionnairePlugin extends XOpatPlugin {
     pageRef: string | number,
     element: Partial<QuestionnaireElement> & { kind?: QuestionnaireElement["kind"] },
   ): QuestionnaireElement {
-    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
-    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
-    const kind = (element?.kind || "text") as QuestionnaireElement["kind"];
+    const page = this._requirePage(pageRef);
+    // Same contract as setSchema: an authored field that cannot be rendered as
+    // asked is refused, not silently turned into a blank text box.
+    assertUsableElement(element, page.title, page.elements.length);
+    const kind = element!.kind as QuestionnaireElement["kind"];
     const created = { ...makeElement(kind), ...(element || {}), kind } as QuestionnaireElement;
     const id = created.id;
     page.elements.push(created);
@@ -531,13 +616,19 @@ export class QuestionnairePlugin extends XOpatPlugin {
 
   /** Shallow-merge a patch into an existing element (id stays fixed). Returns the updated element. */
   updateElement(pageRef: string | number, elementId: string, patch: Partial<QuestionnaireElement>): QuestionnaireElement {
-    const page = this._schema.pages[this._resolvePageIndex(pageRef)];
-    if (!page) throw new Error(`Questionnaire page '${pageRef}' was not found.`);
+    const page = this._requirePage(pageRef);
     const elementIndex = page.elements.findIndex((e) => e.id === elementId);
-    if (elementIndex < 0) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
-    const current = page.elements[elementIndex];
-    if (!current) throw new Error(`Questionnaire element '${elementId}' was not found on page '${page.id}'.`);
-    page.elements[elementIndex] = { ...current, ...(patch || {}), id: current.id } as QuestionnaireElement;
+    const current = elementIndex < 0 ? undefined : page.elements[elementIndex];
+    if (!current) {
+      throw new Error(
+        `Questionnaire element '${elementId}' was not found on page '${page.id}'. ${this._describeElements(page)}`
+      );
+    }
+    const merged = { ...current, ...(patch || {}), id: current.id } as QuestionnaireElement;
+    // Validate the RESULT, not the patch: a patch is legal only if what it
+    // produces is renderable. Nothing is written when this throws.
+    assertUsableElement(merged, page.title, elementIndex);
+    page.elements[elementIndex] = merged;
     this._applySchema(this._schema, "script-element-update");
     const result = this._findElementById(elementId);
     return clone(result?.element ?? current);
@@ -676,9 +767,17 @@ export class QuestionnairePlugin extends XOpatPlugin {
     return { scene, bound, skipped };
   }
 
+  /**
+   * A page by id or 0-based index, or a refusal that says what IS there.
+   *
+   * `Questionnaire page '1' was not found.` names the bad reference and nothing else, so
+   * a caller that guessed wrong guesses again — a script asking for "the second page"
+   * with `1` got that message against a one-page questionnaire and had no way to see it.
+   * The count, the ids and the indexing rule are the whole fix.
+   */
   private _requirePage(ref: string | number): QuestionnairePage {
     const page = this._schema.pages[this._resolvePageIndex(ref)];
-    if (!page) throw new Error(`Questionnaire page '${ref}' was not found.`);
+    if (!page) throw new Error(`Questionnaire page '${ref}' was not found. ${this._describePages()}`);
     return page;
   }
 
@@ -697,17 +796,29 @@ export class QuestionnairePlugin extends XOpatPlugin {
    * refresh the undo baseline, fire events, repaint. `recordHistory` true pushes
    * one undo entry (programmatic edits); imports pass false. `imported` raises
    * the `schema-imported` event for wholesale replacements. `strict` makes an
-   * unusable payload throw instead of silently becoming the default form.
+   * unusable payload throw instead of silently becoming the default form, and
+   * `authored` adds the completeness checks that only a caller writing the
+   * schema right now should face (never a saved file).
    */
   private _applySchema(
     next: any,
     reason: string,
-    opts: { recordHistory?: boolean; imported?: boolean; strict?: boolean } = {},
+    opts: { recordHistory?: boolean; imported?: boolean; strict?: boolean; authored?: boolean } = {},
   ): QuestionnaireSchema {
-    const { recordHistory = true, imported = false, strict = false } = opts;
+    const { recordHistory = true, imported = false, strict = false, authored = false } = opts;
+    // Carry the page payloads a caller could only have been SHOWN in summary form. Without
+    // this, read-modify-write silently destroyed every page's scene and bound tours — see
+    // `preservePageOpaques`. Runs before normalization so the normalizers see real payloads,
+    // and before the strict checks so a refusal is still about the caller's own fields.
+    const preserved = preservePageOpaques(next, this._schema?.pages);
+    this._lastSchemaDrops = preserved.dropped;
+    if (preserved.dropped.length) {
+      console.warn(`[questionaire] ${preserved.dropped.length} recording binding(s) could not be ` +
+        `carried across this schema replacement (their page is gone):`, preserved.dropped);
+    }
     // `strict` (import path) throws instead of degrading to the default form —
     // the caller turns that into a refusal and keeps the current schema.
-    const normalized = normalizeSchema(next, { strict });
+    const normalized = normalizeSchema(preserved.schema, { strict, authored });
     if (recordHistory) {
       this._schema = normalized;
       this._clampCurrentPage();
@@ -731,6 +842,26 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (this._currentPage < 0) this._currentPage = 0;
   }
 
+  /** The page inventory a failed reference needs, capped so a long form stays readable. */
+  private _describePages(): string {
+    const pages = this._schema.pages || [];
+    const shown = pages.slice(0, 10)
+      .map((p, i) => `[${i}] "${p.title}" (id ${p.id})`)
+      .join(", ");
+    const more = pages.length > 10 ? `, … ${pages.length - 10} more` : "";
+    return `The questionnaire has ${pages.length} page(s): ${shown}${more}. `
+      + `A number is a 0-BASED index; a string is a page id.`;
+  }
+
+  /** The element inventory of one page, same purpose as `_describePages`. */
+  private _describeElements(page: QuestionnairePage): string {
+    const elements = page.elements || [];
+    if (!elements.length) return `Page "${page.title}" has no fields yet.`;
+    const shown = elements.slice(0, 10).map((e) => `${e.id} (${e.kind})`).join(", ");
+    const more = elements.length > 10 ? `, … ${elements.length - 10} more` : "";
+    return `Page "${page.title}" has ${elements.length} field(s): ${shown}${more}.`;
+  }
+
   private _resolvePageIndex(ref: string | number): number {
     if (typeof ref === "number") return Number.isInteger(ref) ? ref : -1;
     return this._schema.pages.findIndex((p) => p.id === ref);
@@ -752,7 +883,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     LAYOUT.addTab({
       id: "questionaire",
       title: $.t("questionaire:tab.title"),
-      icon: "fa-question-circle",
+      icon: "ph-question",
       body: [new UI.RawHtml(`
         <main class="questionnaire-root mx-auto max-w-7xl p-2">
           <div class="card bg-base-100 shadow-md">
@@ -848,9 +979,9 @@ export class QuestionnairePlugin extends XOpatPlugin {
       left.append(this.inlineInput(this._schema.title || "", $.t("questionaire:tab.title"), (v) => { this._schema.title = v; this.commitInline("form-title"); }, "input input-ghost text-lg font-semibold px-0 w-full focus:outline-none"));
       left.append(this.inlineInput(this._schema.description || "", $.t("questionaire:toolbar.defaultDescription"), (v) => { this._schema.description = v; this.commitInline("form-description"); }, "input input-ghost input-sm px-0 w-full text-base-content/70 focus:outline-none"));
     } else {
-      left.append(el("h2", "text-lg font-semibold", this._schema.title || $.t("questionaire:tab.title")));
+      left.append(el("h2", "text-lg font-semibold", undefined, [richInline("", this._schema.title || $.t("questionaire:tab.title"))]));
       const subtitle = this._schema.description || (canManage ? $.t("questionaire:toolbar.defaultDescription") : "");
-      if (subtitle) left.append(el("div", "text-sm text-base-content/70", subtitle));
+      if (subtitle) left.append(richText("text-sm text-base-content/70", subtitle));
     }
     const right = el("div", "flex flex-wrap items-center gap-2");
     if (this._enableEditor && canManage) {
@@ -863,14 +994,15 @@ export class QuestionnairePlugin extends XOpatPlugin {
     if (canManage && this._canAnswer) {
       right.append(button($.t("questionaire:toolbar.clearDraft"), "btn btn-outline btn-sm", () => this.clearDraft()));
     }
-    if (this._canExport) {
-      right.append(button($.t("questionaire:toolbar.export"), "btn btn-outline btn-sm", () => void this._onExportClick()));
+    // Template save/load are AUTHORING actions on the blank form — they carry no
+    // answers and touch no sink, so they ride on the same gate as the designer
+    // rather than on the session-state bundle capabilities. A respondent has no
+    // business swapping the form out from under their own answers.
+    if (canManage) {
+      right.append(button($.t("questionaire:toolbar.exportTemplate"), "btn btn-outline btn-sm", () => this._onExportTemplateClick()));
     }
-    // Importing is NOT gated on `questionaire.edit` — a respondent restoring
-    // their own answers is not an authoring action.
-    const mayImportSomething = this.can("questionaire.import.schema") || this.can("questionaire.import.answers");
-    if (this._canImport && mayImportSomething && !this._isExported) {
-      right.append(button($.t("questionaire:toolbar.import"), "btn btn-outline btn-sm", () => void this._onImportClick()));
+    if (canManage && this.can("questionaire.import.schema")) {
+      right.append(button($.t("questionaire:toolbar.importTemplate"), "btn btn-outline btn-sm", () => void this._onImportTemplateClick()));
     }
     right.append(this.renderPrefsDropdown());
     if (this._isExported) right.append(el("span", "badge badge-warning", $.t("questionaire:toolbar.readOnly")));
@@ -905,59 +1037,54 @@ export class QuestionnairePlugin extends XOpatPlugin {
   }
 
   /**
-   * Hand the questionnaire to whatever the deployment bound. With no binding at
-   * all the pipeline has no sink to fall back from, so download the document
-   * directly — the button must never look like it did nothing.
+   * Save the blank form to a file.
+   *
+   * A plain local download, NOT an IO flush: the template is the author's
+   * artefact, not deployment state, and routing it through `bundle-export`
+   * meant the button shipped every respondent's answers with the form and
+   * competed with Submit for the same destination.
    */
-  private async _onExportClick(): Promise<void> {
-    if (!this.can("questionaire.bundle-export")) {
-      this.showInfo($.t("questionaire:messages.exportDenied"));
+  private _onExportTemplateClick(): void {
+    if (!this._canEdit) {
+      this.showInfo($.t("questionaire:messages.templateExportDenied"));
       return;
     }
-    this.flushDraftSave();
-    let results: any[] = [];
-    try {
-      results = (await this.io.flush()) || [];
-    } catch (e: any) {
-      console.warn("[questionaire] export failed:", e);
-      this.showInfo($.t("questionaire:messages.exportFailed", { reason: e?.message ?? String(e) }));
-      return;
-    }
-    if (!results.length) {
-      UTILITIES.downloadAsFile("questionnaire.json", JSON.stringify(this._buildExportPayload(), null, 2));
-      this.showInfo($.t("questionaire:messages.exportNoSink"));
-      return;
-    }
-    const failed = results.filter((r: any) => r && !r.ok);
-    if (failed.length) {
-      this.showInfo($.t("questionaire:messages.exportFailed", { reason: failed[0]?.userMessage ?? failed[0]?.reason ?? "" }));
-    } else {
-      this.showInfo($.t("questionaire:messages.exportOk"));
-    }
+    const name = sanitizeName(this._schema.title || "questionnaire") || "questionnaire";
+    UTILITIES.downloadAsFile(`${name}-form.json`, JSON.stringify(this._buildTemplatePayload(), null, 2));
+    this.showInfo($.t("questionaire:messages.templateExportOk"));
   }
 
   /**
-   * Load a questionnaire document the user picked. The file is handed to the IO
-   * pipeline rather than applied directly, so it traverses exactly the same
-   * validated, capability-gated path as a sink restore.
+   * Replace the form with a template the author picked.
+   *
+   * Applied directly rather than through `IO_PIPELINE.importBundle`: that path
+   * is the session-state channel and would also apply any `answers` the file
+   * carries. A template load must only ever change the form. The payload is
+   * still treated as hostile — `_applySchema(..., {strict: true})` refuses
+   * anything without usable pages instead of degrading to the default form.
    */
-  private async _onImportClick(): Promise<void> {
+  private async _onImportTemplateClick(): Promise<void> {
+    if (!this._canEdit || !this.can("questionaire.import.schema")) {
+      this.showInfo($.t("questionaire:messages.importSchemaDenied"));
+      return;
+    }
     UTILITIES.uploadFile(async (content: string | ArrayBuffer) => {
       if (typeof content !== "string") {
         this.showInfo($.t("questionaire:messages.importUnreadable"));
         return;
       }
       try {
-        const results = (await IO_PIPELINE.importBundle(content, { ownerUid: this.uid })) || [];
-        const failed = results.filter((r: any) => r && !r.ok);
-        if (failed.length) {
-          this.showInfo($.t("questionaire:messages.importFailed", { reason: failed[0]?.userMessage ?? failed[0]?.reason ?? "" }));
-        } else {
-          this.showInfo($.t("questionaire:messages.importOk"));
-        }
+        const parsed = JSON.parse(content);
+        // Accept both a bare schema and a `{schema}` envelope — an author
+        // should not have to know which of the two a file happens to be.
+        const schema = parsed && typeof parsed === "object" && parsed.schema !== undefined
+          ? parsed.schema : parsed;
+        this._applySchema(schema, "import", { recordHistory: true, imported: true, strict: true });
+        this.renderAll();
+        this.showInfo($.t("questionaire:messages.templateImportOk"));
       } catch (e: any) {
-        console.warn("[questionaire] import failed:", e);
-        this.showInfo($.t("questionaire:messages.importFailed", { reason: e?.userMessage ?? e?.message ?? String(e) }));
+        console.warn("[questionaire] template import failed:", e);
+        this.showInfo($.t("questionaire:messages.importSchemaRefused", { reason: e?.message ?? String(e) }));
       }
     }, ".json,application/json", "text");
   }
@@ -1692,8 +1819,8 @@ export class QuestionnairePlugin extends XOpatPlugin {
     // The toolbar already renders the (custom) schema title + description as the
     // single panel header, so the main runtime skips them to avoid a duplicate.
     if (!isMainRuntime) {
-      target.append(el("div", "text-lg font-semibold", this._schema.title || $.t("questionaire:tab.title")));
-      if (this._schema.description) target.append(el("div", "mb-3 text-sm text-base-content/70", this._schema.description));
+      target.append(el("div", "text-lg font-semibold", undefined, [richInline("", this._schema.title || $.t("questionaire:tab.title"))]));
+      if (this._schema.description) target.append(richText("mb-3 text-sm text-base-content/70", this._schema.description));
     }
     if (!pages.length) {
       target.append(el("div", "text-sm text-base-content/70", $.t("questionaire:runtime.noVisiblePages")));
@@ -1756,8 +1883,8 @@ export class QuestionnairePlugin extends XOpatPlugin {
       target.append(el("div", "alert alert-info text-sm", undefined, [el("span", "", $.t("questionaire:runtime.readOnlyDenied"))]));
     }
 
-    target.append(el("div", "text-base font-semibold", page.title));
-    if (page.description) target.append(el("div", "mb-4 text-sm text-base-content/70", page.description));
+    target.append(el("div", "text-base font-semibold", undefined, [richInline("", page.title)]));
+    if (page.description) target.append(richText("mb-4 text-sm text-base-content/70", page.description));
 
     // Validation is computed ONCE per render, and only surfaces after a failed
     // Next/Submit on this page (no red "required" wall before any interaction).
@@ -1780,40 +1907,114 @@ export class QuestionnairePlugin extends XOpatPlugin {
       }
       this._showErrors.delete(page.id);
       if (pos < pages.length - 1) this.goToPage(pos + 1);
-      else this.submit();
+      else void this.submit();
     });
     // Browsing a form read-only is legitimate, so navigation stays enabled;
     // only the terminal submit is refused.
-    if (!this._canAnswer && pos === pages.length - 1) next.disabled = true;
+    if (pos === pages.length - 1 && (!this._canAnswer || !this._canSubmit)) next.disabled = true;
     actions.append(prev, next);
     target.append(actions);
   }
 
   /**
-   * Final page reached and valid. Drain the answer outbox and write the bundle
-   * so a submit is durable wherever the deployment bound it — but never block
-   * the submit event on it: hosts listen for that event to advance their own
-   * workflow, and an unbound/failing sink must not swallow the submission.
+   * Hand in the filled form.
+   *
+   * Every visible page is validated, not just the last one: a respondent who
+   * skipped back and cleared a required field on page 1 used to be able to
+   * submit from page 3, because only the current page was checked.
+   *
+   * The submission goes to the `bundle-submit` capability, so a deployment
+   * routes it independently of the session-state channel. With nothing bound
+   * the pipeline has no sink to fall back from, so the form is downloaded — the
+   * button must never look like it did nothing, which is exactly what it did
+   * before.
+   *
+   * The `questionnaire-submit` event still fires regardless of persistence:
+   * hosts listen for it to advance their own workflow, and an unbound or
+   * failing sink must not swallow the submission.
    */
-  private submit(): void {
+  private async submit(): Promise<void> {
     this.flushDraftSave();
-    const slot = this._slotKey;
-    const pending: Array<Promise<any>> = [];
-    if (this.answerResource?.flush) pending.push(this.answerResource.flush());
-    if (this.can("questionaire.bundle-export")) pending.push(this.io.flush());
-    if (pending.length) {
-      void Promise.allSettled(pending).then((settled) => {
-        const failed = settled.flatMap((entry) => entry.status === "fulfilled"
-          ? (Array.isArray(entry.value) ? entry.value.filter((r: any) => r && !r.ok) : [])
-          : [{ reason: (entry as PromiseRejectedResult).reason }]);
-        if (!failed.length) { this._dirtyFields.delete(slot); return; }
-        console.warn("[questionaire] submit persistence failed:", failed);
-        this.showInfo($.t("questionaire:messages.exportFailed", {
-          reason: (failed[0] as any)?.userMessage ?? (failed[0] as any)?.reason ?? "",
-        }));
-      });
+
+    const invalid = this._firstInvalidPage();
+    if (invalid) {
+      this._showErrors.add(invalid.page.id);
+      this.raiseTypedEvent("questionnaire-validation-failed", { pageIndex: invalid.pos, errors: invalid.errors });
+      // Land the respondent ON the offending page — reporting an error about a
+      // page they cannot see is not a report.
+      if (invalid.page.id !== this.currentPageId()) this.goToPage(invalid.pos);
+      else this.renderRuntime();
+      this.showInfo($.t("questionaire:messages.submitValidationFailed", { page: invalid.page.title }));
+      return;
     }
+
+    if (!this.can("questionaire.bundle-submit")) {
+      this.showInfo($.t("questionaire:messages.submitDenied"));
+      return;
+    }
+
+    const slot = this._slotKey;
+    const payload = this._buildSubmissionPayload();
     this.raiseTypedEvent("questionnaire-submit", { answers: clone(this._answers), schema: clone(this._schema) });
+
+    // "Is anything actually configured?" is NOT "did the flush return results".
+    // Every bundle capability falls back to the in-page `post-data` dict when
+    // nothing is bound, so a submission always looks like it went somewhere.
+    // Ask the pipeline about THIS capability instead — an owner can be remotely
+    // bound for session state and not for submissions.
+    const bound = IO_PIPELINE.hasRemoteBundleSinks(this.uid, "bundle-submit");
+
+    let results: any[] = [];
+    try {
+      // The answer outbox first: a sink storing both wants the per-field
+      // records to exist before the submission that refers to them.
+      if (this.answerResource?.flush) results.push(...((await this.answerResource.flush()) || []));
+      results.push(...((await this.io.flush({ capabilityId: "bundle-submit" })) || []));
+    } catch (e: any) {
+      console.warn("[questionaire] submit failed:", e);
+      this.showInfo($.t("questionaire:messages.submitFailed", { reason: e?.userMessage ?? e?.message ?? String(e) }));
+      return;
+    }
+
+    if (!bound) {
+      const name = sanitizeName(this._schema.title || "questionnaire") || "questionnaire";
+      UTILITIES.downloadAsFile(`${name}-submission.json`, JSON.stringify(payload, null, 2));
+      this.showInfo($.t("questionaire:messages.submitNoSink"));
+      this._dirtyFields.delete(slot);
+      return;
+    }
+
+    const failed = results.filter((r: any) => r && !r.ok);
+    if (failed.length) {
+      console.warn("[questionaire] submit persistence failed:", failed);
+      this.showInfo($.t("questionaire:messages.submitFailed", {
+        reason: failed[0]?.userMessage ?? failed[0]?.reason ?? "",
+      }));
+      return;
+    }
+    this._dirtyFields.delete(slot);
+    this.showInfo($.t("questionaire:messages.submitOk"));
+  }
+
+  /**
+   * First visible page failing validation, or null. Hidden pages
+   * (`visibleWhen`) are skipped — a respondent cannot answer what a branch
+   * never showed them. `pos` is the VISIBLE position, which is what
+   * `goToPage` navigates by.
+   */
+  private _firstInvalidPage(): { pos: number; page: QuestionnairePage; errors: Record<string, string> } | null {
+    const pages = this.visiblePages();
+    for (let pos = 0; pos < pages.length; pos++) {
+      const page = pages[pos]!.page;
+      const errors = validatePage(page, this._answers);
+      if (Object.keys(errors).length) return { pos, page, errors };
+    }
+    return null;
+  }
+
+  /** Id of the page currently shown. `_currentPage` is a SCHEMA index. */
+  private currentPageId(): string | null {
+    return this._schema.pages[this._currentPage]?.id ?? null;
   }
 
   private renderElement(element: QuestionnaireElement, page: QuestionnairePage, errors: Record<string, string>, parentAnswers?: QuestionnaireAnswers, parentKey = ""): HTMLElement {
@@ -1822,17 +2023,24 @@ export class QuestionnairePlugin extends XOpatPlugin {
     const key = parentKey ? `${parentKey}.${element.name}` : element.name;
     if (element.kind === "content") {
       const content = element as QuestionnaireContentElement;
-      // Plain text only — rendered via textContent, never innerHTML (XSS-safe).
+      // Markdown, never raw HTML: the legacy `html` field is still tag-stripped on
+      // the way in, and the markdown path sanitizes whatever it produces.
       const text = content.text ?? (content.html ? content.html.replace(/<[^>]*>/g, "") : "");
       if (content.variant === "header") {
-        wrap.append(el("div", "text-lg font-semibold text-base-content", text));
+        wrap.append(richText("text-lg font-semibold text-base-content", text));
       } else {
-        wrap.append(el("div", "whitespace-pre-wrap text-sm text-base-content/80", text));
+        wrap.append(richText("text-sm text-base-content/80", text));
       }
       return wrap;
     }
-    if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") wrap.append(el("label", "label", undefined, [el("span", "label-text font-medium", `${element.label}${(element.validation?.required || element.validation?.requiredWhen) ? " *" : ""}`)]));
-    if (element.description) wrap.append(el("div", "mb-1 text-xs text-base-content/60", element.description));
+    if (element.label && element.kind !== "toggle" && element.kind !== "checkbox") {
+      const label = el("span", "label-text font-medium", undefined, [richInline("", element.label)]);
+      // The required marker is ours, not the author's — appended as text so a
+      // markdown label cannot swallow or restyle it.
+      if (element.validation?.required || element.validation?.requiredWhen) label.append(" *");
+      wrap.append(el("label", "label", undefined, [label]));
+    }
+    if (element.description) wrap.append(richText("mb-1 text-xs text-base-content/60", element.description));
     const readOnly = !!element.readOnly || this._isExported || !this._canAnswer;
     const currentValue = parentAnswers ? answerFor(element, parentAnswers) : answerFor(element, this._answers);
     let input: HTMLElement;

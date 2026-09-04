@@ -6,6 +6,11 @@
   "version": "0.2.0",
   "categories": ["Data"],
   "keywords": ["tiff", "geotiff", "ome-tiff", "qptiff", "multi-channel"],
+  // Will be by `modules/webtiff`, which registers the same `tiff` protocol —
+  // enable one decoder, not both. Declared rather than left to be inferred from
+  // a README sentence: this is what badges the module in the Modules menu and the
+  // docs catalogue, and without it the deprecated decoder reads as the stable one.
+  // "stability": "deprecated",
   "includes": [
     "index.mjs"
   ],

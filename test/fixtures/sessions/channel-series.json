@@ -1,0 +1,47 @@
+{
+  "params": {
+    "customBlending": true,
+    "background": "#000000ff",
+    "sessionName": "channel-series"
+  },
+  "data": [
+    {
+      "dataID": "slides/LuCa-7color_Scan1.ome.tiff",
+      "options": {
+        "format": "tiff",
+        "channels": "all"
+      }
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "Fluorescence source"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Channel browser",
+      "shaders": {
+        "channel_browser": {
+          "name": "Channel browser",
+          "type": "channel-series",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            0
+          ],
+          "channelRenderer": "single_channel",
+          "channelRendererConfig": {
+            "params": {
+              "color": "#00fff0"
+            }
+          },
+          "sourceIndex": 0,
+          "params": {}
+        }
+      }
+    }
+  ]
+}

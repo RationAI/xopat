@@ -9,9 +9,28 @@ created by using
 
 Directives for developing modules and plugins are in README files in respective directories. 
 
-General development can furthermore use the ``npm run dev`` task. The tasks starts a node server
-(you need to provide `./env/.env` file or `XOPAT_ENV` variable with configuration of the viewer), and
-also tun a tailwind watcher. This is necessary to register new styles automatically using tailwind.
+### Choosing a deployment configuration
+
+The viewer always needs one — where slides come from, whether there is a login,
+what is loaded. Rather than maintaining a whole ENV file per combination, compose
+one from tracked fragments:
+
+``npm run up`` — asks one question per decision, then starts the server.
+
+``npm run up -- dicom-idc`` runs a named preset; ``npm run up -- --list`` shows
+everything available; ``npm run up:dev -- <selectors>`` adds the asset watcher.
+Secrets go in ``env/.env`` (copy ``env/.env.example``); the composer injects them
+into the server process and never writes them into a config file. Full reference:
+[`env/README.md`](env/README.md).
+
+A hand-written ENV still works everywhere it did — pass it to ``XOPAT_ENV``, or
+name it as a layer: ``npm run up -- env/env.mine.json``.
+
+### Watchers
+
+``npm run dev`` starts a node server (configured from ``env/env.json`` or the
+``XOPAT_ENV`` variable, with secrets read from ``env/.env``) and a tailwind
+watcher. The watcher is necessary to register new styles automatically.
 You can specify watched entities by providing ``WATCH_PATTERN`` variable, the task will 
 watch your chosen files.
 
@@ -66,5 +85,6 @@ Such files are then included instead of the sources defined in ``include.json`` 
 which might be confusing if you try to develop after running ``npm run minify`` (your changes will not be reflected because
 the system loads minified files). This behavior is only active in **production mode**. See [the default configuration](./src/config.json).
 ### Predefined sessions
-You can use ``/docs/example_sessions`` to open sessions for testing purposes, these sessions
-explore various viewer modes.
+The session fixture library is [`test/fixtures/sessions/`](test/fixtures/sessions/) — one tracked
+session per viewer capability, indexed in `index.json` with the deployment it wants and what must
+exist first. `npm run fixtures:urls` prints an openable link for each.

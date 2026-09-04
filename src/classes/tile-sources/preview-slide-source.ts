@@ -3,7 +3,7 @@
  * `HTMLImageElement` as a single-tile, single-level "pyramid".
  *
  * Used where a slide preview/thumbnail must be shown as a real world item
- * (e.g. `OpenSeadragon.Tools` slide previews, see `src/external/osd_tools.js`).
+ * (e.g. `OpenSeadragon.Tools` slide previews, see `src/classes/osd/tools.ts`).
  * Never auto-detected — `supports()` is hard `false`; construct it explicitly
  * with `{ image }`.
  *

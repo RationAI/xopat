@@ -1,11 +1,17 @@
 # web-tiff — vendored bundle
 
+**Version 0.1.0.**
+
 A TIFF / whole-slide decoder: libtiff compiled to WebAssembly. Decoding and HTTP
 range reads both happen in a worker, so a tile costs one `postMessage` hop.
 
 **Copy this whole folder.** Every file resolves relative to `web-tiff.mjs`, so it
 works at any depth under a web root — no build step, no package manager, no paths
 to rewrite.
+
+Re-vendoring: the same version string is exported as `VERSION` from the bundle, so
+a consumer can check at runtime which copy it is actually running rather than
+diffing two megabytes of WebAssembly. Bump it whenever this folder changes.
 
 ## Use
 

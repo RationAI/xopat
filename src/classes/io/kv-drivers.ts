@@ -99,24 +99,101 @@ function makeCookiesMemoryFallback(id: string, label: string): IOKVDriver {
 }
 
 /**
- * Cookie-backed driver. Adapter over the existing `js-cookie` library
- * (or whatever the host provides at `window.Cookies`); falls back to an
- * in-memory store if `Cookies` is unavailable or the browser refuses cookies
- * (third-party context, or a sandboxed iframe with an opaque origin, where
- * `document.cookie` throws `SecurityError`).
+ * Cookie attributes, as supplied by the deployment (`ENV.client.js_cookie_*`).
+ * Same shape js-cookie's `withAttributes` took, so deployment configs and
+ * `CookiesFacade.with(...)` call sites are unchanged.
+ */
+export interface CookieAttributes {
+    /** Lifetime in days, or an explicit expiry date. */
+    expires?: number | Date | null;
+    path?: string | null;
+    domain?: string | null;
+    secure?: boolean | null;
+    sameSite?: string | null;
+}
+
+/**
+ * `document.cookie` access, replacing the vendored js-cookie 3.0.1.
+ *
+ * The encoding is deliberately js-cookie's, not a naive
+ * `encodeURIComponent`: cookies written by a previous xOpat version must stay
+ * readable, so the same RFC-6265-permitted characters are decoded back after
+ * escaping. Everything here is called through `makeDegradableBacking().guard`
+ * — in a sandboxed iframe with an opaque origin the property access itself
+ * throws `SecurityError` (see `src/IO_PIPELINE.md` → "Sandboxed /
+ * opaque-origin operation").
+ */
+const cookieCodec = {
+    writeValue: (v: string) => encodeURIComponent(String(v))
+        .replace(/%(2[346BF]|3[AC-F]|40|5[BDE]|60|7[BCD])/g, decodeURIComponent),
+    writeName: (n: string) => encodeURIComponent(String(n))
+        .replace(/%(2[346B]|5E|60|7C)/g, decodeURIComponent)
+        .replace(/[()]/g, escape),
+    read: (s: string) => s.replace(/(%[\dA-F]{2})+/gi, decodeURIComponent),
+};
+
+function serializeAttributes(attrs: CookieAttributes): string {
+    let out = "";
+    let expires = attrs.expires;
+    if (typeof expires === "number") {
+        expires = new Date(Date.now() + expires * 864e5);
+    }
+    if (expires instanceof Date) out += "; expires=" + expires.toUTCString();
+    if (attrs.path) out += "; path=" + attrs.path;
+    if (attrs.domain) out += "; domain=" + attrs.domain;
+    // A bare `; secure` flag — a value would be ignored by the browser.
+    if (attrs.secure) out += "; secure";
+    if (attrs.sameSite) out += "; samesite=" + attrs.sameSite;
+    return out;
+}
+
+/** Every cookie visible to this document, decoded. */
+function readAllCookies(): Record<string, string> {
+    const out: Record<string, string> = {};
+    const raw = document.cookie ? document.cookie.split("; ") : [];
+    for (const part of raw) {
+        const eq = part.indexOf("=");
+        if (eq < 0) continue;
+        const name = part.slice(0, eq);
+        let value = part.slice(eq + 1);
+        // js-cookie strips the quoting some servers add around values.
+        if (value[0] === '"') value = value.slice(1, -1);
+        try {
+            out[cookieCodec.read(name)] = cookieCodec.read(value);
+        } catch {
+            // A malformed percent-escape from a foreign writer must not take
+            // out every other cookie — skip just that entry.
+        }
+    }
+    return out;
+}
+
+function writeCookie(name: string, value: string, attrs: CookieAttributes): void {
+    document.cookie = cookieCodec.writeName(name) + "=" + cookieCodec.writeValue(value)
+        + serializeAttributes(attrs);
+}
+
+/**
+ * Cookie-backed driver over `document.cookie`; falls back to an in-memory
+ * store when the browser refuses cookies (third-party context, or a
+ * sandboxed iframe with an opaque origin, where the access throws
+ * `SecurityError`).
  *
  * Replaces the legacy anonymous class previously registered via
  * `XOpatStorage.Cookies.registerClass(...)` in `src/app.ts`.
  *
- * NOTE: `globalThis.Cookies` is read EAGERLY here, so this must be called
- * after `src/app.ts` has configured js-cookie.
+ * `defaults` are the deployment's `ENV.client.js_cookie_*` policy; the
+ * builder-pattern `with(o)` overlays one-shot attributes for the next write,
+ * which is what `CookiesFacade.with()` in `src/store.ts` relies on.
  */
-export function makeCookiesDriver(id = "cookies"): IOKVDriver {
-    const Cookies: any = (globalThis as any).Cookies;
-    if (!Cookies) {
-        console.warn("[IO] js-cookie unavailable; cookies KV driver falls back to memory.");
-        return makeCookiesMemoryFallback(id, "Cookies (fallback: memory)");
-    }
+export function makeCookiesDriver(id = "cookies", defaults: CookieAttributes = {}): IOKVDriver {
+    const Cookies = {
+        get: (k?: string) => (k === undefined ? readAllCookies() : readAllCookies()[k]),
+        set: (k: string, v: string, o: CookieAttributes) => writeCookie(k, v, { ...defaults, ...o }),
+        // Expiring in the past is the only way to delete a cookie, and the
+        // path/domain must match the write or the browser keeps the original.
+        remove: (k: string) => writeCookie(k, "", { ...defaults, expires: -1 }),
+    };
     if (!XOpatStorageAvailability.cookies) {
         // Probed, not assumed: `document.cookie` throws in an opaque origin and
         // silently drops writes in a blocked third-party context.

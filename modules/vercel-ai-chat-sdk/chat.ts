@@ -3,10 +3,12 @@ import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import { UsagePanel } from './ui/UsagePanel';
 import {ChatService} from './chatService';
 import { extractToolEnvelopeScripts, readCodeFromToolPayload } from './shared/tool-envelope';
+import type { ToolPayloadCode } from './shared/tool-envelope';
 import {
     bracketCensus, describeCensusDamage, findScriptFence, formatCensus,
 } from './shared/script-text';
 import { matchProviderRef } from './shared/providerRef';
+import { isAuthError } from './shared/errors';
 import { serializeStructuredResult } from './shared/structured-result';
 
 /** Where a script came from and what shape it was in when it arrived. */
@@ -44,6 +46,19 @@ type ManagedProviderRegistrationOpts<T = any> = {
      * which never reaches `chatService._providers` because `listProviders` filters it out.
      */
     pluginId?: string;
+    /**
+     * The auth context this provider's registration RPC travels under, when it needs one.
+     *
+     * Every provider plugin already computes this to hand to its own server method; passing it
+     * here too is what lets the shared retry loop WAIT for that context to settle instead of
+     * racing it. Plugins load during `before-app-init`, which runs before core awaits the boot
+     * login (`application-lifecycle-controller._awaitAuthContexts`), and the RPC rides
+     * `APPLICATION_CONTEXT.httpClient` whose `awaitContext` is false — so without this the very
+     * first attempt goes out bare on every deployment that gates the main context.
+     *
+     * Omit it for a provider that needs no login; the wait is then skipped entirely.
+     */
+    contextId?: string | null;
 };
 
 // Wire bounds for the live viewer snapshot, mirroring LIVE_VIEWER_CONTEXT_MAX_* in
@@ -143,6 +158,18 @@ class ChatModule extends XOpatModuleSingleton {
     /** Registrations that exhausted their retries, kept (with the register thunk) for the panel's Retry action. */
     _failedRegistrations: Map<string, { register: () => Promise<any>; opts: ManagedProviderRegistrationOpts; reason: string }> = new Map();
     /**
+     * Registrations REFUSED for want of a login, kept for the sign-in notice and for the
+     * automatic re-run once their context authenticates.
+     *
+     * Separate from `_failedRegistrations` because it is not a failure: the deployment gates
+     * this provider and the user has not signed in yet, which is a state it is supposed to
+     * have. Merging the two is what put "Couldn't connect to the OpenAI provider" in front of
+     * a user whose only problem was that they had not clicked Login.
+     */
+    _pendingAuthRegistrations: Map<string, { register: () => Promise<any>; opts: ManagedProviderRegistrationOpts }> = new Map();
+    /** Unsubscribe for the auth feed that re-runs `_pendingAuthRegistrations`. */
+    _pendingAuthUnsub?: (() => void) | null;
+    /**
      * Provider reference → resolved instance id. Fed by managed registrations (whose RPC result
      * carries the freshly minted id) and memoized server lookups. This is the only client-side
      * route to a hidden provider's id — `chatService._providers` never contains one.
@@ -174,6 +201,8 @@ class ChatModule extends XOpatModuleSingleton {
     _viewerRealByHandle: Map<string, string> = new Map();
     _viewerHandleSeq = 0;
     _viewerAliasSessionId: string | null | undefined = undefined;
+    /** The handle→viewer resolver is registered with the `markdown` module once. */
+    _regionResolverRegistered = false;
 
     /**
      * In-memory workspace-change tracking. Re-baselined at the end of every
@@ -256,14 +285,18 @@ class ChatModule extends XOpatModuleSingleton {
         this._viewerAnonMode = this._normalizeAnonMode(
             this.getStaticMeta?.('anonymizeViewerContext', 'full')
         );
+        // Region links in assistant text resolve through the shared registry; teach
+        // it this session's handles before anything renders a link.
+        this._registerRegionLinkResolver();
 
         this.chatService = new ChatService({
             getAllowedScriptApi: () => this.getAllowedScriptApiManifest(),
             getLiveViewerContext: () => this.composeLiveViewerContext(),
             getExpandedNamespaces: () => this.getSessionExpandedNamespaces(),
             // Deployment knob (H flag): which namespaces render in FULL every turn.
-            // Default (unset) keeps the server's core set incl. visualization; flip
-            // to ['application','viewer'] after eval to shrink the steady-state prompt.
+            // Default (unset) keeps the server's core set, which is ['application','viewer']
+            // — `visualization` is NOT in it (its declarations are ~19 KB). Set this to add
+            // 'visualization' back for deployments where rendering work dominates.
             fullPromptNamespaces: this.getStaticMeta?.('fullPromptNamespaces', null) || undefined,
             onUserTurnText: (text: string) => this.applyIntentExpansionHints(text),
             onSessionHydrated: (session: any) => {
@@ -981,9 +1014,18 @@ class ChatModule extends XOpatModuleSingleton {
     static NAMESPACE_INTENT_HINTS: Record<string, RegExp> = {
         annotationsRead: /annotat|measure|outlin|marking|comment/i,
         annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
-        visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity/i,
+        // Appearance vocabulary counts as visualization intent: "the overlay is ugly",
+        // "too dark", "hard to see" are shader-configuration requests, not analysis ones.
+        visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity|render|palette|contrast|brightness|threshold|ugly|nicer?|prettier|washed|too (?:dark|bright|faint)|hard to see/i,
         pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore|patholog|histolog|stain|magnif|whole[- ]slide|\bwsi\b|cellular|nuclei|interrogat|montage|invasi/i,
         mlflowSink: /mlflow|experiment|metric/i,
+        // A namespace with no hint here can only reach the full tier by FAILING first.
+        // These three had none, and the cost was concrete: asked for "a questionnaire +
+        // a recording", the model had names-only catalogue entries for both, read
+        // `bindPageTour` under `questionnaire`, and called it on `recorder` three times.
+        questionnaire: /question(n?aire|s)?|survey|\bform\b|quiz|exam\b|assessment|respondent|self[- ]test|teaching case/i,
+        recorder: /record(ing|er|ed)?|\btour\b|walk[- ]?through|narrat|voice[- ]?over|presentation|guided|playback|slide ?show|storyboard/i,
+        measurements: /measur|distance|\barea\b|perimeter|diameter|calibrat|µm|micron|micrometer|scale ?bar|\bmm\b/i,
     };
 
     applyIntentExpansionHints(userText: string): void {
@@ -1043,6 +1085,9 @@ class ChatModule extends XOpatModuleSingleton {
 
     /** Reset alias maps when the active chat session changes — handles stay stable within a session. */
     _ensureViewerAliasSession(): void {
+        // Retry point for the shared resolver: the constructor runs while modules are
+        // still settling, and a resolver registered late would silently never register.
+        this._registerRegionLinkResolver();
         const sid = this.chatService?.getActiveSessionId?.() ?? null;
         if (this._viewerAliasSessionId !== sid) {
             this._viewerAliasSessionId = sid;
@@ -1133,92 +1178,32 @@ class ChatModule extends XOpatModuleSingleton {
 
     /**
      * Navigate a viewer to the slide region referenced by an in-chat region link
-     * (`[label](#xopat-region?...)`). Coordinates are level-0 image pixels, parent-global
-     * for virtual-region splits — the same space as annotation coordinates, pathology
-     * `bounds`, and `viewer.frameImageRegion(...)` (whose fit/pad semantics this mirrors).
-     * The model-facing viewer handle is resolved back to the real viewer uniqueId first.
+     * (`[label](#xopat-region?...)`). Kept as public API — the actual navigation
+     * lives in the `markdown` module's link registry, where every subsystem that
+     * renders assistant prose reaches it (a questionnaire description carries the
+     * same links). Chat's only contribution is the handle → viewer resolver
+     * registered in `_registerRegionLinkResolver`.
      */
     navigateToRegionFromChat(link: ChatRegionLinkPayload): boolean {
-        const viewer = this._resolveViewerForRegionLink(link?.viewer ?? null);
-        const x = Number(link?.x);
-        const y = Number(link?.y);
-        if (!viewer || !Number.isFinite(x) || !Number.isFinite(y)) {
-            this._notifyRegionLinkUnavailable();
-            return false;
-        }
-
-        try {
-            // Switch the focal plane first when the link pins one (z-stack slides only) —
-            // same path as viewer.setZDepth; a no-op for single-plane slides.
-            const z = Number(link?.z);
-            if (Number.isFinite(z)) {
-                viewer.__depthController?.setDepth?.(Math.round(z));
-            }
-
-            const item: any = viewer.scalebar?.getReferencedTiledImage?.()
-                || (viewer.world?.getItemCount?.() > 0 ? viewer.world.getItemAt(0) : null);
-            if (!item) throw new Error('The viewer has no tiled image to navigate.');
-
-            const OSD = (globalThis as any).OpenSeadragon;
-            // Virtual-region crops expose the parent↔region mapping on their source —
-            // link coordinates are parent-global, so map them into the crop first.
-            const source = item.source;
-            const cropped = source && typeof source.getParentId === 'function' && source.getParentId() ? source : null;
-            const toViewport = (px: number, py: number) => {
-                const local = cropped ? cropped.fromParentImageCoordinates({ x: px, y: py }) : { x: px, y: py };
-                return item.imageToViewportCoordinates(new OSD.Point(local.x, local.y));
-            };
-
-            const w = Number.isFinite(Number(link?.w)) ? Math.max(0, Number(link.w)) : 0;
-            const h = Number.isFinite(Number(link?.h)) ? Math.max(0, Number(link.h)) : 0;
-            const tl = toViewport(x, y);
-            const br = toViewport(x + w, y + h);
-
-            const vw = Math.abs(br.x - tl.x);
-            const vh = Math.abs(br.y - tl.y);
-            if (vw > 0 && vh > 0) {
-                const pad = 0.1;
-                viewer.viewport.fitBounds(new OSD.Rect(
-                    Math.min(tl.x, br.x) - vw * pad,
-                    Math.min(tl.y, br.y) - vh * pad,
-                    vw * (1 + 2 * pad),
-                    vh * (1 + 2 * pad),
-                ));
-            } else {
-                // Point of interest — centre on it without changing zoom.
-                viewer.viewport.panTo(new OSD.Point(tl.x, tl.y));
-            }
-            viewer.viewport.applyConstraints();
-            return true;
-        } catch (error) {
-            console.warn('Chat region link navigation failed:', error);
-            this._notifyRegionLinkUnavailable();
-            return false;
-        }
+        const markdown = (globalThis as any).singletonModule?.("markdown");
+        if (!markdown) return false;
+        return markdown.openLink({ kind: "region", payload: link });
     }
 
     /**
-     * Resolve a region link's viewer reference — a per-session anonymization handle
-     * (`viewer-N`) or, with anonymization off, a real uniqueId — to a live viewer.
-     * Falls back to the active viewer, then to the only open viewer.
+     * Teach the shared region-link handler about this session's anonymization
+     * handles (`viewer-1`), so a link the model authored resolves to the real
+     * viewer no matter which subsystem renders it. Idempotent.
      */
-    _resolveViewerForRegionLink(handleOrId: string | null): any | null {
-        const viewers: any[] = (globalThis as any).VIEWER_MANAGER?.viewers || [];
-        if (!viewers.length) return null;
-
-        let realId = (typeof handleOrId === 'string' && handleOrId.trim()) ? handleOrId.trim() : null;
-        if (realId && this._viewerRealByHandle.has(realId)) {
-            realId = this._viewerRealByHandle.get(realId)!;
-        }
-        if (!realId) realId = this._resolveLiveViewerContextId();
-
-        const viewer = realId ? viewers.find((v: any) => String(v?.uniqueId || '') === realId) : null;
-        return viewer || (viewers.length === 1 ? viewers[0] : null);
-    }
-
-    _notifyRegionLinkUnavailable(): void {
-        const Dialogs = (window as any).Dialogs;
-        Dialogs?.show?.($.t('chat.regionLinkUnavailable'), 4000, Dialogs?.MSG_WARN);
+    _registerRegionLinkResolver(): void {
+        if (this._regionResolverRegistered) return;
+        const markdown = (globalThis as any).singletonModule?.("markdown");
+        if (!markdown) return;
+        this._regionResolverRegistered = true;
+        markdown.registerViewerResolver((reference: string) => {
+            const real = this._viewerRealByHandle.get(reference);
+            return real || this._resolveLiveViewerContextId() || null;
+        });
     }
 
     /**
@@ -1239,6 +1224,73 @@ class ChatModule extends XOpatModuleSingleton {
      * happened while the turn was running. Never throws — a viewer that cannot answer
      * degrades to nulls, partial live context is always fine.
      */
+    /**
+     * The layer stack of one viewer: which visualization is drawn over the data, and what
+     * the background itself renders with. Read from the world items' own config (the same
+     * `getConfig('background')` / `getConfig('visualization')` the core scripting API uses)
+     * rather than from the global config, so it reflects THIS viewer rather than whichever
+     * one happens to be focused.
+     *
+     * Composed as part of the volatile fields on purpose: it participates in the cache
+     * signature, so applying a visualization invalidates the memoized block instead of
+     * serving the model a stale "no visualization" for the rest of the turn.
+     */
+    _layerFieldsFor(viewer: any): {
+        visualization: LiveViewerContextVisualization | null;
+        backgroundShaderTypes: string[] | null;
+    } {
+        const out: { visualization: LiveViewerContextVisualization | null; backgroundShaderTypes: string[] | null } = {
+            visualization: null,
+            backgroundShaderTypes: null,
+        };
+        try {
+            const count = viewer?.world?.getItemCount?.() ?? 0;
+            let vizConfig: any = null;
+            let bgConfig: any = null;
+            for (let i = 0; i < count; i++) {
+                const item = viewer.world.getItemAt(i);
+                bgConfig = bgConfig || item?.getConfig?.('background') || null;
+                vizConfig = vizConfig || item?.getConfig?.('visualization') || null;
+            }
+
+            if (bgConfig) {
+                // An unset `shaders` means the renderer synthesizes the implicit identity
+                // pass-through — i.e. the raw scan. Reporting that explicitly is the point:
+                // it tells the model the base layer is not something it needs to "fix".
+                const bgShaders = bgConfig.shaders;
+                const types = bgShaders && typeof bgShaders === 'object'
+                    ? Object.values<any>(bgShaders)
+                        .map((layer: any) => clampLiveContextString(layer?.type) ?? '')
+                        .filter(Boolean)
+                    : [];
+                out.backgroundShaderTypes = types.length ? types : ['identity'];
+            }
+
+            if (vizConfig) {
+                const all = (globalThis as any).APPLICATION_CONTEXT?.config?.visualizations;
+                const index = Array.isArray(all) ? all.indexOf(vizConfig) : -1;
+                const shaders = vizConfig.shaders && typeof vizConfig.shaders === 'object' ? vizConfig.shaders : {};
+                const layers = Object.entries<any>(shaders).map(([id, layer]) => ({
+                    id: clampLiveContextString(layer?.id ?? id) ?? '',
+                    type: clampLiveContextString(layer?.type) ?? '',
+                    dataReferences: Array.isArray(layer?.dataReferences)
+                        ? layer.dataReferences.filter((n: unknown) => Number.isInteger(n)).slice(0, 32)
+                        : null,
+                }));
+                out.visualization = {
+                    index: index >= 0 ? index : null,
+                    // Author-set text, same posture as imageName: dropped when the deployment
+                    // masks slide identity entirely.
+                    name: this._viewerAnonMode === 'full' ? null : clampLiveContextString(vizConfig.name),
+                    layers,
+                };
+            }
+        } catch (_) {
+            // partial info is fine — never fail composing over one viewer
+        }
+        return out;
+    }
+
     _viewportFieldsFor(viewer: any): LiveViewerContextViewportFields {
         const fields: LiveViewerContextViewportFields = {
             currentMagnification: null,
@@ -1246,6 +1298,8 @@ class ChatModule extends XOpatModuleSingleton {
             magnificationLabel: null,
             scalebarText: null,
             zStack: null,
+            visualization: null,
+            backgroundShaderTypes: null,
         };
         try {
             const scalebar = viewer?.scalebar;
@@ -1265,6 +1319,10 @@ class ChatModule extends XOpatModuleSingleton {
             // The literal bar caption ("500 μm") — the one thing the user can read off
             // their own screen to check the answer.
             fields.scalebarText = clampLiveContextString(scalebar?.scalebarContainer?.textContent?.trim());
+
+            const layers = this._layerFieldsFor(viewer);
+            fields.visualization = layers.visualization;
+            fields.backgroundShaderTypes = layers.backgroundShaderTypes;
 
             const range = viewer?.__depthController?.getRange?.();
             if (range && Number.isFinite(range.count) && range.count > 1) {
@@ -1437,6 +1495,10 @@ class ChatModule extends XOpatModuleSingleton {
                 regionsDescribed,
                 levels: maxDepth + 1,
                 slideCoverage: typeof overview.slideCoverage === 'number' ? overview.slideCoverage : 0,
+                // Degrades to the narrowest claim, not the widest: an unrecognised value must
+                // not be presented as slide-wide coverage.
+                coverageScope: overview.coverageScope === 'whole-slide' || overview.coverageScope === 'current-view'
+                    ? overview.coverageScope : 'region',
                 isComplete: !!overview.isComplete,
                 truncated: !!overview.budget?.truncated,
                 builtAtIso: clampLiveContextString(overview.builtAtIso, LIVE_CTX_MAX_ISO) ?? '',
@@ -1634,6 +1696,13 @@ class ChatModule extends XOpatModuleSingleton {
             const scriptError: Record<string, unknown> = this._extractScriptExecutionErrorDetails(error) || {};
             const referencedSignatures = this._collectReferencedSignatures(apiRefs);
             if (referencedSignatures.length) scriptError.referencedSignatures = referencedSignatures;
+            // The attempt above expanded the namespaces the script NAMED. When the call
+            // was the right verb on the wrong namespace, the one worth expanding is the
+            // one that actually owns it — otherwise the corrected retry is written from
+            // the same names-only catalogue entry that produced the mistake.
+            const owners = referencedSignatures.flatMap((entry: any) =>
+                (Array.isArray(entry?.availableOn) ? entry.availableOn : []).map((o: any) => o?.namespace));
+            if (owners.length) this._markNamespacesExpanded(owners.filter(Boolean));
 
             // A stopped or timed-out script is not necessarily worthless: hand back
             // whatever it published via progress() so the model can decide whether to
@@ -1797,9 +1866,13 @@ class ChatModule extends XOpatModuleSingleton {
      */
     hasUnterminatedScriptFence(message: ChatMessage): boolean {
         const content = String(message?.content || "");
-        if (!/```xopat-script/i.test(content)) return false;
-        const fence = findScriptFence(content);
-        return !!fence && !fence.terminated;
+        if (/```xopat-script/i.test(content)) {
+            const fence = findScriptFence(content);
+            if (fence && !fence.terminated) return true;
+        }
+        // A tool-call envelope whose `{"code": "..."}` was cut mid-string is the same condition
+        // wearing a different surface, and it leaves no unclosed fence to detect.
+        return this._extractScriptFromToolEnvelope(content)?.truncated === true;
     }
 
     /**
@@ -1824,10 +1897,12 @@ class ChatModule extends XOpatModuleSingleton {
 
         const pseudoToolCall = this._extractScriptFromToolEnvelope(content);
         if (pseudoToolCall) {
+            // A payload cut mid-value is exactly as unfinished as an unclosed fence — say so
+            // rather than presenting the prefix as a complete script the model must have broken.
             return {
-                script: pseudoToolCall,
-                terminated: true,
-                balanced: bracketCensus(pseudoToolCall).balanced,
+                script: pseudoToolCall.code,
+                terminated: !pseudoToolCall.truncated,
+                balanced: bracketCensus(pseudoToolCall.code).balanced,
                 source: "tool-envelope",
             };
         }
@@ -1876,7 +1951,7 @@ class ChatModule extends XOpatModuleSingleton {
      * message ever gets here, so this rarely fires — it covers paths that bypass server
      * sanitisation (cached/imported history, a future direct-provider client path).
      */
-    _extractScriptFromToolEnvelope(content: string): string | undefined {
+    _extractScriptFromToolEnvelope(content: string): ToolPayloadCode | undefined {
         return extractToolEnvelopeScripts(content)[0];
     }
 
@@ -1930,7 +2005,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const wrapper = (window as any).LAYOUT.addTab({
             id: 'chat',
             title: $.t('chat.tabTitle'),
-            icon: 'fa-comments',
+            icon: 'ph-chats',
             body: [this.chatPanel],
         });
         this._layoutAttached = true;
@@ -2469,8 +2544,14 @@ When scripting is not available or insufficient, explain the limitation clearly.
     ): { completion: Promise<T | null> } {
         // A fresh (re)run supersedes a recorded failure for the same provider —
         // the busy phase takes over from the failure notice.
-        this._failedRegistrations.delete(opts.label || 'provider');
+        const label = opts.label || 'provider';
+        this._failedRegistrations.delete(label);
         this._syncRegistrationFailureNotice();
+        this._pendingAuthRegistrations.delete(label);
+        this._syncRegistrationAuthNotice();
+        // Armed on the first managed registration, not in the constructor: the auth feed
+        // hangs off `XOpatUser`, which is not there yet when the module is constructed.
+        this._watchPendingAuthRegistrations();
 
         const completion = this._runManagedRegistration(register, opts);
         this._managedRegistrations.add(completion);
@@ -2515,6 +2596,13 @@ When scripting is not available or insufficient, explain the limitation clearly.
         const busyKey = `provider-registration:${label}`;
         try {
             this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRegistering', 'provider', { label });
+            // Wait for the verdict on this provider's auth context BEFORE the first attempt.
+            // Not for success — for the answer. Plugins load during `before-app-init`, which
+            // runs before core awaits the boot login, and the registration RPC rides the core
+            // HttpClient whose `awaitContext` is false, so the first attempt would otherwise
+            // always race an in-flight login. Bounded, memoized and never interactive, and a
+            // no-op for a deployment that declares no such context. See AGENTS.md §4.
+            await this._settleRegistrationContext(opts.contextId);
             for (let i = 0; i < attempts; i++) {
                 try {
                     const result = await register();
@@ -2529,6 +2617,22 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     }
                     return result;
                 } catch (e) {
+                    // A refusal is a VERDICT, not a transient: the deployment gates this
+                    // provider and nobody has signed in. Retrying spends six seconds to be
+                    // told the same thing and then reports the provider as broken, which is
+                    // a lie about a state the deployment is designed to have. Stop here and
+                    // wait for the login instead — `_watchPendingAuthRegistrations` re-runs
+                    // this the moment the context authenticates.
+                    if (isAuthError(e)) {
+                        this.chatPanel?.setExternalBusy?.(busyKey, null);
+                        this._pendingAuthRegistrations.set(label, { register, opts });
+                        this._syncRegistrationAuthNotice();
+                        this.raiseEvent('provider-registration-needs-login', {
+                            label: opts.label || null,
+                            contextId: opts.contextId ?? null,
+                        });
+                        return null;
+                    }
                     const last = i === attempts - 1;
                     if (last) {
                         const reason = this._describeRegistrationError(e);
@@ -2555,6 +2659,114 @@ When scripting is not available or insufficient, explain the limitation clearly.
         }
     }
 
+    /**
+     * Wait (bounded) for a registration's auth context to reach a verdict — but ONLY when
+     * something is actually driving a login for it.
+     *
+     * `whenContextSettled` is core's own bounded, memoized, never-interactive wait, the same
+     * primitive `HttpClient`'s `awaitContext` uses. What it is NOT is passive: settling a
+     * context runs the broker's `init()`, and for OIDC that includes the once-per-session
+     * `prompt=none` probe. On a deployment that deliberately does not log in at boot there is
+     * nothing to wait for, and asking anyway *causes* the very thing it was meant to avoid —
+     * the probe runs, comes back `interaction_required`, and the context lands in
+     * needs-interaction, after which a later `auth.login()` defers to the recovery gate
+     * instead of navigating. The user clicks Login and nothing happens.
+     *
+     * So the wait is gated on `listAutoLoginContexts()`: a context core will log in at boot is
+     * worth waiting for (that is the redirect-callback case this exists for), and one it will
+     * not is left alone. Its registration goes out, gets its honest 401, and lands in the
+     * pending set — which is exactly where a not-yet-signed-in provider belongs.
+     *
+     * Everything is optional-chained and swallowed: no auth module, an older core without the
+     * method, or a broker that never settles must all leave the registration free to proceed.
+     * This is an optimisation of WHEN we ask, never a precondition for asking.
+     */
+    async _settleRegistrationContext(contextId: string | null | undefined): Promise<void> {
+        if (!contextId) return;
+        const auth = (window as any)?.APPLICATION_CONTEXT?.auth;
+        if (typeof auth?.whenContextSettled !== 'function') return;
+        try {
+            const driven: string[] = auth.listAutoLoginContexts?.() ?? [];
+            if (!driven.includes(contextId)) return;
+            await auth.whenContextSettled(contextId);
+        } catch (_) {
+            // A context that failed to settle is exactly the case where the server's own
+            // 401 is the honest answer. Proceed and let it say so.
+        }
+    }
+
+    /**
+     * Re-run registrations that were refused for want of a login, once their context has one.
+     *
+     * Subscribed to `onProviderAuthChange` rather than `APPLICATION_CONTEXT.auth.onChange`
+     * deliberately: the raw feed also fires on every silent token renew, and re-running a
+     * registration from there is how a 401ing deployment once produced thousands of RPCs (see
+     * ChatService.onProviderAuthChange). This feed is already the coarse login/logout signal.
+     *
+     * Gated on `isAuthenticated` so a LOGOUT does not re-run anything; a re-run that is refused
+     * again simply lands back in the pending map, so the loop is bounded by real transitions.
+     */
+    _watchPendingAuthRegistrations(): void {
+        if (this._pendingAuthUnsub) return;
+        // `onProviderAuthChange` hands back a no-op unsubscribe when `XOpatUser` is not there
+        // yet, which is indistinguishable from a real one — latching that would leave the
+        // watcher permanently inert and the self-heal silently dead. Check first and stay
+        // unarmed instead; the next registration tries again.
+        if (!(window as any)?.XOpatUser?.instance?.()) return;
+        const unsub = this.chatService?.onProviderAuthChange?.(() => {
+            if (!this._pendingAuthRegistrations.size) return;
+            const auth = (window as any)?.APPLICATION_CONTEXT?.auth;
+            for (const [label, entry] of [...this._pendingAuthRegistrations]) {
+                const contextId = entry.opts.contextId;
+                // No context named ⇒ nothing to be authenticated for; leave it pending
+                // rather than re-running on every unrelated transition.
+                if (!contextId || auth?.isAuthenticated?.(contextId) !== true) continue;
+                this._pendingAuthRegistrations.delete(label);
+                this.registerManagedProvider(entry.register, entry.opts);
+            }
+            this._syncRegistrationAuthNotice();
+        });
+        this._pendingAuthUnsub = unsub || null;
+    }
+
+    /**
+     * Mirror `_pendingAuthRegistrations` into the panel's notice band — as an invitation to
+     * sign in, NOT as the failure band `_syncRegistrationFailureNotice` renders.
+     *
+     * The action calls the auth broker directly rather than `chatService.login(providerId)`:
+     * that one resolves the context THROUGH the provider record, and the whole point of this
+     * state is that the provider does not exist yet.
+     */
+    _syncRegistrationAuthNotice(): void {
+        const panel = this.chatPanel;
+        if (!panel?.setPanelNotice) return;
+        const entries = [...this._pendingAuthRegistrations.values()];
+        if (!entries.length) {
+            // Only clear a notice this method owns: the failure band may legitimately be up.
+            if (!this._failedRegistrations.size) panel.setPanelNotice(null);
+            else this._syncRegistrationFailureNotice();
+            return;
+        }
+        const text = entries
+            .map((entry) => $.t('chat.providerNeedsLogin', { label: entry.opts.label || 'provider' }))
+            .join(' ');
+        const contextId = entries.find((entry) => entry.opts.contextId)?.opts.contextId;
+        panel.setPanelNotice({
+            text,
+            // The core auth label, not a chat-local one: this button starts the SAME
+            // login the app-bar user menu does.
+            actionText: $.t('auth.signIn'),
+            onAction: () => {
+                const auth = (window as any)?.APPLICATION_CONTEXT?.auth;
+                if (!contextId || typeof auth?.login !== 'function') return;
+                // Never awaited: a redirect flow unloads the page mid-call, and a popup
+                // failure is reported through the auth layer's own surfaces.
+                void Promise.resolve(auth.login(contextId)).catch((e: any) =>
+                    console.warn('chat: sign-in for a pending provider registration failed', e));
+            },
+        });
+    }
+
     /** One short human-readable line out of a registration failure. */
     _describeRegistrationError(error: any): string {
         const message = typeof error?.message === 'string' && error.message.trim()
@@ -2574,7 +2786,11 @@ When scripting is not available or insufficient, explain the limitation clearly.
         if (!panel?.setPanelNotice) return;
         const entries = [...this._failedRegistrations.values()];
         if (!entries.length) {
-            panel.setPanelNotice(null);
+            // The two notices share one band. Hand it back to the pending-login one rather
+            // than blanking it, or a provider that failed and a provider awaiting a sign-in
+            // would take turns erasing each other's message.
+            if (this._pendingAuthRegistrations.size) this._syncRegistrationAuthNotice();
+            else panel.setPanelNotice(null);
             return;
         }
         const text = entries

@@ -100,6 +100,11 @@ export async function measureChannelRanges(file, descriptor) {
         ({ bands } = await file.readRegion({
             dir: level.dir,
             subifd: level.subifd,
+            // Every directory the level's channels live in. Without it a plane
+            // stack measures plane 0 alone, `buildAutoShaders` gets one range for
+            // an N-channel descriptor, and every channel but the first opens with
+            // no window — the exact slides `autoWindow: "rescue"` exists for.
+            planes: level.planes,
             x0: 0,
             y0: 0,
             x1: level.width,

@@ -1,3 +1,13 @@
+// `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), NOT jQuery — jQuery is no
+// longer shipped. The UI bundle is emitted BEFORE the core scripts, so the
+// placeholder is installed here too; whichever runs first wins, and `src/app.ts`
+// later swaps `t` for the real i18next translator. Idempotent by design — see
+// `src/classes/app/i18n-dom.ts` and AGENTS.md §3.
+if (!globalThis.$) globalThis.$ = {};
+if (typeof globalThis.$.t !== "function") {
+    globalThis.$.t = (key) => String(key).split(".").findLast(Boolean);
+}
+
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 
@@ -60,6 +70,7 @@ import { Autocomplete } from "./classes/components/autocomplete.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
 import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
 import { RenderDebugPanel } from "./classes/components/renderDebugPanel.mjs";
+import { UserRolesPanel } from "./classes/components/userRolesPanel.mjs";
 import { SuggestionEditor } from "./classes/components/suggestionEditor.mjs";
 
 // SERVICES
@@ -126,7 +137,7 @@ const UI = {
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect, Autocomplete,
-    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor,
+    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor, UserRolesPanel,
 
     Services: new ServiceContainer(),
     Mixins: {

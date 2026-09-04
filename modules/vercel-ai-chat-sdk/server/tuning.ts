@@ -52,6 +52,18 @@ export interface ChatTuning {
     maxAttachmentsPerSession: number;
     /** Keep pre-principal (unowned) sessions on migration instead of dropping them. */
     keepLegacySessions: boolean;
+    /**
+     * Emit attachment BYTES on the transcript channel.
+     *
+     * The transcript itself is governed by the log channel
+     * (`module.vercel-ai-chat-sdk:transcript`); this is the separate question of
+     * whether the images and uploads go with it. On by default so a deployment
+     * that turned the transcript on gets a readable one, and refusable here for
+     * a deployment that wants the words without the pixels. The destination can
+     * refuse them too — a `url` destination always does, having nowhere to put
+     * them. See server/LOGGING.md.
+     */
+    transcriptAttachments: boolean;
 }
 
 const MODULE_ID = 'vercel-ai-chat-sdk';
@@ -71,6 +83,7 @@ export const CHAT_TUNING_DEFAULTS: ChatTuning = {
     maxMessagesPerSession: 500,
     maxAttachmentsPerSession: 200,
     keepLegacySessions: false,
+    transcriptAttachments: true,
 };
 
 /** Lower bounds — a config typo must not produce a 0ms budget. */
@@ -125,6 +138,9 @@ export function chatLog(sub?: string): any {
         warn: (...a: any[]) => console.warn(prefix, ...a),
         error: (...a: any[]) => console.error(prefix, ...a),
         sensitive: () => {},
+        // No broker ⇒ nowhere to put bytes either. Present so a caller never has
+        // to feature-detect the logger it was handed.
+        attachment: () => {},
         isEnabled: () => false,
         child: () => chatLog(sub),
         time: () => () => undefined,
@@ -230,6 +246,7 @@ export function getChatTuning(ctx?: any): ChatTuning {
         maxMessagesPerSession: readNumber(merged.maxMessagesPerSession, d.maxMessagesPerSession, FLOORS.maxMessagesPerSession),
         maxAttachmentsPerSession: readNumber(merged.maxAttachmentsPerSession, d.maxAttachmentsPerSession, FLOORS.maxAttachmentsPerSession),
         keepLegacySessions: readBool(merged.keepLegacySessions, d.keepLegacySessions),
+        transcriptAttachments: readBool(merged.transcriptAttachments, d.transcriptAttachments),
     };
     cached = { signature, value };
     return value;

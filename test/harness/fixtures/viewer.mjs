@@ -29,6 +29,11 @@ class XOpatPage {
     constructor(page, server) {
         this.page = page;
         this.server = server;
+        /**
+         * What the last `launch()` opened, for failure diagnostics.
+         * @type {{session: object|null, transport: string, url: string|null}|null}
+         */
+        this.lastLaunch = null;
     }
 
     /**
@@ -43,6 +48,7 @@ class XOpatPage {
     async launch(session = null, opts = {}) {
         const transport = opts.transport ?? (opts.slides ? "slides" : "hash");
         const base = this.server.baseURL;
+        this.lastLaunch = { session, transport, url: null };
 
         if (transport === "post") {
             await this.#launchViaPost(session, opts);
@@ -51,6 +57,7 @@ class XOpatPage {
             if (transport === "slides") url += `?slides=${(opts.slides ?? []).map(encodeURIComponent).join(",")}`;
             else if (transport === "query" && session) url += `?visualization=${jsonParam(session)}`;
             else if (transport === "hash" && session) url += `#${jsonParam(session)}`;
+            this.lastLaunch.url = url;
             await this.page.goto(url, { waitUntil: "domcontentloaded" });
         }
         await this.waitForApp();
@@ -148,6 +155,62 @@ class XOpatPage {
     }
 }
 
+/**
+ * Everything needed to reproduce a failing viewer test by hand.
+ *
+ * The scratch ENV *file* is already attached by the diagnostics fixture, but a
+ * file is not what the page ran against: `<% VAR %>` placeholders are
+ * substituted server-side, so the protocol URL a test actually hit — the thing
+ * that is usually wrong — appears nowhere in it. And nothing at all recorded
+ * the session. So attach the ENV the page received, the session that was
+ * launched, and, for the hash transport, the literal URL: pasting it into a
+ * browser against `XOPAT_ENV=<sourceFile>` reproduces the failure with no test
+ * runner involved.
+ */
+const attachReproduction = async (xopat, testInfo) => {
+    const launch = xopat.lastLaunch;
+    if (launch) {
+        await testInfo.attach("session config", {
+            body: JSON.stringify(launch.session, null, 2),
+            contentType: "application/json",
+        }).catch(() => {});
+    }
+
+    const env = await xopat.env().catch(() => null);
+    if (env) {
+        await testInfo.attach("effective client ENV (as the page received it)", {
+            body: JSON.stringify(env, null, 2),
+            contentType: "application/json",
+        }).catch(() => {});
+    }
+
+    // The scratch path, not the source file. `createEnvScratch` FLATTENS the
+    // `$base` chain; the server does not resolve `$base` itself, so pointing
+    // XOPAT_ENV at the source file gives a deployment missing everything the
+    // base layers contributed — and it fails by silently falling back to
+    // `src/config.json`, which looks like a broken slide rather than a broken
+    // ENV. `npm run up:dev` does the same flattening for a hand-run server.
+    const source = xopat.server.scratch?.sourceFile;
+    const lines = [
+        `XOPAT_ENV=${xopat.server.scratch?.path ?? "(unknown)"}`,
+        `XOPAT_NODE_PORT=${xopat.server.port}`,
+        `transport=${launch?.transport ?? "(never launched)"}`,
+        "",
+        source
+            ? `That path is a flattened scratch copy and is deleted when the run ends.\n`
+              + `To start the same deployment by hand:  npm run up:dev -- ${source}`
+            : "",
+        "",
+        launch?.url
+            ? `Open this URL against that ENV:\n${launch.url}`
+            : "This transport rewrites the navigation request, so there is no URL to paste — see the attached session config.",
+    ];
+    await testInfo.attach("reproduce", {
+        body: lines.join("\n"),
+        contentType: "text/plain",
+    }).catch(() => {});
+};
+
 export const viewerFixtures = {
     xopat: async ({ page, xopatServer }, use, testInfo) => {
         const xopat = new XOpatPage(page, xopatServer);
@@ -161,6 +224,7 @@ export const viewerFixtures = {
                     contentType: "application/json",
                 }).catch(() => {});
             }
+            await attachReproduction(xopat, testInfo).catch(() => {});
         }
     },
 };

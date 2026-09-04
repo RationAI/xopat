@@ -26,6 +26,7 @@
  */
 
 import { setupIsolatedViewer, type IsolatedViewerHandle } from "../app/setup-isolated-viewer";
+import { BackgroundConfig } from "../background-config";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "../app/assemble-render-output";
 import {
     serializeSceneFromViewer,
@@ -252,6 +253,10 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                 cellEl,
                 navigatorEl: navigatorHost || cellEl, // fallback so OSD doesn't crash
                 cellId,
+                // Clear like the mirrored slide: `background[i].fill` overrides the
+                // session default, and a playground rendering a fluorescence slide
+                // on the app's white would not be WYSIWYG against the source viewer.
+                backgroundColor: BackgroundConfig.resolveFillColor(pickBackgrounds(init)?.[0]),
                 htmlHandler: (shaderLayer: any, shaderConfig: any, htmlContext: any) => {
                     if (!shaderRowsEnabled) return;
                     try {

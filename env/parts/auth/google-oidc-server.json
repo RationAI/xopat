@@ -1,0 +1,49 @@
+{
+  "$meta": {
+    "description": "Google as IdP, confidential server-side flow — the client secret never reaches the browser",
+    "dimension": "auth",
+    "requires": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
+  },
+  /**
+   * The shape to use when the *server* needs the user's token — Google
+   * Healthcare DICOMweb being the case this was extracted from: `autoLogin`
+   * redirects on the first 401, and `tokenForServer: "access_token"` is what
+   * DICOM's HttpClient then presents upstream.
+   *
+   * The whole context lives under `core.server.secure`, so client secret and
+   * refresh token stay server-side. The browser-side counterpart
+   * (`oidc-client-ts` with a public PKCE client) cannot hold a secret at all —
+   * if you find yourself putting `client_secret` in a `modules.oidc-client-ts`
+   * block, you want this fragment instead.
+   *
+   * `scope` carries the Google Healthcare scope; trim it for a login that only
+   * needs identity.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "modules": {
+          "oidc-server-ts": {
+            "contexts": {
+              "core": {
+                "issuer": "https://accounts.google.com",
+                "clientId": "<% GOOGLE_CLIENT_ID %>",
+                "clientSecret": "<% GOOGLE_CLIENT_SECRET %>",
+                "scope": "openid email profile https://www.googleapis.com/auth/cloud-healthcare",
+                "authMethod": "post",
+                "autoLogin": true,
+                "tokenForServer": "access_token",
+                "serviceName": "Google"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "oidc-server-ts": { "enabled": true, "permaLoad": true },
+    "oidc-client-ts": { "enabled": false },
+    "saml-auth": { "enabled": false }
+  }
+}

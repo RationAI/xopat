@@ -1,0 +1,41 @@
+{
+  "$meta": {
+    "description": "Raw TIFF from a static file server, decoded by the webtiff module",
+    "dimension": "data",
+    "clientKey": "localhost",
+    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+  },
+  /**
+   * Serve the slide folder first:  npm run fixtures:serve
+   * (defaults to the repository's `test/fixtures/data`; pass a path or set
+   * XOPAT_SLIDE_ROOT to serve scans from elsewhere, and point
+   * TIFF_FILESERVER at it in `env/.env`.)
+   *
+   * There is deliberately no `slide_protocols.tiff` entry: `webtiff` registers
+   * the `tiff` protocol itself (a factory — the tile source reads the file,
+   * there is no info endpoint to template a URL against), and declaring one
+   * here would collide with that registration. Where the files live is the
+   * module's `protocolBaseUrl`; without it a bare data id resolves against the
+   * viewer origin.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "default_background_protocol": "tiff",
+        "default_visualization_protocol": "tiff"
+      }
+    },
+    "setup": {
+      "webGlPrecision": "auto"
+    }
+  },
+  "modules": {
+    "webtiff": {
+      "enabled": true,
+      "permaLoad": true,
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>"
+    },
+    "geotiff": { "permaLoad": false },
+    "rationai-wsi-tile-source": { "enabled": false }
+  }
+}

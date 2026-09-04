@@ -90,20 +90,20 @@ export class MobileBottomBar {
 
         this.viewerButton = this._createButton(
             "mobile-bottom-bar-viewer",
-            "Viewer",
-            "fa-solid fa-panorama",
+            $.t("main.bar.mobileViewer"),
+            "ph-light ph-panorama",
             () => this.showViewerPicker()
         );
         this.viewerMenuButton = this._createButton(
             "mobile-bottom-bar-viewer-menu",
-            "Viewer Menu",
-            "fa-solid fa-sliders",
+            $.t("main.bar.mobileViewerMenu"),
+            "ph-light ph-sliders-horizontal",
             () => this.showViewerMenus()
         );
         this.globalMenuButton = this._createButton(
             "mobile-bottom-bar-global-menu",
-            "Global Menu",
-            "fa-brands fa-readme",
+            $.t("main.bar.mobileGlobalMenu"),
+            "ph-light ph-book-open",
             () => this.showGlobalMenu()
         );
 
@@ -249,7 +249,11 @@ export class MobileBottomBar {
     }
 
     showGlobalMenu() {
-        if (this._activePanel === "globalMenu") return;
+        // Not a plain "already active" early-out: LAYOUT can close itself behind
+        // the bar's back — closing the last global-menu card exits the mobile
+        // fullscreen — and a button that reports active while nothing is on
+        // screen is a dead button until some other panel is visited.
+        if (this._activePanel === "globalMenu" && window.LAYOUT?.isOpened?.()) return;
 
         this._closeViewerPicker();
         this._hideViewerMenus();
@@ -282,8 +286,12 @@ export class MobileBottomBar {
     getViewerLabel(viewer) {
         const viewers = this.getViewers();
         const index = viewers.findIndex(v => v === viewer);
-        if (index < 0) return viewers.length === 1 ? "Viewer 1" : "Viewer";
-        return `Viewer ${index + 1}`;
+        if (index < 0) {
+            return viewers.length === 1
+                ? $.t("main.bar.mobileViewerN", { index: 1 })
+                : $.t("main.bar.mobileViewer");
+        }
+        return $.t("main.bar.mobileViewerN", { index: index + 1 });
     }
 
     sync() {
@@ -312,6 +320,15 @@ export class MobileBottomBar {
                 if (menu === activeMenu) this._showViewerMenu(menu);
                 else this._hideViewerMenu(menu);
             }
+        }
+
+        // LAYOUT can close the global menu without going through this bar —
+        // closing the last global-menu card exits the mobile fullscreen. Give
+        // the toolbars back and drop the active mark, or the button stays lit
+        // over a viewport that is showing the slide again.
+        if (this._activePanel === "globalMenu" && !window.LAYOUT?.isOpened?.()) {
+            this._activePanel = null;
+            if (this._isMobileWidth()) this._setToolbarsVisible(true);
         }
 
         this._setActivePanel(this._activePanel);
@@ -364,12 +381,12 @@ export class MobileBottomBar {
             ].join(";");
 
             const icon = document.createElement("i");
-            icon.className = "fa-regular fa-square";
+            icon.className = "ph-light ph-square";
             icon.setAttribute("aria-hidden", "true");
             icon.style.fontSize = "0.9em";
 
             const text = document.createElement("span");
-            text.textContent = `Viewer ${index + 1}`;
+            text.textContent = $.t("main.bar.mobileViewerN", { index: index + 1 });
 
             item.append(icon, text);
             if (viewer === activeViewer) {

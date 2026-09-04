@@ -1,12 +1,22 @@
 import {
+    canDeferVoiToShader,
+    isMonochrome as isMonochromePixel,
     parseImagePixel,
     parseModalityLut,
     parseVoiLut,
     parsePaletteLut,
     parseRealWorldRange,
+    storedValueRange,
     cielabToSrgb,
     hueForIndex,
 } from './pixel-pipeline.mjs';
+import {
+    buildPlaneModel,
+    chooseValueRange,
+    planeCandidateFromInstance,
+    planeCandidatesFromMultiframe,
+} from './radiology-geometry.mjs';
+import { parseOrientation } from './slide-orientation.mjs';
 
 /**
  * Cap on memoized WADO metadata responses per client. A slide open touches a
@@ -14,6 +24,23 @@ import {
  * the map without bound.
  */
 const META_CACHE_MAX = 256;
+
+/**
+ * Cap on memoized QIDO responses per client. See {@link DicomTools._memoQuery}.
+ */
+const QIDO_CACHE_MAX = 128;
+
+/**
+ * How long a QIDO answer may be reused.
+ *
+ * Unlike instance metadata, a query result is NOT immutable — a store can gain
+ * instances (a freshly STOW-ed SR is the case that matters) while the session is
+ * open. So this is a short coalescing window, not a session cache: it exists to
+ * collapse the burst of identical queries several independent consumers fire
+ * during one slide open, not to remember anything. A write through `stow`
+ * invalidates the client's window outright.
+ */
+const QIDO_TTL_MS = 30000;
 
 /**
  * How many metadata requests to keep in flight when walking independent
@@ -26,6 +53,9 @@ export default class DicomTools {
 
     /** client -> Map(path -> Promise<metadata>). See `wadoMetadata`. */
     static _metaCaches = new WeakMap();
+
+    /** client -> Map(key -> {at, promise}). See `_memoQuery`. */
+    static _qidoCaches = new WeakMap();
 
     /**
      * Helper to extract DICOM JSON tag values.
@@ -57,9 +87,32 @@ export default class DicomTools {
     // 401-refresh are handled there. Callers pass relative paths (`/studies/...`);
     // the client's `baseURL` carries the DICOMweb service URL or proxy prefix.
 
-    static async qido(client, path) {
+    /**
+     * @param {object} [options]
+     * @param {"normal"|"background"} [options.priority] Connection-pool hint,
+     *   NOT a security or correctness knob. `"background"` routes through
+     *   `APPLICATION_CONTEXT.requestScheduler`, which admits zero background
+     *   requests while any viewer is loading tiles (with a starvation escape).
+     *   Use it for anything the user is not waiting on — browser listings,
+     *   previews, annotation discovery. Do NOT use it for a query the first
+     *   tile depends on: the pyramid scan is the slide open.
+     *
+     *   The priority is deliberately absent from the memo key. It describes how
+     *   urgently to fetch, not what comes back, so a background caller happily
+     *   reuses an answer a foreground caller already paid for.
+     */
+    static async qido(client, path, options = {}) {
+        // Memoized on the composed path, so `qidoSafe`'s `includefield` variants
+        // are distinct keys and are covered without its own cache.
+        return this._memoQuery(client, `q:${path}`, () => this._fetchQido(client, path, options));
+    }
+
+    static async _fetchQido(client, path, options = {}) {
         try {
-            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+            const res = await client.fetchRaw(path, {
+                headers: { Accept: 'application/dicom+json' },
+                priority: options.priority,
+            });
             if (res.status === 204) return undefined;
             const text = await res.text();
             try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
@@ -75,15 +128,15 @@ export default class DicomTools {
     }
 
     // Safe QIDO wrapper: try with includefield, retry without if server rejects that param
-    static async qidoSafe(client, path, includefield) {
+    static async qidoSafe(client, path, includefield, options = {}) {
         const sep = path.includes('?') ? '&' : '?';
         const pathWithField = includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
         try {
-            return await this.qido(client, pathWithField);
+            return await this.qido(client, pathWithField, options);
         } catch (e) {
             const msg = String(e?.message || '');
             if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                return await this.qido(client, path);
+                return await this.qido(client, path, options);
             }
             throw e;
         }
@@ -101,11 +154,19 @@ export default class DicomTools {
      *
      * @returns {Promise<{rows: object[], total: (number|null)}>}
      */
-    static async qidoSafeWithMeta(client, path, includefield) {
+    static async qidoSafeWithMeta(client, path, includefield, options = {}) {
+        return this._memoQuery(client, `m:${path}|${includefield ?? ""}`,
+            () => this._fetchQidoWithMeta(client, path, includefield, options));
+    }
+
+    static async _fetchQidoWithMeta(client, path, includefield, options = {}) {
         const sep = path.includes('?') ? '&' : '?';
         const make = (withFields) => withFields && includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
 
-        const tryFetch = (p) => client.fetchRaw(p, { headers: { Accept: 'application/dicom+json' } });
+        const tryFetch = (p) => client.fetchRaw(p, {
+            headers: { Accept: 'application/dicom+json' },
+            priority: options.priority,
+        });
 
         let url = make(true);
         let res;
@@ -161,7 +222,13 @@ export default class DicomTools {
      * Cached per client. Two `HttpClient`s can carry different auth contexts, and
      * one caller's metadata must never be served to another.
      */
-    static async wadoMetadata(client, path) {
+    static async wadoMetadata(client, path, options = {}) {
+        // An enhanced multi-frame instance carries one Per-Frame Functional
+        // Groups item per frame, so a 300-slice CT's `/metadata` can be tens of
+        // megabytes of JSON. Callers that read it once and keep only a derived
+        // summary opt out rather than pinning that in the cache for the session.
+        if (options.memoize === false) return this._fetchWadoMetadata(client, path, options);
+
         const cache = this._metaCacheFor(client);
         const hit = cache.get(path);
         if (hit) {
@@ -172,16 +239,7 @@ export default class DicomTools {
             return hit;
         }
 
-        const promise = (async () => {
-            try {
-                const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
-                const text = await res.text();
-                try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-            } catch (e) {
-                if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
-                throw e;
-            }
-        })();
+        const promise = this._fetchWadoMetadata(client, path, options);
 
         // A failure must not be remembered — the next caller has to be able to retry.
         promise.catch(() => cache.delete(path));
@@ -189,6 +247,20 @@ export default class DicomTools {
         cache.set(path, promise);
         while (cache.size > META_CACHE_MAX) cache.delete(cache.keys().next().value);
         return promise;
+    }
+
+    static async _fetchWadoMetadata(client, path, options = {}) {
+        try {
+            const res = await client.fetchRaw(path, {
+                headers: { Accept: 'application/dicom+json' },
+                priority: options.priority,
+            });
+            const text = await res.text();
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        } catch (e) {
+            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+            throw e;
+        }
     }
 
     /**
@@ -209,6 +281,95 @@ export default class DicomTools {
     static clearMetadataCache(client = null) {
         if (client) this._metaCaches.delete(client);
         else this._metaCaches = new WeakMap();
+    }
+
+    /**
+     * Short-window memo for QIDO, shared in flight.
+     *
+     * QIDO had no caching at all, and several consumers legitimately ask the
+     * same question during one slide open — the tile source builds its pyramid
+     * from a series' instances, the browser lists the same series, the
+     * capability probe re-runs per consumer. In a measured Google Healthcare
+     * open the 16-field `…/instances` query went out **four** times and
+     * `/patients?limit=1` **four** times, each ~0.7-3 s and each with its own
+     * CORS preflight.
+     *
+     * Deliberately NOT the same policy as `wadoMetadata`: instance metadata is
+     * immutable for its SOP Instance UID and is cached for the session, whereas
+     * a query answer can go stale the moment anything is written. Hence
+     * {@link QIDO_TTL_MS} and the explicit invalidation in `stow`.
+     *
+     * Cached per client — two `HttpClient`s can carry different auth contexts,
+     * and one caller's results must never be served to another.
+     */
+    static async _memoQuery(client, key, factory) {
+        let cache = this._qidoCaches.get(client);
+        if (!cache) {
+            cache = new Map();   // insertion-ordered ⇒ usable as an LRU
+            this._qidoCaches.set(client, cache);
+        }
+
+        const hit = cache.get(key);
+        if (hit && (Date.now() - hit.at) < QIDO_TTL_MS) {
+            // Refresh recency, not the timestamp: a hot key must still expire
+            // on schedule, otherwise a repeatedly-polled query never refetches.
+            cache.delete(key);
+            cache.set(key, hit);
+            return hit.promise;
+        }
+        if (hit) cache.delete(key);
+
+        const promise = factory();
+        // A failure must not be remembered — the next caller has to be able to retry.
+        promise.catch(() => {
+            if (cache.get(key)?.promise === promise) cache.delete(key);
+        });
+
+        cache.set(key, { at: Date.now(), promise });
+        while (cache.size > QIDO_CACHE_MAX) cache.delete(cache.keys().next().value);
+        return promise;
+    }
+
+    /**
+     * Drop memoized QIDO answers for one client (or all of them). Called after
+     * any write that can change what a query returns.
+     */
+    static clearQueryCache(client = null) {
+        if (client) this._qidoCaches.delete(client);
+        else this._qidoCaches = new WeakMap();
+    }
+
+    /** client -> Promise<boolean>. See `supportsPatients`. */
+    static _patientsProbes = new WeakMap();
+
+    /**
+     * Whether the store implements the (non-standard) `/patients` QIDO resource.
+     *
+     * Keyed by **client**, not by plugin instance. The plugin used to memoize
+     * this on `this`, and it still went out four times in one session — so the
+     * instance is not a reliable identity for it. The client is: it is what the
+     * answer is actually a property of.
+     *
+     * Never re-probed once answered, including a negative answer. On a store
+     * without `/patients` (Google Healthcare) the CORS *preflight* is what 404s,
+     * so each attempt is two failed requests and a console error that looks like
+     * a bug to whoever is reading the log.
+     */
+    static supportsPatients(client) {
+        let probe = this._patientsProbes.get(client);
+        if (!probe) {
+            probe = (async () => {
+                try {
+                    await client.fetchRaw('/patients?limit=1', { headers: { Accept: 'application/dicom+json' } });
+                    return true;
+                } catch (e) {
+                    // Any HTTPError (or network/CORS error) → treat as unsupported.
+                    return false;
+                }
+            })();
+            this._patientsProbes.set(client, probe);
+        }
+        return probe;
     }
 
     /**
@@ -267,6 +428,13 @@ export default class DicomTools {
             throw e;
         }
 
+        // The store now holds an instance it did not hold a moment ago, so every
+        // memoized query answer for this client is potentially stale — most
+        // importantly the SR listing that `findLatestAnnotation` reads back
+        // right after a save. Metadata is keyed by SOP Instance UID and stays
+        // valid, so only the query window is dropped.
+        this.clearQueryCache(client);
+
         // Verify response is actually JSON before parsing
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("json")) {
@@ -294,6 +462,68 @@ export default class DicomTools {
         // 3) ImageType contains WSI keyword
         const imageType = (this.tag(ds, "00080008") || []).join("\\");
         return (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType));
+    }
+
+    /* RADIOLOGY (CT / MR / PT / CR / DX / NM) */
+
+    /**
+     * SOP classes we can render as a windowed intensity stack, and the modality
+     * each implies. Deliberately absent, and not oversights:
+     *
+     * - `…1.1.4.2` MR Spectroscopy — the "pixels" are spectra, not an image.
+     * - `…1.1.7`   Secondary Capture — a screenshot; no reliable geometry and
+     *              often already windowed and burned to 8 bits.
+     * - `…1.1.6.1` Ultrasound — frames are *time*, not depth, and the sector
+     *              geometry is not a stack.
+     *
+     * See `radiology-geometry.mjs` for the rest of the refusal list.
+     */
+    static RADIOLOGY_SOP_CLASSES = new Map([
+        ["1.2.840.10008.5.1.4.1.1.2",     "CT"],   // CT Image
+        ["1.2.840.10008.5.1.4.1.1.2.1",   "CT"],   // Enhanced CT
+        ["1.2.840.10008.5.1.4.1.1.2.2",   "CT"],   // Legacy Converted Enhanced CT
+        ["1.2.840.10008.5.1.4.1.1.4",     "MR"],   // MR Image
+        ["1.2.840.10008.5.1.4.1.1.4.1",   "MR"],   // Enhanced MR
+        ["1.2.840.10008.5.1.4.1.1.4.3",   "MR"],   // Enhanced MR Colour (monochrome subset only)
+        ["1.2.840.10008.5.1.4.1.1.4.4",   "MR"],   // Legacy Converted Enhanced MR
+        ["1.2.840.10008.5.1.4.1.1.128",   "PT"],   // PET Image
+        ["1.2.840.10008.5.1.4.1.1.128.1", "PT"],   // Legacy Converted Enhanced PET
+        ["1.2.840.10008.5.1.4.1.1.130",   "PT"],   // Enhanced PET
+        ["1.2.840.10008.5.1.4.1.1.1",     "CR"],   // Computed Radiography
+        ["1.2.840.10008.5.1.4.1.1.1.1",   "DX"],   // Digital X-Ray (for presentation)
+        ["1.2.840.10008.5.1.4.1.1.1.1.1", "DX"],   // Digital X-Ray (for processing)
+        ["1.2.840.10008.5.1.4.1.1.20",    "NM"],   // Nuclear Medicine
+    ]);
+
+    static RADIOLOGY_MODALITIES = new Set(["CT", "MR", "PT", "CR", "DX", "NM"]);
+
+    /**
+     * True for an instance the radiology tile source can render.
+     *
+     * Exclusive by construction: WSI and derived objects are tested first and
+     * always win, so this can never claim a slide or a segmentation even when a
+     * store reports an ambiguous Modality. `isWSIInstance` is untouched by this
+     * and stays the sole authority on what a slide is.
+     */
+    static isRadiologyInstance(ds) {
+        if (!ds) return false;
+        if (this.isWSIInstance(ds)) return false;
+        if (this.isSegInstance(ds) || this.isParametricMapInstance(ds)) return false;
+
+        if (this.RADIOLOGY_SOP_CLASSES.has(this.v(ds, "00080016"))) return true;
+        return this.RADIOLOGY_MODALITIES.has(this.v(ds, "00080060"));
+    }
+
+    /**
+     * `"volume"` for modalities whose instances stack along a depth axis,
+     * `"projection"` for the ones that produce a single image (CR/DX), `null`
+     * for anything this reader does not own.
+     */
+    static radiologyGeometryOf(ds) {
+        if (!this.isRadiologyInstance(ds)) return null;
+        const modality = this.RADIOLOGY_SOP_CLASSES.get(this.v(ds, "00080016"))
+            ?? this.v(ds, "00080060");
+        return (modality === "CR" || modality === "DX") ? "projection" : "volume";
     }
 
     /* DERIVED OBJECTS: SEGMENTATION + PARAMETRIC MAP */
@@ -388,10 +618,15 @@ export default class DicomTools {
             return mod === "SEG" || mod === "OT";
         });
 
-        const derived = [];
-        for (const s of candidates) {
+        // Candidates are independent of one another, so they are probed
+        // concurrently. This runs inside `before-open`, which the open pipeline
+        // AWAITS — the tile source is not even constructed until it returns — so
+        // a serial walk here is time the slide spends showing nothing. Order is
+        // preserved by `mapConcurrent`, so the resulting index is identical to
+        // the one the serial loop produced.
+        const probed = await this.mapConcurrent(candidates, METADATA_CONCURRENCY, async (s) => {
             const seriesUID = this.v(s, "0020000E");
-            if (!seriesUID) continue;
+            if (!seriesUID) return null;
 
             let instances;
             try {
@@ -400,11 +635,11 @@ export default class DicomTools {
                     "00080016,00080018");
             } catch (e) {
                 console.warn(`[DICOM] derived-series probe failed for ${seriesUID}:`, e?.message ?? e);
-                continue;
+                return null;
             }
             const first = (instances || [])[0];
             const instanceUID = this.v(first, "00080018");
-            if (!instanceUID) continue;
+            if (!instanceUID) return null;
 
             let sopClass = this.v(first, "00080016");
             let meta = null;
@@ -415,21 +650,21 @@ export default class DicomTools {
                         `/instances/${encodeURIComponent(instanceUID)}/metadata`))?.[0] || null;
                 } catch (e) {
                     console.warn(`[DICOM] derived-series metadata failed for ${seriesUID}:`, e?.message ?? e);
-                    continue;
+                    return null;
                 }
                 sopClass = sopClass || this.v(meta, "00080016");
             }
-            if (!meta) continue;
+            if (!meta) return null;
 
             const kind = sopClass === this.SOP_SEGMENTATION ? "seg"
                 : (sopClass === this.SOP_PARAMETRIC_MAP ? "pmap" : null);
-            if (!kind) continue;
+            if (!kind) return null;
 
             // The probe already holds one instance's metadata, so the segment
             // list (and therefore the overlay's colours and labels) is free
             // here. Deferring it to tile-source init would mean the shader
             // config is assembled before the segments are known.
-            derived.push({
+            return {
                 seriesUID,
                 kind,
                 sopClass,
@@ -448,10 +683,10 @@ export default class DicomTools {
                 // controls in real-world units.
                 valueRange: kind === "pmap" ? parseRealWorldRange(meta) : null,
                 voiPresets: kind === "pmap" ? (parseVoiLut(meta)?.presets ?? []) : [],
-            });
-        }
+            };
+        });
 
-        return { derived, smSeriesCount };
+        return { derived: probed.filter(Boolean), smSeriesCount };
     }
 
     /**
@@ -688,6 +923,36 @@ export default class DicomTools {
         level.pixel = item.pixel;
         level.frameWidth = frameWidth;
         level.frameHeight = frameHeight;
+        // The grid this level actually has, as decided above — including the
+        // collapse to 1×1. Read by the tile source's `getNumTiles`, which must
+        // not re-derive it: OSD would otherwise infer the row/column count from
+        // the base level's scale and invent cells nothing maps to.
+        level.tilesX = tilesX;
+        level.tilesY = tilesY;
+        // A derived object shares its slide's frame of reference, so it must
+        // carry the same orientation — otherwise the overlay and the slide it
+        // annotates would be placed differently.
+        if (!level.slide) {
+            const slide = this._parseSlideDescriptor(attrs);
+            if (slide) level.slide = slide;
+        }
+        // Spacing says how much of the slide one of THIS object's pixels covers,
+        // which is the only way to know whether its raster spans the declared
+        // TotalPixelMatrix or stops short of it. Without it the collapsed level
+        // below is stretched across the whole matrix on faith.
+        //
+        // `_parseSpacing`, not `_applySpacingToLevel`: the latter falls back to
+        // 0.25 um so a slide with no spacing still renders at a plausible scale.
+        // Here the value is not cosmetic — it decides geometry — so an undeclared
+        // spacing must stay undefined and let the caller degrade, rather than
+        // become a made-up number that silently crops the overlay.
+        if (!level.micronsX || !level.micronsY) {
+            const spacing = this._parseSpacing(attrs);
+            if (spacing) {
+                level.micronsX = spacing.micronsX;
+                level.micronsY = spacing.micronsY;
+            }
+        }
 
         const put = (tileX, tileY, segNumber, frameIndex) => {
             if (tileX < 0 || tileY < 0 || tileX >= tilesX || tileY >= tilesY) return false;
@@ -776,23 +1041,38 @@ export default class DicomTools {
 
     static async findWSIItems(client, studyUID, seriesUID, options = {}) {
         const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+        // EXACTLY the attributes `groupSeriesInstances` reads, and nothing else.
+        //
+        // This projection used to ask for the geometry sequences as well —
+        // Per-Frame Functional Groups (52009230), Shared FG, DimensionIndex*,
+        // plane positions. None of them were ever read from these rows:
+        // `_ingestInstanceMetadata` takes every one of them from the instance's
+        // own `/metadata`, and ignores the QIDO row entirely. On a store that
+        // honours sequence `includefield` at query level, 52009230 alone means
+        // one functional-group item PER FRAME PER INSTANCE in this single
+        // response — for a base level with 100k frames that is an enormous
+        // payload fetched to be thrown away.
+        //
+        // Two attributes the grouping DOES read were missing, so every instance
+        // fell back to "UNKNOWN_CONTAINER"/"DEFAULT_PATH" and a series holding
+        // several specimens or optical paths collapsed into one group.
         const { rows, total } = await this.qidoSafeWithMeta(client, base,
-            //'00080018,00080008,00280010,00280011,00400512,00480106,00480006,00480007'
             [
-                "52009230", // Per-Frame FG
-                "00209157", // DimensionIndexValues
-                "0048021E", // Column position (preferred ground truth)
-                "0048021F", // Row position (preferred ground truth)
-                "00209113", // PlanePosition(Slide) (fallback)
-                "52009229", // Shared FG (carries DimensionIndexSequence)
-                "00209222", // DimensionIndexSequence
-                "00209165", // DimensionIndexPointer (resolves DIV axes)
-                "00209311", // DimensionOrganizationType (TILED_FULL / TILED_SPARSE)
-                "00480006", "00480007", // TotalPixelMatrix
-                "00280010", "00280011", // Rows/Cols
-                "00280008",             // NumberOfFrames
-                "00080008",             // ImageType
                 "00080018",             // SOPInstanceUID
+                "00080016",             // SOPClassUID    ) what `isWSIInstance`
+                "00080060",             // Modality       ) classifies on
+                "00080008",             // ImageType (ORIGINAL vs DERIVED pyramid)
+                "00280008",             // NumberOfFrames
+                "00280010", "00280011", // Rows/Columns (tile size)
+                "00480006", "00480007", // TotalPixelMatrix
+                "00400512",             // ContainerIdentifier (groups by specimen)
+                "00480106",             // OpticalPathIdentifier (groups by channel)
+                // ConcatenationUID. Single-valued and not a sequence, so it costs
+                // one string per row. It is what lets the grouping tell "two parts
+                // of one level" apart from "a duplicate size" and keeps the
+                // level-count ranking honest; a store that ignores the includefield
+                // simply gets the previous behaviour back.
+                "00209161",
             ].join(',')
         );
         // rows are already instance objects; pass through or normalize if needed.
@@ -802,7 +1082,16 @@ export default class DicomTools {
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
         const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
 
-        for (let wsi of wsiInstances) {
+        // The tile source keeps ONE group (the deepest pyramid, then the widest)
+        // and discards the rest — but the metadata for every group was fetched
+        // first, and fetched in a serial `for` loop, so a series holding several
+        // WSI items paid a full round-trip walk per item before the slide could
+        // open. `options.only: "best"` ranks the groups from the QIDO rows,
+        // which already carry the instance counts and TotalPixelMatrix, and
+        // walks metadata for the winner alone.
+        const groups = options.only === "best" ? this._bestWsiGroup(wsiInstances) : wsiInstances;
+
+        for (let wsi of groups) {
             wsi.levels = [];
             // Persist series context + ordering overrides on the WSI object
             wsi.seriesUID = seriesUID;
@@ -829,9 +1118,122 @@ export default class DicomTools {
                 this._ingestInstanceMetadata(uids[i], wsi.pyramidInstances[i], metas[i], wsi,
                     options.frameOrder || null);
             }
+            // Ingest only maps each instance against its own frame space. Merging
+            // the parts of a level, resolving concatenation offsets and running the
+            // sequential fallback are level-wide decisions, so they happen here —
+            // before inference, which reads the finished maps.
+            this._finalizeWsiLevels(wsi);
             this._inferSequentialLayoutForWsi(wsi);
         }
-        return wsiInstances;
+        return groups;
+    }
+
+    /**
+     * The one WSI group worth building a pyramid for, chosen WITHOUT metadata.
+     *
+     * Mirrors the ranking `DICOMWebTileSource._initializeFromServer` applies
+     * after the fact — most levels first, then largest — but reads it off the
+     * QIDO rows (`pyramidInstances`, TotalPixelMatrix/Columns) instead of off
+     * `levels`, which only exists once the metadata walk has already run. That
+     * is the whole point: ranking first is what makes the walk cost one group
+     * instead of all of them.
+     *
+     * Depth is counted in DISTINCT TotalPixelMatrix sizes, not in instances,
+     * because that is what "levels" means after the walk. Counting instances made
+     * a three-level pyramid split into six concatenation parts outrank a genuine
+     * five-level one — and then the metadata walk paid for the wrong group.
+     *
+     * @returns {object[]} a single-element array, or empty if there is nothing.
+     */
+    static _bestWsiGroup(wsiInstances) {
+        if (!wsiInstances?.length) return [];
+        const dimsOf = (ds) => `${Number(this.v(ds, "00480006")) || Number(this.v(ds, "00280011")) || 0}` +
+            `x${Number(this.v(ds, "00480007")) || Number(this.v(ds, "00280010")) || 0}`;
+        const depthOf = (wsi) => new Set((wsi.pyramidInstances || []).map(dimsOf)).size;
+        const widthOf = (wsi) => Math.max(0, ...(wsi.pyramidInstances || []).map(ds =>
+            Number(this.v(ds, "00480006")) || Number(this.v(ds, "00280011")) || 0));
+
+        return [wsiInstances.slice().sort((a, b) => {
+            const an = depthOf(a);
+            const bn = depthOf(b);
+            if (bn !== an) return bn - an;
+            return widthOf(b) - widthOf(a);
+        })[0]];
+    }
+
+    /**
+     * Describe a **monochrome slide** well enough to give it a `dicom-window`
+     * layer, or `null` when this series is not one.
+     *
+     * The DICOM analogue of `describeRadiologySeries`, but for `SM`: a monochrome
+     * slide — a fluorescence or multiplex-IHC optical path, most often — carries
+     * intensity, not colour, and its stored values are frequently confined to a
+     * narrow part of the 8-bit range. Rendered through the implicit identity
+     * layer that is a flat, washed-out picture with no way for the user to say
+     * otherwise. `dicom-window` is the layer that already knows how to window it;
+     * this is the descriptor that layer's params are built from.
+     *
+     * `null` for every series whose window cannot honestly be moved into a shader
+     * — see {@link canDeferVoiToShader}, which is also what the tile source asks
+     * before it stops baking. Every *monochrome* level must qualify, not just the
+     * finest: the tile source decides per level, and a level that still bakes
+     * under a layer that also windows would be windowed twice.
+     *
+     * ## Request budget: 0 beyond the open
+     *
+     * It calls `findWSIItems(only: "best")` — the very call the tile source makes
+     * at init, with the same arguments — and both the QIDO and the per-level WADO
+     * `/metadata` are memoized per client. So on the open path this costs one
+     * cache lookup, and it is deliberately NOT wired into `get-preview-shader`:
+     * a slide-switcher card would pay the metadata walk for a series nobody
+     * opened, and the default window here is the identity anyway, so a preview
+     * rendered without the layer is the same picture.
+     *
+     * @param {object} client HttpClient
+     * @param {string} studyUID
+     * @param {string} seriesUID
+     * @param {object} [options] forwarded to `findWSIItems` (`seriesMeta`, frame order)
+     * @returns {Promise<object|null>}
+     */
+    static async describeMonochromeSlide(client, studyUID, seriesUID, options = {}) {
+        const items = await this.findWSIItems(client, studyUID, seriesUID, { ...options, only: "best" });
+        const wsi = (items || []).find(w => w?.levels?.length);
+        if (!wsi) return null;
+
+        const chainOf = (level) => ({
+            pixel: level?.pixel ?? wsi.pixel ?? null,
+            modalityLut: level?.modalityLut ?? wsi.modalityLut ?? null,
+            voiLut: level?.voiLut ?? wsi.voiLut ?? null,
+        });
+
+        // Levels are not sorted yet — `_normalizeLevels` in the tile source does
+        // that — so the finest is the widest, not the first.
+        const finest = wsi.levels.slice().sort((a, b) => (Number(b?.width) || 0) - (Number(a?.width) || 0))[0];
+        const chain = chainOf(finest);
+        if (!canDeferVoiToShader(chain.pixel, chain)) return null;
+
+        const inconsistent = wsi.levels.some(level => {
+            const c = chainOf(level);
+            return isMonochromePixel(c.pixel) && !canDeferVoiToShader(c.pixel, c);
+        });
+        if (inconsistent) {
+            console.debug(`[DICOM] series ${seriesUID} mixes monochrome levels with and without a baked ` +
+                "window; leaving the window baked so it is never applied twice.");
+            return null;
+        }
+
+        return {
+            studyUID,
+            seriesUID,
+            modality: options.seriesMeta?.modality ?? "SM",
+            pixel: chain.pixel,
+            // Derived, not the literal `{0, 255}` the predicate currently implies:
+            // the descriptor stays correct if the predicate ever widens.
+            valueRange: storedValueRange(chain.pixel, chain.modalityLut),
+            voiPresets: chain.voiLut?.presets ?? [],
+            units: chain.modalityLut?.units ?? null,
+            invert: chain.pixel.photometricInterpretation === "MONOCHROME1",
+        };
     }
 
     /**
@@ -852,7 +1254,11 @@ export default class DicomTools {
             "00280008",             // NumberOfFrames
             "00080008",             // ImageType
             "00080018",             // SOPInstanceUID
-        ].join(','));
+            // This variant exists FOR listings, so it defaults to the background
+            // lane: a browser sweep is one query per series and must not compete
+            // with the tiles of whatever slide is already open. A caller that
+            // needs it foreground passes `priority: "normal"`.
+        ].join(','), { priority: options.priority ?? "background" });
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
         const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
         for (const wsi of wsiInstances) {
@@ -863,19 +1269,293 @@ export default class DicomTools {
         return wsiInstances;
     }
 
+    /* RADIOLOGY SERIES DESCRIPTION */
+
+    /**
+     * One `includefield` list covering everything the plane model needs:
+     * identity, geometry, the raster, the whole display chain, and every
+     * attribute that can distinguish two co-located planes.
+     *
+     * Asking for all of it in one query is the point — see the request budget on
+     * `describeRadiologySeries`.
+     */
+    static RADIOLOGY_INSTANCE_FIELDS = [
+        "00080016", "00080018", "00080060", "00080008",  // SOPClass/Instance, Modality, ImageType
+        "00200013", "00200032", "00200037", "00201041",  // InstanceNumber, IPP, IOP, SliceLocation
+        "00200052",                                      // FrameOfReferenceUID
+        "00180050", "00180088", "00280030",              // SliceThickness, SpacingBetweenSlices, PixelSpacing
+        "00181164",                                      // ImagerPixelSpacing (CR/DX carry only this)
+        "00280010", "00280011", "00280008",              // Rows, Columns, NumberOfFrames
+        "00280002", "00280004",                          // SamplesPerPixel, PhotometricInterpretation
+        "00280100", "00280101", "00280102", "00280103",  // Bits*, PixelRepresentation
+        "00281052", "00281053", "00281054",              // Rescale intercept/slope/type
+        "00281050", "00281051", "00281055", "00281056",  // Window centre/width/explanation/function
+        "00180086", "00180081", "00200100", "00200012",  // Echo, TemporalPosition, AcquisitionNumber
+        "00189087", "00209056",                          // DiffusionBValue, StackID
+    ].join(",");
+
+    /**
+     * Describe a CT/MR/PT/CR/DX/NM series as an ordered plane stack.
+     *
+     * This is a peer of `findWSIItems`, not a variant of it. It shares the HTTP
+     * and parsing helpers but calls none of `groupSeriesInstances` /
+     * `_ingestInstanceMetadata` / the frame-order strategies: those interpret a
+     * series' instances as *pyramid levels of one image* and its frames as *tile
+     * positions*, which is precisely the interpretation that does not apply
+     * here. The plane maths itself lives in `radiology-geometry.mjs`, which is
+     * pure; this function is only the I/O around it.
+     *
+     * ## Request budget: 2, worst case 4 — never N
+     *
+     * 1. One instance-level QIDO carrying `RADIOLOGY_INSTANCE_FIELDS`. One round
+     *    trip returns all 300 rows of a 300-slice series (one row for an
+     *    enhanced multi-frame instance).
+     * 2. One WADO `/metadata` for the geometric middle instance — the full
+     *    display chain, plus the Per-Frame Functional Groups when multi-frame.
+     * 3. Optional: a retry with `includefield=all` when the store silently
+     *    dropped the field list (`qidoSafeWithMeta` falls back to a bare query),
+     *    detected by the geometry simply not being there.
+     * 4. Optional: the series-level QIDO row, skipped when the caller already
+     *    has it (`options.seriesMeta`).
+     *
+     * A per-instance metadata walk is deliberately refused. `findWSIItems` can
+     * afford `mapConcurrent` over its instances because a pyramid has ~5 levels;
+     * doing the same over 300 CT slices is 300 requests and tens of megabytes of
+     * JSON — the exact N+1 `findWSIItemsShallow` exists to avoid.
+     *
+     * @param {object} client HttpClient
+     * @param {string} studyUID
+     * @param {string} seriesUID
+     * @param {object} [options]
+     * @param {string} [options.subVolume] pick an interleaved sub-volume by key
+     * @param {object} [options.seriesMeta] series-level row the caller already has
+     * @returns {Promise<object|null>} the descriptor, `{error}` when the series is
+     *   refused, or `null` when the series holds no radiology instances at all
+     */
+    static async describeRadiologySeries(client, studyUID, seriesUID, options = {}) {
+        const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+
+        let { rows } = await this.qidoSafeWithMeta(client, base, this.RADIOLOGY_INSTANCE_FIELDS);
+        if (!rows.length) return null;
+
+        // `qidoSafeWithMeta` retries without `includefield` when a store rejects
+        // it (GCP does), and reports that as an ordinary success. The only way
+        // to notice is that the geometry is missing from every row.
+        if (!this._rowsCarryGeometry(rows)) {
+            const retry = await this.qidoSafeWithMeta(client, base, "all").catch(() => null);
+            if (retry?.rows?.length && this._rowsCarryGeometry(retry.rows)) rows = retry.rows;
+        }
+
+        const radiologyRows = rows.filter(row => this.isRadiologyInstance(row));
+        if (!radiologyRows.length) return null;
+
+        const modality = this.RADIOLOGY_SOP_CLASSES.get(this.v(radiologyRows[0], "00080016"))
+            ?? this.v(radiologyRows[0], "00080060")
+            ?? null;
+        const sopClass = this.v(radiologyRows[0], "00080016") ?? null;
+        const multiframe = radiologyRows.length === 1 && (this.iv(radiologyRows[0], "00280008") ?? 1) > 1;
+
+        const metaPath = (uid) => `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances/${encodeURIComponent(uid)}/metadata`;
+
+        let candidates;
+        let representative = null;
+
+        if (multiframe) {
+            const uid = this.v(radiologyRows[0], "00080018");
+            // Not memoized: the Per-Frame Functional Groups of a 300-frame
+            // instance are the bulk of this payload and nothing reads them again.
+            const meta = await this.wadoMetadata(client, metaPath(uid), { memoize: false });
+            representative = Array.isArray(meta) ? meta[0] : meta;
+            candidates = planeCandidatesFromMultiframe(representative);
+            if (!candidates.length) {
+                // A single-frame-per-instance reading of a NumberOfFrames > 1
+                // object would render frame 1 and call it the whole series.
+                return { error: "multi-frame instance carries no Per-Frame Functional Groups" };
+            }
+        } else {
+            candidates = radiologyRows.map(row => planeCandidateFromInstance(row)).filter(Boolean);
+        }
+
+        const model = buildPlaneModel(candidates, { subVolume: options.subVolume });
+        if (model.error) return { error: model.error, modality, sopClass };
+
+        if (!representative) {
+            // The middle plane, not the first: on a series whose ends are
+            // partially outside the patient it is the one most likely to carry a
+            // representative window.
+            const middle = model.planes[model.planes.length >> 1];
+            const meta = await this.wadoMetadata(client, metaPath(middle.instanceUID));
+            representative = Array.isArray(meta) ? meta[0] : meta;
+        }
+
+        const chain = this.parsePixelChain(representative);
+        const realWorldRange = parseRealWorldRange(representative);
+        const seriesModalityLut = chain.modalityLut;
+
+        const byCandidate = new Map(candidates.map(c => [`${c.instanceUID}#${c.frame}`, c]));
+        const planes = model.planes.map(p => {
+            const candidate = byCandidate.get(`${p.instanceUID}#${p.frame}`);
+            return {
+                ...p,
+                modalityLut: this._planeModalityLut(candidate, seriesModalityLut),
+            };
+        });
+
+        const extraRanges = this._perPlaneValueRanges(planes, chain.pixel, seriesModalityLut);
+        const valueRange = chooseValueRange({
+            modality,
+            pixel: chain.pixel,
+            modalityLut: seriesModalityLut,
+            voiLut: chain.voiLut,
+            realWorldRange,
+            extraRanges,
+        });
+
+        const pixelSpacing = model.raster.pixelSpacing;
+        const seriesMeta = options.seriesMeta ?? await this._radiologySeriesMeta(client, studyUID, seriesUID);
+
+        return {
+            studyUID,
+            seriesUID,
+            modality,
+            sopClass,
+            geometry: (modality === "CR" || modality === "DX") ? "projection" : "volume",
+            multiframe,
+
+            width: model.raster.cols,
+            height: model.raster.rows,
+            // DICOM PixelSpacing is [row spacing (Y), column spacing (X)] in
+            // MILLIMETRES; `micronsX/Y` are micrometres (src/README.md).
+            micronsX: Array.isArray(pixelSpacing) ? pixelSpacing[1] * 1000 : undefined,
+            micronsY: Array.isArray(pixelSpacing) ? pixelSpacing[0] * 1000 : undefined,
+            frameOfReferenceUID: this.v(representative, "00200052")
+                ?? this.v(radiologyRows[0], "00200052") ?? null,
+
+            pixel: chain.pixel,
+            photometricInterpretation: chain.pixel.photometricInterpretation,
+            // MONOCHROME1 is "higher value = darker". That is a PRESENTATION
+            // property, so it travels to the shader rather than being baked into
+            // the samples — the stored values must stay quantitative.
+            invert: chain.pixel.photometricInterpretation === "MONOCHROME1",
+
+            planes,
+            spacingUm: model.spacingUm,
+            spacingSource: model.spacingSource,
+            irregular: model.irregular,
+            orderStrategy: model.orderStrategy,
+            subVolumes: model.subVolumes,
+            activeSubVolume: model.activeSubVolume,
+            rejected: model.rejected,
+            warnings: model.warnings,
+
+            modalityLut: seriesModalityLut,
+            voiLut: chain.voiLut,
+            voiPresets: chain.voiLut?.presets ?? [],
+            valueRange,
+            units: seriesModalityLut?.units ?? null,
+
+            seriesMeta,
+        };
+    }
+
+    /** Whether a QIDO instance listing actually came back with plane geometry. */
+    static _rowsCarryGeometry(rows) {
+        return rows.some(row => row?.["00200032"] || row?.["00201041"] || row?.["00200037"]);
+    }
+
+    /**
+     * A plane's own Modality LUT.
+     *
+     * PET series routinely carry a per-frame rescale (decay correction differs
+     * between acquisitions), and applying the series-level one to every plane
+     * would report the wrong activity on most of them. The candidate's `rescale`
+     * discriminator already holds the pair, so this costs no extra request.
+     */
+    static _planeModalityLut(candidate, seriesModalityLut) {
+        const rescale = candidate?.keys?.rescale;
+        if (!rescale) return seriesModalityLut;
+
+        const [slope, intercept] = rescale.split("/").map(Number);
+        if (!Number.isFinite(slope) || !Number.isFinite(intercept)) return seriesModalityLut;
+
+        // A LUT-kind or Real World Value transform is not expressible as a pair,
+        // and the series-level one is then the only correct answer.
+        if (seriesModalityLut && seriesModalityLut.kind !== "linear") return seriesModalityLut;
+        if (seriesModalityLut
+            && seriesModalityLut.slope === slope && seriesModalityLut.intercept === intercept) {
+            return seriesModalityLut;
+        }
+
+        return { kind: "linear", slope, intercept, units: seriesModalityLut?.units ?? null, explanation: null };
+    }
+
+    /**
+     * One value range per distinct plane transform. The normalization range is
+     * baked into the shader as GLSL literals, so it must cover every plane —
+     * otherwise the planes whose rescale differs clip.
+     */
+    static _perPlaneValueRanges(planes, pixel, seriesModalityLut) {
+        const seen = new Set();
+        const out = [];
+        for (const plane of planes) {
+            const lut = plane.modalityLut;
+            if (!lut || lut === seriesModalityLut) continue;
+            const key = lut.kind === "linear" ? `${lut.slope}/${lut.intercept}` : "lut";
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(storedValueRange(pixel, lut));
+        }
+        return out;
+    }
+
+    /** The series row, for a human-readable name. Skipped when the caller has it. */
+    static async _radiologySeriesMeta(client, studyUID, seriesUID) {
+        try {
+            const { rows } = await this.qidoSafeWithMeta(
+                client,
+                `/studies/${encodeURIComponent(studyUID)}/series?SeriesInstanceUID=${encodeURIComponent(seriesUID)}`,
+                "0008103E,00200011,00180015,00080060"
+            );
+            const row = rows[0];
+            if (!row) return null;
+            return {
+                description: this.v(row, "0008103E") ?? null,
+                seriesNumber: this.iv(row, "00200011"),
+                bodyPart: this.v(row, "00180015") ?? null,
+                modality: this.v(row, "00080060") ?? null,
+            };
+        } catch (e) {
+            // A missing series row costs a nicer label, nothing more.
+            return null;
+        }
+    }
+
     /**
      * Fetch a single instance's `/rendered` representation as an image Blob
      * (JPEG/PNG). Handles both single-part image responses and multipart
      * envelopes. Used for listing thumbnails (OVERVIEW/LABEL instances) —
      * the tile source's own preview path stays instance-side.
      */
-    static async fetchRenderedInstance(client, studyUID, seriesUID, instanceUID, { preferPng = false } = {}) {
+    static async fetchRenderedInstance(client, studyUID, seriesUID, instanceUID, { preferPng = false, window = null } = {}) {
         if (!client || !studyUID || !seriesUID || !instanceUID) return null;
+        // `window` overrides the store's own VOI. Left null by default: an
+        // instance that carries WindowCenter/WindowWidth already renders sensibly,
+        // and a store that does not honour the parameter would otherwise refuse
+        // the whole request rather than ignore it.
+        const query = window && Number.isFinite(window.center) && Number.isFinite(window.width)
+            ? `?window=${encodeURIComponent(`${window.center},${window.width},LINEAR`)}` : "";
         const path = `/studies/${encodeURIComponent(studyUID)}` +
             `/series/${encodeURIComponent(seriesUID)}` +
-            `/instances/${encodeURIComponent(instanceUID)}/rendered`;
+            `/instances/${encodeURIComponent(instanceUID)}/rendered${query}`;
         const accept = preferPng ? 'image/png, image/jpeg;q=0.9' : 'image/jpeg, image/png;q=0.9';
-        const res = await client.fetchRaw(path, { headers: { Accept: accept } });
+        // A browser thumbnail. It is decoration on a list the user is scrolling;
+        // a tile is the slide they are looking at. `/rendered` is also the
+        // single most expensive thing a store does per request — two of these
+        // cost 8.7 s of connection time in the measured session.
+        const res = await client.fetchRaw(path, {
+            headers: { Accept: accept },
+            priority: "background",
+        });
         const ct = (res.headers.get('content-type') || '').toLowerCase();
         if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
             return await res.blob();
@@ -887,6 +1567,52 @@ export default class DicomTools {
         const mime = type.includes('image/png') ? 'image/png'
             : (type.includes('image/jpeg') ? 'image/jpeg' : 'application/octet-stream');
         return new Blob([bytes], { type: mime });
+    }
+
+    /**
+     * Pick an instance worth rendering as a series thumbnail.
+     *
+     * `previewInstanceUID` only ever exists for a WSI series that ships an
+     * OVERVIEW/THUMBNAIL instance (`_ingestInstanceMetadata`). A radiology series
+     * has none, and a background restored from a session carries none either — in
+     * both cases the card used to render as an empty box. Any instance of the
+     * series is a better thumbnail than nothing.
+     *
+     * The geometric middle, not the first: the ends of a CT stack are frequently
+     * outside the patient, and "the first slice" of a chest scan is often pure
+     * air. Same reasoning `describeRadiologySeries` records for its representative
+     * instance.
+     *
+     * One QIDO, and `qidoSafeWithMeta` memoizes it, so repeatedly scrolling a
+     * card in and out of view costs one request per series for the session.
+     *
+     * @returns {Promise<string|null>} SOPInstanceUID, or null
+     */
+    static async pickPreviewInstance(client, studyUID, seriesUID) {
+        if (!client || !studyUID || !seriesUID) return null;
+        const path = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+        let rows;
+        try {
+            ({ rows } = await this.qidoSafeWithMeta(client, path, "00080018,00200013",
+                { priority: "background" }));
+        } catch (e) {
+            // A thumbnail is decoration on a list; a failure here must cost the
+            // card its picture and nothing else.
+            console.debug(`[dicom] preview instance lookup failed for ${seriesUID}:`, e?.message ?? e);
+            return null;
+        }
+        if (!rows?.length) return null;
+
+        // Sorted by InstanceNumber where present; rows without one keep the
+        // store's order behind those with one, rather than jumping to the front.
+        const sorted = rows.slice().sort((a, b) => {
+            const na = this.iv(a, "00200013"), nb = this.iv(b, "00200013");
+            if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+            if (Number.isFinite(na)) return -1;
+            if (Number.isFinite(nb)) return 1;
+            return 0;
+        });
+        return this.v(sorted[sorted.length >> 1], "00080018") ?? null;
     }
 
     /**
@@ -991,6 +1717,88 @@ export default class DicomTools {
     }
 
     /**
+     * Every SR instance in a study, each tagged with the series it belongs to.
+     *
+     * One study-level QIDO, not one per SR series. The per-series walk this
+     * replaces was a strictly serial `for` loop, and it dominated a measured
+     * slide open: 48 queries of 1-4 s each, spread across the whole 80 s the
+     * slide took to fill, every one of them competing with tile requests on the
+     * same connection.
+     *
+     * A store that cannot answer `/studies/{uid}/instances` (the resource is
+     * optional in PS3.18) falls back to the old shape — but concurrently, via
+     * `mapConcurrent`, never serially.
+     *
+     * Rows are copied before being tagged: QIDO answers are memoized now, so
+     * writing `_parentSeriesUID` onto the row itself would scribble on a shared
+     * cache entry.
+     */
+    static async _srCandidates(client, studyUID) {
+        // Nobody is staring at a spinner for this: annotations hydrate into a
+        // slide that is already rendering. It used to run at full priority for
+        // the entire 80 s a slide took to fill, on the same connection as the
+        // tiles. The scheduler admits none of it while tiles are in flight.
+        const bg = { priority: "background" };
+
+        // 0020000E SeriesInstanceUID (which series the SR lives in),
+        // 00080018 SOPInstanceUID, 00080060 Modality (to verify the server
+        // honoured the filter), plus the date/time tags `datetimeOf` ranks by.
+        const SR_FIELDS = '0020000E,00080018,00080060,00080023,00080033,00080012,00080013,00080021,00080031';
+
+        const tag = (rows, uidOf) => (rows || []).reduce((out, row) => {
+            const parent = uidOf(row);
+            if (parent) out.push({ ...row, _parentSeriesUID: parent });
+            return out;
+        }, []);
+
+        try {
+            const rows = await this.qidoSafe(
+                client, `/studies/${encodeURIComponent(studyUID)}/instances?Modality=SR`, SR_FIELDS, bg);
+            // Never trust the server-side filter. A store that silently drops
+            // an unsupported query parameter answers this with every instance
+            // in the study, which would hand the ranking step a pile of images
+            // to treat as reports. Re-check whenever the rows actually carry
+            // Modality; when none of them do, the filter is all we have.
+            if (rows && rows.length) {
+                const typed = rows.filter(r => this.v(r, '00080060') != null);
+                if (!typed.length) return tag(rows, r => this.v(r, '0020000E'));
+
+                const sr = typed.filter(r => this.v(r, '00080060') === 'SR');
+                if (sr.length) return tag(sr, r => this.v(r, '0020000E'));
+
+                // Rows carry a modality and none of it is SR: the filter was
+                // ignored. Say nothing about this study yet — fall through to
+                // the per-series walk, which cannot be fooled the same way.
+                console.debug('[DICOM] store ignored Modality=SR; falling back to per-series SR walk');
+            } else if (Array.isArray(rows)) {
+                // The endpoint exists and understood the filter (`qido` maps a
+                // missing collection to undefined and a dead endpoint to a
+                // throw), so an empty array means this study holds no SR.
+                return [];
+            }
+        } catch (e) {
+            console.debug('[DICOM] study-level SR query unavailable, falling back to per-series:', e?.message ?? e);
+        }
+
+        // Fallback: list the study's series, then query the SR ones concurrently.
+        const seriesList = await this.qidoSafe(
+            client, `/studies/${encodeURIComponent(studyUID)}/series`,
+            '00080060,0020000E,00080021,00080031', bg);
+        const srSeries = (seriesList || [])
+            .filter(s => this.v(s, '00080060') === 'SR')
+            .map(s => this.v(s, '0020000E'))
+            .filter(Boolean);
+        if (!srSeries.length) return [];
+
+        const perSeries = await this.mapConcurrent(srSeries, METADATA_CONCURRENCY, async (srSeriesUID) => {
+            const path = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(srSeriesUID)}/instances`;
+            const rows = await this.qidoSafe(client, path, SR_FIELDS, bg);
+            return tag(rows, () => srSeriesUID);
+        });
+        return perSeries.flat();
+    }
+
+    /**
      * Find the latest DICOM SR that references the given imaging series.
      *
      * @param {HttpClient} client
@@ -1003,39 +1811,9 @@ export default class DicomTools {
      *   Omit to keep the legacy "any latest SR in study" behavior.
      */
     static async findLatestAnnotation(client, studyUID, seriesUID) {
-        // Request Modality (00080060) and Dates explicitly
-        const seriesPath = `/studies/${studyUID}/series?includefield=00080060&includefield=00080021&includefield=00080031`;
-
         try {
-            const seriesList = await this.qidoSafe(client, seriesPath);
-            if (!seriesList || !seriesList.length) return null;
-
-            // Filter for SR (Structured Report) series client-side
-            const srSeriesList = seriesList.filter(s => this.v(s, '00080060') === 'SR');
-
-            if (srSeriesList.length === 0) {
-                console.log("No SR series found in this study.");
-                return null;
-            }
-
-            const allCandidates = [];
-
-            // Check every SR series for instances
-            for (const series of srSeriesList) {
-                const srSeriesUID = this.v(series, '0020000E');
-
-                // Fetch instances with date tags
-                const instancesPath = `/studies/${studyUID}/series/${srSeriesUID}/instances?includefield=00080023&includefield=00080033&includefield=00080012&includefield=00080013`;
-
-                const instances = await this.qidoSafe(client, instancesPath);
-                if (instances && instances.length) {
-                    // Attach SeriesUID so we can use it later
-                    instances.forEach(i => { i._parentSeriesUID = srSeriesUID; });
-                    allCandidates.push(...instances);
-                }
-            }
-
-            if (allCandidates.length === 0) return null;
+            const allCandidates = await this._srCandidates(client, studyUID);
+            if (!allCandidates.length) return null;
 
             // Sort newest-first. Walking in this order lets the
             // `ReferencedSeriesSequence` filter short-circuit on the first
@@ -1057,7 +1835,11 @@ export default class DicomTools {
             if (!seriesUID) {
                 const latest = allCandidates[0];
                 const sopUID = this.v(latest, '00080018');
-                console.log(`Found ${allCandidates.length} annotations. Newest:`, latest);
+                // Count only. The row carries SOP/Series Instance UIDs, which
+                // this codebase classifies as opaque PHI identifiers
+                // (see `getSensitiveMetadata`), and they have no business in a
+                // console the user may paste into a bug report.
+                console.debug(`[DICOM] ${allCandidates.length} SR candidate(s); taking the newest.`);
                 return { seriesUID: latest._parentSeriesUID, sopUID };
             }
 
@@ -1080,6 +1862,10 @@ export default class DicomTools {
                         return await this.wadoMetadata(
                             client,
                             `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
+                            // Same lane as the listing that produced these
+                            // candidates: annotation hydration must never
+                            // compete with the tiles it will be drawn over.
+                            { priority: "background" },
                         );
                     } catch (e) {
                         console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
@@ -1204,9 +1990,14 @@ export default class DicomTools {
                 continue;
             }
 
-            // only consider multi-frame tiled instances as pyramid candidates
+            // only consider multi-frame tiled instances as pyramid candidates.
+            // A concatenation part (0020,9161) is the one legitimate single-frame
+            // pyramid instance: the level's frames are split across siblings, and
+            // one of them may hold exactly one.
             const frames = Number(ds?.["00280008"]?.Value?.[0] ?? 0);
-            if (!(frames > 1 && rows > 0 && cols > 0 && rows <= 1024 && cols <= 1024)) { // Increased to 1024
+            const isConcatPart = !!ds?.["00209161"]?.Value?.[0];
+            const minFrames = isConcatPart ? 1 : 2;
+            if (!(frames >= minFrames && rows > 0 && cols > 0 && rows <= 1024 && cols <= 1024)) { // Increased to 1024
                 continue;
             }
 
@@ -1261,27 +2052,49 @@ export default class DicomTools {
             let chosen = originals.length ? originals.slice() : [];
 
             if (chosen.length <= 1 && derived.length) {
-                // Reference dims: use ORIGINAL dims if present; else use biggest derived dims
-                const refDims = chosen.length ? dimsOf(chosen[0]) : dimsOf(derived[0]);
+                // With no ORIGINAL instance at all, the largest DERIVED one IS the
+                // base level and must be ADOPTED, not merely used as a yardstick.
+                // It used to be measured and then dropped by the `d.w >= refDims.w`
+                // test below — the reference can never be smaller than itself — so
+                // every all-DERIVED pyramid silently started one level down and
+                // rendered at half the available resolution. That is most converted
+                // data: `com.pixelmed.convert.TIFFToDicom` marks every level
+                // `DERIVED\PRIMARY\VOLUME\RESAMPLED`, which is what all of IDC is.
+                const skipFirstDerived = chosen.length === 0;
+                if (skipFirstDerived) chosen.push(derived[0]);
+
+                // Reference dims: use ORIGINAL dims if present; else the biggest derived.
+                const refDims = dimsOf(chosen[0]);
 
                 // Take derived levels that:
                 // - are smaller than the reference
                 // - have ~same aspect ratio (so they are true downsample versions)
                 // - are not duplicates of existing sizes
-                const seen = new Set(chosen.map(ds => {
+                //
+                // "Same size" is not the same claim as "duplicate": the parts of a
+                // concatenated level share TotalPixelMatrix dimensions by
+                // definition, and dropping all but the first left that level with a
+                // fraction of its frames. So the key remembers WHICH concatenation
+                // a size belongs to, and a second instance survives when it names
+                // the same one. With no ConcatenationUID in the row (a store that
+                // dropped the includefield) this is exactly the old rule.
+                const concatOf = (ds) => ds?.["00209161"]?.Value?.[0] || null;
+                const seen = new Map(chosen.map(ds => {
                     const d = dimsOf(ds);
-                    return `${d.w}x${d.h}`;
+                    return [`${d.w}x${d.h}`, concatOf(ds)];
                 }));
 
-                for (const ds of derived) {
+                for (let di = skipFirstDerived ? 1 : 0; di < derived.length; di++) {
+                    const ds = derived[di];
                     const d = dimsOf(ds);
                     if (!d.w || !d.h) continue;
                     if (d.w >= refDims.w || d.h >= refDims.h) continue;
                     if (!aspectOK(d, refDims)) continue;
 
                     const key = `${d.w}x${d.h}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
+                    const concatUID = concatOf(ds);
+                    if (seen.has(key) && !(concatUID && seen.get(key) === concatUID)) continue;
+                    seen.set(key, concatUID);
 
                     chosen.push(ds);
                 }
@@ -1294,6 +2107,216 @@ export default class DicomTools {
             g.pyramidInstances = chosen;
         }
         return Array.from(groups.values());
+    }
+
+    /**
+     * Where the total pixel matrix sits on the glass.
+     *
+     * `ImageOrientationSlide` (0048,0102) gives the direction cosines of the
+     * matrix's first row and first column in the slide frame of reference, and
+     * `TotalPixelMatrixOriginSequence` (0048,0008) gives that matrix's origin in
+     * millimetres.
+     *
+     * Returns `null` rather than a partial record: half an orientation renders as
+     * a *different* orientation, which is worse than not honouring the tag.
+     *
+     * @param {object} attrs one instance's DICOM JSON attributes
+     * @returns {{orientation: number[], originX: number, originY: number}|null}
+     */
+    static _parseSlideDescriptor(attrs) {
+        // A Whole Slide Microscopy Image carries these at the top level. A
+        // Segmentation or Parametric Map is a multi-frame functional-groups
+        // object and puts its slide geometry inside the Shared Functional Groups
+        // Sequence instead — which is why reading only the top level found
+        // nothing on a SEG and drew it unrotated under a rotated slide.
+        //
+        // Shared only, never Per-Frame (52009230): a per-frame value describes
+        // one frame, and adopting frame 0's as the whole object's is the kind of
+        // guess this function exists to avoid.
+        const shared = attrs?.["52009229"]?.Value?.[0] || null;
+        const holding = (tag) => (attrs?.[tag] ? attrs : this._datasetHolding(shared, tag));
+
+        // `tag`, not `v`: the six cosines are the whole Value array, and `v`
+        // would hand back only the first one.
+        const orientation = parseOrientation(this.tag(holding("00480102"), "00480102"));
+        if (!orientation) return null;
+        // TotalPixelMatrixOriginSequence
+        const origin = this.tag(holding("00480008"), "00480008")?.[0] || null;
+        const ox = this.fv(origin, "0040072A");                   // XOffsetInSlideCoordinateSystem
+        const oy = this.fv(origin, "0040073A");                   // YOffsetInSlideCoordinateSystem
+        return {
+            orientation,
+            originX: Number.isFinite(ox) ? ox : 0,
+            originY: Number.isFinite(oy) ? oy : 0,
+        };
+    }
+
+    /**
+     * Pixel spacing of one instance, in micrometres, as `{micronsX, micronsY}`.
+     *
+     * Four declarations, in falling order of authority. The Shared Functional
+     * Groups entry is not a nicety: a Segmentation or Parametric Map keeps its
+     * spacing *only* there, which is why the derived ingest — which did not read
+     * spacing at all — could not tell how much of the slide its raster covered.
+     *
+     * @returns {{micronsX: number, micronsY: number}|null} null when nothing declared it
+     */
+    static _parseSpacing(attrs) {
+        let spacingArr = attrs?.["00280030"]?.Value;                    // PixelSpacing
+        if (!spacingArr) {
+            const pms = this._datasetHolding(
+                attrs?.["52009229"]?.Value?.[0] || null, "00280030");   // Shared FG > Pixel Measures
+            spacingArr = pms?.["00280030"]?.Value;
+        }
+        if (!spacingArr) {
+            const nominal = this.fv(attrs, "00182010");                 // Nominal Scanned Pixel Spacing
+            if (nominal) spacingArr = [nominal, nominal];
+        }
+        if (!spacingArr) {
+            const imager = this.fv(attrs, "00181164");                  // Imager Pixel Spacing
+            if (imager) spacingArr = [imager, imager];
+        }
+        if (!spacingArr) return null;
+
+        // Every source above is in MILLIMETRES; `micronsX/Y` are micrometres, the
+        // unit the core scalebar and the annotation exporters expect. This used to
+        // store the millimetre value verbatim, which is why the default read as the
+        // nonsensical `0.00025` — 0.25 um written in mm.
+        //
+        // PixelSpacing is [row spacing (Y), column spacing (X)] — the same ordering
+        // `describeRadiologySeries` documents. A scalar (the two scalar-valued
+        // fallbacks above) is isotropic.
+        const micronsX = Number(spacingArr[1] ?? spacingArr[0]) * 1000;
+        const micronsY = Number(spacingArr[0]) * 1000;
+        if (!Number.isFinite(micronsX) || !Number.isFinite(micronsY)) return null;
+        if (micronsX <= 0 || micronsY <= 0) return null;
+        return { micronsX, micronsY };
+    }
+
+    /**
+     * The instance of a WSI series that carries the base (largest) level.
+     *
+     * `instances[0]` is not it — QIDO returns a pyramid in whatever order it likes.
+     *
+     * @param {object[]} instances QIDO records with 00480006/00480007 included
+     * @param {?{width:number, height:number}} expectedMatrix
+     */
+    static _pickBaseInstance(instances, expectedMatrix = null) {
+        if (expectedMatrix?.width > 0 && expectedMatrix?.height > 0) {
+            const exact = instances.find(inst =>
+                this.iv(inst, "00480006") === expectedMatrix.width &&
+                this.iv(inst, "00480007") === expectedMatrix.height);
+            if (exact) return exact;
+        }
+        let best = null, bestWidth = -1;
+        for (const inst of instances) {
+            const width = this.iv(inst, "00480006");
+            if (Number.isFinite(width) && width > bestWidth) { best = inst; bestWidth = width; }
+        }
+        // No dimensions at all: the store told us nothing to rank by, so the first
+        // instance is as good an answer as exists.
+        return best || instances[0];
+    }
+
+    /** Stamp {@link _parseSpacing} onto a level, never overwriting what it already has. */
+    static _applySpacingToLevel(level, attrs) {
+        const spacing = this._parseSpacing(attrs);
+        if (spacing && (!level.micronsX || !level.micronsY)) {
+            level.micronsX = spacing.micronsX;
+            level.micronsY = spacing.micronsY;
+        }
+        // The historical default, kept: a slide that declares nothing still has to
+        // render, and 0.25 um is the common scanner pitch.
+        if (!level.micronsX || !level.micronsY) {
+            level.micronsX = level.micronsX || 0.25;
+            level.micronsY = level.micronsY || 0.25;
+        }
+    }
+
+    /**
+     * The dataset that directly holds `tag`, searching nested sequences.
+     *
+     * DICOM JSON nests a sequence as `{Value: [ {…dataset}, … ]}`, and which
+     * sequence a functional-groups object uses for slide geometry varies by IOD.
+     * Searching rather than naming one keeps this from being a list of tag paths
+     * that has to grow every time a new object type shows up.
+     *
+     * @returns {object|null} the dataset, so the ordinary accessors still apply
+     */
+    static _datasetHolding(root, tag, maxDepth = 3) {
+        if (!root || typeof root !== "object") return null;
+        if (root[tag]) return root;
+        if (maxDepth <= 0) return null;
+        for (const key of Object.keys(root)) {
+            const items = root[key]?.Value;
+            if (!Array.isArray(items)) continue;
+            for (const item of items) {
+                if (!item || typeof item !== "object") continue;
+                const found = this._datasetHolding(item, tag, maxDepth - 1);
+                if (found) return found;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The slide descriptor of a series, without building its pyramid.
+     *
+     * A derived object shares its slide's frame of reference, so when the file
+     * declares no orientation of its own the slide's is the answer — not a
+     * guess, whereas drawing it unrotated under a rotated slide is one.
+     *
+     * Spacing rides along from the same instance because the second caller needs
+     * it and a second fetch for one number would be absurd: a derived object's
+     * spacing is only meaningful as a RATIO against the slide's.
+     *
+     * **WHICH instance matters, and it used to be `instances[0]`.** Orientation is a
+     * property of the series, so any instance answers it — but spacing is a property
+     * of the LEVEL, and a WSI series is a whole pyramid. QIDO promises no ordering,
+     * and on the measured store the first listed instance was the 4625-wide level of
+     * a 74003-wide slide: exactly 16x too coarse, which scaled a Parametric Map that
+     * covers 92.7% of the slide down to a 5.8% sliver in the corner.
+     *
+     * `expectedMatrix` is how the caller says which level it means. A derived object
+     * declares its slide's own TotalPixelMatrix, so matching on it is self-validating
+     * rather than a heuristic — a match IS the base level. Failing that, the largest
+     * matrix, and failing that the first instance, which is all a store that returns
+     * no dimensions allows.
+     *
+     * @param {?{width:number, height:number}} expectedMatrix the base level to find
+     * @returns {Promise<{orientation:number[], originX:number, originY:number,
+     *                    micronsX:?number, micronsY:?number,
+     *                    matrixWidth:?number, matrixHeight:?number}|null>}
+     */
+    static async slideDescriptorForSeries(client, studyUID, seriesUID, expectedMatrix = null) {
+        if (!client || !studyUID || !seriesUID) return null;
+        try {
+            const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}`;
+            const instances = await this.qidoSafe(client, `${base}/instances`,
+                "00080018,00480006,00480007");
+            if (!Array.isArray(instances) || !instances.length) return null;
+
+            const chosen = this._pickBaseInstance(instances, expectedMatrix);
+            const uid = this.v(chosen, "00080018");
+            if (!uid) return null;
+
+            const meta = await this.wadoMetadata(client, `${base}/instances/${encodeURIComponent(uid)}/metadata`);
+            const attrs = meta?.[0] || {};
+            const descriptor = this._parseSlideDescriptor(attrs);
+            const spacing = this._parseSpacing(attrs);
+            // Either half may be absent, and they are independently useful — an
+            // object can inherit an orientation without a spacing, or the reverse.
+            if (!descriptor && !spacing) return null;
+            // Published so the caller can verify it got the level it asked for. A
+            // spacing from the wrong level is not a smaller error than no spacing.
+            const matrixWidth = this.iv(chosen, "00480006") ?? this.iv(attrs, "00480006");
+            const matrixHeight = this.iv(chosen, "00480007") ?? this.iv(attrs, "00480007");
+            return { ...(descriptor || {}), ...(spacing || {}), matrixWidth, matrixHeight };
+        } catch (e) {
+            // A missing parent orientation is a diagnostic, never a failed open.
+            console.warn(`[DICOM] could not read slide orientation of series ${seriesUID}:`, e?.message ?? e);
+            return null;
+        }
     }
 
     static _ingestInstanceMetadata(instanceUID, instance, metadata, wsiInstance, frameOrder) {
@@ -1324,33 +2347,7 @@ export default class DicomTools {
         // Per-frame functional groups
         const perFrameFG = attrs["52009230"]?.Value || null;
 
-        // --- Robust PixelSpacing finder ---
-        let spacingArr = attrs["00280030"]?.Value; // PixelSpacing
-        if (!spacingArr) {
-            const sfg = attrs["52009229"]?.Value?.[0];           // Shared FG
-            const pms = sfg?.["00289110"]?.Value?.[0];           // Pixel Measures
-            spacingArr = pms?.["00280030"]?.Value;
-        }
-        if (!spacingArr) {
-            const nominal = this.fv(attrs, "00182010");          // Nominal Scanned Pixel Spacing
-            if (nominal) spacingArr = [nominal, nominal];
-        }
-        if (!spacingArr) {
-            const imager = this.fv(attrs, "00181164");           // Imager Pixel Spacing
-            if (imager) spacingArr = [imager, imager];
-        }
-
-        const applySpacingToLevel = (level) => {
-            const m = spacingArr || null;
-            if (m && (!level.micronsX || !level.micronsY)) {
-                level.micronsX = Number(m[0]);
-                level.micronsY = Number(m[1] ?? m[0]);
-            }
-            if (!level.micronsX || !level.micronsY) {
-                level.micronsX = level.micronsX || 0.00025;
-                level.micronsY = level.micronsY || 0.00025;
-            }
-        };
+        const applySpacingToLevel = (level) => this._applySpacingToLevel(level, attrs);
 
         // Image Pixel module + display chain. Read once per instance here so the
         // tile source never has to guess: before this existed the decoder was
@@ -1362,21 +2359,65 @@ export default class DicomTools {
             wsiInstance.photometricInterpretation = pixelChain.pixel.photometricInterpretation;
         }
 
-        // Only attempt mapping for multi-frame tiled instances
-        if (!(totalWidth && totalHeight && tileWidth && tileHeight && numberOfFrames > 1)) return;
+        // Concatenation (PS3.3 C.7.6.16). One logical level may be split across
+        // several SOP Instances: they share TotalPixelMatrix dimensions, each
+        // carries a slice of the level's frame space, and
+        // ConcatenationFrameOffsetNumber says where that slice starts.
+        // `_injectLevelByDims` matches on dimensions, so all parts land on ONE
+        // level record — which is why everything below is computed per part and
+        // merged later in `_finalizeWsiLevel`. The offsets (derivable from the
+        // siblings' frame counts when 0020,9228 is absent) and the level's total
+        // frame count are not knowable from one instance.
+        const concatUID = this.v(attrs, "00209161");        // ConcatenationUID
+        const inConcatRaw = this.iv(attrs, "00209162");     // InConcatenationNumber
+        const frameOffsetRaw = this.iv(attrs, "00209228");  // ConcatenationFrameOffsetNumber
+        const inConcatNumber = Number.isFinite(inConcatRaw) ? inConcatRaw : null;
+        // 0 is a legal offset, so this is a finiteness test, not a truthiness one.
+        const frameOffset = Number.isFinite(frameOffsetRaw) ? frameOffsetRaw : null;
+
+        // Only attempt mapping for tiled instances. A concatenation part may
+        // legally hold a single frame, so the multi-frame requirement is relaxed
+        // for an instance that declares itself part of one.
+        if (!(totalWidth && totalHeight && tileWidth && tileHeight)) return;
+        if (!(numberOfFrames > 1 || (numberOfFrames === 1 && concatUID))) return;
 
         const tilesX = Math.ceil(totalWidth / tileWidth);
         const tilesY = Math.ceil(totalHeight / tileHeight);
         const expected = tilesX * tilesY;
 
         const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
-        level.instanceUID = instanceUID;
+        level.parts = level.parts || [];
         level.frames = level.frames || Object.create(null);
         applySpacingToLevel(level);
+        // First part wins, like the pixel chain below: every instance of a level
+        // describes the same physical slide, so a later disagreement is a signal,
+        // not a value to overwrite with.
+        if (!level.slide) {
+            const slide = this._parseSlideDescriptor(attrs);
+            if (slide) level.slide = slide;
+        }
         // Per-level, because a DICOM pyramid may mix instances that differ in
         // bit depth or photometric interpretation (a DERIVED thumbnail level is
         // frequently 8-bit RGB over a 16-bit monochrome base).
-        Object.assign(level, pixelChain);
+        //
+        // Only the FIRST part of a level defines the chain. A later part that
+        // disagrees is a signal, not a value to overwrite with: `_injectLevelByDims`
+        // matches dimensions within ±1 px, so a disagreement means two unrelated
+        // instances were merged onto one level.
+        if (!level.parts.length) {
+            Object.assign(level, pixelChain);
+        } else if (
+            level.pixel?.photometricInterpretation !== pixelChain.pixel?.photometricInterpretation ||
+            level.pixel?.bitsAllocated !== pixelChain.pixel?.bitsAllocated
+        ) {
+            console.warn(
+                `[DICOM] Instance ${instanceUID} shares level ${tilesX}×${tilesY} with ` +
+                `${level.parts[0].instanceUID} but declares a different Image Pixel module ` +
+                `(${pixelChain.pixel?.photometricInterpretation}/${pixelChain.pixel?.bitsAllocated}b vs ` +
+                `${level.pixel?.photometricInterpretation}/${level.pixel?.bitsAllocated}b). ` +
+                "They may be unrelated images matched only on dimensions; keeping the first."
+            );
+        }
 
         // Resolve user-provided ordering override once (applies only to the
         // sequential fallback path; never overrides explicit per-frame data).
@@ -1392,24 +2433,26 @@ export default class DicomTools {
         const dimOrgType = String(this.v(attrs, "00209311") || "").toUpperCase().trim() || null;
 
         // --- Build one candidate map ----------------------------------------
-        // Returns { frames, mapped, collisions, oob } for a per-frame mapper
-        // that, given (frameIndex, fg), produces tileX/tileY (or null).
+        // Returns { frames, mapped, collisions, oob, unresolved, frameCount } for
+        // a per-frame mapper that, given (frameIndex, fg), produces tileX/tileY
+        // (or null). Every frame lands in exactly one bucket, so
+        // mapped + collisions + oob + unresolved === frameCount.
         const buildFrameMap = (resolver) => {
             const frames = Object.create(null);
-            let mapped = 0, collisions = 0, oob = 0;
+            let mapped = 0, collisions = 0, oob = 0, unresolved = 0;
 
             if (!Array.isArray(perFrameFG) || !perFrameFG.length) {
-                return { frames, mapped, collisions, oob, supported: false };
+                return { frames, mapped, collisions, oob, unresolved, frameCount: numberOfFrames, supported: false };
             }
 
             for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
                 const fg = perFrameFG[frameIndex];
-                if (!fg) continue;
+                if (!fg) { unresolved++; continue; }
 
                 const pos = resolver(frameIndex, fg);
-                if (!pos) continue;
+                if (!pos) { unresolved++; continue; }
                 const { tileX, tileY } = pos;
-                if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) continue;
+                if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) { unresolved++; continue; }
                 if (tileX < 0 || tileY < 0 || tileX >= tilesX || tileY >= tilesY) { oob++; continue; }
 
                 const k = `${tileX}_${tileY}`;
@@ -1417,11 +2460,50 @@ export default class DicomTools {
                 else collisions++;
                 frames[k] = frameIndex + 1;
             }
-            return { frames, mapped, collisions, oob, supported: true };
+            return { frames, mapped, collisions, oob, unresolved, frameCount: numberOfFrames, supported: true };
         };
 
-        // Strict acceptance: every cell of the grid must be uniquely populated.
-        const accepts = (cand) => cand.supported && cand.mapped === expected && cand.collisions === 0;
+        // Two ways a candidate can be right, and they are not the same claim.
+        //
+        // DENSE is the historical rule, unchanged: every cell of the grid is
+        // uniquely populated. `oob` is deliberately not part of it — a file whose
+        // in-bounds frames tile the grid exactly renders correctly no matter how
+        // many strays it also carries, and that has always been accepted.
+        //
+        // SPARSE is what PS3.3 permits and what this ladder used to reject: "the
+        // level may be sparse and any number of tiles may be absent". There is no
+        // coverage to check, so the proof is the other direction — every frame the
+        // instance carries was consumed, in bounds, without collision. A partial
+        // map is then the correct map, not a failed one.
+        const acceptsDense = (cand) => cand.supported && cand.collisions === 0 && cand.mapped === expected;
+        const acceptsSparse = (cand) => cand.supported && cand.collisions === 0 && cand.oob === 0
+            && cand.mapped === cand.frameCount;
+
+        // This instance's contribution to the level. `frames` is in the part's
+        // LOCAL frame space (1-based within this instance); `_finalizeWsiLevel`
+        // shifts it by `frameOffset` into the level's logical space.
+        const part = {
+            instanceUID,
+            numberOfFrames,
+            concatUID: concatUID || null,
+            inConcatNumber,
+            frameOffset,
+            dimOrgType,
+            overrideOrder,
+            tilesX, tilesY, expected,
+            frames: null,
+            strategy: null,
+            stats: null,
+            best: null,     // best rejected candidate, kept for the diagnostic log
+        };
+        level.parts.push(part);
+
+        // A rejected candidate is the only evidence an operator has about WHY a
+        // level went unmapped, so keep the one that got furthest.
+        const trackBest = (name, cand) => {
+            if (!cand.supported) return;
+            if (!part.best || cand.mapped > part.best.stats.mapped) part.best = { strategy: name, stats: cand };
+        };
 
         // ---------- Strategy 1: pixel positions (unambiguous ground truth) --
         const pixelPosResolver = (_idx, fg) => {
@@ -1440,10 +2522,11 @@ export default class DicomTools {
         };
 
         const pixelMap = buildFrameMap(pixelPosResolver);
-        if (accepts(pixelMap)) {
-            level.frames = pixelMap.frames;
-            level._strategy = "pixel-pos";
-            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "pixel-pos", pixelMap);
+        trackBest("pixel-pos", pixelMap);
+        if (acceptsDense(pixelMap) || acceptsSparse(pixelMap)) {
+            part.frames = pixelMap.frames;
+            part.strategy = "pixel-pos";
+            part.stats = pixelMap;
             return;
         }
 
@@ -1471,10 +2554,11 @@ export default class DicomTools {
                 return { tileX: xRaw - 1, tileY: yRaw - 1 };
             };
             const disMap = buildFrameMap(disResolver);
-            if (accepts(disMap)) {
-                level.frames = disMap.frames;
-                level._strategy = "div-dis";
-                this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-dis", disMap);
+            trackBest("div-dis", disMap);
+            if (acceptsDense(disMap) || acceptsSparse(disMap)) {
+                part.frames = disMap.frames;
+                part.strategy = "div-dis";
+                part.stats = disMap;
                 return;
             }
         }
@@ -1483,6 +2567,16 @@ export default class DicomTools {
         // Try both axis assignments; accept ONLY if exactly one is full+clean.
         // Refuse to silently pick when both are full — that's the documented
         // source of the high-res striping bug.
+        //
+        // DENSE ONLY, deliberately. Tiers 1-2 read what the standard defines the
+        // position to be, so consuming every frame cleanly proves them right over
+        // a sparse subset too. This tier only guesses which DIV axis is X, and its
+        // sole evidence is that the guess uniquely tiles the WHOLE grid. Over a
+        // sparse subset that evidence is worth nothing — and the both-orders guard
+        // below cannot save it either, since on a non-square grid the transposed
+        // order simply falls out of bounds instead of colliding. A sparse level
+        // whose only positional data is a bare DimensionIndexValues is therefore
+        // refused (frameOrder* overrides steer the sequential tier, not this one).
         const mkHeuristic = (mode) => (_idx, fg) => {
             const div = fg["00209157"]?.Value;
             if (!Array.isArray(div) || div.length < 2) return null;
@@ -1493,18 +2587,20 @@ export default class DicomTools {
         };
         const heurXY = buildFrameMap(mkHeuristic("xy"));
         const heurYX = buildFrameMap(mkHeuristic("yx"));
-        const okXY = accepts(heurXY);
-        const okYX = accepts(heurYX);
+        trackBest("div-heuristic-xy", heurXY);
+        trackBest("div-heuristic-yx", heurYX);
+        const okXY = acceptsDense(heurXY);
+        const okYX = acceptsDense(heurYX);
         if (okXY && !okYX) {
-            level.frames = heurXY.frames;
-            level._strategy = "div-heuristic-xy";
-            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-heuristic-xy", heurXY);
+            part.frames = heurXY.frames;
+            part.strategy = "div-heuristic-xy";
+            part.stats = heurXY;
             return;
         }
         if (okYX && !okXY) {
-            level.frames = heurYX.frames;
-            level._strategy = "div-heuristic-yx";
-            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-heuristic-yx", heurYX);
+            part.frames = heurYX.frames;
+            part.strategy = "div-heuristic-yx";
+            part.stats = heurYX;
             return;
         }
         if (okXY && okYX) {
@@ -1515,43 +2611,221 @@ export default class DicomTools {
             );
         }
 
-        // ---------- Strategy 4: DimensionOrganizationType-informed sequential
-        // Only bail on TILED_SPARSE when the frame count genuinely can't tile
-        // the grid. When expected === numberOfFrames, the SPARSE label is
-        // effectively misleading metadata — fall through to the sequential
-        // assignment block, and let post-loop inference rewrite the layout
-        // using truth levels from the same WSI if any exist.
-        if (dimOrgType === "TILED_SPARSE" && !overrideOrder && expected !== numberOfFrames) {
+        // Strategy 4 — the DimensionOrganizationType-informed sequential fallback —
+        // is level-wide, not per-instance: for one part of a concatenation the
+        // frame count never covers the grid, and the layout has to be laid over the
+        // merged logical frame space. It runs in `_finalizeWsiLevel`, which is also
+        // where an unmapped part is reported.
+    }
+
+    /**
+     * Complete every level of a WSI group once all its instances are ingested.
+     *
+     * A level is not finished when its instance is: two facts are level-wide and
+     * unknowable from a single SOP Instance. A concatenation part's frame offset
+     * may only be derivable from its siblings' frame counts (0020,9228 absent but
+     * 0020,9162 present), and whether the frame total covers the grid is a
+     * question about the whole level — for one part of a concatenation the answer
+     * is always "no", which is exactly what used to make such a level render
+     * nothing at all.
+     *
+     * @param {object} wsi the WSI group, with `levels[]` carrying `parts[]`
+     */
+    static _finalizeWsiLevels(wsi) {
+        if (!wsi?.levels?.length) return;
+        for (const level of wsi.levels) this._finalizeWsiLevel(wsi, level);
+    }
+
+    static _finalizeWsiLevel(wsi, level) {
+        if (!Array.isArray(level?.parts) || !level.parts.length) return;
+
+        let parts = level.parts;
+        const { tilesX, tilesY, expected } = parts[0];
+        const where = parts.length === 1
+            ? `instance ${parts[0].instanceUID}`
+            : `level ${tilesX}×${tilesY} (${parts.length} concatenation parts)`;
+
+        // --- 1. Frame offsets ------------------------------------------------
+        // Explicit ConcatenationFrameOffsetNumber is authoritative. Failing that,
+        // InConcatenationNumber orders the parts and their frame counts accumulate.
+        // A lone instance trivially starts at 0.
+        let offsetsResolved = true;
+        if (parts.length === 1) {
+            if (!Number.isFinite(parts[0].frameOffset)) parts[0].frameOffset = 0;
+        } else if (parts.every(p => Number.isFinite(p.frameOffset))) {
+            // as declared
+        } else if (parts.every(p => Number.isFinite(p.inConcatNumber))) {
+            let acc = 0;
+            for (const p of parts.slice().sort((a, b) => a.inConcatNumber - b.inConcatNumber)) {
+                p.frameOffset = acc;
+                acc += p.numberOfFrames;
+            }
+        } else {
+            offsetsResolved = false;
+        }
+
+        if (!offsetsResolved) {
+            // Guessing an order here would silently misplace whole regions of the
+            // slide. Keep the part that covers the most and say so.
+            const largest = parts.slice().sort((a, b) => b.numberOfFrames - a.numberOfFrames)[0];
             console.error(
-                `[DICOM] Malformed TILED_SPARSE instance ${instanceUID}: ` +
-                `frame count ${numberOfFrames} does not cover grid ${tilesX}×${tilesY} (${expected} tiles) ` +
-                "and no per-frame positions are present. Tiles will fail-fast. " +
-                "Provide frameOrderByInstance in plugin options if you know the layout."
+                `[DICOM] Cannot order the ${parts.length} instances sharing level ${tilesX}×${tilesY}: ` +
+                "neither ConcatenationFrameOffsetNumber (0020,9228) nor InConcatenationNumber (0020,9162) " +
+                `is present on all of them. Keeping ${largest.instanceUID} only.`
             );
-            return;
+            largest.frameOffset = 0;
+            parts = level.parts = [largest];
         }
 
-        if (expected === numberOfFrames) {
-            // TILED_FULL standard layout is row-major; honor explicit user overrides above all.
-            // Inference (post-loop) may rewrite this map when no user override
-            // was supplied and other levels carry per-frame truth.
-            const resolved = overrideOrder || "row-major";
-            level.frames = this._buildSequentialFrames(tilesX, tilesY, resolved);
-            level._overrideApplied = !!overrideOrder;
-            level._strategy = overrideOrder
-                ? `sequential-${String(resolved).toLowerCase()}`
-                : (dimOrgType === "TILED_FULL" ? "sequential-tiled-full-row-major" : "sequential-row-major-legacy");
-            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, level._strategy,
-                { mapped: expected, collisions: 0, oob: 0 });
-            return;
+        parts.sort((a, b) => a.frameOffset - b.frameOffset);
+
+        if (parts.length > 1) {
+            let cursor = 0, contiguous = true;
+            for (const p of parts) {
+                if (p.frameOffset !== cursor) contiguous = false;
+                cursor += p.numberOfFrames;
+            }
+            if (!contiguous) {
+                console.warn(
+                    `[DICOM] Concatenation parts of level ${tilesX}×${tilesY} do not tile the frame space ` +
+                    `contiguously: ${parts.map(p => `${p.instanceUID}@${p.frameOffset}+${p.numberOfFrames}`).join(", ")}. ` +
+                    "Frames in a gap resolve to no instance; frames in an overlap resolve to the earlier part."
+                );
+            }
+
+            // `_injectLevelByDims` matches dimensions within ±1 px. That is the
+            // right rule for a concatenation and the wrong one for two unrelated
+            // images that happen to be the same size, and the ConcatenationUID is
+            // the only thing that tells them apart.
+            const concatUIDs = new Set(parts.map(p => p.concatUID || null));
+            if (concatUIDs.size > 1 || concatUIDs.has(null)) {
+                console.warn(
+                    `[DICOM] Level ${tilesX}×${tilesY} was assembled from instances that do not share one ` +
+                    `ConcatenationUID (0020,9161): ${parts.map(p => `${p.instanceUID}=${p.concatUID || "none"}`).join(", ")}. ` +
+                    "They match on dimensions only, so they may be unrelated images."
+                );
+            }
         }
 
-        // Out of options.
-        console.warn(
-            `[DICOM] WSI frame-map mismatch for instance ${instanceUID}: ` +
-            `grid ${tilesX}×${tilesY} (${expected} tiles) vs ${numberOfFrames} frames, ` +
-            `dimOrgType=${dimOrgType || "unknown"}. Tiles will fail-fast.`
-        );
+        // --- 2. Merge, or fall back --------------------------------------------
+        const mapped = parts.filter(p => p.frames);
+        const totalFrames = parts.reduce((sum, p) => sum + p.numberOfFrames, 0);
+        const dimOrgType = parts.find(p => p.dimOrgType)?.dimOrgType || null;
+        const overrideOrder = parts.find(p => p.overrideOrder)?.overrideOrder || null;
+        let strategy = null, reason = null;
+        let collisions = 0, oob = 0, unresolved = 0;
+
+        const mergeMaps = (list) => {
+            if (list.length === 1 && list[0].frameOffset === 0) return list[0].frames;
+            const merged = Object.create(null);
+            for (const p of list) {
+                for (const key in p.frames) {
+                    // First-wins, so the part with the lower offset owns a
+                    // contested cell. (Within one part a collision is impossible —
+                    // acceptance rejects any candidate that has one.)
+                    if (merged[key] != null) { collisions++; continue; }
+                    merged[key] = p.frames[key] + p.frameOffset;
+                }
+            }
+            return merged;
+        };
+
+        if (mapped.length === parts.length) {
+            level.frames = mergeMaps(parts);
+            for (const p of parts) {
+                oob += p.stats?.oob || 0;
+                unresolved += p.stats?.unresolved || 0;
+            }
+            const names = Array.from(new Set(parts.map(p => p.strategy)));
+            strategy = names.length === 1 ? names[0] : `mixed:${names.join("+")}`;
+            if (names.length > 1) {
+                console.warn(
+                    `[DICOM] Concatenation parts of level ${tilesX}×${tilesY} resolved by different strategies ` +
+                    `(${parts.map(p => `${p.instanceUID}=${p.strategy}`).join(", ")}). The merged map is still ` +
+                    "positional, but the parts disagree about which metadata is authoritative."
+                );
+            }
+            if (collisions) {
+                console.warn(
+                    `[DICOM] ${collisions} tile position(s) of level ${tilesX}×${tilesY} are claimed by more than ` +
+                    "one concatenation part; the lowest frame offset wins."
+                );
+            }
+        } else if (mapped.length === 0) {
+            // ---------- Strategy 4: DimensionOrganizationType-informed sequential
+            // Only bail on TILED_SPARSE when the frame count genuinely can't tile
+            // the grid. When expected === totalFrames, the SPARSE label is
+            // effectively misleading metadata — fall through to the sequential
+            // assignment block, and let post-loop inference rewrite the layout
+            // using truth levels from the same WSI if any exist.
+            if (dimOrgType === "TILED_SPARSE" && !overrideOrder && expected !== totalFrames) {
+                console.error(
+                    `[DICOM] Malformed TILED_SPARSE ${where}: ` +
+                    `frame count ${totalFrames} does not cover grid ${tilesX}×${tilesY} (${expected} tiles) ` +
+                    "and no per-frame positions are present. Tiles will fail-fast. " +
+                    "Provide frameOrderByInstance in plugin options if you know the layout."
+                );
+                reason = "tiled-sparse-no-positions";
+            } else if (expected === totalFrames) {
+                // TILED_FULL standard layout is row-major; honor explicit user overrides above all.
+                // Inference (post-loop) may rewrite this map when no user override
+                // was supplied and other levels carry per-frame truth.
+                const resolved = overrideOrder || "row-major";
+                level.frames = this._buildSequentialFrames(tilesX, tilesY, resolved);
+                level._overrideApplied = !!overrideOrder;
+                strategy = overrideOrder
+                    ? `sequential-${String(resolved).toLowerCase()}`
+                    : (dimOrgType === "TILED_FULL" ? "sequential-tiled-full-row-major" : "sequential-row-major-legacy");
+            } else {
+                console.warn(
+                    `[DICOM] WSI frame-map mismatch for ${where}: ` +
+                    `grid ${tilesX}×${tilesY} (${expected} tiles) vs ${totalFrames} frames, ` +
+                    `dimOrgType=${dimOrgType || "unknown"}. Tiles will fail-fast.`
+                );
+                reason = "frame-count-mismatch";
+            }
+        } else {
+            // Some parts positioned, some not. The sequential fallback cannot
+            // complete this: it would have to invent frame numbers for cells the
+            // positioned parts already own. Keep what is known — a partial level
+            // renders its real tiles and lets the coarser level show through the
+            // rest, which beats rendering nothing.
+            level.frames = mergeMaps(mapped);
+            for (const p of mapped) {
+                oob += p.stats?.oob || 0;
+                unresolved += p.stats?.unresolved || 0;
+            }
+            strategy = Array.from(new Set(mapped.map(p => p.strategy))).join("+");
+            reason = "mixed-parts";
+            console.warn(
+                `[DICOM] Only ${mapped.length} of ${parts.length} instances sharing level ${tilesX}×${tilesY} carry ` +
+                `usable per-frame positions; no map for ${parts.filter(p => !p.frames).map(p => p.instanceUID).join(", ")}. ` +
+                "Those tiles will be absent."
+            );
+        }
+
+        // --- 3. Publish --------------------------------------------------------
+        const present = Object.keys(level.frames || {}).length;
+        // Read by `tileExists` in the tile source: a cell with no frame is a legal
+        // absent tile, not a failed request. Only the WSI ingest sets this, which
+        // is what keeps the derived and radiology sources on their own paths.
+        level.sparse = present < expected;
+        level._strategy = strategy || undefined;
+        level.instanceUID = parts[0].instanceUID;
+        // The level's real grid. `getNumTiles` in the tile source reports this
+        // instead of letting OSD infer the row/column count from the base
+        // level's scale — the two disagree whenever a level's own height is not
+        // exactly `baseHeight × (levelWidth / baseWidth)`, which is routine
+        // because a pyramid rounds each axis independently.
+        level.tilesX = tilesX;
+        level.tilesY = tilesY;
+
+        this._logFrameStrategy(wsi, level, {
+            tilesX, tilesY, expected, present, totalFrames,
+            parts: parts.length, strategy, reason,
+            collisions, oob, unresolved,
+            best: parts.find(p => p.best)?.best || null,
+        });
     }
 
     /**
@@ -1613,12 +2887,18 @@ export default class DicomTools {
      * only credible if it explains the data on every truth level. A pattern
      * that fits one level perfectly and another not at all is not the
      * scanner's canonical layout — it's a coincidence on a single grid size.
+     *
+     * Why sparse levels are not truth: their frames are numbered over the cells
+     * that exist, so no dense pattern can reproduce them and every candidate
+     * scores near zero. Because the score is a per-level MINIMUM, one sparse
+     * level in the series would drag every candidate below the threshold and
+     * kill inference for the whole group.
      */
     static _inferSequentialLayoutForWsi(wsi) {
         if (!wsi?.levels?.length) return;
 
         const truthLevels = wsi.levels.filter(L =>
-            L?._strategy && /^(pixel-pos|div-)/.test(L._strategy) && L.frames
+            L?._strategy && /^(pixel-pos|div-)/.test(L._strategy) && L.frames && !L.sparse
         );
         const targets = wsi.levels.filter(L =>
             L?._strategy?.startsWith("sequential-") && !L._overrideApplied && L.width && L.height && L.tileWidth && L.tileHeight
@@ -1687,17 +2967,69 @@ export default class DicomTools {
         );
     }
 
-    static _logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, strategy, stats) {
-        const expected = tilesX * tilesY;
-        const coverage = expected > 0 ? ((stats.mapped / expected) * 100).toFixed(1) : "0.0";
+    /**
+     * One concise line per level — searchable, single-grep diagnostic.
+     *
+     * An unmapped level prints `strategy=none reason=<why>` plus the rejected
+     * candidate that got furthest, because "this level is blank" is otherwise
+     * indistinguishable from "this level is absent" in an operator's console.
+     */
+    static _logFrameStrategy(wsiInstance, level, info) {
+        const { tilesX, tilesY, expected, present, totalFrames, parts, strategy, reason,
+            collisions, oob, unresolved, best } = info;
+        const coverage = expected > 0 ? ((present / expected) * 100).toFixed(1) : "0.0";
         const idx = wsiInstance?.levels ? wsiInstance.levels.indexOf(level) : -1;
         const dims = level.width != null ? `${level.width}×${level.height}` : "?";
-        // One concise line per level — searchable, single-grep diagnostic.
+
+        let tail = `collisions=${collisions || 0} oob=${oob || 0} unresolved=${unresolved || 0}`;
+        if (!strategy && best) {
+            tail += ` best=${best.strategy}(mapped=${best.stats.mapped}/${expected},` +
+                `collisions=${best.stats.collisions},oob=${best.stats.oob},unresolved=${best.stats.unresolved})`;
+        }
+
         console.info(
-            `[DICOM] level=${idx >= 0 ? idx : "?"} dims=${dims} grid=${tilesX}×${tilesY} frames=${numberOfFrames} ` +
-            `strategy=${strategy} coverage=${coverage}% collisions=${stats.collisions || 0} oob=${stats.oob || 0} ` +
-            `instance=${instanceUID}`
+            `[DICOM] level=${idx >= 0 ? idx : "?"} dims=${dims} grid=${tilesX}×${tilesY} frames=${totalFrames} ` +
+            `parts=${parts} strategy=${strategy || `none reason=${reason || "unknown"}`} coverage=${coverage}% ` +
+            `sparse=${level.sparse ? "yes" : "no"} ${tail} instance=${level.instanceUID}`
         );
+    }
+
+    /**
+     * Resolve a level-logical frame number to the SOP Instance that holds it.
+     *
+     * `level.frames` is numbered over the level's whole frame space, which for a
+     * concatenation spans several instances (ConcatenationFrameOffsetNumber says
+     * where each one starts). This is the only place that mapping lives: the tile
+     * source asks for a logical frame and gets back the instance plus the local,
+     * 1-based frame number a WADO-RS URL needs.
+     *
+     * @param {object} level a level record
+     * @param {number} logicalFrame 1-based frame number in the level's space
+     * @returns {?{instanceUID: string, frame: number}} null when unresolvable
+     */
+    static resolveFrameRef(level, logicalFrame) {
+        if (!Number.isFinite(logicalFrame) || logicalFrame <= 0) return null;
+
+        const parts = level?.parts;
+        // Hand-built levels (the radiology source) carry no parts table, and a
+        // single-instance level needs no arithmetic.
+        if (!Array.isArray(parts) || !parts.length) {
+            return level?.instanceUID ? { instanceUID: level.instanceUID, frame: logicalFrame } : null;
+        }
+        if (parts.length === 1 && !parts[0].frameOffset) {
+            return parts[0].instanceUID ? { instanceUID: parts[0].instanceUID, frame: logicalFrame } : null;
+        }
+
+        // Parts are sorted by offset, and the scan runs forward so that a frame
+        // inside a declared overlap resolves to the earlier part — the same
+        // tie-break the map merge uses.
+        for (const p of parts) {
+            const local = logicalFrame - (p.frameOffset || 0);
+            if (local >= 1 && local <= p.numberOfFrames) {
+                return p.instanceUID ? { instanceUID: p.instanceUID, frame: local } : null;
+            }
+        }
+        return null;
     }
 
     static _injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight) {
@@ -1729,6 +3061,12 @@ export default class DicomTools {
             height: totalHeight ?? null,
             tileWidth: tileWidth ?? null,
             tileHeight: tileHeight ?? null,
+            // A level can be assembled from several instances (concatenation), so
+            // these are containers from the start rather than fields a later
+            // ingest overwrites. This function stays a pure dimension lookup —
+            // the union semantics live in `_finalizeWsiLevel`.
+            parts: [],
+            frames: Object.create(null),
         };
 
         levels.splice(insertIdx, 0, newLevel);

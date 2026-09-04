@@ -79,6 +79,28 @@ export interface RequestOptions {
     priority?: "high" | "normal" | "background" | "background-urgent";
 }
 
+/**
+ * `RequestInit` plus the two xOpat-specific knobs {@link HttpClient.fetchRaw}
+ * understands. Both are stripped before the underlying `fetch` call.
+ */
+export interface FetchRawInit extends RequestInit {
+    /**
+     * Retry budget for this request, overriding the client-wide `maxRetries`.
+     * `0` means "one attempt". Tile downloads use it: retrying a tile the viewer
+     * has already panned past just holds a connection slot, and the draw loop
+     * re-requests anything it still needs.
+     */
+    maxRetries?: number;
+    /**
+     * Connection-pool scheduling hint, with the same meaning as
+     * {@link RequestOptions.priority}. `"background"` makes the request yield to
+     * tile loading via {@link APPLICATION_CONTEXT.requestScheduler}; the default
+     * bypasses the scheduler entirely.
+     * @default "normal"
+     */
+    priority?: "high" | "normal" | "background" | "background-urgent";
+}
+
 /** Options for {@link HttpClient.stream}. */
 export interface StreamOptions {
     /** @default "POST" */
@@ -201,8 +223,21 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
     }
 
-    private _tryHandleSessionExpiry(status: number, textData?: string): boolean {
-        if (!this.usingProxy) return false;
+    /**
+     * An xOpat *session* error (dead session cookie, stale CSRF) routed to the
+     * recovery gate rather than to the credential-refresh path — refreshing an OIDC
+     * token cannot revive a server session, and treating one as the other is how a
+     * dead session became an unbounded refresh loop.
+     *
+     * Gated on the target being OUR origin, not on `usingProxy`. The proxy check was
+     * too narrow: `/__rpc/...` calls go through same-origin clients built with a bare
+     * `baseURL` and no proxy alias (see `chatService._getRpcHttpClient`), so every
+     * `RPC_NO_SESSION` / `RPC_BAD_CSRF` from an RPC fell straight through to the
+     * refresh arm. A cross-origin upstream's 401 is still never read as an xOpat
+     * session expiry.
+     */
+    private _tryHandleSessionExpiry(status: number, textData?: string, url?: string): boolean {
+        if (url !== undefined ? this.isCrossOriginUrl(url) : !this.usingProxy) return false;
 
         const payload = this._parseErrorPayload(textData);
         const code = payload?.code;
@@ -298,12 +333,20 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const getBaseHeaders = async (headerSignal?: AbortSignal) => ({
-            ...(hasBody ? { "Content-Type": "application/json" } : {}),
-            ...(await this._authHeaders(url, method, headerSignal)),
-            ...headers,
-            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
-        });
+        // The credentials this attempt is carrying, recorded as the headers are built.
+        // Reset on every rebuild (i.e. after a refresh) so a 401 always reports the
+        // credential that request actually sent — see `_maybeRefreshSecrets`.
+        let sentSecrets: Record<string, any> = {};
+
+        const getBaseHeaders = async (headerSignal?: AbortSignal) => {
+            sentSecrets = {};
+            return {
+                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
+                ...headers,
+                ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
+            };
+        };
 
         // Resolved before the timeout is armed below: building headers may wait
         // for the auth context to settle, and that wait must not eat the request
@@ -362,12 +405,12 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 if (!res.ok) {
                     const text = await res.text().catch(() => "");
 
-                    if (this._tryHandleSessionExpiry(res.status, text)) {
+                    if (this._tryHandleSessionExpiry(res.status, text, url)) {
                         throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                     }
 
-                    if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
-                        refreshed = await this._maybeRefreshSecrets();
+                    if (this.refreshesOnStatus(res.status) && !refreshed) {
+                        refreshed = await this._maybeRefreshSecrets(sentSecrets);
                         if (refreshed) {
                             currentHeaders = await getBaseHeaders(effectiveSignal);
                             continue;
@@ -387,6 +430,9 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 // Headers are in and the response is OK — the body read below is
                 // no longer subject to the connect/headers deadline.
                 abort.disarmTimeout();
+                // The credentials we sent were accepted: clear any rejection streak
+                // recorded from an earlier 401 on this context.
+                this._reportAuthAccepted();
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
@@ -450,18 +496,61 @@ export class HttpClient extends XOpatRemoteEndpoint {
      *
      * Throws `HTTPError` on non-retriable 4xx/5xx (after refresh + retries
      * are exhausted). Returns `Response` only when `res.ok` is true.
+     *
+     * Beyond `RequestInit`, two xOpat-specific options are honoured and stripped
+     * before the underlying `fetch`:
+     *
+     * - `maxRetries` — overrides the client-wide retry budget for this request.
+     *   A tile is the motivating case: the default three retries with 1s/2s/4s
+     *   backoff can hold a connection slot for 7 s+ on a tile the viewer has
+     *   already panned away from, and there is no point retrying something the
+     *   draw loop will simply request again if it still needs it.
+     * - `priority` — `"background"` / `"background-urgent"` route through
+     *   {@link APPLICATION_CONTEXT.requestScheduler}, exactly as `request()`
+     *   does, so bulk traffic yields to tiles. Anything else (the default) keeps
+     *   the documented zero-overhead bypass on the hot path.
      */
-    async fetchRaw(path: string, init: RequestInit = {}): Promise<Response> {
+    async fetchRaw(path: string, init: FetchRawInit = {}): Promise<Response> {
+        const { maxRetries: initRetries, priority, ...fetchInit } = init;
+        const maxRetries = typeof initRetries === "number" ? initRetries : this.maxRetries;
+
+        if (priority === "background" || priority === "background-urgent") {
+            const scheduler = (globalThis as any).APPLICATION_CONTEXT?.requestScheduler;
+            if (scheduler) {
+                // Same lane key as `request()`: admission is per origin, so
+                // background traffic to the tile origin is what yields to tiles.
+                const release = await scheduler.acquire(this._originOf(this.resolveUrl(path)), {
+                    signal: fetchInit.signal ?? undefined,
+                    jumpQueue: priority === "background-urgent",
+                });
+                try {
+                    return await this._fetchRaw(path, fetchInit, maxRetries);
+                } finally {
+                    release?.();
+                }
+            }
+        }
+        return this._fetchRaw(path, fetchInit, maxRetries);
+    }
+
+    private async _fetchRaw(path: string, init: RequestInit, maxRetries: number): Promise<Response> {
         const url = this.resolveUrl(path);
         const method = (init.method || "GET").toUpperCase();
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
 
-        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => ({
-            ...(await this._authHeaders(url, method, headerSignal)),
-            ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
-            ...(callerHeaders || {}),
-        });
+        // See `request`: reset per rebuild so a 401 reports the credential this
+        // attempt actually carried, not one a concurrent refresh has since installed.
+        let sentSecrets: Record<string, any> = {};
+
+        const buildHeaders = async (headerSignal?: AbortSignal): Promise<Record<string, string>> => {
+            sentSecrets = {};
+            return {
+                ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
+                ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {}),
+                ...(callerHeaders || {}),
+            };
+        };
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
@@ -496,19 +585,19 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     if (!res.ok) {
                         const text = await res.clone().text().catch(() => "");
 
-                        if (this._tryHandleSessionExpiry(res.status, text)) {
+                        if (this._tryHandleSessionExpiry(res.status, text, url)) {
                             throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                         }
 
-                        if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
-                            refreshed = await this._maybeRefreshSecrets();
+                        if (this.refreshesOnStatus(res.status) && !refreshed) {
+                            refreshed = await this._maybeRefreshSecrets(sentSecrets);
                             if (refreshed) {
                                 currentHeaders = await buildHeaders(signal);
                                 continue;
                             }
                         }
 
-                        if (this._isRetriable(res.status, text) && attempt < this.maxRetries) {
+                        if (this._isRetriable(res.status, text) && attempt < maxRetries) {
                             attempt += 1;
                             const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                             await this._delay(backoff);
@@ -518,13 +607,14 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
                     }
 
+                    this._reportAuthAccepted();
                     return res;
                 } catch (err: any) {
                     if (err instanceof HTTPError) throw err;
                     if (err?.name === "AbortError") {
                         throw new HTTPError(`HTTP ${method} ${url} aborted`);
                     }
-                    if (attempt < this.maxRetries) {
+                    if (attempt < maxRetries) {
                         attempt += 1;
                         const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                         await this._delay(backoff);

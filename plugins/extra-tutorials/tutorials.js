@@ -61,7 +61,7 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
         super(id);
         const raw = this.getOption('data', []);
         // External input — sanitize once at load so the render paths
-        // (innerHTML for the welcome modal, EnjoyHint .html() for step labels)
+        // (innerHTML for the welcome modal, the tour engine's step labels)
         // never see hostile markup.
         this.tutorials = Array.isArray(raw) ? raw.map(sanitizeTutorial) : [];
     }

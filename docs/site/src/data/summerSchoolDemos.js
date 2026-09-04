@@ -28,8 +28,8 @@ export const occlusionConfig = {
     id('heatmap_mask_unfinished.tiff'),     // 4
   ],
   background: [
-    {dataReference: 0, goalIndex: 0},
-    {dataReference: 0, goalIndex: 1},
+    {dataReference: 0, visualizationIndex: 0},
+    {dataReference: 0, visualizationIndex: 1},
   ],
   visualizations: [
     {
@@ -182,8 +182,8 @@ export const gradcamConfig = {
     id('gradcam_mask.tiff'),// 1
   ],
   background: [
-    {dataReference: 0, goalIndex: 0},
-    {dataReference: 0, goalIndex: 1},
+    {dataReference: 0, visualizationIndex: 0},
+    {dataReference: 0, visualizationIndex: 1},
   ],
   visualizations: [
     {
@@ -331,7 +331,7 @@ export const activationClustersConfig = {
       },
     },
   ],
-  background: [{dataReference: 0, goalIndex: 0}],
+  background: [{dataReference: 0, visualizationIndex: 0}],
   visualizations: [
     {name: 'Activation Clusters', shaders: heatmapShaders},
     {name: 'Activation Clusters (Hatching)', shaders: hatchShaders},

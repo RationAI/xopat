@@ -86,5 +86,5 @@ and the OpenSeadragon project.
 xOpat is released under the MIT License — see [`LICENSE`](LICENSE).
 
 xOpat bundles and redistributes third-party open-source software (OpenSeadragon,
-Font Awesome, Monaco, Little CMS, and others) under their own licenses. Those
+Phosphor Icons, Monaco, Little CMS, and others) under their own licenses. Those
 notices are collected in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

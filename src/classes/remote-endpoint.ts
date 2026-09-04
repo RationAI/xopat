@@ -44,6 +44,8 @@ export interface AuthHandlerParams {
 }
 
 const DEFAULT_SECRET_TYPES = ["jwt"];
+/** Statuses that drive the one-shot credential refresh unless overridden. */
+const DEFAULT_REFRESH_STATUSES = [401];
 /** Default bound on the pre-request auth-context wait, in ms. */
 const DEFAULT_AWAIT_CONTEXT_MS = 8000;
 
@@ -73,6 +75,24 @@ export interface RemoteEndpointOptions {
         handlers?: Record<string, AuthHandler>;
         /** Attempt a one-shot secret refresh on authn failure (HTTP 401 / WS close 1008). @default true */
         refreshOn401?: boolean;
+        /**
+         * Which HTTP statuses count as "authn failure" for that one-shot refresh.
+         *
+         * @default [401]
+         *
+         * Set it when the upstream reports a MISSING credential with something
+         * else. FastAPI's `HTTPBearer`, for one, answers 403 when the
+         * `Authorization` header is absent and 401 only once it is present and
+         * rejected — so a context that lost its credential is served 403s that
+         * nothing here would ever retry, and the session stays dead behind a
+         * console warning. `refreshOn401: false` still disables the whole
+         * mechanism, whatever this lists.
+         *
+         * Keep it narrow: a status listed here spends an identity-provider round
+         * trip per failing request burst, so it must mean "your credential is
+         * wrong or missing", never "you are authenticated but not allowed".
+         */
+        refreshOnStatuses?: number[];
         /** Warn if no secrets are found at request time; also the default for {@link awaitContext}. */
         required?: boolean;
         /**
@@ -103,6 +123,8 @@ export class XOpatRemoteEndpoint {
         types?: string[];
         handlers: Record<string, AuthHandler>;
         refreshOn401: boolean;
+        /** Resolved, non-empty. Read it through {@link refreshesOnStatus}. */
+        refreshOnStatuses: number[];
         required: boolean;
         awaitContext: boolean;
         awaitContextTimeoutMs: number;
@@ -116,6 +138,13 @@ export class XOpatRemoteEndpoint {
     private _warnedForeignOrigins: Set<string> = new Set();
     /** One-shot "required but no secret" warning suppression, keyed by context. */
     private _warnedMissingSecret: Set<string> = new Set();
+    /**
+     * Whether this endpoint reported a credential rejected since its last success.
+     * Pure fast-path guard for {@link _reportAuthAccepted}, which sits on every OK
+     * response — without it, each tile would resolve `authTypes` through the auth
+     * broker just to discover there is nothing to clear.
+     */
+    private _sawRejection: boolean = false;
 
     constructor({ baseURL, proxy, auth = {} }: RemoteEndpointOptions = {}) {
         let base = "";
@@ -164,6 +193,7 @@ export class XOpatRemoteEndpoint {
             types = undefined,
             handlers = {},
             refreshOn401 = true,
+            refreshOnStatuses = undefined,
             required = false,
             awaitContext = undefined,
             awaitContextTimeoutMs = DEFAULT_AWAIT_CONTEXT_MS,
@@ -177,6 +207,9 @@ export class XOpatRemoteEndpoint {
             types,
             handlers: { ...XOpatRemoteEndpoint._globalAuthHandlers, ...handlers },
             refreshOn401,
+            refreshOnStatuses: Array.isArray(refreshOnStatuses) && refreshOnStatuses.length
+                ? refreshOnStatuses.slice()
+                : DEFAULT_REFRESH_STATUSES.slice(),
             required,
             awaitContext: awaitContext ?? required,
             awaitContextTimeoutMs,
@@ -258,8 +291,16 @@ export class XOpatRemoteEndpoint {
      * a WebSocket subclass that needs to surface secrets via the handshake
      * subprotocol can either call this and translate the result, or override
      * the collection step entirely.
+     *
+     * `sent` is an optional out-parameter recording, per type, the credential this
+     * request is actually carrying. A 401 handler needs that rather than "whatever is
+     * attached now": the two diverge exactly when a burst of in-flight requests holds
+     * an expired token and one of them refreshes it, and blaming the fresh credential
+     * for the stale burst's 401s would park a healthy context. See
+     * {@link _maybeRefreshSecrets}.
      */
-    protected async _authHeaders(url: string, method: string, signal?: AbortSignal): Promise<Record<string, string>> {
+    protected async _authHeaders(url: string, method: string, signal?: AbortSignal,
+                                 sent?: Record<string, any>): Promise<Record<string, string>> {
         if (this.isCrossOriginUrl(url)) {
             this._warnCrossOriginOnce(url);
             return {};
@@ -295,12 +336,22 @@ export class XOpatRemoteEndpoint {
             const secret = this.secretStore.getSecret(type, contextId);
             if (!secret) continue;
             hasAnySecret = true;
+            if (sent) sent[type] = secret;
             const addition = await handler({ secret, type, contextId, url, method });
             if (addition && typeof addition === "object") Object.assign(headers, addition);
         }
 
         if (required) this._reportSecretPresence(hasAnySecret, types);
         return headers;
+    }
+
+    /**
+     * Whether a response with this status should drive the one-shot credential
+     * refresh. Single decision point for every transport (request, stream, socket)
+     * so they cannot drift apart.
+     */
+    protected refreshesOnStatus(status: number): boolean {
+        return this.auth.refreshOn401 && this.auth.refreshOnStatuses.includes(status);
     }
 
     /** True when at least one of `types` currently has a secret for our context. */
@@ -360,14 +411,90 @@ export class XOpatRemoteEndpoint {
         );
     }
 
-    /** Ask the secret store to refresh credentials for the resolved secret types. */
-    protected async _maybeRefreshSecrets(): Promise<boolean> {
+    /**
+     * Ask the secret store to refresh credentials for the resolved secret types.
+     *
+     * The credentials the request CARRIED are reported REJECTED first. That report is
+     * the only thing that distinguishes "the provider cannot issue a token" from "the
+     * provider issues tokens this resource refuses" — and the second case is what used
+     * to run away: the refresh succeeded every time, `setSecret` re-armed the attempt
+     * budget, the retry 401'd, and the cycle repeated without bound. See
+     * `XOpatUser._rejectionStreak`.
+     *
+     * `sent` comes from {@link _authHeaders} and matters: reading the store here
+     * instead would report whatever is attached *now*. When a burst of in-flight
+     * requests shares an expired token and one of them refreshes it, the burst's late
+     * 401s would then accuse the brand-new credential — two of those and a perfectly
+     * healthy context is parked on the interaction gate. The store fallback keeps
+     * callers that do not thread it working as before.
+     *
+     * `sent` also tells us when there is nothing to do: a credential that is no longer
+     * the attached one was already replaced while this request was in flight, so the
+     * caller should simply retry with what is there. Asking again would spend one IdP
+     * round trip per member of a stale burst.
+     *
+     * "Nothing was sent" is a THIRD case and must not be folded into that one. A
+     * request that carried no credential at all — because the context never got one,
+     * or lost it (an identity swap drops a context's secrets, see `user.ts`
+     * `_clearContextSecrets`) — has nothing to supersede it, so retrying bare just
+     * reproduces the failure and the context stays dead for the session. Asking the
+     * provider is the only thing that can fix it, and it is exactly what the provider
+     * is for. Safe to do unconditionally: `requestSecretUpdate` rejects at once when
+     * no auth module listens on the context, and is budgeted per secret
+     * (`XOpatUser.REFRESH_COOLDOWN_MS` / `MAX_REFRESH_FAILURES`) so a provider that
+     * cannot deliver is asked twice, not once per request.
+     */
+    protected async _maybeRefreshSecrets(sent?: Record<string, any>): Promise<boolean> {
         const { contextId } = this.auth;
+        const types = this.authTypes;
+        const stale: string[] = [];
+        let carriedAny = false;
+
+        for (const t of types) {
+            const current = this.secretStore.getSecret(t, contextId);
+            const inUse = sent?.[t] ?? current;
+            if (!inUse) continue;
+            carriedAny = true;
+            this.secretStore.reportSecretRejected?.(inUse, t, contextId);
+            this._sawRejection = true;
+            if (inUse !== current) continue;   // already superseded — nothing to ask for
+            stale.push(t);
+        }
+
+        // Every credential this request carried has already been replaced. Report the
+        // retry as "refreshed" so the caller rebuilds its headers and tries once more.
+        if (carriedAny && !stale.length) return true;
+
+        // Nothing carried: ask for every type the context declares, and let the
+        // presence of a credential afterwards be the verdict — a provider may resolve
+        // its update without this promise carrying the value.
+        const request = stale.length ? stale : types;
+
         try {
-            for (const t of this.authTypes) {
+            for (const t of request) {
                 await this.secretStore.requestSecretUpdate(t, contextId);
             }
-            return true;
-        } catch (_) { return false; }
+            return carriedAny || this._hasAnySecret(types);
+        } catch (_) {
+            return !carriedAny && this._hasAnySecret(types);
+        }
+    }
+
+    /**
+     * A request carrying this context's credentials was accepted — clears the
+     * rejection streak so a recovered context is not judged by its past 401s.
+     *
+     * On the success path of EVERY request, tiles included, so the common case must
+     * cost nothing: `_sawRejection` short-circuits before `authTypes` is even
+     * resolved (that getter reaches into the auth broker). Only an endpoint that has
+     * actually seen a 401 pays for the clear.
+     */
+    protected _reportAuthAccepted(): void {
+        if (!this._sawRejection) return;
+        this._sawRejection = false;
+        const { contextId } = this.auth;
+        const store = this.secretStore;
+        if (typeof store?.reportSecretAccepted !== "function") return;
+        for (const t of this.authTypes) store.reportSecretAccepted(t, contextId);
     }
 }

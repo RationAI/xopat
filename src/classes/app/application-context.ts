@@ -11,10 +11,12 @@ import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
 import { NetworkStatus } from "../network-status";
 import { RequestScheduler } from "./request-scheduler";
+import { ClientLogging } from "./logging";
 import { CaptureIndicator } from "./capture-indicator";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
 import { RenderDebugController } from "./render-debug-controller";
+import { TourEngine } from "./tutorial";
 import {
     serializeScene,
     serializeSceneFromViewer,
@@ -109,7 +111,11 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get sessionName() {
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const self = this as unknown as ApplicationContext;
-            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") || {};
+            // `getConfig?.` and not `getConfig(`: the method is stamped per world item after
+            // the item is already in the world (see the TiledImage.prototype default in
+            // loader.ts), and this getter is reached from `zoom`/`pan` handlers that OSD
+            // raises during that window.
+            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background") || {};
             if (config["sessionName"]) return config["sessionName"];
             if (sessionName) return sessionName;
             return self.referencedId();
@@ -367,7 +373,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (!CONFIG.background || CONFIG.background.length < 0) {
                 return undefined;
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             if (bgConfig) {
                 return UTILITIES.nameFromBGOrIndex(bgConfig, stripSuffix);
             }
@@ -383,7 +389,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             }
             let config;
             if (VIEWER.scalebar) {
-                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             } else {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
                     || CONFIG.background[0];
@@ -444,6 +450,24 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
     }) as unknown as ApplicationContext;
 
     /**
+     * Client-side logging broker — the counterpart of `XOPAT_SERVER.log`.
+     *
+     * Built FIRST, and before anything that might want to report a problem:
+     * channels, per-channel levels, a bounded ring (which replaces the unbounded
+     * `console.appTrace` array), and an operator-enabled forwarder that puts
+     * browser records into the server's sinks. Configured from
+     * `env.client.logging` — deployment-controlled, never `getOption` (§7).
+     * Reached as `APPLICATION_CONTEXT.log("channel").warn(...)`.
+     * See src/LOGGING.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    const logging = new ClientLogging(ac.env?.client?.logging);
+    ac.logging = logging;
+    ac.log = (channel: string) => logging.log(channel);
+    logging.adoptConsole(console);
+    logging.installLifecycleFlush();
+
+    /**
      * Core HTTP Client.
      * @memberof APPLICATION_CONTEXT
      */
@@ -464,6 +488,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.networkStatus = NetworkStatus.instance();
+
+    /**
+     * Interactive tutorial overlay — the step driver behind
+     * `USER_INTERFACE.Tutorials`. Replaces the vendored EnjoyHint; authoring
+     * is unchanged, see src/TUTORIALS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.tutorials = new TourEngine();
 
     /**
      * Per-origin admission gate for background HTTP (e.g. LLM vision-inference

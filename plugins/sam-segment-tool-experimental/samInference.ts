@@ -34,6 +34,11 @@ interface SamViewportCapture {
     blob: Blob;
     width: number;
     height: number;
+    /**
+     * False when the broker's bounded tile wait expired and the capture holds partially streamed
+     * tiles, so a mask traced from it can follow a tile edge rather than the specimen.
+     */
+    isComplete?: boolean;
 }
 
 export class SAMInference {

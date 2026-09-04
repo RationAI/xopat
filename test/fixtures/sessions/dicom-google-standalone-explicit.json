@@ -1,0 +1,57 @@
+{
+  "params": {
+    "sessionName": "Google DICOM — standalone (explicit overlay)",
+    "activeBackgroundIndex": [0],
+    "customBlending": true,
+    "webGlPrecision": "auto",
+    "ui": {
+      "mainMenu": true,
+      "scaleBar": true,
+      "toolBar": true,
+      "statusBar": true,
+      "navigator": true,
+      "appBar": true,
+      "globalMenu": true
+    }
+  },
+  "data": [
+    {
+      "protocol": "dicom",
+      "dataID": {
+        "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+        "seriesUID": "1.2.826.0.1.3680043.8.498.77278192630710008320308486728784799314"
+      }
+    },
+    {
+      "protocol": "dicom",
+      "dataID": {
+        "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+        "seriesUID": "REPLACE-WITH-SEG-OR-PARAMETRIC-MAP-SERIES-UID",
+        "role": "seg",
+        "sourceSeriesUID": "1.2.826.0.1.3680043.8.498.77278192630710008320308486728784799314"
+      }
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "Google DICOM slide",
+      "visualizationIndex": 0
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "My visualization",
+      "shaders": {
+        "shader_id_1": {
+          "name": "Layer 1",
+          "type": "dicom-seg",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

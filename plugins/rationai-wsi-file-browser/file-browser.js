@@ -108,7 +108,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     if (item.type === "case") {
                         return div(
                             { class: "flex items-center gap-2 px-2 py-2 hover:bg-base-300 rounded cursor-pointer text-base-content/80"},
-                            new UI.FAIcon({ name: "fa-folder", extraClasses: "text-base-content/70" }).create(),
+                            new UI.PhIcon({ name: "ph-folder", extraClasses: "text-base-content/70" }).create(),
                             span(item.label)
                         );
                     }

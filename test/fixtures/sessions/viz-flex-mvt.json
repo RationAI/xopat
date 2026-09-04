@@ -1,0 +1,35 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "viz-flex-mvt"
+  },
+  "data": [
+    "slides/slide.tif",
+    {
+      "dataID": "generated/mvt/tiles.json",
+      "protocol": "demo-mvt"
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Vector tiles",
+      "shaders": {
+        "mvt": {
+          "name": "Predictions (MVT)",
+          "type": "identity",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

@@ -291,7 +291,7 @@ html[data-color-mode=dark] .invert-icon {
   Selectable multi-icon buttons (use with input radio or checkbox)
   Use (strictly follow this):
     <input id="id" type="radio" name="name" class="switch hidden">
-    <label for="id"><span class="fa-auto fa-icon-name"></span></label>
+    <label for="id"><span class="ph-light ph-icon-name"></span></label>
  */
 input.switch:checked + label span {
     background: var(--color-bg-tertiary);
@@ -322,62 +322,6 @@ input.switch:checked + label span {
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
-/* font awesome: default behavior extended by these properties
-                 to avoid the styling, use full name, e.g. fa-solid
-*/
-/* Font Awesome Free – Regular */
-@font-face{
-    font-family: "FA6FreeRegular";
-    src: url("../libs/fontawesome/webfonts/fa-regular-400.woff2") format("woff2"),
-    url("../libs/fontawesome/webfonts/fa-regular-400.ttf") format("ttf");
-    font-weight: 200;
-    font-style: normal;
-    font-display: swap;
-}
-
-/* Font Awesome Free – Solid */
-@font-face{
-    font-family: "FA6FreeSolid";
-    src: url("../libs/fontawesome/webfonts/fa-solid-900.woff2") format("woff2"),
-    url("../libs/fontawesome/webfonts/fa-solid-900.ttf") format("ttf");
-    font-weight: 900;
-    font-style: normal;
-    font-display: swap;
-    font-size: larger;
-}
-
-.fa-auto,
-.fa-auto::before {
-    font-family: "FA6FreeRegular","FA6FreeSolid", var(--fa-style-family, "Font Awesome 6 Free"); /* fallback order */
-    font-weight: 200;
-    font-style: normal;
-    font-variant: normal;
-    text-rendering: auto;
-    line-height: 1;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-font-smoothing: antialiased;
-    display: var(--fa-display, inline-block);
-    content: var(--fa);
-}
-
-.fas, .far, .fab {
-    font-size: 24px;
-    line-height: 1;
-    letter-spacing: normal;
-    text-transform: none;
-    display: inline-block;
-    white-space: nowrap;
-    word-wrap: normal;
-    direction: ltr;
-    -webkit-font-feature-settings: 'liga';
-    -webkit-font-smoothing: antialiased;
-    color: var( --color-icon-primary);
-    vertical-align: middle;
-    padding: 3px 9px;
-    text-rendering: optimizeLegibility;
-    -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'liga';
-}
 
 /*Important: fixes the navigator viewport position*/
 div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !important;}
@@ -428,10 +372,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     border-top: 3px solid var(--color-state-focus-border);}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
-
-.fas, .fa-solid {
-    font-weight: 900 !important;
-  }
 
 /*TODO implement switch button
   input.switch[type=checkbox]{height: 0;width: 0;visibility: hidden;}*/
@@ -569,7 +509,10 @@ input.selectable-image-row-context:checked + div {
 }
 a {cursor: pointer;}
 input {background-color: inherit;}
-input[type=range]:not(.range) {
+/* Applies to every slider, DaisyUI-classed or not — the `.range` look is
+ * unified with this one in custom.css, so the filter must not be scoped to
+ * `:not(.range)` any more or the two halves drift apart in brightness. */
+input[type=range] {
     filter: contrast(0.5); /*attempt to make really visible*/
 }
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
@@ -767,3 +710,60 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
 .er-slider--vertical-pips.noUi-horizontal {
     margin-bottom: 4.5rem;
 }
+
+/* --- flex-renderer AdvancedSlider: horizontal pips -------------------
+ * `.noUi-*` rules have to live in this plain stylesheet: those class
+ * names exist only inside src/libs/nouislider.min.js, which
+ * tailwind.config.js excludes from the content scan (`!**\/*.min.js`),
+ * so an @layer components rule for them in tailwind-spec.css would be
+ * tree-shaken away. This file also loads AFTER nouislider.css
+ * (src/config.json css.libs -> css.src.env), which is what lets these
+ * rules win the ties.
+ *
+ * The TRACK, HANDLE, CONNECT and TOOLTIP are deliberately not touched
+ * here - nouislider.css:296-328 already themes them with DaisyUI tokens
+ * (`oklch(var(--bc)/.14)` track, `--b1`/`--b3` handle, `--p` active
+ * ring). Only the pip layout is broken.
+ *
+ * `.noUi-pips-horizontal` is `position: absolute; top: 100%; height:
+ * 30px` (nouislider.css:199-204), so the tick labels render OUTSIDE the
+ * slider's box and crowd whatever control the shader put in the next
+ * row. Reserve the space on the target - the same idiom
+ * `.er-slider--vertical-pips` above already uses for the vertical case,
+ * which is the only case AdvancedSlider.init (~:8100) ever asked for.
+ * `:has()` keeps pip-less sliders from getting a dead gap; `:not()`
+ * keeps the 4.5rem vertical rule authoritative.
+ *
+ * Scoped to `.er-control__widget--advanced-slider` (the container class
+ * survives noUiSlider.create, which only ADDS noUi-* classes) so the
+ * app's other noUiSlider instances are untouched. */
+.er-control__widget--advanced-slider.noUi-horizontal:not(.er-slider--vertical-pips):has(.noUi-pips-horizontal) {
+    margin-bottom: 2rem;
+}
+
+/* The side menu is narrow; 12px labels at five break positions collide.
+ * They are absolutely positioned, so shrinking them cannot reflow the
+ * row - it only stops the ticks overlapping each other. */
+.er-control__widget--advanced-slider .noUi-value-horizontal {
+    font-size: 0.6875rem;
+}
+
+/* The library hard-codes `height: 9px` inline on the widget
+ * (AdvancedSlider.toHtml ~:8338), which is thinner than the 18px
+ * `.noUi-horizontal` the handle offsets were written for. Nudge the
+ * handle back onto the centre line of the thinner track. The 19px
+ * geometry comes from `.noUi-horizontal .noUi-handle`
+ * (nouislider.css:90-96), which outranks the 14px `.noUi-handle` block
+ * at :302, so match that rule's specificity rather than fighting it. */
+.noUi-horizontal.er-control__widget--advanced-slider .noUi-handle {
+    top: -5px;
+}
+
+/* NOTE: the salmon connect bars are NOT overridden. `oklch(var(--er))`
+ * is written as an INLINE style by AdvancedSlider._updateConnectStyles
+ * (~:8232) and the toggleMask mouseup handler (~:8154), and it encodes
+ * STATE ("this interval is visible"), not theme. A blanket
+ * `background: ... !important` here would erase the masked-vs-unmasked
+ * distinction and make the widget unusable. Recolouring it is a one-line
+ * library change - filed in UPSTREAM.md ("flex-renderer - basic UI
+ * controls carry no DaisyUI classes", item 3). */

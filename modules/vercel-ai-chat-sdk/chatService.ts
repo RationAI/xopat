@@ -458,12 +458,14 @@ export class ChatService {
     async createProvider(input: CreateProviderInstanceInput): Promise<ChatProviderClientRegistration> {
         const provider = await this._server().createProvider!(input);
         this._providers.set(provider.id, provider);
+        this._rewireAuthEvents?.();
         return provider;
     }
 
     async updateProvider(input: UpdateProviderInstanceInput): Promise<ChatProviderClientRegistration> {
         const provider = await this._server().updateProvider!(input);
         this._providers.set(provider.id, provider);
+        this._rewireAuthEvents?.();
         // Config/secret change can change the model catalogue — drop the reuse window.
         this._listModelsFreshAt.delete(provider.id);
         this._listModelsNeedsKey.delete(provider.id);
@@ -492,6 +494,8 @@ export class ChatService {
             const result = await this._server().listProviders!({ typeId: typeId || null });
             const providers = result?.providers || [];
             for (const provider of providers) this._providers.set(provider.id, provider);
+            // A provider can introduce an auth context nobody was listening to yet.
+            this._rewireAuthEvents?.();
             return this.getProviders();
         })().finally(() => this._providersRefreshInFlight.delete(key));
         this._providersRefreshInFlight.set(key, pending);
@@ -742,12 +746,75 @@ export class ChatService {
         await this._auth().login(state.contextId);
     }
 
-    /** Subscribe to auth-state changes for any provider context. Returns unsubscribe. */
+    /**
+     * Subscribe to genuine login/logout transitions of any provider context.
+     * Returns unsubscribe.
+     *
+     * NOT `APPLICATION_CONTEXT.auth.onChange`: that is the raw transition feed and
+     * fires on `secret-updated` too, i.e. on **every silent token renew**. Consumers
+     * re-run provider/model discovery from this callback, so a renew produced a full
+     * refresh round — and when those calls were themselves 401ing, each 401 triggered
+     * another renew, which fired this again. That closed loop is what fired thousands
+     * of RPCs against a deployment whose tokens were being rejected.
+     *
+     * The events below are already the coarse signal: `XOpatUser.login()` is
+     * idempotent for a re-asserted identity and the OIDC broker only calls it when
+     * not already logged in, so a renew raises `secret-updated` alone and never
+     * reaches here. `auth-interaction-changed` covers the case login/logout cannot:
+     * `markNeedsInteraction` drops the credential with `setSecret(null, …)`, which is
+     * a `secret-removed`, not a logout.
+     */
     onProviderAuthChange(cb: () => void): () => void {
-        const auth = this._auth();
-        if (!auth || typeof auth.onChange !== 'function') return () => {};
-        return auth.onChange(() => cb());
+        const user = (window as any)?.XOpatUser?.instance?.();
+        if (!user || typeof user.addHandler !== 'function') return () => {};
+
+        const fire = (e?: any) => {
+            // `logout {switching: true}` is the intermediate step of an identity swap
+            // inside `login()`, not a sign-out — the `login` that follows is the real
+            // transition (see XOpatUser.login).
+            if (e?.switching === true) return;
+            try { cb(); } catch (err) { console.warn('ChatService.onProviderAuthChange listener failed', err); }
+        };
+
+        /** Event names wired per context key, so re-wiring is idempotent. */
+        const wired = new Map<string, string[]>();
+        const wire = (contextId: string | null | undefined) => {
+            const key = contextId || 'core';
+            if (wired.has(key)) return;
+            const names = ['login', 'logout'].map((base) => user.getEventName(base, contextId || undefined));
+            for (const name of names) user.addHandler(name, fire);
+            wired.set(key, names);
+        };
+
+        // Context-less: XOpatAuth raises this for EVERY context on
+        // markNeedsInteraction / clearNeedsInteraction (xopat-auth `_raiseUserEvent`).
+        user.addHandler('auth-interaction-changed', fire);
+
+        // Core, plus every provider context known now. Providers discovered later
+        // wire themselves through `_rewireAuthEvents`.
+        wire(null);
+        for (const provider of this.getProviders()) wire(this._providerContextId(provider));
+        this._rewireAuthEvents = () => {
+            for (const provider of this.getProviders()) wire(this._providerContextId(provider));
+        };
+
+        return () => {
+            this._rewireAuthEvents = undefined;
+            user.removeHandler('auth-interaction-changed', fire);
+            for (const names of wired.values()) {
+                for (const name of names) user.removeHandler(name, fire);
+            }
+            wired.clear();
+        };
     }
+
+    /**
+     * Set while {@link onProviderAuthChange} is subscribed: wires login/logout
+     * handlers for provider contexts that appear after the subscription was made.
+     * Providers arrive asynchronously (`refreshProviders`), so the initial pass
+     * cannot see all of them.
+     */
+    _rewireAuthEvents?: () => void;
 
     getActiveSessionId(): string | null {
         return this._activeSessionId;
@@ -910,10 +977,19 @@ export class ChatService {
         }, this._authCallOptionsForSession(sessionId));
     }
 
+    /**
+     * Append an already-uploaded attachment to the transcript as a message.
+     *
+     * `note` prepends a text part in the SAME message. It exists so a caller that knows something
+     * about the attachment the pixels cannot convey — most importantly that a screenshot was taken
+     * while the viewer was still streaming tiles, so its blank areas are a loading artefact — can
+     * put that in front of the model. Metadata cannot do this: it never reaches the model.
+     */
     async attachUploadedFileAsMessage(options: {
         sessionId?: string | null;
         attachment: ChatAttachmentRecord;
         role?: 'user' | 'assistant';
+        note?: string | null;
     }): Promise<void> {
         const sessionId = options.sessionId || this._activeSessionId;
         if (!sessionId) throw new Error('attachUploadedFileAsMessage requires an active session.');
@@ -936,9 +1012,10 @@ export class ChatService {
                 metadata: options.attachment.metadata,
             };
 
+        const note = typeof options.note === 'string' ? options.note.trim() : '';
         await this.appendMessages(sessionId, [{
             role: options.role || 'user',
-            parts: [part],
+            parts: note ? [{ type: 'text', text: note } as ChatMessagePart, part] : [part],
             createdAt: new Date(),
         }]);
     }

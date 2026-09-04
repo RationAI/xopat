@@ -15,13 +15,11 @@ export interface ChatMessageListOptions {
      * opaque handles the LLM was given (viewer-identity anonymization). Identity by default.
      */
     presentText?: (text: string) => string;
-    /**
-     * Invoked when the user clicks an assistant-emitted region link
-     * (`[label](#xopat-region?...)`) — navigates the referenced viewer to the region.
-     * When absent, region links render as inert text.
-     */
-    onRegionLink?: (payload: ChatRegionLinkPayload) => void;
 }
+// Region links (`[label](#xopat-region?...)`) are handled by the `markdown` module:
+// it parses them out of the rendered markdown and dispatches clicks through its link
+// registry, whose built-in `region` kind frames the referenced viewer. Chat only
+// contributes a viewer resolver for its anonymization handles (see ChatModule).
 
 export class ChatMessageList {
     options: ChatMessageListOptions;
@@ -388,7 +386,7 @@ export class ChatMessageList {
             { class: `flex mb-1 ${isUser ? "justify-end" : "justify-start"}` },
             div(
                 {
-                    class: `rounded-xl px-3 py-1.5 text-[12px] leading-snug chat-md ${bubbleCls}`,
+                    class: `rounded-xl px-3 py-1.5 text-[12px] leading-snug xo-md ${bubbleCls}`,
                     // Widths as inline styles — the shipped Tailwind build is purged and has no
                     // `w-[88%]`/`max-w-[100%]`. Own messages stay capped and right-aligned; replies
                     // take the pane so long-form markdown is not squeezed.
@@ -425,34 +423,32 @@ export class ChatMessageList {
             switch (part.type) {
                 case "text": {
                     const asMarkdown = kind === "assistant" && this.options.markdownEnabled !== false;
-                    // Rendered markdown must NOT inherit `whitespace-pre-wrap`: marked emits
-                    // pretty-printed HTML, and every inter-tag newline / source indent would then
-                    // render as a literal blank line on top of the block margins.
-                    const textEl = div({ class: asMarkdown ? "chat-md-body" : "whitespace-pre-wrap" }) as HTMLElement;
-                    // Region links must be extracted from the RAW text, before presentText —
-                    // the friendly-name restoration would otherwise rewrite the viewer handle
-                    // inside the link target and break it.
-                    const regionLinks: ChatRegionLinkPayload[] = [];
-                    const rawText = asMarkdown ? this._extractRegionLinks(part.text, regionLinks) : part.text;
-                    // Restore friendly slide names from anonymization handles for the local user.
-                    const shownText = (kind === "assistant" || kind === "runtime")
-                        ? (this.options.presentText?.(rawText) ?? rawText)
-                        : rawText;
+                    const transformText = (kind === "assistant" || kind === "runtime")
+                        ? this.options.presentText
+                        : undefined;
                     if (asMarkdown) {
-                        const rendered = this._renderMarkdown(shownText);
-                        if (rendered != null) {
-                            textEl.innerHTML = rendered;
-                            this._activateRegionLinks(textEl, regionLinks);
+                        // The `markdown` module owns parsing, sanitizing, the region-link
+                        // wiring and the degrade-closed fallback (shared with the recorder
+                        // and the questionnaire). `presentText` — the anonymization-handle →
+                        // friendly-name restoration — is passed through as a TEXT transform,
+                        // so it can no longer reach inside a link target.
+                        const textEl = div({ class: "xo-md-body" }) as HTMLElement;
+                        const markdown = (globalThis as any).singletonModule?.("markdown");
+                        if (markdown) {
+                            markdown.renderInto(textEl, part.text, {
+                                transformText,
+                                sanitize: this.options.sanitizeConfig,
+                            });
                         } else {
-                            // Markdown unavailable (no lib) or failed — plain text needs its
-                            // newlines back, so drop the markdown whitespace mode.
                             textEl.className = "whitespace-pre-wrap";
-                            textEl.textContent = shownText;
+                            textEl.textContent = transformText?.(part.text) ?? part.text;
                         }
+                        el.appendChild(textEl);
                     } else {
-                        textEl.textContent = shownText;
+                        const textEl = div({ class: "whitespace-pre-wrap" }) as HTMLElement;
+                        textEl.textContent = transformText?.(part.text) ?? part.text;
+                        el.appendChild(textEl);
                     }
-                    el.appendChild(textEl);
                     break;
                 }
                 case "host-feedback": {
@@ -527,106 +523,5 @@ export class ChatMessageList {
                 }
             }
         }
-    }
-
-    /**
-     * Rewrite assistant region-link destinations (`](#xopat-region?viewer=..&x=..)`) into
-     * opaque indexed hrefs (`](#xopat-region-N)`), collecting the parsed payloads into `out`.
-     * The opaque form survives both presentText (no handle text left to rewrite) and the
-     * HTML sanitizer (schemeless fragment href). Unparseable links are left untouched.
-     */
-    _extractRegionLinks(text: string, out: ChatRegionLinkPayload[]): string {
-        if (!text || !text.includes("#xopat-region")) return text;
-        return text.replace(/\]\(\s*#xopat-region\?([^)\s]*)\s*\)/g, (match, query) => {
-            const payload = this._parseRegionLinkQuery(String(query || ""));
-            if (!payload) return match;
-            const index = out.push(payload) - 1;
-            return `](#xopat-region-${index})`;
-        });
-    }
-
-    _parseRegionLinkQuery(query: string): ChatRegionLinkPayload | null {
-        let params: URLSearchParams;
-        try {
-            params = new URLSearchParams(query);
-        } catch (_) {
-            return null;
-        }
-        const num = (key: string): number | null => {
-            const raw = params.get(key);
-            if (raw == null || raw === "") return null;
-            const value = Number(raw);
-            return Number.isFinite(value) ? value : null;
-        };
-        const x = num("x");
-        const y = num("y");
-        if (x == null || y == null) return null;
-        const viewer = (params.get("viewer") || "").trim();
-        return { viewer: viewer || null, x, y, w: num("w"), h: num("h"), z: num("z") };
-    }
-
-    /** Bind click-to-navigate behavior onto the sanitized anchors produced by _extractRegionLinks. */
-    _activateRegionLinks(root: HTMLElement, payloads: ChatRegionLinkPayload[]): void {
-        if (!payloads.length) return;
-        for (const anchor of Array.from(root.querySelectorAll('a[href^="#xopat-region-"]'))) {
-            const match = (anchor.getAttribute("href") || "").match(/^#xopat-region-(\d+)$/);
-            const payload = match ? payloads[Number(match[1])] : undefined;
-            if (!payload) continue;
-            anchor.removeAttribute("target");
-            anchor.removeAttribute("rel");
-            anchor.classList.add("link", "link-primary", "cursor-pointer");
-            anchor.setAttribute("title", $.t('chat.goToRegion'));
-            (anchor as HTMLElement).onclick = (event: Event) => {
-                event.preventDefault();
-                this.options.onRegionLink?.(payload);
-            };
-        }
-    }
-
-    _renderMarkdown(markdown: string): string | null {
-        const markedLib = (window as any).xnpm?.marked;
-        if (!markedLib) return null;
-
-        let renderFn: ((text: string) => string) | null = null;
-        if (typeof markedLib.parse === "function") renderFn = (text) => markedLib.parse(text);
-        else if (markedLib.marked && typeof markedLib.marked.parse === "function") renderFn = (text) => markedLib.marked.parse(text);
-        else if (typeof markedLib === "function") renderFn = (text) => markedLib(text);
-        if (!renderFn) return null;
-
-        try {
-            const raw = renderFn(markdown);
-            return this._sanitizeHtml(raw);
-        } catch (error) {
-            console.warn("Markdown render failed; falling back to plain text", error);
-            return null;
-        }
-    }
-
-    /**
-     * Returns sanitized HTML, or `null` when it cannot be sanitized.
-     *
-     * Model output is untrusted, so an unavailable sanitizer must degrade
-     * CLOSED — callers render `null` as plain `textContent` (AGENTS.md §0 rule 2
-     * / §7). This used to `return html` unchanged, handing raw `marked` output
-     * straight to `innerHTML`; the core consumers (ui/classes/components/toast.mjs,
-     * ui/classes/baseComponent.mjs) always degraded closed and this did not.
-     */
-    _sanitizeHtml(html: string): string | null {
-        const sanitizer = (window as any).SanitizeHtml;
-        const config = this.options.sanitizeConfig || {};
-        if (sanitizer && typeof sanitizer.sanitize === "function") return sanitizer.sanitize(html, config);
-        if (typeof sanitizer === "function") return sanitizer(html, config);
-        ChatMessageList._requestSanitizer();
-        return null;
-    }
-
-    /** One-shot lazy load so subsequent messages can render rich markup. */
-    static _sanitizerRequested = false;
-    static _requestSanitizer(): void {
-        if (ChatMessageList._sanitizerRequested) return;
-        const utils = (globalThis as any).UTILITIES;
-        if (!utils?.loadModules) return;
-        ChatMessageList._sanitizerRequested = true;
-        try { utils.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
     }
 }

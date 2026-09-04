@@ -1,0 +1,53 @@
+{
+  "$meta": {
+    "description": "A generated DeepZoom pyramid served by the viewer itself — no image server, no download, no credentials",
+    "dimension": "data",
+    "clientKey": "localhost"
+  },
+  /**
+   * The zero-dependency deployment. Generate the pyramid once:
+   *
+   *     npm run fixtures:synthetic
+   *     npm run up:dev -- synthetic
+   *
+   * `test/harness/slides/make-synthetic.mjs` writes a DeepZoom directory of PNGs
+   * plus one XML descriptor. OpenSeadragon autodetects a `.dzi` from the URL, so
+   * nothing else is needed — which is what makes this the deployment to reach
+   * for first when something is broken and you need to know whether it is the
+   * viewer or the data.
+   *
+   * The tile pattern is diagnostic rather than decorative: each tile is tinted
+   * by (level, col, row) and carries an 8x8 red corner marker, so tiles rendered
+   * transposed, off-by-one, or from the wrong level look obviously wrong instead
+   * of merely different.
+   *
+   * Two details worth knowing:
+   *
+   *  - `core.server.staticRoots` has to opt the fixture directory in. Static
+   *    serving resolves against an allowlist of roots, not "any path that
+   *    exists" — that is what keeps `env/*.json` and `*.server.ts` unreachable —
+   *    and `test/` is deliberately not a default root.
+   *  - The protocol template is absolute rather than relative so the URL
+   *    survives OpenSeadragon's own tile-URL derivation (`<name>.dzi` ->
+   *    `<name>_files/`). `<% XOPAT_NODE_PORT %>` is substituted server-side, so
+   *    the same fragment works on whatever port the server actually bound —
+   *    including the floating port the test harness assigns per worker.
+   *
+   * The one data id it serves is `synthetic.dzi`. Open it with
+   * `?slides=synthetic.dzi`, or through any session naming that id.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          "static": "`http://localhost:<% XOPAT_NODE_PORT:-9000 %>/test/fixtures/slides/generated/${data}`"
+        },
+        "default_background_protocol": "static",
+        "default_visualization_protocol": "static"
+      }
+    },
+    "server": {
+      "staticRoots": ["test/fixtures/slides"]
+    }
+  }
+}

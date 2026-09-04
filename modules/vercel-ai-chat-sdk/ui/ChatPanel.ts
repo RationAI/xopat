@@ -1,5 +1,6 @@
 import type {ChatService} from "../chatService";
 import type {ChatModule} from "../chat";
+import {isAuthError} from "../shared/errors";
 import {ChatSessionPicker} from "./ChatSessionPicker";
 import {ChatAttachmentBar} from "./ChatAttachmentBar";
 import {ChatVoiceController} from "./ChatVoiceController";
@@ -10,7 +11,7 @@ import {
     type BracketCensus,
 } from "../shared/script-text";
 
-const { BaseComponent, Button, FAIcon, PhIcon, Checkbox } = (globalThis as any).UI;
+const { BaseComponent, Button, PhIcon, Checkbox } = (globalThis as any).UI;
 const { div, span, select, option, textarea, fieldset, legend, label, input, a, progress } = (globalThis as any).van.tags;
 
 type ChatPanelOptions = {
@@ -509,9 +510,22 @@ export class ChatPanel extends BaseComponent {
             this.setPanelNotice(null, 'models');
             this._models = Array.isArray(models) ? models : [];
             const nextPreferred = preferredModelId || this._modelId;
-            this._modelId = nextPreferred && this._models.some((m) => m.id === nextPreferred)
-                ? nextPreferred
-                : (this._models[0]?.id || null);
+            const preferredIsAvailable = !!nextPreferred && this._models.some((m) => m.id === nextPreferred);
+            this._modelId = preferredIsAvailable ? nextPreferred! : (this._models[0]?.id || null);
+            // Substituting the catalogue's first entry for a model that vanished used to be
+            // silent, so the panel kept LOOKING like the picked model was in use while every turn
+            // ran on whatever the upstream happened to list first. Say which model is actually
+            // running; the id is the only thing that identifies it.
+            if (nextPreferred && !preferredIsAvailable && this._modelId) {
+                this.setPanelNotice({
+                    text: $.t('chat.modelUnavailableSubstituted', {
+                        requested: nextPreferred,
+                        actual: this._modelId,
+                    }),
+                }, 'model-substituted');
+            } else {
+                this.setPanelNotice(null, 'model-substituted');
+            }
 
             this._modelSelectEl.innerHTML = "";
             if (!this._models.length) {
@@ -536,6 +550,7 @@ export class ChatPanel extends BaseComponent {
             });
             this._modelSelectEl.value = this._modelId || "";
             this._modelSelectEl.disabled = false;
+            this._updateModelDivergenceNotice();
         } catch (error) {
             console.error("Failed to refresh models:", error);
             const failedProviderId = this._providerId;
@@ -566,7 +581,13 @@ export class ChatPanel extends BaseComponent {
             // Recompute the input/send/status after a failed refresh so the panel
             // can't be left stuck in a stale enabled-but-broken state.
             this._updateInputState();
-            void this._maybeShowNeedsKeyHint();
+            // Never chase an auth failure with another authenticated RPC. "Does this
+            // provider need a key?" is unanswerable when the call itself was refused,
+            // and the notice band above already carries the real reason. It also used
+            // to be the second half of a loop: the 401 from this very call triggered a
+            // token refresh, the refresh re-fired the auth callback, and the callback
+            // re-entered this method.
+            if (!ChatPanel._isAuthError(error)) void this._maybeShowNeedsKeyHint();
         } finally {
             this._busy.end(modelsBusy);
         }
@@ -593,12 +614,42 @@ export class ChatPanel extends BaseComponent {
         await this._refreshModelsForCurrentProvider();
     }
 
+    /**
+     * The model the ACTIVE session will actually run — `session.modelId`, frozen at creation and
+     * never rewritten mid-turn (server-side `runTurn`). The dropdown holds an *intent*, and the
+     * two diverge whenever picking a model could not create the session that would apply it.
+     */
+    _activeSessionModelId(): string | null {
+        const activeId = this.chatService?.getActiveSessionId?.();
+        if (!activeId) return null;
+        return this._sessions.find((s) => s.id === activeId)?.modelId || null;
+    }
+
+    /**
+     * Band the divergence above, because it is invisible and consequential: the model id decides
+     * the prompt-transport shape server-side, so "the dropdown says X, the turns run Y" surfaces
+     * later as failures that make no sense against the model the user believes they picked.
+     */
+    _updateModelDivergenceNotice(): void {
+        const sessionModelId = this._activeSessionModelId();
+        if (!sessionModelId || !this._modelId || sessionModelId === this._modelId) {
+            this.setPanelNotice(null, 'model-divergence');
+            return;
+        }
+        this.setPanelNotice({
+            text: $.t('chat.modelSessionMismatch', { selected: this._modelId, active: sessionModelId }),
+            actionText: $.t('chat.startSessionWithSelectedModel'),
+            onAction: () => void this._handleNewSession({ successStatus: $.t('chat.modelChangedSessionCreated') }),
+        }, 'model-divergence');
+    }
+
     async _onModelChange(modelId: string): Promise<void> {
         const nextModelId = modelId || null;
         const previousModelId = this._modelId;
 
         this._modelId = nextModelId;
         this._updateAttachmentCapabilityState();
+        this._updateModelDivergenceNotice();
 
         if (!nextModelId || nextModelId === previousModelId) {
             return;
@@ -763,7 +814,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.logIn'), disabled: "" },
                 onClick: () => this._handleLoginClick(),
             },
-            new FAIcon({ name: "fa-right-to-bracket" }),
+            new PhIcon({ name: "ph-sign-in" }),
             span($.t('chat.login'))
         );
 
@@ -867,14 +918,13 @@ export class ChatPanel extends BaseComponent {
             displayMode: this._displayMode,
             extractScriptFromAssistantMessage: (message) => this.chat?.extractScriptFromAssistantMessage?.(message),
             presentText: (text) => this.chat?.presentTextForUser?.(text) ?? text,
-            onRegionLink: (payload) => this.chat?.navigateToRegionFromChat?.(payload),
         });
 
         const headerRow = div(
             { class: "flex items-center justify-between gap-2 px-2 py-1 border-b border-base-300 bg-base-200" },
             div(
                 { class: "flex items-center gap-2 min-w-0" },
-                new FAIcon({ name: "fa-comments" }).create(),
+                new PhIcon({ name: "ph-chats" }).create(),
                 span({ class: "font-semibold text-xs truncate" }, $.t('chat.pathologyAssistant'))
             ),
             div(
@@ -897,10 +947,17 @@ export class ChatPanel extends BaseComponent {
         // The session bar is ONE control, not a label that happens to be clickable: the title
         // the user reads is the button that opens the list of the other sessions. Renaming —
         // which used to hide behind a click on that title — lives in the ⋯ menu next to it.
-        this._sessionTitleEl = span({ class: "truncate text-[12px] font-medium" },
-            $.t('chat.noActiveSession')) as HTMLElement;
+        // DaisyUI's `.btn` sets `flex-wrap: wrap`, so a long auto-title would wrap onto a second
+        // line and then get cut mid-glyph by the fixed `btn-xs` height. `flex-nowrap` on the
+        // button plus `min-w-0` here is what lets the span shrink and ellipsize instead. The
+        // truncation is spelled out inline rather than left to `truncate` alone because the
+        // shipped Tailwind build is purged (same reasoning as ChatMessageList's inline widths).
+        this._sessionTitleEl = span({
+            class: "truncate min-w-0 text-[12px] font-medium",
+            style: "overflow:hidden; text-overflow:ellipsis; white-space:nowrap",
+        }, $.t('chat.noActiveSession')) as HTMLElement;
         this._sessionSwitcherEl = div({
-            class: "btn btn-xs btn-ghost flex-1 min-w-0 justify-start gap-1 px-1 font-normal normal-case",
+            class: "btn btn-xs btn-ghost flex-1 flex-nowrap min-w-0 justify-start gap-1 px-1 font-normal normal-case",
             role: "button",
             tabindex: 0,
             title: $.t('chat.browseSessions'),
@@ -914,9 +971,9 @@ export class ChatPanel extends BaseComponent {
                 this._showSessionsView();
             },
         },
-            new PhIcon({ name: "ph-chats" }).create(),
+            new PhIcon({ name: "ph-chats", extraClasses: { shrink: "shrink-0" } }).create(),
             this._sessionTitleEl,
-            new PhIcon({ name: "ph-caret-down" }).create(),
+            new PhIcon({ name: "ph-caret-down", extraClasses: { shrink: "shrink-0" } }).create(),
         ) as HTMLElement;
 
         this._sessionMenuBtnEl = new Button(
@@ -938,7 +995,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.consentAndSettings') },
                 onClick: () => this._openSettingsDialog(),
             },
-            new FAIcon({ name: "fa-shield-halved" })
+            new PhIcon({ name: "ph-shield-check" })
         ).create();
 
         // The one indicator that is always on screen: the status line is small, truncated and at
@@ -973,7 +1030,7 @@ export class ChatPanel extends BaseComponent {
                 extraClasses: { base: "btn btn-xs" },
                 onClick: () => this._showChatView(),
             },
-            new FAIcon({ name: "fa-arrow-left" }),
+            new PhIcon({ name: "ph-arrow-left" }),
             span($.t('chat.back'))
         ).create();
 
@@ -985,7 +1042,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.startNewSession') },
                 onClick: () => { void this._handleNewSession(); },
             },
-            new FAIcon({ name: "fa-plus" }),
+            new PhIcon({ name: "ph-plus" }),
             span($.t('chat.new'))
         ).create();
 
@@ -1061,7 +1118,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.sendMessage') },
                 onClick: (e: Event) => this._isRunning ? this._handleStop(e) : this._handleSend(e),
             },
-            new FAIcon({ name: "fa-paper-plane" }),
+            new PhIcon({ name: "ph-paper-plane-tilt" }),
             this._sendBtnLabelEl
         ).create();
 
@@ -1831,7 +1888,7 @@ export class ChatPanel extends BaseComponent {
                 extraProperties: { title: $.t('chat.saveSettings') },
                 onClick: () => { void this._applySettingsAndContinue(); },
             },
-            new FAIcon({ name: "fa-check" }).create(),
+            new PhIcon({ name: "ph-check" }).create(),
             span($.t('chat.save'))
         ).create();
 
@@ -1841,7 +1898,7 @@ export class ChatPanel extends BaseComponent {
                 { class: "flex items-center justify-between gap-2" },
                 div(
                     { class: "flex items-center gap-2" },
-                    new FAIcon({ name: "fa-shield-halved" }).create(),
+                    new PhIcon({ name: "ph-shield-check" }).create(),
                     span({ class: "font-semibold text-lg" }, $.t('chat.consentSettingsTitle'))
                 )
             ),
@@ -1893,6 +1950,9 @@ export class ChatPanel extends BaseComponent {
         // its band (and its Retry) into the next provider would retry the wrong
         // thing. _refreshModelsForCurrentProvider re-raises it if it still applies.
         this.setPanelNotice(null, 'models');
+        // Same ownership rule: both model bands describe THIS provider's catalogue and session.
+        this.setPanelNotice(null, 'model-substituted');
+        this.setPanelNotice(null, 'model-divergence');
         // Remember the last-used provider so it auto-selects on the next load.
         if (providerId) this.chat?.rememberProviderId?.(providerId);
         this.chatService.setActiveSessionId(null);
@@ -2028,6 +2088,18 @@ export class ChatPanel extends BaseComponent {
             $.t('chat.openProviderKeys'),
             () => this._openProviderKeysMenu()
         );
+    }
+
+    /**
+     * Whether a failure was the request being REFUSED rather than the upstream
+     * answering badly.
+     *
+     * Kept as a static so existing call sites are untouched; the rule itself lives in
+     * `shared/errors.ts` because the managed-registration path decides whether to RETRY
+     * on the same predicate, and those two must not drift.
+     */
+    static _isAuthError(error: unknown): boolean {
+        return isAuthError(error);
     }
 
     async _maybeShowNeedsKeyHint(): Promise<void> {
@@ -2194,9 +2266,12 @@ export class ChatPanel extends BaseComponent {
         return firstLine.length > 220 ? firstLine.slice(0, 217) + "…" : firstLine;
     }
 
-    // Library-noise: getSchema()/getVisualizations() trip the FlexRenderer "published examples failed validation"
-    // path on every call. Don't burn the failure budget on it. Track upstream patch B4 in
-    // docs/patches/flex-renderer-llm-schema.md; remove this guard once patched.
+    // Library-noise: getSchema()/getVisualizations() trip the FlexRenderer "published examples
+    // failed validation" path on every call — the renderer refuses to publish its config schema
+    // because its own bundled examples disagree with it. Not the assistant's fault, so it must not
+    // burn the failure budget. Matching on the message is coupling to a library error string, and
+    // is exactly the kind of thing that breaks on the next bump; recorded in UPSTREAM.md, and this
+    // guard goes when the library warns instead of throwing.
     _isLibraryNoiseScriptFailure(executionMessage: ChatMessage | null | undefined): boolean {
         const message = String(
             (executionMessage as any)?.metadata?.scriptError?.message ||
@@ -2325,7 +2400,16 @@ export class ChatPanel extends BaseComponent {
         return "runtime";
     }
 
-    _buildScriptFailureFeedback(executionMessage: ChatMessage, script?: string): ChatMessage {
+    /**
+     * @param outputTruncated The reply carrying this script was cut off — at the output limit,
+     *   or mid tool-call payload. Decides the ONE instruction that matters: a script damaged in
+     *   transport must be re-emitted verbatim, a script that was never finished must be made
+     *   smaller. Telling the model the wrong one costs the whole step, every step, because it
+     *   truncates again at the same place.
+     */
+    _buildScriptFailureFeedback(
+        executionMessage: ChatMessage, script?: string, outputTruncated = false
+    ): ChatMessage {
         const metadata = (executionMessage as any)?.metadata || {};
         const structured = metadata?.scriptError || null;
         const coupling = structured?.couplingViolation || null;
@@ -2355,6 +2439,28 @@ export class ChatPanel extends BaseComponent {
         for (const entry of referenced) {
             if (!entry?.namespace || !entry?.method) continue;
             if (entry.found === false) {
+                if (entry.reason === "not-consented") {
+                    // Opposite reaction to "does not exist": the method is real, so
+                    // abandoning it for the rest of the session is the wrong lesson.
+                    signatureLines.push(
+                        `- ${entry.namespace}.${entry.method}: exists, but this session is not granted the ` +
+                        `\`${entry.namespace}\` namespace — do not retry it; tell the user it must be enabled.`
+                    );
+                    continue;
+                }
+                // The right verb on the wrong namespace is the common case; naming the
+                // owner is the difference between one corrected call and three retries.
+                const owners = Array.isArray((entry as any).availableOn) ? (entry as any).availableOn : [];
+                if (owners.length) {
+                    const where = owners
+                        .map((o: any) => `${o.namespace}.${o.tsSignature || `${entry.method}(…)`}`)
+                        .join(" or ");
+                    signatureLines.push(
+                        `- ${entry.namespace}.${entry.method}: DOES NOT EXIST on \`${entry.namespace}\` — ` +
+                        `it is ${where}. Call it there.`
+                    );
+                    continue;
+                }
                 signatureLines.push(`- ${entry.namespace}.${entry.method}: DOES NOT EXIST — do not retry it.`);
                 continue;
             }
@@ -2384,14 +2490,32 @@ export class ChatPanel extends BaseComponent {
         let corruptionBlock: string | null = null;
         if (kind === "malformed-script" && receivedScript) {
             const damage = census ? describeCensusDamage(census) : undefined;
-            corruptionBlock = [
-                "The runtime received EXACTLY these bytes and did NOT run them (verbatim, line-numbered):",
-                "---",
-                numberedExcerpt(receivedScript, { aroundLine: census?.firstImbalanceLine ?? null }),
-                "---",
-                damage
+            // Truncation and corruption produce the SAME census (unbalanced brackets) and demand
+            // opposite corrections, so the verdict comes from the reply's own truncation flags —
+            // never from the bracket counts, which cannot tell the two apart.
+            const verdict = outputTruncated
+                ? "Your reply was CUT OFF before the script finished — the closing brackets were " +
+                  "never generated. This is not a transport fault and re-emitting the same script " +
+                  "will truncate at the same place. Emit a SHORTER script: one step per turn, " +
+                  "build large structures (questionnaires, tours) across several turns, and keep " +
+                  "prose to a sentence so the budget goes to the code."
+                : damage
                     ? `${damage.charAt(0).toUpperCase()}${damage.slice(1)}. Your code did not arrive intact — this is a transport fault, not a logic error. Re-emit the SAME logic; do not "fix" it.`
-                    : "Re-emit the script; if it keeps arriving broken, emit a shorter one.",
+                    : "Re-emit the script; if it keeps arriving broken, emit a shorter one.";
+            corruptionBlock = [
+                outputTruncated
+                    ? "The runtime received these bytes — an INCOMPLETE PREFIX of your script — and did NOT run them (verbatim, line-numbered):"
+                    : "The runtime received EXACTLY these bytes and did NOT run them (verbatim, line-numbered):",
+                "---",
+                // Corruption is best read at the first imbalance; truncation is best read at the
+                // END, which is the only place that tells the model where its budget ran out.
+                numberedExcerpt(receivedScript, {
+                    aroundLine: outputTruncated
+                        ? (census?.lines ?? null)
+                        : (census?.firstImbalanceLine ?? null),
+                }),
+                "---",
+                verdict,
             ].join("\n");
         }
 
@@ -2577,6 +2701,7 @@ export class ChatPanel extends BaseComponent {
         this._modelId = session.modelId || fallbackModelId || this._modelId;
         if (this._modelSelectEl) this._modelSelectEl.value = this._modelId || "";
         this._sessions = [session, ...this._sessions.filter((s) => s.id !== session.id)];
+        this._updateModelDivergenceNotice();
         this._sessionPicker?.setSessions(this._sessions, session.id);
         this._updateSessionTitle(session);
         this._emit("session-changed", { sessionId: session.id, session, reason: "created" });
@@ -2716,21 +2841,28 @@ export class ChatPanel extends BaseComponent {
         const busy = this._busy.begin("attachment", 'chat.uploadingAttachment');
         try {
             const sessionId = await this._ensureActiveSession();
-            const blob = await this._captureViewerScreenshotBlob();
+            const { blob, isComplete } = await this._captureViewerScreenshotBlob();
             const attachment = await this.chatService.uploadAttachment({
                 sessionId,
                 file: blob,
                 name: `viewer-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`,
                 kind: "screenshot",
-                metadata: { source: "viewer" },
+                metadata: { source: "viewer", complete: isComplete },
             });
-            await this.chatService.attachUploadedFileAsMessage({ sessionId, attachment, role: "user" });
+            // Attach it either way — a partial view still answers most questions — but never
+            // silently: the model must be told the blanks are unloaded tiles, not the specimen.
+            await this.chatService.attachUploadedFileAsMessage({
+                sessionId,
+                attachment,
+                role: "user",
+                note: isComplete ? null : $.t('chat.screenshotIncompleteNote'),
+            });
             this.addMessage(this._messageFromAttachment(attachment));
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
             this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
             this._busy.end(busy);
-            this._setStatus($.t('chat.screenshotAttached'));
+            this._setStatus($.t(isComplete ? 'chat.screenshotAttached' : 'chat.screenshotAttachedIncomplete'));
         } catch (error) {
             console.error("Failed to attach screenshot:", error);
             this._busy.end(busy);
@@ -2797,7 +2929,7 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
-    async _captureViewerScreenshotBlob(): Promise<Blob> {
+    async _captureViewerScreenshotBlob(): Promise<{ blob: Blob; isComplete: boolean }> {
         const manager = globalThis.VIEWER_MANAGER;
         const viewers = manager.viewers;
         const preferredViewerId = this._getCurrentViewerContextId();
@@ -2828,10 +2960,15 @@ export class ChatPanel extends BaseComponent {
             } catch (e) { /* diagnostics must never break the capture */ }
         };
         announce("start");
-        return await new Promise<Blob>((resolve, reject) => {
+        // Measured, not waited for. The user asked to send the view they are looking at, so the
+        // capture is faithful by construction: if tiles are missing, they are missing on screen
+        // too. Waiting would send a view the user never saw. The flag drives the provisional note
+        // added alongside the image, so the model is told the blanks are unloaded tiles.
+        const isComplete = viewer?.getFullyLoaded?.() === true;
+        return await new Promise<{ blob: Blob; isComplete: boolean }>((resolve, reject) => {
             canvas.toBlob((blob) => {
                 announce("end", !!blob);
-                if (blob) resolve(blob);
+                if (blob) resolve({ blob, isComplete });
                 else reject(new Error($.t('chat.failedToCaptureScreenshot')));
             }, "image/png");
         });
@@ -3824,7 +3961,7 @@ export class ChatPanel extends BaseComponent {
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {
-                        executionMessage = this._buildScriptFailureFeedback(executionMessage, script);
+                        executionMessage = this._buildScriptFailureFeedback(executionMessage, script, outputTruncated);
                     }
                 } catch (err) {
                     failedScript = true;
@@ -3878,7 +4015,11 @@ export class ChatPanel extends BaseComponent {
                 // not survive the trip, so re-asking the same way reproduces them verbatim (it
                 // did, twice, in the report that motivated this). A plain syntax slip keeps the
                 // 2-strike threshold — a model typo really can be fixed by retrying.
-                const corrupted = failedScript && this._isTransportCorruption(executionMessage);
+                // A reply that was CUT OFF produces the same unbalanced census as one that arrived
+                // damaged, but the bytes did survive the trip — there were simply fewer of them.
+                // Counting it as corruption latches the session onto the fence transport and
+                // persists a `transportDamage` phrase blaming a transport that is working fine.
+                const corrupted = failedScript && !outputTruncated && this._isTransportCorruption(executionMessage);
                 if (corrupted) this._transportCorruptionCount += 1;
 
                 const shouldEscalate = failedScript && !this._forceFenceTransport && !this._transportFenceLatched

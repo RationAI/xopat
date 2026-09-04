@@ -131,7 +131,7 @@ try {
             "/src/config.json",
             "/src/locales/en.json",
             "/src/assets/favicon-32x32.png",
-            "/docs/assets/xopat-banner.png",
+            "/docs/assets/xopat-banner-v3.png",
             "/server/client-rpc.js",
         ];
         for (const p of mustServe) {

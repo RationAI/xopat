@@ -44,9 +44,12 @@ Test files are `*.test.mjs`. Cypress owns `*.cy.js`; the two never overlap.
 | `unit` | none | pure logic; no server, no browser |
 | `legacy` | none | the not-yet-ported scripts, run unmodified |
 | `default` | `env/env.default.json` | the ordinary dev deployment |
-| `secure` | `test/env/secure.json` | `client.secureMode` on |
-| `production` | `test/env/production.json` | `client.production` on — config cache + asset baking |
+| `secure` | `test/env/secure.json` | `flags/secure-mode` over the default deployment |
+| `production` | `test/env/production.json` | `flags/production` — config cache + asset baking |
 | `synthetic` | `test/env/synthetic.json` | serves a generated slide; the only project that renders image data |
+| `errors` | `test/env/errors.json` | the same slide plus a destination that is not there; failure rendering |
+| `saml` | `test/env/saml.json` | a real identity provider and role-based rules; skips without the Keycloak fixture |
+| `oidc` | `test/env/oidc.json` | the same deployment and the same rules over OIDC instead of SAML; same fixture |
 
 Why projects and not flags: `secureMode` and `production` are **not reachable
 from a session**. `secureMode` lives at `core.client.<active>.secureMode` and is
@@ -58,6 +61,165 @@ started with it.
 `integration` and `e2e` suites run in **every** matrix project. A test that only
 makes sense in one says so with a tag.
 
+A matrix ENV file states only its *difference*, over a `$base` — either one path,
+or an ordered list of composer selectors (fragment ids under `env/parts/`, preset
+names, paths). Resolution, merging and conflict detection are
+`server/utils/node/env-compose.mjs`, shared with the `npm run up` runner, so a
+project's deployment and a developer's hand-run deployment cannot mean different
+things. `createEnvScratch({ envFile })` accepts an array directly, and a layer
+disagreement throws rather than resolving last-wins. See
+[`env/README.md`](../env/README.md).
+
+### Why the fragments live in `env/`, not here
+
+`env/parts/` and `env/presets.json` are a **product surface**, not test
+scaffolding. `npm run up -- keycloak-oidc` is how an operator deploys xOpat —
+it is the path documented in `env/README.md`, `docs/web/xopat_deployment.md`,
+`server/ENVIRONMENT.md` and the Docker READMEs — and a packaged build that
+shipped without `test/` would lose the ability to compose a deployment at all.
+
+What lives here is the other half: **deltas that are only meaningful to the
+suite.** `errors.json`'s destination-that-is-not-there is not a deployment
+anybody should be offered; the port-pinned `saml`/`oidc` files exist because a
+realm's redirect URIs name concrete origins.
+
+The line to hold is that a matrix file restates **no configuration** — every
+one of them is a `$base` and the handful of keys that differ. `secure.json` and
+`production.json` used to spell their flag out inline while `env/parts/flags/`
+already carried it; they are now `["base/core", "data/wsi-service", "flags/<x>"]`,
+so what a project tests and what `npm run up -- default flags/secure-mode`
+composes are the same thing.
+
+The exception is the two Cypress-era files (`runtime.json`,
+`viewer.env.test-custom.json`): `test/run-env.sh` hands `XOPAT_ENV` straight to
+`node index.js`, and the server does not resolve `$base`. They stay whole until
+those specs are ported.
+
+### The `saml` project
+
+It needs an identity provider, so it brings its own:
+
+```bash
+docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+npm test -- --project=saml
+```
+
+Without the container the suite **skips with instructions** (`requireKeycloak()`
+probes it), so a clean checkout pays one failed connection. Two things make it
+different from the other matrix projects, both consequences of talking to
+something outside the repo:
+
+- **The port is pinned** (`xopatPort: 9400`, `workers: 1`). The realm registers
+  concrete redirect URIs, so the server cannot float with the worker index.
+- **It declares its own process environment** (`xopatServerEnv`) for the values
+  read before any config — the token signing secret and the SSRF allowlist entry
+  a loopback IdP needs. Stating them in the project beats relying on whatever the
+  developer happened to export.
+
+It also carries a **SAML-protected OpenAI chat provider** on the same `core`
+context, which is what proves the auth indirection: the plugin names a context
+and knows nothing about SAML, so swapping brokers is a `modules` change. No API
+key is needed — the assertions are that the RPCs are refused without a token and
+that the provider registers with `requiresLogin` after login. Set
+`OPENAI_API_KEY` to exercise real model calls.
+
+See [`fixtures/keycloak/README.md`](fixtures/keycloak/README.md) for the users
+and what each is allowed to do.
+
+### The `oidc` project
+
+The same deployment reached over OpenID Connect — same container, same realm,
+same two users, second client (`xopat-viewer-oidc`, public + PKCE).
+
+```bash
+docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+npm test -- --project=oidc
+```
+
+It exists because `core.roles.claims` is supposed to be **broker-agnostic**: it
+names a claim and a context, and nothing in it is SAML. The only way to show that
+is to run it twice.
+
+The two fixtures used to carry the role block and the `chat-openai` block copied
+verbatim, with a comment asking readers to keep them byte-identical — a
+divergence *was* the regression. They now compose the same fragments
+(`env/parts/roles/guest-pathologist-researcher.json`, `chat/openai-server-key`,
+`storage/tiered-sessions`) through an array `$base`, so identity is structural
+rather than aspirational, and each file is down to the one layer that differs:
+`auth/keycloak-oidc` versus `auth/keycloak-saml`.
+
+Two differences from the `saml` project:
+
+- **No signing secret.** `saml-auth` mints a session token, so both halves need
+  `XOPAT_SAML_JWT_SECRET`. Here the IdP signs and the `oidc` verifier checks the
+  signature against the published JWKS, so nothing shared has to be configured.
+- **`XOPAT_SSRF_ALLOWED_HOSTS` is still required**, for a different fetch: the
+  verifier pulls the JWKS through the core SSRF guard, which blocks loopback and
+  fails closed. Without it every authenticated RPC is refused, which looks like a
+  broken login.
+
+The port is pinned to **9401** (`workers: 1`), for the same reason 9400 is:
+`redirectUris` on the OIDC client name concrete origins. Its probe is
+`requireKeycloakOidc()` rather than `requireKeycloak()`, because a container
+started before that client existed still answers for the realm — an existing
+realm is never re-imported, so the skip message names the `down -v`.
+
+### The `errors` project
+
+Failure rendering — a tile that will not load, a descriptor that will not parse,
+a destination that is not there, a visualization index pointing at nothing, a
+shader type nothing registers.
+
+```bash
+npm run fixtures:synthetic           # once; the same pyramid the synthetic project uses
+npm test -- --project=errors
+```
+
+To drive it by hand in a browser, **compose the ENV first**:
+
+```bash
+npm run up:dev -- test/env/errors.json
+```
+
+Not `XOPAT_ENV=test/env/errors.json npm run dev`. The server reads `XOPAT_ENV`
+as a plain file and does **not** resolve `$base` — that key lives only in
+`server/utils/node/env-compose.mjs`. It would see this file's one added protocol
+and nothing the base layers contribute, then fall back to the `src/config.json`
+dev client, which fails as `/iipsrv/iipsrv.fcgi?…` 404s: a broken ENV that looks
+exactly like a broken slide. The harness never hits this because
+`createEnvScratch` flattens the chain before spawning; `up:dev` does the same
+for a hand-run server. This applies to every `$base`-using ENV under `test/env/`,
+not just this one.
+
+It is opt-in for the inverse of the `synthetic` project's reason: these specs
+*expect* the viewer to fail, so running them against a healthy deployment would
+report a working viewer as a broken test.
+
+Faults are injected two ways, and which one is right depends on the failure:
+
+- **`page.route`** when a destination answers *wrongly* — a tile that 500s, a
+  descriptor that comes back malformed. There is deliberately **no server-side
+  fault-injection hook**: a test-only "fail this path" branch in
+  `server/node/index.js` would put test surface in the production server, and
+  interception produces the same client behaviour. Install the route **before**
+  `launch()`.
+- **the deployment** when a destination is *not there*. `test/env/errors.json`
+  adds a `missing` protocol pointing inside the opted-in static root at a
+  directory the generator never creates, so the request gets a real 404 from the
+  real static handler. A background opts in per entry with
+  `{"protocol": "missing"}`; the inherited `static` protocol stays the default,
+  so one session can hold both a healthy and a dead slide.
+
+The suite asserts **state and messages, not pixels** — and that is the finding,
+not a shortcut. A failed tile draws nothing (OSD sets `exists = false` and
+returns; `tileRetryMax` is 0), and a faulty background is an `EmptyTileSource`
+at `opacity: 0`. Both are pixel-identical to a slow load, so a pixel assertion
+here would be asserting that the gap exists. Messages are captured by trapping
+the `window.Dialogs` assignment in an init script rather than scraping the toast
+DOM, which collapses repeats into a count badge and races the auto-hide timer.
+
+**These specs need a current `src/dist` bundle** — see *Diagnosing a failure*.
+
 ## Tags
 
 | Tag | Meaning |
@@ -67,6 +229,9 @@ makes sense in one says so with a tag.
 | `@slow` `@soak` | excluded from the default run; `npm run test:slow` |
 | `@secure-only` `@production-only` | only meaningful under that deployment |
 | `@synthetic` | needs the generated slide; runs only in the `synthetic` project |
+| `@errors` | expects the viewer to fail; runs only in the `errors` project |
+| `@saml` | needs the Keycloak fixture; runs only in the `saml` project, skips with a reason when it is not up |
+| `@oidc` | the same fixture over its OIDC client; runs only in the `oidc` project, same skip |
 | `@needs-slides` | needs *real* slide data; skips with a reason when absent |
 
 `XOPAT_TEST_ALL=1` lifts the slow exclusion — as an env var rather than a baked-in
@@ -96,8 +261,15 @@ Fixtures:
 - **`xopatDiagnostics`** (automatic) — on failure, attaches the effective ENV, the
   server's output, its log buffer, and the page's `console.appTrace`.
 
-Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `installBrowserGlobals()`,
+Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `requireEnvVar()`,
+`requireKeycloak()`, `requireKeycloakOidc()`, `installBrowserGlobals()`,
 `loadBrowserScript()`, `fromRoot()`.
+
+Worker options a project sets in `use`: `xopatEnv`, `xopatDevMode`,
+`xopatServerLogLevel`, `xopatServerEnv` (extra process environment for the
+spawned server — bootstrap values that by definition cannot come from the ENV
+file), `xopatPort` (pin the port instead of deriving it from the worker index;
+requires `workers: 1`).
 
 Prefer asserting on application state (`APPLICATION_CONTEXT`, `VIEWER`) and
 stable DOM anchors over screenshots.
@@ -128,15 +300,45 @@ Assert on `APPLICATION_CONTEXT.env.setup.<key>`, not `getOption("<key>")`: the
 boot call passes an explicit default for some keys, and an explicit caller
 default outranks the ENV `setup` block in the core resolver.
 
-## Slides
+## Fixtures: slides, data and sessions
 
-`test/env/synthetic.json` + `ensureSyntheticSlide()` generate a DeepZoom pyramid
-(pure Node, no dependencies, cached on disk) and serve it from the viewer's own
-static handler. Regenerate by hand with `npm run test:slides`.
+Everything a deployment can be pointed at lives under `test/fixtures/`, in three
+tiers by cost. Nothing depends on the state of one developer's disk.
 
-Tests that genuinely need real data call `requireSlides()`, which **skips with a
-reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set — rather than
-failing with a timeout whose cause has to be explained in prose.
+| | What | How | Tracked? |
+| --- | --- | --- | --- |
+| **generated** | `slides/generated/synthetic.dzi` — a DeepZoom pyramid, pure Node, content-stamped | `npm run fixtures:synthetic` | output gitignored, generator tracked |
+| **fetched** | `data/slides/*` — the real H&E slides and prediction masks | `npm run fixtures:fetch` | `data/manifest.json` tracked, slides gitignored |
+| **derived** | `data/generated/*` — vector / MVT / grid / mask-pyramid overlays | `npm run fixtures:derive` | gitignored, generator tracked |
+| **sessions** | `sessions/*.json` — one per viewer capability | `npm run fixtures:urls` | **tracked**, indexed by `sessions/index.json` |
+
+The synthetic pyramid is what lets a clean checkout run browser tests at all —
+no image server, no download, no credentials, and its tile pattern is diagnostic
+rather than decorative. `ensureSyntheticSlide()` is importable from the harness;
+`test/env/synthetic.json` is now nothing but a layer list over
+`env/parts/data/synthetic-dzi.json`, so `npm run up:dev -- synthetic` and the
+`synthetic` project run the same deployment rather than two that drift.
+
+The fetched slides are **checksum-verified**: a mismatch deletes the download
+and fails, because a truncated TIFF opens far enough to render a
+plausible-looking wrong demo. See `test/fixtures/data/README.md` for the
+publishing procedure, and `test/fixtures/sessions/README.md` for the session
+conventions.
+
+Tests that genuinely need a live slide service call `requireSlides()`, which
+**skips with a reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set
+— rather than failing with a timeout whose cause has to be explained in prose.
+
+## Testing by hand
+
+`test/MANUAL_TESTING.md` walks every deployment reachable through
+`npm run up:dev -- <preset>`, ordered by setup cost: what to run first, which
+containers and keys it needs, which session to open, and what to actually look
+at. A unit test asserts every preset in `env/presets.json` appears there, so a
+new deployment cannot be added without saying how to exercise it.
+
+Start at tier 0 (`synthetic`, `dicom-idc`) — a failure that reproduces there is
+a viewer bug; one that does not is a data or deployment bug.
 
 ## Plugin and module tests
 
@@ -204,8 +406,27 @@ The HTML report carries, for every failed test: the deployment ENV in force, the
 server's stdout/stderr, its log ring buffer, the page's `console.appTrace`, plus
 Playwright's trace, screenshot and video.
 
+A test that used the `xopat` fixture also attaches what it takes to reproduce
+the failure **outside the runner**, which the ENV file alone does not give you:
+
+- **`session config`** — the session that was launched. Nothing recorded it
+  before; a spec builds it inline and it vanished with the worker.
+- **`effective client ENV`** — the ENV *as the page received it*. The scratch
+  file is pre-substitution, so the protocol URL the test actually hit — usually
+  the thing that is wrong — appears nowhere in it.
+- **`reproduce`** — `XOPAT_ENV=…`, the port, and for the hash transport the
+  literal URL. Paste it into a browser running that ENV and you have the failure
+  with no test runner involved.
+
 `XOPAT_TEST_SERVER_LOG=debug npm test -- --project=default` raises the spawned
 server's log level through the normal logging broker (see `server/LOGGING.md`).
+
+**A client-side fix with no effect usually means a stale bundle.** The harness
+boots `node index.js` against whatever is compiled into `src/dist`; it does not
+build. `src/**/*.ts` is compiled by the watcher (`npm run dev`), so with the dev
+server down, an edit to `src/classes/**` is invisible to every browser project.
+Check the timestamp of `src/dist/app.js` against your edit before believing a
+red test.
 
 ---
 

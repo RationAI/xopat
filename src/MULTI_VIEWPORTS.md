@@ -126,6 +126,22 @@ Multi-viewport integrations must always use:
 
 ## Recommended integration pattern (Annotations + Generic API)
 
+> **Persistence belongs to the IO pipeline — not to hand-written event wiring.**
+> Annotation state is exactly what the pipeline is for: declare `io.capabilities`
+> in `include.json` and either `await this.initIO({exportBundle, importBundle,
+> bundleScope: "per-viewer-background"})` for whole-bundle state, or
+> `this.defineResource({...})` for per-item `create`/`update`/`delete`. The
+> pipeline already keys state by `(viewerId, backgroundId)`, flushes on
+> slide-out, restores on slide-in, runs the capability guards, and routes to
+> whichever sink the deployment binds — so you get the multi-viewport scoping
+> below **for free**. See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+>
+> The event-driven pattern in this section is the **advanced / fallback** route.
+> Reach for it when you bridge an existing backend that has no sink yet, or when
+> you must react to a user-triggered action such as `save-annotations`. It is
+> shown here because it is the case where picking the *wrong viewer* is easiest
+> — the viewer-scoping rules are the point of the example, not the transport.
+
 ### Generic API (example)
 
 Assume a minimal REST API:
@@ -134,6 +150,14 @@ Assume a minimal REST API:
 - `POST /api/annotations?slideId=...` with body `{ objects: [...] }`
 
 Where `slideId` comes from the viewer’s opened content metadata.
+
+All upstream calls go through `HttpClient` — never native `fetch` (it bypasses
+JWT/CSRF injection, proxy aliases and secureMode policy). One client per
+integration, created once at module scope:
+
+```js
+const api = new HttpClient({ baseURL: "/api" });
+```
 
 ---
 
@@ -158,12 +182,12 @@ VIEWER_MANAGER.broadcastHandler("open", async (e) => {
   await fabric.loadObjects({ objects: [] }, true);
 
   // 3) Fetch and load objects into THIS viewport only
-  const res = await fetch(`/api/annotations?slideId=${encodeURIComponent(slideId)}`, {
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) return;
-
-  const imported = await res.json(); // { objects: [...] }
+  let imported;                              // { objects: [...] }
+  try {
+    imported = await api.request("annotations", { query: { slideId } });
+  } catch (e) {
+    return;                                  // HttpClient throws HTTPError on failure
+  }
 
   if (imported?.objects?.length) {
     await fabric.loadObjects(imported, true); // clear=true is safe on slide switch
@@ -182,11 +206,18 @@ VIEWER_MANAGER.broadcastHandler("open", async (e) => {
 
 ### Best practice: pass the viewer explicitly in the save event payload
 
-Note that this part is simplified, if your API supports it, you should store annotations
-per element, bidnig to events like ``annotation-created``. Here, we provide a handler
-for 'save' action performed by user, which, if not handled and the annotations **plugin** is active,
-downloads the annotations as a file. So even if you implemented per-element saving, you still would
-likely want to implement this to save annotations on user demand, instead of downloading files.
+This part is simplified. Per-element persistence is **not** something you should
+hand-wire to `annotation-created` & co.: declare `crud:annotation` in
+`io.capabilities` and dispatch through `this.defineResource({...})`, which gives
+you guards, the offline outbox, undo/redo and viewer scoping (see
+[`IO_PIPELINE.md`](IO_PIPELINE.md)). Bind to raw annotation events only when the
+pipeline genuinely cannot express your backend.
+
+The `save-annotations` handler below is a different thing — a **user-triggered
+action**, not the storage path. If nothing handles it while the annotations
+**plugin** is active, the annotations are downloaded as a file, so even with
+per-element saving in place you likely want to handle it to save on user demand
+instead.
 
 ```js
 annotations.raiseEvent("save-annotations", { viewer });
@@ -210,13 +241,12 @@ module.addHandler("save-annotations", async (e) => {
   const exported = await fabric.exportObjects(); // { objects: [...] } (example API)
   if (!exported?.objects?.length) return;
 
-  const res = await fetch(`/api/annotations?slideId=${encodeURIComponent(slideId)}`, {
+  // Throws HTTPError on failure — let it propagate, the caller reports it.
+  await api.request("annotations", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(exported),
+    query: { slideId },
+    body: exported,
   });
-
-  if (!res.ok) throw new Error("Save failed");
   e.setHandled?.("Annotations saved.");
 });
 ```
@@ -262,8 +292,8 @@ VIEWER_MANAGER.addHandler("viewer-reset", (e) => cleanupFor(e.viewer));
 
 Cross-viewport navigation sync is a two-layer stack:
 
-- **Transport** — `OpenSeadragon.Tools.link(context, mapper)` (`src/external/osd_tools.js`): the first viewer to move becomes the leader for that frame and pushes its `{zoom, center, rotation, flip}` through every other subscriber's mapper.
-- **Alignment** — `ViewportSyncAPI` (`src/external/scalebar.js`, reachable as `viewer.scalebar.ViewportSyncAPI`): keeps a class-static session `{leaderId, transforms, flipParity}`. The first joined viewer's image space is the reference space; every other viewer stores a similarity transform `p_viewer = A · p_reference + b`, and the mapper converts viewport centres through it (zoom is converted through *image* pixels, so slides of different pixel size/placement stay at matching magnification).
+- **Transport** — `OpenSeadragon.Tools.link(context, mapper)` (`src/classes/osd/tools.ts`): the first viewer to move becomes the leader for that frame and pushes its `{zoom, center, rotation, flip}` through every other subscriber's mapper.
+- **Alignment** — `ViewportSyncAPI` (`src/classes/osd/scalebar/viewport-sync-api.ts`, reachable as `viewer.scalebar.ViewportSyncAPI`): keeps a class-static session `{leaderId, transforms, flipParity}`. The first joined viewer's image space is the reference space; every other viewer stores a similarity transform `p_viewer = A · p_reference + b`, and the mapper converts viewport centres through it (zoom is converted through *image* pixels, so slides of different pixel size/placement stay at matching magnification).
 
 `enable({mode})` decides where that transform comes from:
 
@@ -285,9 +315,9 @@ Both arm a manual re-align, on the principle that a user who discards an alignme
 
 ### Registration providers
 
-`src/external/viewport-registration.js` runs a priority chain and returns the first result at or above `MIN_CONFIDENCE`; a weaker result is passed to the next provider as `ctx.seed` and, if nothing better appears, returned flagged `approximate` (the UI warns instead of pretending it is aligned).
+`src/classes/osd/viewport-registration.ts` runs a priority chain and returns the first result at or above `MIN_CONFIDENCE`; a weaker result is passed to the next provider as `ctx.seed` and, if nothing better appears, returned flagged `approximate` (the UI warns instead of pretending it is aligned).
 
-Built-ins: `metadata` (100) — identical `tileSourceId`, virtual regions of one parent (exact, via `virtual-region-protocol`), or a µm/px seed; `thumbnail` (50) — tissue-silhouette similarity search over ≤384 px thumbnails, refined in `src/external/registration-worker.js` (off the main thread; similarity only — rotation, uniform scale, translation, optional mirror).
+Built-ins: `metadata` (100) — identical `tileSourceId`, virtual regions of one parent (exact, via `virtual-region-protocol`), or a µm/px seed; `thumbnail` (50) — tissue-silhouette similarity search over ≤384 px thumbnails, refined in `src/workers/registration-worker.js` (off the main thread; similarity only — rotation, uniform scale, translation, optional mirror).
 
 Add your own (server-side registration, feature matching, …):
 

@@ -9,10 +9,10 @@
  * captured from the current viewport, holds, narration overlays) and playback.
  *
  * Two rules shape this adapter:
- *  - **Never hand raw module records to a script.** Steps carry screenshots,
- *    navigation sample tracks and visualization snapshots; a recording carries
- *    every step. Everything returned here is a compact summary and binaries are
- *    always stripped.
+ *  - **Never hand raw module records to a script.** Steps carry navigation
+ *    sample tracks and visualization snapshots; a recording carries every step.
+ *    Everything returned here is a compact summary and binaries are always
+ *    stripped.
  *  - **The active viewer is the target.** The module's API is viewer-keyed, but
  *    a raw `viewerId` param would leak viewer identity past the anonymization
  *    layer, so the viewer comes from the script context
@@ -68,7 +68,6 @@ export type StepInfo = {
     capturesViewport: boolean;
     capturesVisualization: boolean;
     capturesNavigation: boolean;
-    hasScreenshot: boolean;
     /** Viewport center in image coordinates (keyframe/navigation steps only). */
     center?: { x: number; y: number };
     zoomLevel?: number;
@@ -96,6 +95,25 @@ export type StepTiming = {
 };
 
 /**
+ * One stop of a tour: where it pauses, for how long, and what it says.
+ *
+ * \`narration\` is the reason the stop exists. Without it a viewer gets a view and
+ * nothing telling them what to look at, so pass it here — it is the same text (and the
+ * same rules) as setStepNarration, applied in the one call that makes the stop.
+ */
+export type StepStop = StepTiming & {
+    /**
+     * The caption shown over the viewer while this step plays. One or two short
+     * sentences (~40 words, 400 characters max) saying what is visible HERE and why it
+     * matters — see setStepNarration for how to write one. Passing it raises the step's
+     * \`duration\` to the time needed to read it.
+     */
+    narration?: string;
+    /** Where the caption sits; defaults to "bottom". See NarrationPlacement. */
+    placement?: NarrationPlacement;
+};
+
+/**
  * Where a narration card sits. Pick by intent, not by taste:
  *  - "bottom" (default) / "top" — a band across the viewer. Informative
  *    narration about tissue the viewer can still see: put the band on the side
@@ -118,6 +136,22 @@ export type AssetInfo = {
     createdAtIso: string;
 };
 
+/**
+ * Whether the tour is watchable. Returned by the calls that FINISH one (play,
+ * playFromIndex, playAll) because a script never sees what it authored — this is the
+ * only report it gets. \`warnings\` is empty when the tour is fine; when it is not, each
+ * entry names the edit to make. Act on them before telling the user the tour is ready.
+ */
+export type TourSummary = {
+    stepCount: number;
+    /** Steps that show a view of their own — the ones a caption belongs on. */
+    keyframeCount: number;
+    narratedCount: number;
+    totalSeconds: number;
+    shortestSeconds: number;
+    warnings: string[];
+};
+
 export type PlaybackState = {
     playing: boolean;
     /** Index of the step the timeline sits at (0-based). */
@@ -125,15 +159,27 @@ export type PlaybackState = {
     stepCount: number;
     /** Recording being played, or the active one when stopped. */
     recordingId: string | null;
+    /** Present on play/playFromIndex/playAll. Read \`tour.warnings\`. */
+    tour?: TourSummary;
 };
+
+/**
+ * Anywhere an id is asked for you may pass the object a previous call returned
+ * instead — every write here answers with a RecordingInfo / StepInfo /
+ * AssetInfo, and its \`id\` is what gets used. \`const r = await
+ * recorder.createRecording("Tour"); await recorder.setActiveRecording(r);\`
+ * works exactly like passing \`r.id\`.
+ */
+export type RecordingRef = string | RecordingInfo;
+/** As RecordingRef, and additionally a 0-based index into the active recording's steps. */
+export type StepRef = string | number | StepInfo;
+export type AssetRef = string | AssetInfo;
 
 export type CaptureSettings = {
     /** Capture the shader/visualization state into new steps. */
     visualization: boolean;
     /** Capture the viewport (zoom/center/rotation) into new steps. Usually true. */
     viewport: boolean;
-    /** Capture a screenshot thumbnail into new steps. */
-    screen: boolean;
 };
 
 /**
@@ -166,21 +212,21 @@ export interface RecorderScriptApi {
     createRecording(name?: string): RecordingInfo;
 
     /** Make an existing recording the active one (stops playback first). */
-    setActiveRecording(recordingId: string): RecordingInfo;
+    setActiveRecording(recording: RecordingRef): RecordingInfo;
 
-    renameRecording(recordingId: string, name: string): RecordingInfo;
+    renameRecording(recording: RecordingRef, name: string): RecordingInfo;
 
     /** Deep-copy a recording (new ids) and make the copy active. */
-    duplicateRecording(recordingId: string): RecordingInfo;
+    duplicateRecording(recording: RecordingRef): RecordingInfo;
 
     /** Delete a recording. Asks the user for permission. */
-    deleteRecording(recordingId: string): Promise<void>;
+    deleteRecording(recording: RecordingRef): Promise<void>;
 
     /**
      * Download a recording as a JSON file. Asks the user for permission (the
      * data leaves the app). Defaults to the active recording.
      */
-    exportRecording(recordingId?: string): Promise<void>;
+    exportRecording(recording?: RecordingRef): Promise<void>;
 
     /**
      * Add recordings from previously exported data (a JSON string, or the same
@@ -197,41 +243,56 @@ export interface RecorderScriptApi {
     // ---- steps ----
 
     /**
-     * Capture the active viewer's CURRENT view as a new keyframe step appended
-     * to the active recording. Navigate first (e.g.
-     * \`viewer.frameImageRegion(bounds)\`) and wait for the move to settle, then
-     * capture.
+     * Capture the active viewer's CURRENT view as one stop of the tour. Navigate
+     * first (e.g. \`viewer.frameImageRegion(bounds)\`) and wait for the move to
+     * settle, then capture.
+     *
+     * PASS \`narration\`. A stop with no caption shows a view and says nothing
+     * about it, which is the difference between a tour and a slideshow of
+     * coordinates:
+     *
+     * \`\`\`
+     * await viewer.frameImageRegion(region.bounds);
+     * await recorder.captureFrame({
+     *     narration: "Glands are back-to-back here with no intervening stroma.",
+     *     placement: "top",
+     * });
+     * \`\`\`
+     *
+     * Timing takes care of itself: left alone a stop eases in over ~1.8 s and then
+     * holds still, and a caption stretches the hold to the time needed to read it.
+     * Pass \`duration\` only to linger longer than that.
      *
      * Capturing without having moved is an ERROR and captures nothing: a step
      * only earns its place by showing something new. Use captureHold() to dwell
      * on the view you are already on. Also fails while the recording is playing.
      */
-    captureFrame(timing?: StepTiming): StepInfo;
+    captureFrame(stop?: StepStop): StepInfo;
 
     /**
-     * Append a timing-only hold (no captured state) — the view stays where the
-     * previous step left it. Use it to pause on a view, e.g. to let a longer
-     * narration be read.
+     * Append a hold — the view stays where the previous step left it. Use it to
+     * dwell on a view you are already on, or to put a second caption on it
+     * (pass \`narration\`); a hold with neither is dead time.
      */
-    captureHold(timing?: StepTiming): StepInfo;
+    captureHold(stop?: StepStop): StepInfo;
 
-    /** The active recording's steps, summarized (no screenshots, no sample tracks). */
+    /** The active recording's steps, summarized (no sample tracks). */
     listSteps(): StepInfo[];
 
     /** One step of the active recording, by id or 0-based index. */
-    getStep(idOrIndex: string | number): StepInfo | null;
+    getStep(step: StepRef): StepInfo | null;
 
     /** Delete a step from the active recording. Asks the user for permission. */
-    removeStep(idOrIndex: string | number): Promise<void>;
+    removeStep(step: StepRef): Promise<void>;
 
     /**
      * Reorder the active recording's steps to match \`stepIds\` (ids not listed
      * keep their relative order at the end).
      */
-    reorderSteps(stepIds: string[]): StepInfo[];
+    reorderSteps(steps: Array<string | StepInfo>): StepInfo[];
 
     /** Change a step's timing. Only the given fields change. */
-    setStepTiming(stepId: string, timing: StepTiming): StepInfo;
+    setStepTiming(step: StepRef, timing: StepTiming): StepInfo;
 
     /**
      * Set (or clear) the step's narration card — markdown rendered over the
@@ -253,7 +314,7 @@ export interface RecorderScriptApi {
      * @param placement where the card sits; defaults to "bottom". Choose it
      *   against the step's content — see NarrationPlacement.
      */
-    setStepNarration(stepId: string, markdown: string, placement?: NarrationPlacement): StepInfo;
+    setStepNarration(step: StepRef, markdown: string, placement?: NarrationPlacement): StepInfo;
 
     /** What new steps capture. */
     getCaptureSettings(): CaptureSettings;
@@ -266,17 +327,17 @@ export interface RecorderScriptApi {
     /** Binary assets (images, voiceover) of the active viewer. Never returns the binary itself. */
     listAssets(): AssetInfo[];
 
-    getAssetInfo(assetId: string): AssetInfo | null;
+    getAssetInfo(asset: AssetRef): AssetInfo | null;
 
     /**
      * Attach an image to a step's narration card. \`dataUrl\` must be an image
      * data URL (\`data:image/png;base64,...\`) of at most 4 MB. The step's
      * duration is raised to at least 4 s so the image is actually seen.
      */
-    attachImageToStep(stepId: string, dataUrl: string, alt?: string): AssetInfo;
+    attachImageToStep(step: StepRef, dataUrl: string, alt?: string): AssetInfo;
 
     /** Delete an asset and detach the overlays using it. Asks the user for permission. */
-    deleteAsset(assetId: string): Promise<void>;
+    deleteAsset(asset: AssetRef): Promise<void>;
 
     // ---- playback ----
 
@@ -284,7 +345,7 @@ export interface RecorderScriptApi {
     play(): PlaybackState;
 
     /** Play from a specific step index. */
-    playFromIndex(index: number): PlaybackState;
+    playFromIndex(step: StepRef): PlaybackState;
 
     /** Play every viewer's active recording together (multi-viewer tour). */
     playAll(): PlaybackState[];
@@ -302,7 +363,7 @@ export interface RecorderScriptApi {
     previous(): PlaybackState;
 
     /** Jump the viewer to a step. Only works while stopped; the view moves there. */
-    goToIndex(index: number): PlaybackState;
+    goToIndex(step: StepRef): PlaybackState;
 
     getPlaybackState(): PlaybackState;
 }
@@ -314,6 +375,16 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const READING_LEAD_IN_SECONDS = 0.8;
 /** Mirrors Recorder.DEFAULT_MOVE_SECONDS — the eased move preceding the hold. */
 const DEFAULT_MOVE_SECONDS = 1.8;
+/**
+ * How long a scripted stop stays still after the move, when the caller says nothing.
+ *
+ * The module defaults a step to 0.5 s, which is right for the UI recorder — a human
+ * clicks, then drags the step out on the timeline in front of them. A script has no
+ * timeline: it writes the number once and never sees the result, so 0.5 s (movement
+ * INCLUDED, because `_moveSeconds` clamps the move to the duration) produced tours that
+ * flick through a slide's regions faster than anyone can look at one.
+ */
+const DEFAULT_HOLD_SECONDS = 2.5;
 /**
  * Spring stiffness stored on captured steps. Playback eases moves itself, so
  * this only shapes out-of-playback jumps (timeline scrubbing); use what the
@@ -363,26 +434,30 @@ export function registerRecorderScriptingApi(): void {
             super(
                 namespace,
                 "Recorder",
-                "Author and play guided tours of a slide with the recorder. A recording belongs to ONE viewer " +
-                "and to the slide open there; select the viewer with application.setActiveViewer before calling. " +
-                "Every call acts on the ACTIVE viewer's own recordings, so application.setActiveViewer switches " +
-                "which recording you are editing: to cover several slides, call createRecording(name) again on " +
-                "each viewer and build that viewer's steps before moving on — one recording per viewer, never one " +
+                // The compact prompt tier keeps roughly the first 400 characters, so the
+                // recipe and the caption rule come first — they are what a tour is
+                // missing when it comes out as a flip-book of coordinates.
+                "Author and play guided tours of a slide. Build one stop at a time: createRecording(name), then " +
+                "for each stop navigate the view (viewer.frameImageRegion(bounds); pathology.exploreSlide gives " +
+                "you regions worth visiting) and call captureFrame({ narration, placement }) — the caption is " +
+                "what makes it a tour rather than a slideshow of coordinates. Finish with play() and READ the " +
+                "`tour.warnings` it returns; act on them before you tell the user the tour is ready. " +
+                "Captions are clinical notes, NOT storytelling: one or two short sentences (400 characters max) " +
+                "saying what is visible here and why it matters — no chapter titles, no scene-setting, no " +
+                "rhetorical questions. Place them with `placement`: \"bottom\"/\"top\" band opposite the region " +
+                "you discuss, \"center\" only when the text replaces the slide, \"left\"/\"right\" rarely (the " +
+                "app's own UI lives there). Timing looks after itself — a stop eases in and then holds still, and " +
+                "a caption stretches the hold to reading time — so pass `duration` only to linger longer. " +
+                "setStepNarration(step, markdown) captions a step you already captured; captureHold() adds a " +
+                "pause on the view you are on. " +
+                "A recording belongs to ONE viewer and to the slide open there; select the viewer with " +
+                "application.setActiveViewer before calling. Every call acts on the ACTIVE viewer's own " +
+                "recordings, so covering several slides means calling createRecording(name) again on each viewer " +
+                "and building that viewer's steps before moving on — one recording per viewer, never one " +
                 "recording spanning slides. " +
-                "To build a tour: createRecording(name), then for each stop navigate the view (e.g. " +
-                "viewer.frameImageRegion(bounds), pathology.exploreSlide gives you regions to visit), call " +
-                "captureFrame() to record that view as a step, and setStepNarration(stepId, markdown) to caption " +
-                "it; finish with play(). Captions are clinical notes, NOT storytelling: one or two short sentences " +
-                "(400 characters max) saying what is visible here and why it matters — no chapter titles, no " +
-                "scene-setting, no rhetorical questions. Playback is on a timer — each step disappears once its " +
-                "duration elapses — so ALWAYS caption with setStepNarration (it stretches the step to the time " +
-                "needed to read the text) instead of leaving the short default duration. Place the caption with " +
-                "its third argument: \"bottom\"/\"top\" band opposite the region you discuss, \"center\" only when " +
-                "the text replaces the slide, \"left\"/\"right\" rarely (the app's own UI lives there). " +
-                "captureHold() inserts a pause. listRecordings/listSteps return compact " +
-                "summaries (screenshots and sample tracks are never included). Playback: play, stop, next, " +
-                "previous, goToIndex, playFromIndex, and playAll/stopAll for all viewers at once. Deleting a " +
-                "recording, a step or an asset asks the user for permission.",
+                "listRecordings/listSteps return compact summaries (sample tracks are never included). " +
+                "Playback: play, stop, next, previous, goToIndex, playFromIndex, and playAll/stopAll " +
+                "for all viewers at once. Deleting a recording, a step or an asset asks the user for permission.",
             );
         }
 
@@ -433,6 +508,57 @@ export function registerRecorderScriptingApi(): void {
                 throw new Error("The active viewer has no identity; it cannot hold recordings.");
             }
             return id;
+        }
+
+        /**
+         * Coerce an id argument that may have arrived as the info object a
+         * previous call returned.
+         *
+         * Every write here answers with a RecordingInfo / StepInfo / AssetInfo,
+         * so feeding that value straight into the next call is the natural next
+         * line to write — and refusing it used to surface as
+         * `No recording '[object Object]' on this viewer`, which names the
+         * symptom and not the fix. Unwrapping `.id` is not guesswork: it is the
+         * identity this API just handed out.
+         */
+        _id(value: unknown, what: string): string {
+            if (typeof value === "string" && value.trim()) return value;
+            if (value && typeof value === "object" && typeof (value as AnyRecord).id === "string" && (value as AnyRecord).id) {
+                return (value as AnyRecord).id;
+            }
+            throw new Error(
+                `${what} must be an id string — or the object a previous call returned, whose 'id' is used. `
+                + `Received ${this._describeArg(value)}.`
+            );
+        }
+
+        /** As `_id`, for the parameters documented as "by id or 0-based index". */
+        _ref(value: unknown, what: string): string | number {
+            if (typeof value === "number") {
+                if (!Number.isInteger(value) || value < 0) {
+                    throw new Error(`${what} as an index must be a whole number from 0 upwards. Received ${value}.`);
+                }
+                return value;
+            }
+            if (typeof value === "string" && value.trim()) return value;
+            if (value && typeof value === "object" && typeof (value as AnyRecord).id === "string" && (value as AnyRecord).id) {
+                return (value as AnyRecord).id;
+            }
+            throw new Error(
+                `${what} must be an id string, a 0-based index, or the object a previous call returned. `
+                + `Received ${this._describeArg(value)}.`
+            );
+        }
+
+        _describeArg(value: unknown): string {
+            if (value === null) return "null";
+            if (value === undefined) return "undefined";
+            if (typeof value === "object") {
+                return Array.isArray(value)
+                    ? "an array"
+                    : `an object without a usable 'id' (keys: ${Object.keys(value as AnyRecord).slice(0, 6).join(", ") || "none"})`;
+            }
+            return `${typeof value} ${JSON.stringify(value)}`;
         }
 
         /**
@@ -509,7 +635,6 @@ export function registerRecorderScriptingApi(): void {
                 capturesViewport: recorder.stepCapturesViewport(step),
                 capturesVisualization: recorder.stepCapturesVisualization(step),
                 capturesNavigation: recorder.stepCapturesNavigation(step),
-                hasScreenshot: !!step.screenShot,
                 center: step.point ? { x: step.point.x, y: step.point.y } : undefined,
                 zoomLevel: typeof step.zoomLevel === "number" ? step.zoomLevel : undefined,
                 overlays: (step.overlays ?? []).map((o: AnyRecord) => this._overlayInfo(o)),
@@ -641,7 +766,7 @@ export function registerRecorderScriptingApi(): void {
             return this._stepInfo(step, index);
         }
 
-        _playback(): AnyRecord {
+        _playback(withTour = false): AnyRecord {
             const recorder = this._recorder();
             const viewerId = this._vid();
             const active = recorder.getActiveRecording(viewerId);
@@ -650,6 +775,10 @@ export function registerRecorderScriptingApi(): void {
                 index: recorder.currentStepIndex(viewerId),
                 stepCount: active?.steps?.length ?? 0,
                 recordingId: active?.id ?? null,
+                // Only on the calls that FINISH a tour. A script never watches what it
+                // authored, so playing it is the last moment anything can say the tour
+                // is nine uncaptioned flashes — and it is a report, not a refusal.
+                ...(withTour && active ? { tour: recorder.summarizeTour(active.steps) } : {}),
             };
         }
 
@@ -667,13 +796,19 @@ export function registerRecorderScriptingApi(): void {
          * pass what the recorder plugin captures with so scrubbing feels the
          * same. The eased move length is `moveDuration`, applied separately.
          */
-        _timingArgs(timing?: AnyRecord): [number, number, number] {
+        /**
+         * @param moving whether the step eases into a new view (a keyframe) or just
+         *   holds the one already on screen — a hold pays for no movement, so it needs
+         *   only the still time.
+         */
+        _timingArgs(timing?: AnyRecord, moving = true): [number, number, number] {
             const move = this._seconds(timing?.move, 0, "move");
+            const fallback = (moving ? DEFAULT_MOVE_SECONDS : 0) + DEFAULT_HOLD_SECONDS;
             return [
                 this._seconds(timing?.delay, 0, "delay"),
                 // A step must outlast its own movement, so an explicit long
                 // move implies at least that much duration.
-                this._seconds(timing?.duration, Math.max(0.5, move), "duration"),
+                this._seconds(timing?.duration, Math.max(fallback, move), "duration"),
                 LEGACY_SPRING_STIFFNESS,
             ];
         }
@@ -740,7 +875,8 @@ export function registerRecorderScriptingApi(): void {
             return this._recordingInfo(recording, recording.id);
         }
 
-        setActiveRecording(recordingId: string): AnyRecord {
+        setActiveRecording(recordingIdOrInfo: string | AnyRecord): AnyRecord {
+            const recordingId = this._id(recordingIdOrInfo, "setActiveRecording(recordingId)");
             const viewerId = this._vid();
             this._requireRecording(recordingId);
             this._recorder().setActiveRecording(recordingId, viewerId);
@@ -749,7 +885,8 @@ export function registerRecorderScriptingApi(): void {
             return this._recordingInfo(recording, recordingId);
         }
 
-        async renameRecording(recordingId: string, name: string): Promise<AnyRecord> {
+        async renameRecording(recordingIdOrInfo: string | AnyRecord, name: string): Promise<AnyRecord> {
+            const recordingId = this._id(recordingIdOrInfo, "renameRecording(recordingId)");
             if (typeof name !== "string" || !name.trim()) {
                 throw new Error("A recording name must be a non-empty string.");
             }
@@ -760,7 +897,8 @@ export function registerRecorderScriptingApi(): void {
             return this._recordingInfo(this._requireRecording(recordingId), activeId);
         }
 
-        async duplicateRecording(recordingId: string): Promise<AnyRecord> {
+        async duplicateRecording(recordingIdOrInfo: string | AnyRecord): Promise<AnyRecord> {
+            const recordingId = this._id(recordingIdOrInfo, "duplicateRecording(recordingId)");
             this._requireRecording(recordingId);
             const copy = this._recorder().duplicateRecording(recordingId, this._vid());
             if (!copy) throw new Error(`Failed to duplicate recording '${recordingId}'.`);
@@ -768,7 +906,8 @@ export function registerRecorderScriptingApi(): void {
             return this._recordingInfo(copy, copy.id);
         }
 
-        async deleteRecording(recordingId: string): Promise<void> {
+        async deleteRecording(recordingIdOrInfo: string | AnyRecord): Promise<void> {
+            const recordingId = this._id(recordingIdOrInfo, "deleteRecording(recordingId)");
             const recording = this._requireRecording(recordingId, true);
             await this._consent("Delete recording", [
                 `Recording: ${recording.name}`,
@@ -778,13 +917,14 @@ export function registerRecorderScriptingApi(): void {
             await this._settle();
         }
 
-        async exportRecording(recordingId?: string): Promise<void> {
+        async exportRecording(recordingIdOrInfo?: string | AnyRecord): Promise<void> {
             const viewerId = this._vid();
-            const recording = recordingId
-                ? this._requireRecording(recordingId) : this._requireActiveRecording();
+            const recording = recordingIdOrInfo === undefined || recordingIdOrInfo === null
+                ? this._requireActiveRecording()
+                : this._requireRecording(this._id(recordingIdOrInfo, "exportRecording(recordingId)"));
             await this._consent("Export recording to a file", [
                 `Recording: ${recording.name}`,
-                "The recording (including any captured screenshots) is downloaded as a JSON file.",
+                "The recording is downloaded as a JSON file.",
             ], "recorder:export");
             this._recorder().setActiveRecording(recording.id, viewerId);
             this._recorder().downloadActiveRecording(viewerId);
@@ -822,13 +962,37 @@ export function registerRecorderScriptingApi(): void {
             }
             const step = this._recorder().create(this._vid(), ...this._timingArgs(timing));
             const info = await this._capturedInfo(step, "capture the current view", true);
-            return timing?.move === undefined ? info : await this.setStepTiming(info.id, { move: timing.move });
+            return this._finishStop(info, timing);
         }
 
         async captureHold(timing?: AnyRecord): Promise<AnyRecord> {
             this._requireEditableActiveRecording();
-            const step = this._recorder().createEmpty(this._vid(), ...this._timingArgs(timing));
-            return this._capturedInfo(step, "add a hold step");
+            const step = this._recorder().createEmpty(this._vid(), ...this._timingArgs(timing, false));
+            const info = await this._capturedInfo(step, "add a hold step");
+            return this._finishStop(info, timing);
+        }
+
+        /**
+         * Apply the parts of a stop that only exist once the step does: an explicit
+         * move, then its caption.
+         *
+         * Captioning used to be a separate second call, which made the UNCAPTIONED tour
+         * the shorter thing to write — and that is what got written: nine stops, no
+         * text, half a second each. Accepting the caption here makes the good path the
+         * short one, and reuses `setStepNarration` whole (the 400-char cap, the
+         * placement mapping, and the raise of `duration` to move + reading time), so
+         * there is no second implementation to drift.
+         */
+        async _finishStop(info: AnyRecord, timing?: AnyRecord): Promise<AnyRecord> {
+            let current = info;
+            // Before the narration: its duration maths reads the step's move.
+            if (timing?.move !== undefined) {
+                current = await this.setStepTiming(current.id, { move: timing.move });
+            }
+            if (typeof timing?.narration === "string" && timing.narration.trim()) {
+                current = await this.setStepNarration(current.id, timing.narration, timing.placement);
+            }
+            return current;
         }
 
         listSteps(): AnyRecord[] {
@@ -836,14 +1000,14 @@ export function registerRecorderScriptingApi(): void {
             return (recording.steps ?? []).map((s: AnyRecord, i: number) => this._stepInfo(s, i));
         }
 
-        getStep(idOrIndex: string | number): AnyRecord | null {
-            const { step, index } = this._resolveStep(idOrIndex);
+        getStep(idOrIndex: string | number | AnyRecord): AnyRecord | null {
+            const { step, index } = this._resolveStep(this._ref(idOrIndex, "getStep(idOrIndex)"));
             return this._stepInfo(step, index);
         }
 
-        async removeStep(idOrIndex: string | number): Promise<void> {
+        async removeStep(idOrIndex: string | number | AnyRecord): Promise<void> {
             this._requireEditableActiveRecording();
-            const { step, index } = this._resolveStep(idOrIndex);
+            const { step, index } = this._resolveStep(this._ref(idOrIndex, "removeStep(idOrIndex)"));
             await this._consent("Delete a recording step", [
                 `Step ${index + 1} (${step.kind ?? "keyframe"}) of the active recording.`,
             ], "recorder:removeStep");
@@ -851,19 +1015,20 @@ export function registerRecorderScriptingApi(): void {
             await this._settle();
         }
 
-        async reorderSteps(stepIds: string[]): Promise<AnyRecord[]> {
-            if (!Array.isArray(stepIds) || stepIds.some(id => typeof id !== "string")) {
-                throw new Error("reorderSteps expects an array of step ids.");
+        async reorderSteps(stepIds: Array<string | AnyRecord>): Promise<AnyRecord[]> {
+            if (!Array.isArray(stepIds)) {
+                throw new Error("reorderSteps expects an array of step ids (or the step objects listSteps returned).");
             }
+            const ids = stepIds.map((id, i) => this._id(id, `reorderSteps(stepIds)[${i}]`));
             this._requireEditableActiveRecording();
-            this._recorder().sortWithIdList(stepIds, false, this._vid());
+            this._recorder().sortWithIdList(ids, false, this._vid());
             await this._settle();
             return this.listSteps();
         }
 
-        async setStepTiming(stepId: string, timing: AnyRecord): Promise<AnyRecord> {
+        async setStepTiming(stepId: string | number | AnyRecord, timing: AnyRecord): Promise<AnyRecord> {
             this._requireEditableActiveRecording();
-            const { step } = this._resolveStep(stepId);
+            const { step } = this._resolveStep(this._ref(stepId, "setStepTiming(stepId)"));
             const delay = this._seconds(timing?.delay, step.delay, "delay");
             const duration = this._seconds(timing?.duration, step.duration, "duration");
             const move = this._seconds(timing?.move, this._moveSeconds(step), "move");
@@ -880,9 +1045,9 @@ export function registerRecorderScriptingApi(): void {
             return this._stepInfo(resolved.step, resolved.index);
         }
 
-        async setStepNarration(stepId: string, markdown: string, placement?: string): Promise<AnyRecord> {
+        async setStepNarration(stepId: string | number | AnyRecord, markdown: string, placement?: string): Promise<AnyRecord> {
             this._requireEditableActiveRecording();
-            const { step } = this._resolveStep(stepId);
+            const { step } = this._resolveStep(this._ref(stepId, "setStepNarration(stepId)"));
             if (typeof markdown !== "string") {
                 throw new Error("setStepNarration expects markdown text (pass an empty string to remove it).");
             }
@@ -944,7 +1109,6 @@ export function registerRecorderScriptingApi(): void {
             return {
                 visualization: recorder.capturesVisualization,
                 viewport: recorder.capturesViewport,
-                screen: recorder.capturesScreen,
             };
         }
 
@@ -952,7 +1116,6 @@ export function registerRecorderScriptingApi(): void {
             const recorder = this._recorder();
             if (settings?.visualization !== undefined) recorder.setCapturesVisualization(!!settings.visualization);
             if (settings?.viewport !== undefined) recorder.setCapturesViewport(!!settings.viewport);
-            if (settings?.screen !== undefined) recorder.setCapturesScreen(!!settings.screen);
             return this.getCaptureSettings();
         }
 
@@ -976,14 +1139,14 @@ export function registerRecorderScriptingApi(): void {
                 .map((asset: AnyRecord) => this._assetInfo(asset));
         }
 
-        getAssetInfo(assetId: string): AnyRecord | null {
-            const asset = this._recorder().getAsset(assetId);
+        getAssetInfo(assetId: string | AnyRecord): AnyRecord | null {
+            const asset = this._recorder().getAsset(this._id(assetId, "getAssetInfo(assetId)"));
             return asset ? this._assetInfo(asset) : null;
         }
 
-        attachImageToStep(stepId: string, dataUrl: string, alt?: string): AnyRecord {
+        attachImageToStep(stepId: string | number | AnyRecord, dataUrl: string, alt?: string): AnyRecord {
             this._requireEditableActiveRecording();
-            const { step } = this._resolveStep(stepId);
+            const { step } = this._resolveStep(this._ref(stepId, "attachImageToStep(stepId)"));
 
             const match = typeof dataUrl === "string" && /^data:(image\/[\w.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
             if (!match) {
@@ -1031,7 +1194,8 @@ export function registerRecorderScriptingApi(): void {
             return this._assetInfo(asset);
         }
 
-        async deleteAsset(assetId: string): Promise<void> {
+        async deleteAsset(assetIdOrInfo: string | AnyRecord): Promise<void> {
+            const assetId = this._id(assetIdOrInfo, "deleteAsset(assetId)");
             const asset = this._recorder().getAsset(assetId);
             if (!asset) throw new Error(`No asset '${assetId}'.`);
             await this._consent("Delete a recorder asset", [
@@ -1046,13 +1210,15 @@ export function registerRecorderScriptingApi(): void {
         play(): AnyRecord {
             this._requireActiveRecording();
             this._recorder().play(this._vid());
-            return this._playback();
+            return this._playback(true);
         }
 
-        playFromIndex(index: number): AnyRecord {
-            this._resolveStep(index);
+        playFromIndex(step: number | string | AnyRecord): AnyRecord {
+            // The module needs a positional index; resolve whatever reference
+            // came in (index, step id, or the StepInfo a write returned) to one.
+            const { index } = this._resolveStep(this._ref(step, "playFromIndex(index)"));
             this._recorder().playFromIndex(index, this._vid());
-            return this._playback();
+            return this._playback(true);
         }
 
         playAll(): AnyRecord[] {
@@ -1067,6 +1233,7 @@ export function registerRecorderScriptingApi(): void {
                     index: recorder.currentStepIndex(viewerId),
                     stepCount: active?.steps?.length ?? 0,
                     recordingId: active?.id ?? null,
+                    ...(active ? { tour: recorder.summarizeTour(active.steps) } : {}),
                 };
             });
         }
@@ -1092,8 +1259,8 @@ export function registerRecorderScriptingApi(): void {
             return this._playback();
         }
 
-        goToIndex(index: number): AnyRecord {
-            this._resolveStep(index);
+        goToIndex(step: number | string | AnyRecord): AnyRecord {
+            const { index } = this._resolveStep(this._ref(step, "goToIndex(index)"));
             if (this._recorder().isPlaying(this._vid())) {
                 throw new Error("Cannot jump to a step while playing. Call recorder.stop() first.");
             }

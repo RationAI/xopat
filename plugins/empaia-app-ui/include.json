@@ -5,7 +5,6 @@
     "longDescription": "%meta.longDescription%",
     "version": "0.1.0",
     "author": "xOpat",
-    "stability": "experimental",
     "categories": ["Analysis"],
     "keywords": ["empaia", "workbench", "ai", "roi", "jobs"],
     "icon": "ph-flask",

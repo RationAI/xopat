@@ -2,6 +2,25 @@ type XOpatClientConfig = {
     domain: string | null;
     path: string | null;
     /**
+     * Identity of this deployment for browser-local boot state — the session
+     * cache (`xoSessionCache`, `__xopat_session__`) and the plugin-autoload
+     * cookie. Browsers scope those by ORIGIN, and one origin routinely serves
+     * several deployments (every env file on localhost), so without a key a
+     * session captured under one env replays under another.
+     *
+     * Pin it in production: the key then never changes and users keep their
+     * state across unrelated config edits. Leave it unset in development and
+     * each env file gets its own automatically derived key (fingerprint of the
+     * configuration that decides whether data references still resolve — see
+     * `src/classes/app/deployment-key.ts`).
+     *
+     * Does NOT scope `kv:*` storage (AppCache/AppCookies/plugin caches); those
+     * remain keyed by `<ownerUid>::<key>` only.
+     */
+    cacheKey?: string | null;
+    /** @deprecated Use `cacheKey`. Kept as a backwards-compatible alias. */
+    sessionCacheKey?: string | null;
+    /**
      * Named slide-protocol registry. Each entry is either a backtick-template
      * URL string with `data` (scalar DataID) in scope — the server URL embedded
      * in the template — or an object
@@ -120,6 +139,12 @@ type XOpatUiSetup = {
 
 type XOpatSetup = {
     sessionName?: string | null;
+    /**
+     * @deprecated Use `core.client.<active>.cacheKey`. Read only as a legacy
+     * fallback: `setup` doubles as the session-`params` allowlist, and
+     * deployment identity must not be settable from a session (AGENTS.md §7).
+     */
+    sessionCacheKey?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
@@ -141,7 +166,10 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
-    /** Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). */
+    /**
+     * Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). Session-wide
+     * default; a single slide overrides it with `background[i].fill`.
+     */
     backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
@@ -259,6 +287,15 @@ type XOpatSetup = {
      */
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
+    /**
+     * How many viewer cells may hold their own WebGL context instead of sharing
+     * one. A private context removes the per-frame `readPixels` + `putImageData`
+     * transfer a shared context needs; cells past the budget fall back to the
+     * shared context so a host spawning many viewers stays under the browser's
+     * ~16-context cap. Counted in cells (a cell costs two contexts: viewer +
+     * navigator). `0` disables private contexts.
+     */
+    webGlPrivateContextBudget?: number | null;
     fetchAsync?: boolean | null;
     /**
      * Hide the plugin catalogue — the listing that browses available plugins and
@@ -336,6 +373,12 @@ type XOpatSetup = {
     visualizationInspectorMode?: string | null;
     visualizationInspectorRadiusPx?: number | null;
     visualizationInspectorLensZoom?: number | null;
+    /**
+     * FlexDrawer pointer forwarding, required by shaders reading `fr_interaction_*`
+     * state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a
+     * visible layer exists; `"always"` / `"never"` pin it.
+     */
+    flexInteractionForwarding?: "auto" | "always" | "never" | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;

@@ -10,7 +10,7 @@ import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
  *
  * @param {object} options - Configuration options for the toolbar item.
  * @param {string} [options.id] - The ID for the component.
- * @param {string|BaseComponent} options.icon - Icon name string ("fa-…" or "ph-…") or a pre-built icon component instance (FAIcon / PhIcon).
+ * @param {string|BaseComponent} options.icon - Phosphor icon name string ("ph-…") or a pre-built icon component instance (PhIcon / ImageIcon).
  * @param {string} [options.label] - Visible text for the button (used by parents like ToolbarChoiceGroup to render dropdown rows). When `tooltip` is not provided, also used as the title attribute.
  * @param {string} [options.tooltip] - Hover tooltip (title attribute). Falls back to `label`.
  * @param {Function} [options.onClick] - The function to execute when the button is clicked.

@@ -11,6 +11,14 @@ the **default** OIDC provider.
 > secret shipped to the browser is insecure (this module warns and still proceeds
 > PKCE-style). The canonical auth model is documented in [`src/AUTH.md`](../../src/AUTH.md).
 
+**Runnable example.** [`test/fixtures/keycloak/`](../../test/fixtures/keycloak/README.md)
+brings up a Keycloak with a public PKCE client already registered, and
+[`test/env/oidc.json`](../../test/env/oidc.json) is a complete deployment against
+it — contexts, the `oidc` RPC verifier, and the role rules its `groups` claim
+drives. `npm test -- --project=oidc` drives the login for real. The same fixture
+backs the SAML deployment next to it, which is how the *"a feature names a
+context, never a mechanism"* claim is checked rather than asserted.
+
 ## Purpose
 
 - Perform automated login + silent token refresh against an OIDC IdP.
@@ -112,6 +120,24 @@ in-flight attempt. Core adds a second, broker-independent bound on the 401 path
 
 Regression signature to watch for: repeated `…/oidc/authorize?…&prompt=none` requests
 minutes apart in one session, each ending in a redirect bounce or an aborted request.
+
+**Only the refresh-token route reports `"unknown"`.** The two routes fail in ways that
+mean opposite things, so `_silentSignIn` tags its rejection with the one it took
+(`xopatSilentPath`) and `signInSilent` reads that tag. A token-endpoint failure is real
+evidence the authority is unreachable, and core must not escalate it into a redirect. A
+frame timeout is not: the frame carries the viewer's own load cost, the provider may
+simply refuse to be framed, and a `redirect_uri` it does not recognise makes it render
+its own error page — unreadable cross-origin, so the only symptom is the watchdog. That
+path reports `false`, which keeps the context in core's interactive phase.
+
+Because that error is invisible, the client logs its three effective redirect URIs
+(`redirect_uri`, `popup_redirect_uri`, `silent_redirect_uri`) at `console.debug` on
+construction, and names `silent_redirect_uri` again in the frame-timeout warning. A
+silent probe that always times out while the interactive login works is almost always
+an unregistered URI — compare those lines against the provider's registered list
+first. Registration is exact: scheme, host, path and case, with no trailing-slash
+tolerance, and a provider fronted by a registry (Perun → MITREid) may need time to
+sync an approved change before the live client accepts it.
 
 ### Callbacks must not boot the viewer
 

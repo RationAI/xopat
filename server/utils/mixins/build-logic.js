@@ -111,6 +111,85 @@ function _smartCopy(src, dest, logger, prefix) {
 
 
 
+/**
+ * Files a workspace bundle is built from, for a freshness comparison.
+ *
+ * Everything the item ships EXCEPT the build outputs themselves — an artifact
+ * that counted as its own source would always look fresh — and except the
+ * directories no bundle reads from.
+ */
+function collectWorkspaceSources(itemDirectory) {
+    const found = [];
+    function walk(dir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch { return; /* unreadable directory cannot make a bundle stale */ }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (
+                    entry.name === "node_modules" ||
+                    entry.name === ".git" ||
+                    entry.name === ".server-dist" ||
+                    entry.name === "test"
+                ) continue;
+                walk(full);
+            } else if (
+                !/^index\.workspace\./i.test(entry.name) &&
+                !/\.map$/i.test(entry.name) &&
+                !/\.min\.(js|mjs|css)$/i.test(entry.name)
+            ) {
+                found.push(full);
+            }
+        }
+    }
+    if (fs.existsSync(itemDirectory)) walk(itemDirectory);
+    return found;
+}
+
+/**
+ * Is this workspace item's bundle older than what it was built from?
+ *
+ * The dev watcher only rebuilds an item when chokidar reports a change, so any
+ * edit made while it was NOT running — a `git checkout`, a merge, work done on
+ * another machine — leaves the artifact behind forever. The app then runs the
+ * previous commit's code with nothing in the page or the logs to say so, which
+ * is close to undiagnosable from the browser (it presented as a `TypeError` in
+ * a function whose source had already been fixed). Answering this question at
+ * watcher startup is what closes that hole.
+ *
+ * @param {string} itemDirectory workspace item root
+ * @param {object} packageData its parsed package.json
+ * @returns {{stale: boolean, artifact: string, newestSource: string|null}}
+ */
+function inspectWorkspaceBundle(itemDirectory, packageData) {
+    const artifact = path.join(itemDirectory, "index.workspace.js");
+    const buildable = !!(packageData && (
+        packageData.buildEntry ||
+        (packageData.scripts && (packageData.scripts.dev || packageData.scripts.build))
+    ));
+    if (!buildable) return { stale: false, artifact, newestSource: null };
+
+    let builtAt;
+    try {
+        builtAt = fs.statSync(artifact).mtimeMs;
+    } catch {
+        // Never built. A `scripts.build` item may legitimately emit something
+        // else, but building it again is cheap and idempotent.
+        return { stale: true, artifact, newestSource: null };
+    }
+
+    let newestSource = null;
+    let newestAt = 0;
+    for (const file of collectWorkspaceSources(itemDirectory)) {
+        let mtimeMs;
+        try { ({ mtimeMs } = fs.statSync(file)); } catch { continue; }
+        if (mtimeMs > newestAt) { newestAt = mtimeMs; newestSource = file; }
+    }
+    return { stale: newestAt > builtAt, artifact, newestSource };
+}
+
 function findServerEntryFiles(itemDirectory) {
     const found = [];
     function walk(dir) {
@@ -407,6 +486,8 @@ const BuildLogic = {
             if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
         }
     },
+
+    inspectWorkspaceBundle,
 
     spawnAsync,
 };

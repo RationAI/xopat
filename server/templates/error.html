@@ -33,7 +33,7 @@
 
         <div class="card-actions">
             <button id="system-message-details-btn"
-                    onclick="$('#system-message-details').removeClass('hidden'); $(this).addClass('hidden');"
+                    onclick="document.getElementById('system-message-details').classList.remove('hidden'); this.classList.add('hidden');"
                     class="btn btn-outline btn-sm">
                 <template id="template-text-details">Show Details</template>
             </button>
@@ -45,34 +45,37 @@
     </div>
 </div>
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
-
 <script type="text/javascript">
 
     /*---------------------------------------------------------*/
     /*------------ System error messenger ---------------------*/
     /*---------------------------------------------------------*/
 
+    var DIMMED = ["opacity-30", "pointer-events-none", "blur-sm", "transition-all", "duration-300"];
+
     var DisplayError = {
-        msgTitle: $("#system-message-title"),
-        msgDetails: $("#system-message-details"),
-        msgContainer: $("#system-message"),
-        screenContainer: $("#viewer-container"),
+        msgTitle: document.getElementById("system-message-title"),
+        msgDetails: document.getElementById("system-message-details"),
+        msgContainer: document.getElementById("system-message"),
+        screenContainer: document.getElementById("viewer-container"),
 
         show: function(title, description) {
-            this.msgTitle.html(title);
-            this.msgDetails.html(description);
+            // Server-rendered payloads, markup-capable (they carry <code> blocks).
+            if (this.msgTitle) this.msgTitle.innerHTML = title;
+            if (this.msgDetails) this.msgDetails.innerHTML = description;
 
             // Remove hidden class to show
-            this.msgContainer.removeClass("hidden");
+            if (this.msgContainer) this.msgContainer.classList.remove("hidden");
 
             // Visual disable of background
-            this.screenContainer.addClass("opacity-30 pointer-events-none blur-sm transition-all duration-300");
+            if (this.screenContainer) this.screenContainer.classList.add.apply(
+                this.screenContainer.classList, DIMMED);
         },
 
         hide: function() {
-            this.msgContainer.addClass("hidden");
-            this.screenContainer.removeClass("opacity-30 pointer-events-none blur-sm transition-all duration-300");
+            if (this.msgContainer) this.msgContainer.classList.add("hidden");
+            if (this.screenContainer) this.screenContainer.classList.remove.apply(
+                this.screenContainer.classList, DIMMED);
         }
     };
 </script>

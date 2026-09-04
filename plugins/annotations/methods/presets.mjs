@@ -3,8 +3,7 @@ import { PresetCard } from '../components/presetCard.mjs';
 const { div, span, input, select, option, button, i, b, a, br, h4 } = globalThis.van.tags;
 
 function iconNode(icon, extraClass = '', style = '') {
-    const isPh = String(icon ?? '').trim().startsWith('ph-');
-    const cls = isPh ? `ph-light ${icon} ${extraClass}` : `fa-auto ${icon} ${extraClass}`;
+    const cls = `ph-light ${icon ?? ''} ${extraClass}`;
     return i({ class: cls.trim(), style });
 }
 

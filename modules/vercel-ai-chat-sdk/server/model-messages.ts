@@ -95,6 +95,24 @@ export function coerceMessageText(message: ChatMessage | null | undefined): stri
     }).filter(Boolean).join('\n');
 }
 
+/**
+ * An assistant turn carrying nothing a model can read: no text, and no media part that
+ * would say something on its own.
+ *
+ * A turn that produced no usable output is still STORED — the transcript should stay
+ * faithful and the UI reads `metadata.emptyReply` — but replaying it teaches the model
+ * only that ending a turn with nothing is acceptable, and some providers reject empty
+ * assistant content outright. One stalled turn used to sit in the window and poison
+ * every later one. Only assistant turns qualify: a user or tool message with just
+ * attachments is meaningful, and dropping it would lose real input.
+ */
+export function isContentlessAssistantMessage(message: ChatMessage | null | undefined): boolean {
+    if (message?.role !== 'assistant') return false;
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    if (parts.some((part: any) => part?.type === 'image' || part?.type === 'file')) return false;
+    return !coerceMessageText(message).trim();
+}
+
 export function toModelMessage(
     message: ChatMessage,
     attachmentIndex?: Map<string, ChatAttachmentRecord>,

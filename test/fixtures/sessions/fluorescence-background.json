@@ -1,0 +1,44 @@
+{
+  "params": {
+    "customBlending": true,
+    "background": "#000000ff",
+    "sessionName": "fluorescence-background"
+  },
+  "data": [
+    {
+      "dataID": "slides/LuCa-7color_Scan1.ome.tiff",
+      "options": {
+        "format": "tiff",
+        "channels": "all"
+      }
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "Fluorescence composite",
+      "shaders": [
+        {
+          "type": "single_channel",
+          "params": {
+            "color": "#00ff66"
+          }
+        },
+        {
+          "type": "single_channel",
+          "params": {
+            "use_channel_base0": 1,
+            "color": "#ffe600"
+          }
+        },
+        {
+          "type": "single_channel",
+          "params": {
+            "use_channel_base0": 2,
+            "color": "#ff3b7a"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -11,10 +11,26 @@
          falling back to the default xOpat assets. See AGENTS.md §7 / branding config. -->
     <template id="template-branding"></template>
 
-    <!--Remember WARNS/ERRORS to be able to export-->
+    <!--
+        Pre-boot capture. Errors happen before any bundle is parsed, and this is the
+        only thing that can see them. It hands over to the real client logging broker
+        (APPLICATION_CONTEXT.log, src/classes/app/logging.ts) as soon as the app
+        context is built: the broker drains this array, routes console.* into its
+        `console` channel and replaces `appTrace` with a bounded view. Until then the
+        array is capped here — it used to grow for the whole session.
+        See src/LOGGING.md.
+    -->
     <script type="text/javascript">
         (function () {
             window.console.appTrace = [];
+            const PRE_BOOT_TRACE_MAX = 500;
+            const remember = function (parts) {
+                if (window.console.__appTraceOwned) return;   // the broker took over
+                const trace = window.console.appTrace;
+                if (!Array.isArray(trace)) return;
+                trace.push.apply(trace, parts);
+                if (trace.length > PRE_BOOT_TRACE_MAX) trace.splice(0, trace.length - PRE_BOOT_TRACE_MAX);
+            };
 
             // Benign Chromium warning: a ResizeObserver callback dirtied layout and
             // queued another notification in the same frame. State is consistent on
@@ -31,9 +47,9 @@
                 return ts.toLocaleTimeString("cs-CZ") + "." + pad.substring(0, pad.length - ms.length) + ms + " ";
             };
             window.console.error = function (...args) {
-                window.console.appTrace.push("ERROR ",
+                remember(["ERROR ",
                     // (new Error().stack.split("at ")[1]).trim(), " ",
-                    timestamp(), ...args, "\n");
+                    timestamp(), ...args, "\n"]);
 
                 const stack = new Error().stack;
                 defaultError.apply(window.console, [...args, stack]);
@@ -41,7 +57,7 @@
 
             const defaultWarn = console.warn;
             window.console.warn = function (...args) {
-                window.console.appTrace.push("WARN  ", ...args, "\n");
+                remember(["WARN  ", ...args, "\n"]);
                 const stack = new Error().stack;
                 defaultWarn.apply(window.console, [...args, stack]);
             };
@@ -88,7 +104,7 @@
 <!--        </div>-->
 <!--        <br><br>-->
 <!--        <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>-->
-<!--        <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">-->
+<!--        <img src="docs/assets/xopat-banner-v3.png" style="width: 80%; display: block; margin: 0 auto;">-->
 <!--    </div>-->
 <!--</div>-->
 
@@ -97,7 +113,7 @@
     <div class="card bg-base-100 border border-error/40 shadow-2xl w-[min(720px,92vw)] max-h-[90vh] overflow-hidden">
         <div class="card-body gap-3 overflow-y-auto">
             <div id="system-message-warn" class="flex items-center justify-center gap-2 text-3xl font-light text-error">
-                <span class="fa-auto fa-triangle-exclamation"></span>
+                <span class="ph-light ph-warning"></span>
                 <span data-i18n="error.title">Error</span>
             </div>
             <div id="system-message-title" class="text-xl font-light text-center text-base-content"></div>

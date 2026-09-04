@@ -1,17 +1,28 @@
 import { ViewerSelectionState } from "./viewer-selection-state";
+import { LEGACY_PLUGINS_COOKIE, pluginsCookieKey } from "./deployment-key";
 
 export class ApplicationLifecycleController {
     /**
-     * Bootstrap-only path: must use raw sessionStorage because it runs
-     * before initXOpatLoader creates IO_PIPELINE. See src/IO_PIPELINE.md
-     * "Bootstrap exception".
+     * Bootstrap-only path: raw sessionStorage, and necessarily so.
+     *
+     * This payload CARRIES the ENV (plus PLUGINS/MODULES/POST_DATA), which
+     * `app.ts` applies wholesale over what the server just sent — including
+     * `client.io`, the block that configures the storage pipeline. A consumer
+     * of ENV cannot be routed through machinery that ENV configures, so this
+     * one can never move onto IO_PIPELINE no matter how the boot order is
+     * rearranged. See src/IO_PIPELINE.md "Bootstrap exception".
      *
      * Probe-gated: this is the FIRST storage touch of the whole boot, and in a
      * sandboxed iframe (opaque origin) the `sessionStorage` property read
      * throws `SecurityError`. The outer try/catch covers the residual cases the
      * probe cannot see (quota, mid-session policy change).
+     *
+     * @param currentDeploymentKey identity of the deployment being served
+     *   (`initDeploymentKey`, `classes/app/deployment-key.ts`). A payload that
+     *   does not carry exactly this key is refused — including an unstamped one,
+     *   which predates the scoping and carries no evidence of its origin.
      */
-    static restoreLocalState(currentEnv?: any) {
+    static restoreLocalState(currentDeploymentKey?: string) {
         if (!XOpatStorageAvailability.sessionStorage) return null;
         const sessionStateKey = "__xopat_session__";
 
@@ -37,13 +48,13 @@ export class ApplicationLifecycleController {
                     const parsed = JSON.parse(data);
                     // Not `_`-prefixed: the writer's `safeStringify` strips those.
                     const stamp = parsed?.deploymentStamp;
-                    const current = ApplicationLifecycleController.deploymentStamp(currentEnv);
-                    if (stamp && current && stamp !== current) {
+                    const current = currentDeploymentKey;
+                    if (current && stamp !== current) {
                         // Captured under a different deployment. Restoring it would
                         // swap ENV, PLUGINS and MODULES under a viewer that was served
                         // something else entirely.
                         console.warn("xOpat: ignoring a stored session from a different deployment " +
-                            `('${stamp}' ≠ '${current}').`);
+                            `('${stamp ?? "unscoped"}' ≠ '${current}').`);
                         return null;
                     }
                     return parsed;
@@ -55,25 +66,6 @@ export class ApplicationLifecycleController {
             console.debug("Session state storage unavailable.", e);
         }
         return null;
-    }
-
-    /**
-     * Cheap fingerprint of the deployment currently being served, used to refuse a
-     * stored session captured under a different one.
-     *
-     * Deliberately coarse and best-effort: it only has to change when the *served
-     * configuration* changes, and returning `undefined` (nothing to compare) must
-     * leave the historical behaviour intact.
-     */
-    static deploymentStamp(env: any): string | undefined {
-        try {
-            if (!env) return undefined;
-            const modules = Object.keys(env.modules || {}).sort().join(",");
-            const plugins = Object.keys(env.plugins || {}).sort().join(",");
-            return `${env.version ?? ""}|${env.client?.domain ?? ""}|${modules}|${plugins}`;
-        } catch (e) {
-            return undefined;
-        }
     }
 
     constructor(
@@ -107,16 +99,15 @@ export class ApplicationLifecycleController {
         try {
             initLayers();
 
-            function loadPluginAwaits(pid: string, hasParams: boolean) {
-                return new Promise<void>((resolve) => {
-                    UTILITIES.loadPlugin(pid, resolve);
-                    if (!hasParams) {
-                        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-                        if (config.plugins) {
-                            config.plugins[pid] = {};
-                        }
+            function loadPluginAwaits(pid: string, hasParams: boolean, force = false) {
+                const loading = UTILITIES.loadPlugin(pid, undefined, force);
+                if (!hasParams) {
+                    const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+                    if (config.plugins) {
+                        config.plugins[pid] = {};
                     }
-                });
+                }
+                return loading;
             }
 
             // `disablePluginsAutoload` suppresses ONLY the cookie-driven
@@ -125,21 +116,30 @@ export class ApplicationLifecycleController {
             // meant to pretend cached user picks weren't made, not to
             // disable the deployment's auto-loaded set.
             const allowCookieRestore = !this.appContext.getOption("disablePluginsAutoload");
+            // Deployment-scoped: the cookie jar is shared by every deployment on
+            // this origin, so an unscoped list resurrected plugins (and their
+            // module dependencies) in envs that never shipped them. Two
+            // deployments now keep independent lists instead of overwriting
+            // each other's.
+            this.appContext.AppCookies.delete(LEGACY_PLUGINS_COOKIE);
             const pluginKeys = allowCookieRestore
-                ? (this.appContext.AppCookies.get("_plugins", "").split(",") || [])
+                ? (this.appContext.AppCookies.get(pluginsCookieKey(), "").split(",") || [])
                 : [];
             const config = this.appContext._dangerouslyAccessConfig();
             for (const pid in pluginRegistry) {
                 const hasParams = !!config.plugins?.[pid];
                 const plugin = pluginRegistry[pid]!;
-                if (
-                    (plugin.loaded && !plugin.instance) ||
-                    (!plugin.loaded && (hasParams || pluginKeys.includes(pid)))
-                ) {
+                // The server shipped this plugin's scripts but they produced no instance:
+                // a recovery re-run, and the one case that must re-evaluate files already on
+                // the page. `force` covers only the plugin's own files — its shared module
+                // dependencies stay deduplicated (re-evaluating those is what defined
+                // fabric.js twice).
+                const needsRerun = !!(plugin.loaded && !plugin.instance);
+                if (needsRerun || (!plugin.loaded && (hasParams || pluginKeys.includes(pid)))) {
                     if (plugin.error) {
                         console.warn("Dynamic plugin loading skipped: ", pid, plugin.error);
                     } else {
-                        await loadPluginAwaits(pid, hasParams);
+                        await loadPluginAwaits(pid, hasParams, needsRerun);
                     }
                 }
             }
@@ -215,17 +215,29 @@ export class ApplicationLifecycleController {
         await auth.whenContextsDiscovered?.();
         const pending: string[] = auth.listAutoLoginContexts?.() ?? [];
         if (!pending.length) {
-            // An auth module that registered a broker but produced no autoLogin
-            // context means the barrier is waiting for nothing — the signature of a
-            // broker whose contexts were declared after this point. Silent until now,
-            // and the first slide then races the login it should have waited for.
-            // Derived from the registry, not a hardcoded list: the list omitted
-            // `empaia-workbench` and would omit every broker added after it, so the
-            // diagnostic went quiet for exactly the modules most likely to trip it.
-            if (typeof auth.listBrokerMethods === "function" && auth.listBrokerMethods().length > 0) {
-                console.warn("xOpat: an auth module is loaded but declared no autoLogin context before the " +
-                    "first slide open. If slides need a credential they may 401 — the module should announce " +
-                    "its context declaration via APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md.");
+            // A broker that registered but declared NO CONTEXT AT ALL by this point
+            // means the barrier is waiting for nothing — the signature of a module
+            // whose contexts land after the first slide open, which then races the
+            // login it should have waited for. Derived from the registry, not a
+            // hardcoded list: the old list omitted `empaia-workbench` and would omit
+            // every broker added after it, so the diagnostic went quiet for exactly
+            // the modules most likely to trip it.
+            //
+            // `listContexts()` is what separates that from a deployment that simply
+            // does not want a boot login. Testing only `listAutoLoginContexts()`
+            // conflated the two, so every legitimate `autoLogin: false` deployment —
+            // an on-demand chat login over an anonymous viewer, and both auth test
+            // envs — was told to call `registerContextDiscovery()`, which the brokers
+            // shipping here already do. A warning that fires on a supported
+            // configuration teaches readers to ignore it.
+            const declared: unknown[] = auth.listContexts?.() ?? [];
+            if (typeof auth.listBrokerMethods === "function"
+                && auth.listBrokerMethods().length > 0 && !declared.length) {
+                console.warn("xOpat: an auth module is loaded but had declared NO auth context by the time " +
+                    "the first slide opened, so nothing could be waited for. If slides need a credential they " +
+                    "may 401 — the module should announce its context declaration via " +
+                    "APPLICATION_CONTEXT.auth.registerContextDiscovery(). See src/AUTH.md. " +
+                    "(A context declared with autoLogin disabled is a deployment choice and is not this.)");
             }
             return;
         }

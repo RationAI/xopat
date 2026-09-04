@@ -1,0 +1,99 @@
+{
+  "$meta": {
+    "description": "slide-scoring records land in MLflow experiments/runs",
+    "dimension": "io",
+    "defaults": { "MLFLOW_URL": "http://localhost:5000/" }
+  },
+  /**
+   * Expects a local MLflow:
+   *   docker run -p 5000:5000 ghcr.io/mlflow/mlflow \
+   *       mlflow server --host 0.0.0.0 --port 5000
+   *
+   * The browser must never reach MLflow directly — every call goes through the
+   * `mlflow` proxy alias. Confirm in DevTools: requests go to /proxy/mlflow/…,
+   * never to :5000.
+   *
+   * `experimentAllow` is the only thing standing between a script-registered
+   * mapper and an arbitrary experiment name; keep it set. A violation refuses
+   * with W_MLFLOW_EXPERIMENT_DENIED and writes nothing. Everything
+   * security-relevant here (proxy, baseURL, auth, experimentAllow) is trusted
+   * config and may only be set in ENV or include.json — record structure
+   * (template/mapper) deliberately is not.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "io": {
+          "bindings": {
+            "slide-scoring": {
+              "crud:score": ["mlflow"],
+              "bundle-export": ["mlflow"],
+              "bundle-import": ["mlflow"]
+            }
+          },
+          "sinkOverrides": {
+            "mlflow": {
+              "experimentAllow": ["xopat-*"],
+              "auth": null
+            }
+          }
+        }
+      }
+    },
+    "server": {
+      "secure": {
+        "proxies": {
+          "mlflow": {
+            /* Host ROOT only — the /api/2.0/mlflow path comes from the client's baseURL. */
+            "baseUrl": "<% MLFLOW_URL:-http://localhost:5000/ %>",
+            /* A stock local MLflow has no auth. For a secured one, add
+               "headers": {"Authorization": "Bearer <% MLFLOW_TOKEN %>"}. */
+            "auth": {
+              "enabled": false,
+              "verifiers": ["jwt"],
+              "mode": "all",
+              "jwt": { "forward": false, "userClaimHeader": "x-user-sub" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "slide-scoring": {
+      "enabled": true,
+      "permaLoad": true,
+      /* The scoring vocabulary: label → the number a sink records as a metric.
+         Deployment config, never session config — a session bundle must not be
+         able to redefine what a score means. The toolbar is generated from it,
+         so a 1-5 grading scale needs no code change. */
+      "scoreSchema": {
+        "scoreKey": "slide_label",
+        "labels": { "negative": 0, "uncertain": 0.5, "positive": 1 }
+      }
+    }
+  },
+  "modules": {
+    "mlflow": { "enabled": true, "permaLoad": true },
+    "io-mlflow-sink": {
+      "enabled": true,
+      "permaLoad": true,
+      "mlflow": {
+        "proxy": "mlflow",
+        "baseURL": "/api/2.0/mlflow",
+        /* Shipped templates: slide-scoring | run-per-viewer | run-per-session |
+           bundle-artifact (the last needs an "artifacts" block). */
+        "template": "slide-scoring",
+        /* Placeholders: {ownerId} {ownerUid} {viewerId} {backgroundId}
+           {capabilityId} {xoType} {resourceName} {itemId} — must stay inside
+           experimentAllow above. */
+        "experimentTemplate": "xopat-{ownerId}",
+        "runTemplate": "xopat-{viewerId}",
+        "identifierTag": "data_id",
+        "artifacts": null,
+        "auth": null
+      }
+    },
+    "io-github-sink": { "enabled": false }
+  }
+}

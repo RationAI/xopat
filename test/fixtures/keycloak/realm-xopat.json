@@ -1,0 +1,208 @@
+{
+  "realm": "xopat",
+  "displayName": "xOpat Test Realm (SAML + OIDC)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"displayName\",\"displayName\":\"Display name\",\"validations\":{\"length\":{\"max\":255}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}],\"unmanagedAttributePolicy\":\"ENABLED\"}"
+          ]
+        }
+      }
+    ]
+  },
+  "groups": [
+    { "name": "pathologists", "path": "/pathologists" },
+    { "name": "researchers", "path": "/researchers" }
+  ],
+  "users": [
+    {
+      "username": "pathologist",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "pathologist@example.org",
+      "firstName": "Pat",
+      "lastName": "Ologist",
+      "attributes": {
+        "displayName": ["Pat Ologist"]
+      },
+      "credentials": [
+        { "type": "password", "value": "pathologist", "temporary": false }
+      ],
+      "groups": ["/pathologists"]
+    },
+    {
+      "username": "researcher",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "researcher@example.org",
+      "firstName": "Rita",
+      "lastName": "Searcher",
+      "attributes": {
+        "displayName": ["Rita Searcher"]
+      },
+      "credentials": [
+        { "type": "password", "value": "researcher", "temporary": false }
+      ],
+      "groups": ["/researchers"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "xopat-viewer",
+      "name": "xOpat Viewer",
+      "description": "SAML Service Provider served by modules/saml-auth. clientId == SP entityID == the module's `issuer`/`audience`.",
+      "protocol": "saml",
+      "enabled": true,
+      "publicClient": false,
+      "frontchannelLogout": true,
+      "rootUrl": "http://localhost:9000",
+      "adminUrl": "http://localhost:9000/auth/saml/acs/core",
+      "redirectUris": [
+        "http://localhost:9000/auth/saml/*",
+        "http://localhost:9400/auth/saml/*"
+      ],
+      "attributes": {
+        "saml_assertion_consumer_url_post": "http://localhost:9000/auth/saml/acs/core",
+        "saml_single_logout_service_url_redirect": "http://localhost:9000/auth/saml/slo/core",
+
+        "saml_name_id_format": "persistent",
+        "saml_force_name_id_format": "true",
+
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml.server.signature.keyinfo.xmlSigKeyInfoKeyNameTransformer": "NONE",
+
+        "saml.client.signature": "false",
+        "saml.encrypt": "false",
+        "saml.onetimeuse.condition": "false",
+        "saml_idp_initiated_sso_url_name": ""
+      },
+      "defaultClientScopes": ["role_list"],
+      "protocolMappers": [
+        {
+          "name": "uid",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "friendly.name": "uid",
+            "attribute.name": "uid",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "displayName",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "displayName",
+            "friendly.name": "displayName",
+            "attribute.name": "displayName",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "email",
+          "protocol": "saml",
+          "protocolMapper": "saml-user-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "friendly.name": "email",
+            "attribute.name": "email",
+            "attribute.nameformat": "Basic"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "saml",
+          "protocolMapper": "saml-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "attribute.name": "groups",
+            "attribute.nameformat": "Basic",
+            "friendly.name": "groups",
+            "single": "false",
+            "full.path": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "xopat-viewer-oidc",
+      "name": "xOpat Viewer (OIDC)",
+      "description": "Public PKCE client for modules/oidc-client-ts. Same users, same groups, same role rules as the SAML client above - the protocol is the only difference.",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "fullScopeAllowed": false,
+      "rootUrl": "http://localhost:9000",
+      "redirectUris": [
+        "http://localhost:9000/*",
+        "http://localhost:9401/*"
+      ],
+      "webOrigins": [
+        "http://localhost:9000",
+        "http://localhost:9401"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:9000/*##http://localhost:9401/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "displayName",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "displayName",
+            "claim.name": "displayName",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

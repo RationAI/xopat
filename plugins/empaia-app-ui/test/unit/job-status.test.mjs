@@ -17,8 +17,8 @@
 import { test, expect } from "@xopat/test-harness";
 
 import {
-    dayGroupOf, jobTime, latestCompletedJob, normalizeTime, relativeTime,
-    selectJobs, statusClass, statusGroup,
+    dayGroupOf, jobTime, latestCompletedJob, MODE_FILTERS, modeOf, normalizeTime,
+    relativeTime, selectJobs, statusClass, statusGroup,
 } from "../../sections/job-status.mjs";
 
 /** Stand-in translator: returns the key's last segment, like the real dummy `$.t`. */
@@ -137,4 +137,44 @@ test("a validation failure is searchable even when the job carries no error mess
         job({ id: "v2", status: "COMPLETED", ended_at: 2 }),
     ];
     expect(selectJobs(jobs, { search: "bad class" }).map(j => j.id)).toEqual(["v1"]);
+});
+
+// ── which step, not just which state ────────────────────────────────────────
+
+const preprocessing = { id: "p1", mode: "PREPROCESSING", status: "COMPLETED", ended_at: 300 };
+const standalone = { id: "s1", mode: "STANDALONE", status: "COMPLETED", ended_at: 200 };
+const postprocessing = { id: "x1", mode: "POSTPROCESSING", status: "FAILED", ended_at: 100 };
+const allModes = [preprocessing, standalone, postprocessing];
+
+test("modeOf lowercases the uppercase wire enum", () => {
+    expect(modeOf(preprocessing)).toBe("preprocessing");
+    expect(modeOf({})).toBe("");
+    expect(modeOf(undefined)).toBe("");
+});
+
+test("the mode filter selects one step and 'all' selects every one", () => {
+    // The list carries every mode's jobs for the slide now — a postprocessing run
+    // is built on a preprocessing result, so filtering the list down to the mode
+    // the user is about to run hid the very thing they need to pick.
+    expect(selectJobs(allModes, { mode: "preprocessing" }).map(j => j.id)).toEqual(["p1"]);
+    expect(selectJobs(allModes, { mode: "all" }).map(j => j.id)).toEqual(["p1", "s1", "x1"]);
+    expect(selectJobs(allModes, {}).map(j => j.id)).toEqual(["p1", "s1", "x1"]);
+});
+
+test("mode and status filters compose", () => {
+    expect(selectJobs(allModes, { mode: "postprocessing", filter: "failed" }).map(j => j.id))
+        .toEqual(["x1"]);
+    expect(selectJobs(allModes, { mode: "postprocessing", filter: "completed" })).toEqual([]);
+});
+
+test("the mode is searchable, because it is a word the user can see", () => {
+    expect(selectJobs(allModes, { search: "preprocessing" }).map(j => j.id)).toEqual(["p1"]);
+    // "processing" matches both pre- and post-, which is the honest substring answer.
+    expect(selectJobs(allModes, { search: "postprocessing" }).map(j => j.id)).toEqual(["x1"]);
+});
+
+test("MODE_FILTERS leads with 'all', like the status chips", () => {
+    expect(MODE_FILTERS[0]).toBe("all");
+    expect(MODE_FILTERS).toContain("standalone");
+    expect(MODE_FILTERS).toContain("postprocessing");
 });

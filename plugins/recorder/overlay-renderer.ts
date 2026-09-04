@@ -121,13 +121,11 @@ export class OverlayRenderer {
         if (getComputedStyle(container).position === "static") {
             container.style.position = "relative";
         }
-        const layer = document.createElement("div");
-        layer.className = "recorder-overlay-layer";
-        layer.style.position = "absolute";
-        layer.style.inset = "0";
-        layer.style.overflow = "hidden";
-        layer.style.pointerEvents = "none";
-        layer.style.zIndex = "20";
+        const { div } = van.tags;
+        const layer = div({
+            class: "recorder-overlay-layer",
+            style: "position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:20;",
+        }) as HTMLDivElement;
         container.appendChild(layer);
         return layer;
     }
@@ -144,106 +142,112 @@ export class OverlayRenderer {
         const hasText = !!overlay.markdown?.trim();
         const hasImage = !!overlay.imageAssetId;
         if (!hasText && !hasImage) return null;
+        const { div, img } = van.tags;
 
-        const wrap = document.createElement("div");
-        wrap.dataset.recorderOverlayId = overlay.id;
-        wrap.dataset.recorderOverlayKind = "composite";
-        wrap.className = "recorder-overlay recorder-overlay-composite flex flex-col gap-1";
+        const asset = hasImage ? resolve(overlay.imageAssetId!) : undefined;
+        const wrap = div({
+            "data-recorder-overlay-id": overlay.id,
+            "data-recorder-overlay-kind": "composite",
+            class: "recorder-overlay recorder-overlay-composite flex flex-col gap-1",
+        },
+            asset ? img({
+                alt: overlay.imageAlt || "",
+                src: `data:${asset.mimeType};base64,${asset.data}`,
+                style: `display:block;max-width:100%;max-height:60vh;object-fit:contain;`
+                    + (overlay.style?.borderRadius ? `border-radius:${overlay.style.borderRadius}px;` : ""),
+            }) : null,
+            hasText ? this._markdownBody(overlay.markdown!) : null,
+        ) as HTMLElement;
         this._applyPlacement(wrap, overlay);
         this._applyStyle(wrap, this._cardStyle(overlay));
         // Composite card needs visible padding so the body breathes a bit.
         wrap.style.padding = wrap.style.padding || "8px 10px";
         wrap.style.pointerEvents = "none";
-
-        if (hasImage) {
-            const asset = resolve(overlay.imageAssetId!);
-            if (asset) {
-                const img = document.createElement("img");
-                img.alt = overlay.imageAlt || "";
-                img.src = `data:${asset.mimeType};base64,${asset.data}`;
-                img.style.display = "block";
-                img.style.maxWidth = "100%";
-                img.style.maxHeight = "60vh";
-                img.style.objectFit = "contain";
-                if (overlay.style?.borderRadius) img.style.borderRadius = `${overlay.style.borderRadius}px`;
-                wrap.appendChild(img);
-            }
-        }
-        if (hasText) {
-            const body = document.createElement("div");
-            body.className = "recorder-overlay-text-body";
-            body.innerHTML = this._renderMarkdown(overlay.markdown!);
-            wrap.appendChild(body);
-        }
         return { el: wrap, chromeId: this._chromeId(overlay.id) };
     }
 
     private _mountText(overlay: RecorderTextOverlay): Mount {
-        const el = document.createElement("div");
-        el.dataset.recorderOverlayId = overlay.id;
-        el.dataset.recorderOverlayKind = "text";
-        el.className = "recorder-overlay recorder-overlay-text";
+        const { div } = van.tags;
+        const el = div({
+            "data-recorder-overlay-id": overlay.id,
+            "data-recorder-overlay-kind": "text",
+            class: "recorder-overlay recorder-overlay-text",
+        }, this._markdownBody(overlay.markdown || "")) as HTMLElement;
         this._applyPlacement(el, overlay);
         this._applyStyle(el, this._cardStyle(overlay));
         el.style.padding = el.style.padding || "8px 10px";
         el.style.pointerEvents = "none"; // text overlays never eat clicks
-        el.innerHTML = this._renderMarkdown(overlay.markdown || "");
         return { el, chromeId: this._chromeId(overlay.id) };
     }
 
     private _mountImage(overlay: RecorderImageOverlay, resolve: AssetResolver): Mount | null {
         const asset = resolve(overlay.assetId);
         if (!asset) return null;
-        const img = document.createElement("img");
-        img.dataset.recorderOverlayId = overlay.id;
-        img.dataset.recorderOverlayKind = "image";
-        img.className = "recorder-overlay recorder-overlay-image";
-        img.alt = overlay.alt || "";
-        img.src = `data:${asset.mimeType};base64,${asset.data}`;
-        this._applyPlacement(img, overlay);
-        this._applyStyle(img, overlay.style);
+        const { img } = van.tags;
+        const el = img({
+            "data-recorder-overlay-id": overlay.id,
+            "data-recorder-overlay-kind": "image",
+            class: "recorder-overlay recorder-overlay-image",
+            alt: overlay.alt || "",
+            src: `data:${asset.mimeType};base64,${asset.data}`,
+        }) as HTMLImageElement;
+        this._applyPlacement(el, overlay);
+        this._applyStyle(el, overlay.style);
         // Default cap; layer overflow:hidden takes care of any remainder.
-        if (!img.style.maxWidth) img.style.maxWidth = "40%";
-        if (!img.style.maxHeight) img.style.maxHeight = "60vh";
-        img.style.objectFit = "contain";
-        img.style.pointerEvents = "none";
-        return { el: img, chromeId: this._chromeId(overlay.id) };
+        if (!el.style.maxWidth) el.style.maxWidth = "40%";
+        if (!el.style.maxHeight) el.style.maxHeight = "60vh";
+        el.style.objectFit = "contain";
+        el.style.pointerEvents = "none";
+        return { el, chromeId: this._chromeId(overlay.id) };
     }
 
     private _mountAudio(overlay: RecorderAudioOverlay, resolve: AssetResolver): Mount | null {
         const asset = resolve(overlay.assetId);
         if (!asset) return null;
+        const { span, button } = van.tags;
         const audio = new Audio(`data:${asset.mimeType};base64,${asset.data}`);
         audio.preload = "auto";
         if (overlay.hidden) {
             // Off-DOM player; create a tiny invisible anchor so chrome
             // registration has something to attach to.
-            const ghost = document.createElement("span");
-            ghost.dataset.recorderOverlayId = overlay.id;
-            ghost.dataset.recorderOverlayKind = "audio-hidden";
-            ghost.style.display = "none";
+            const ghost = span({
+                "data-recorder-overlay-id": overlay.id,
+                "data-recorder-overlay-kind": "audio-hidden",
+                style: "display:none;",
+            }) as HTMLElement;
             return { el: ghost, audio, chromeId: this._chromeId(overlay.id) };
         }
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.dataset.recorderOverlayId = overlay.id;
-        btn.dataset.recorderOverlayKind = "audio";
-        btn.className = "recorder-overlay recorder-overlay-audio btn btn-sm btn-circle";
-        btn.innerHTML = `<span class="ph-light ph-play"></span>`;
-        btn.title = "Play / pause voiceover";
-        btn.onclick = () => {
-            if (audio.paused) {
-                audio.play().catch(() => undefined);
-                btn.innerHTML = `<span class="ph-light ph-pause"></span>`;
-            } else {
-                audio.pause();
-                btn.innerHTML = `<span class="ph-light ph-play"></span>`;
-            }
-        };
-        audio.onended = () => { btn.innerHTML = `<span class="ph-light ph-play"></span>`; };
+        const playing = van.state(false);
+        const btn = button({
+            type: "button",
+            "data-recorder-overlay-id": overlay.id,
+            "data-recorder-overlay-kind": "audio",
+            class: "recorder-overlay recorder-overlay-audio btn btn-sm btn-circle",
+            title: $.t("playPauseVoiceover", { ns: "recorder" }),
+            onclick: () => {
+                if (audio.paused) { audio.play().catch(() => undefined); playing.val = true; }
+                else { audio.pause(); playing.val = false; }
+            },
+        }, span({ class: () => `ph-light ${playing.val ? "ph-pause" : "ph-play"}` })) as HTMLElement;
+        audio.onended = () => { playing.val = false; };
         this._applyPlacement(btn, overlay);
         this._applyStyle(btn, overlay.style);
         return { el: btn, audio, chromeId: this._chromeId(overlay.id) };
+    }
+
+    /**
+     * Markdown body node. Rendering (parse, sanitize, degrade closed, `#xopat-…`
+     * link wiring) belongs to the shared `markdown` module — a hard dependency of
+     * this plugin — so overlay narration gets the same treatment as chat replies,
+     * including clickable region links.
+     */
+    private _markdownBody(markdown: string): HTMLElement {
+        const { div } = van.tags;
+        const body = div({ class: "recorder-overlay-text-body xo-md xo-md-body" }) as HTMLElement;
+        const renderer = (globalThis as any).singletonModule?.("markdown");
+        if (renderer) renderer.renderInto(body, markdown, { sanitize: OverlayRenderer.MARKDOWN_ALLOWLIST });
+        else body.textContent = markdown;
+        return body;
     }
 
     private _applyPlacement(el: HTMLElement, overlay: RecorderOverlay): void {
@@ -282,39 +286,6 @@ export class OverlayRenderer {
         if (typeof style.opacity === "number") el.style.opacity = String(style.opacity);
         if (typeof style.borderRadius === "number") el.style.borderRadius = `${style.borderRadius}px`;
         if (typeof style.maxWidth === "number") el.style.maxWidth = `${style.maxWidth}px`;
-    }
-
-    private _renderMarkdown(src: string): string {
-        // Overlay markdown is untrusted: it arrives from imported recording
-        // bundles and from the IO pipeline, so `marked.parse` output is
-        // attacker-controlled HTML. Sanitize before any caller assigns it to
-        // innerHTML, and degrade CLOSED to escaped text when the sanitizer is
-        // not loaded (AGENTS.md §0 rule 2 / §7) — same contract as
-        // ui/classes/components/toast.mjs.
-        const marked = (window as any).xnpm?.marked;
-        const sanitize = (globalThis as any).SanitizeHtml;
-        if (marked?.parse && typeof sanitize === "function") {
-            try {
-                return sanitize(marked.parse(src), OverlayRenderer.MARKDOWN_ALLOWLIST);
-            } catch (e) {
-                console.warn("[recorder] markdown render failed", e);
-            }
-        } else {
-            OverlayRenderer._requestSanitizer();
-        }
-        // Plain-text fallback (escaped): sanitizer or parser unavailable.
-        const div = document.createElement("div");
-        div.textContent = src;
-        return div.innerHTML;
-    }
-
-    /** One-shot lazy load so later overlays render rich markup. */
-    private static _sanitizerRequested = false;
-    private static _requestSanitizer(): void {
-        if (OverlayRenderer._sanitizerRequested) return;
-        if (typeof UTILITIES === "undefined" || !(UTILITIES as any).loadModules) return;
-        OverlayRenderer._sanitizerRequested = true;
-        try { (UTILITIES as any).loadModules(() => {}, "sanitize-html", "marked"); } catch (_) { /* best effort */ }
     }
 
     private static readonly MARKDOWN_ALLOWLIST = {

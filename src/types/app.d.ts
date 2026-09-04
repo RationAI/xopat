@@ -27,6 +27,8 @@ type DataSpecification = DataID | DataOverride;
  * @property tileSource DEPRECATED: a pre-built tileSource object. Kept for one deprecation cycle; plugins should
  *    register a factory protocol with `SLIDE_PROTOCOLS.register({ id, createTileSource })` and reference it via
  *    `protocol` instead. The pre-built TileSource is not serializable and breaks URL/POST roundtripping.
+ * @property pixelScale how many reference-image pixels one pixel of this image covers — what makes a
+ *    lower-resolution overlay land on its background instead of being squeezed to its width.
  */
 interface DataOverride {
     dataID: DataID;
@@ -34,12 +36,40 @@ interface DataOverride {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     protocol?: string;
     tileSource?: OpenSeadragon.TileSource;
     /**
      * By default enabled, allows turning off data sampling interpolation.
      */
     imageSmoothingEnabled?: boolean;
+    /**
+     * How many pixels of the stack's REFERENCE image (its background) ONE pixel
+     * of this image covers. `2` means half-resolution; `512` means each pixel is
+     * one 512-px prediction square.
+     *
+     * Why it is needed: OpenSeadragon normalizes every image in the world to
+     * viewport width 1, so an overlay lands on its background only when their
+     * aspect ratios match. An overlay that covers a whole number of blocks of a
+     * slide whose width is NOT a whole number of blocks can never match — the
+     * edge block hangs past the slide, and OSD squeezes the overlay to fit,
+     * shrinking every cell slightly and accumulating the error across the image.
+     * Declaring the scale is what lets such an overlay overhang instead.
+     *
+     * A scalar, or `{x, y}` when the axes differ. Only `x` affects placement:
+     * OSD derives height from the image's own aspect ratio, which is already
+     * right when the two axes share a scale.
+     *
+     * Meaningless on a background (it IS the reference) and ignored there.
+     * Composes with — does not replace — the virtual-region placement of a
+     * cropped stack: the widths multiply, `x`/`y`/`degrees` stay the stack's.
+     *
+     * Absent, non-finite, zero or negative means "no opinion": the image is
+     * placed exactly as it was before this field existed. Session-supplied and
+     * therefore untrusted, so it is range-checked before use.
+     */
+    pixelScale?: number | { x: number; y: number };
     /**
      * Present when this spec resolves a *virtual* (cropped) source via the
      * `virtual-region` protocol. Carries the crop + alignment so the
@@ -146,6 +176,18 @@ interface TileSourceMetadata {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /**
+     * Native optical magnification of the image (e.g. `40` for a 40x objective).
+     *
+     * - omitted / `undefined` — unknown. The core guesses it from the pixel size
+     *   against a whole-slide optics table and warns when the pixel size is too
+     *   coarse to be a slide.
+     * - `null` — **not applicable**: the modality has no objective at all
+     *   (CT/MR/PT/CR/DX/NM). No guess, no warning, no magnification ladder — the
+     *   scalebar still reports physical length from `micronsX/Y`.
+     * - a number — used verbatim.
+     */
+    magnification?: number | null;
 }
 
 /**
@@ -173,6 +215,28 @@ interface TileSourceDisplaySection {
  * TileSource instances. See `src/tile-source.ts` for the default and contract.
  */
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
+/**
+ * Where the original slide file can be fetched from — the return value of the
+ * optional `TileSource.getSlideFileDownload()`. Consumed by
+ * `UTILITIES.downloadSlideFile` (`src/classes/app/slide-file-download.ts`).
+ * See `src/tile-source.ts` for the capability contract.
+ */
+interface SlideFileDownload {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when known without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * HttpClient the fetch must be routed through when the endpoint needs auth
+     * headers. Unset for cookie-authenticated endpoints, which lets the driver
+     * delegate to the browser's own download manager instead of buffering.
+     */
+    client?: any /* HttpClient */;
+}
 /**
  * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
  * @property shaders array of optional rendering specification
@@ -193,11 +257,21 @@ interface BackgroundItem {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     name?: string;
     sessionName?: string;
     visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
+    /**
+     * Canvas clear color for a viewer showing this background — hex
+     * `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`. Per-background override of
+     * `setup.backgroundColor`; unset falls back to it (transparent by default).
+     * Resolved through `BackgroundConfig.resolveFillColor`; a malformed value is
+     * ignored with a console warning.
+     */
+    fill?: string;
     /**
      * Present on a *parent* background that owns a stored decomposition
      * (probe-then-persist). Drives `expandVirtualBackgrounds` to materialize
@@ -239,13 +313,14 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property protocol deprecated on visualization object.  Name of a protocol registered in `window.SLIDE_PROTOCOLS`. In non-secure mode the value may
  *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index when this item is selected
+ *
+ * Note: which visualization a slot renders is NOT stored here — it is the per-background
+ * `BackgroundItem.visualizationIndex` binding.
  */
 interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
-    goalIndex?: number;
     [key: string]: any;
 }
 
@@ -451,8 +526,17 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
     requestScheduler: RequestSchedulerLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
@@ -539,8 +623,17 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
     /** Core network connectivity source of truth (`classes/network-status.ts`). */
     networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
     requestScheduler: RequestSchedulerLike;
     /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
@@ -873,24 +966,37 @@ interface XOpatUtilities {
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;
-    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): void;
+    /**
+     * Load a plugin at runtime. Resolves when the load settles; `onload` is still supported.
+     * `force` re-injects the plugin's own files even if already present (recovery path) —
+     * module dependencies are always deduplicated.
+     */
+    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): Promise<void>;
     isLoaded(id: string, isPlugin?: boolean): boolean | IXOpatPlugin | undefined;
 
     serializeApp(
         includedPluginsList?: string[],
         withCookies?: boolean,
         staticPreview?: boolean
-    ): Promise<{ app: string; data: Record<string, any> }>;
+    ): Promise<{ app: string; data: Record<string, any>; io: IOResult[] }>;
 
     serializeAppConfig(withCookies?: boolean, staticPreview?: boolean): string;
 
     getForm(
         customAttributes?: string,
         includedPluginsList?: string[],
-        withCookies?: boolean
+        withCookies?: boolean,
+        /** Receives the IO flush outcomes so the caller can report omissions. */
+        outcome?: IOResult[]
     ): Promise<string>;
 
     export(): Promise<void>;
+
+    /**
+     * Surface, once, which owners' data an export/save could not include.
+     * Reads the `ownerId` stamped onto refusals; silent when none carry one.
+     */
+    reportExportOmissions(results: IOResult[] | undefined): void;
 
     generateID(input: any, size?: number): string;
     sanitizeID(input: any): string;
@@ -898,7 +1004,7 @@ interface XOpatUtilities {
 
     /**
      * Recursively strip a per-viewer shader-id prefix from a renderer config map.
-     * Exposed for `src/external/*` globals, which cannot import the TS module.
+     * Exposed on UTILITIES for plugins/modules, which cannot import the TS module.
      *
      * Returns a new map but **mutates the configs inside it** — clone before
      * passing anything read out of a live renderer.
@@ -909,8 +1015,22 @@ interface XOpatUtilities {
     copyUrlToClipboard(): void;
     makeScreenshot(viewer?: any): void;
 
-    /** Download a string as a file via a temporary link element. */
-    downloadAsFile(filename: string, content: string): void;
+    /**
+     * Download content as a file via a temporary link element. Strings become
+     * `text/plain`; binary payloads keep their own type.
+     */
+    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): void;
+
+    /**
+     * Download the original slide file behind a tile source that implements the
+     * optional download capability (`canDownloadSlideFile` / `getSlideFileDownload`,
+     * see `src/tile-source.ts`). No-ops with a user-facing notice when the source
+     * does not support it. Implementation: `src/classes/app/slide-file-download.ts`.
+     */
+    downloadSlideFile(
+        source: any,
+        options?: { viewer?: any; fallbackName?: string }
+    ): Promise<void>;
 
     /**
      * Open a file picker and read the selected file. Note `onUploaded` also
@@ -961,7 +1081,13 @@ interface XOpatUtilities {
         microns: number | undefined,
         micronsX: number | undefined,
         micronsY: number | undefined,
-        name: string | undefined
+        name: string | undefined,
+        /**
+         * Native optical magnification as declared by the tile source:
+         * `undefined` = unknown (guessed from pixel size), `null` = the modality
+         * has no objective (radiology), a number = the real objective power.
+         */
+        magnification?: number | null
     ): void;
 
     parseBackgroundSelection(
@@ -977,6 +1103,12 @@ interface XOpatUtilities {
     adjustVisualizationInspectorRadius(deltaPx: number): number;
 
     setVisualizationInspectorMode(mode: string): string;
+
+    /**
+     * FlexDrawer pointer forwarding policy: "auto" (enable per viewer while a visible
+     * shader layer reads `fr_interaction_*` state), "always", or "never".
+     */
+    setInteractionForwarding(mode: string): string;
 
     storePageState(includedPluginsList?: Record<string, any>): boolean;
 

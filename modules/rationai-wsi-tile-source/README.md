@@ -109,3 +109,45 @@ for the full design. The four contract pieces, all in `tile-source.js`:
 Slides with a single focal plane are unaffected; the viewer's depth slider,
 Alt+scroll, and `[` / `]` shortcuts appear automatically when `count > 1`.
 
+
+### Original-file download
+
+The source implements the optional slide-download capability declared in
+[`src/tile-source.ts`](../../src/tile-source.ts):
+
+- `canDownloadSlideFile()` — `true` only when the info response says
+  `raw_download: true`. WSI Service reports it per slide, so a deployment that
+  disables raw access, or a storage backend that cannot serve the source file,
+  turns every "Download slide" entry off by itself. Multiplexed `/v3/files`
+  handles are excluded outright: `fileId` is then a comma-joined list of slides,
+  and there is no single original file to hand back.
+- `getSlideFileDownload()` — `{tilesUrl}/download?slide_id=<id>`, matching the
+  `?slide_id=` form of every other endpoint here, with this source's
+  `__xopatHttpClient` attached so the transfer carries the protocol's auth.
+  No file name is forced; the server's `Content-Disposition` names the file.
+
+The core driver (`UTILITIES.downloadSlideFile`) decides the transport: with an
+HttpClient injecting auth headers it streams behind a cancellable progress
+dialog, otherwise it hands the URL to the browser's own download manager.
+
+#### Cross-origin deployments
+
+The plain (unproxied) wsi-service entry points at its own host/port, so the
+download URL is **cross-origin** with the viewer page. That is handled, but two
+operator-facing consequences follow:
+
+- The browser-native hand-off then goes through a hidden iframe rather than an
+  `<a download>`, because the `download` attribute is ignored across origins and
+  the click would otherwise become a top-level navigation — which fires
+  `beforeunload` and raises xOpat's "Leave site?" prompt for a download that
+  never meant to leave the page. If you switch `core.server.security.csp` from
+  its report-only default to an **enforcing** policy, it must carry a `frame-src`
+  admitting the slide server's origin, or cross-origin downloads stop working.
+- An upstream that authenticates the download by a **cookie** will not work
+  cross-origin: a third-party frame receives no `SameSite=Lax` cookie. Such a
+  deployment belongs behind a `proxy` alias, which makes the request same-origin
+  and routes it to the streamed transport anyway.
+
+`EmpaiaWorkbenchV3TileSource` (`modules/empaia-workbench`) inherits this class
+and overrides `canDownloadSlideFile()` to `false` — the scope-rooted workbench
+API has no `/download` route.

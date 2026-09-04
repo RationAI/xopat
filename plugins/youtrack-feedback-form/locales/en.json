@@ -2,5 +2,12 @@
   "meta": {
     "name": "Youtrack Feedback Form",
     "description": "Provide direct feedback about xOpat to the YouTrack dashboard."
+  },
+  "menu": {
+    "title": "Feedback Form",
+    "unavailable": "The feedback form does not work for domains that are not configured in the YouTrack. An authorized person needs to enable the form for this domain."
+  },
+  "form": {
+    "attachLogs": "Attach app logs to the feedback form"
   }
 }

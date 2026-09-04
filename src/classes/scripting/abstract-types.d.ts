@@ -35,6 +35,24 @@ export type HostScriptContext = Pick<
     /** Real viewer name → shown name (may be masked to the handle by the consumer's policy). */
     presentViewerName?(realId: string, name: string | null | undefined): string | null;
     /**
+     * Optional sensitive-data policy (default: allowed). A namespace flagged `sensitive`
+     * gates itself by consent; a namespace that merely RE-EXPORTS a value some sensitive
+     * namespace also exposes (a raw slide path, a study UID, a filename-derived fact) has
+     * no such gate, and asks here instead.
+     *
+     * Same shape as the viewer alias: core / local scripting installs nothing, the getter
+     * answers `true`, and behaviour is unchanged. A consumer that streams to an untrusted
+     * upstream (chat → LLM) installs a resolver reading its own live consent state.
+     *
+     * Callers must treat it as optional and default to allowed
+     * (`ctx.mayExposeSensitiveData?.() ?? true`) — synthetic in-process contexts omit it.
+     * Prefer the `mayExposeSensitive` getter on {@link XOpatScriptingApi} over hand-rolling
+     * that expression.
+     */
+    mayExposeSensitiveData?(): boolean;
+    /** Install (or clear with `null`) the policy above. See `setSensitiveDataResolver`. */
+    setSensitiveDataResolver?(resolver: (() => boolean) | null): unknown;
+    /**
      * Session-scoped consent cache (optional — synthetic in-process contexts omit
      * it and then every action re-prompts). Runtime memory only, never serialized.
      */
@@ -243,6 +261,20 @@ export type ScriptMethodManifestEntry = {
     namespace: string;
     method: string;
     found: boolean;
+    /**
+     * Why a `found: false` entry failed. `"unknown"` — no such method (or no such
+     * namespace). `"not-consented"` — the method IS there, the caller just may not call
+     * it. Conflating the two told a model that a method it would be granted a moment
+     * later did not exist, which it then never tried again.
+     */
+    reason?: "unknown" | "not-consented";
+    /**
+     * Other namespaces the caller may ALREADY call that own a method of this name —
+     * the answer to "you reached for the right verb on the wrong namespace". Never
+     * lists a namespace the caller is not consented to, so it can reveal nothing that
+     * `describeScriptingApi` would not.
+     */
+    availableOn?: Array<{ namespace: string; tsSignature?: string; description?: string }>;
     description?: string;
     params?: Array<{ name: string; type: string }>;
     returns?: string;

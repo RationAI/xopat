@@ -1,0 +1,40 @@
+/**
+ * The `errors` project: the synthetic deployment, plus a destination that is
+ * genuinely not there.
+ *
+ * Error rendering is the one area the suite could not reach. Everything else a
+ * test wants to break — a tile that 500s, a descriptor that comes back
+ * malformed, a shader type nothing registers — is reachable from the browser
+ * (`page.route`) or from the session payload. A *missing destination* is not:
+ * it has to be a real 404 from the real static handler, because the whole point
+ * is to exercise the path where the network, not the test, produced the
+ * failure.
+ *
+ * Hence the `missing` protocol. Two details make it a 404 and not something
+ * else:
+ *
+ *  - The path stays **inside** the static root `test/fixtures/slides` that
+ *    `synthetic.json` opted in. A path outside it is refused by the allowlist
+ *    instead, which is a different branch (and a different bug class).
+ *  - `__absent__/` is never created by `make-synthetic.mjs`, so
+ *    `resolveStaticTarget` returns null and the request gets a bare 404.
+ *
+ * As in `synthetic.json` the template is absolute, so the URL survives
+ * OpenSeadragon's own tile-URL derivation (`<name>.dzi` → `<name>_files/`).
+ *
+ * The inherited `static` protocol stays the default: a test opts into breakage
+ * per background (`"protocol": "missing"`), so one deployment serves both the
+ * healthy and the broken case and the two can appear in the same session.
+ */
+{
+  "$base": "test/env/synthetic.json",
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          "missing": "`http://localhost:<% XOPAT_NODE_PORT:-9000 %>/test/fixtures/slides/generated/__absent__/${data}`"
+        }
+      }
+    }
+  }
+}

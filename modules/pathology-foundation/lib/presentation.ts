@@ -28,7 +28,7 @@ export const MAX_FINDINGS_CHARS = 400;
 const RATIO_DECIMALS = 3;
 
 /** Fields that are image-pixel geometry and must round to whole pixels. */
-const PIXEL_KEYS = new Set(["bounds", "center"]);
+const PIXEL_KEYS = new Set(["bounds", "center", "scopeBounds"]);
 /** Fields that are ratios, scores or physical scales — a few decimals is plenty. */
 const RATIO_KEYS = new Set([
     "interest", "rankScore", "areaFraction", "slideAreaFraction", "bboxFillFraction",
@@ -38,6 +38,18 @@ const RATIO_KEYS = new Set([
 ]);
 /** Prose fields worth capping. */
 const PROSE_KEYS = new Set(["findings", "summary", "answer"]);
+/**
+ * Scheduler bookkeeping that must not reach the model.
+ *
+ * `pendingTiles` is a list of rectangles the walk has planned and not yet read. It is the
+ * largest thing on a node after its children, it is meaningless to a reader, and a model that
+ * saw it would be given boxes it must never present as regions that were examined — the
+ * COUNT is what a caller needs, and that is reported once as `budget.plannedNotRead`.
+ *
+ * `expandedUnder` is the checklist hash a node's children were generated for — traversal
+ * bookkeeping that says nothing about the tissue.
+ */
+const DROP_KEYS = new Set(["pendingTiles", "expandedUnder"]);
 
 /**
  * A copy of `value` sized for a model: whole-pixel geometry, short numbers, capped prose.
@@ -63,6 +75,13 @@ type Mode = "pixel" | "ratio" | null;
 function project(value: any, key: string | null, mode: Mode, maxFindings: number): any {
     if (value == null) return value;
 
+    // A function cannot be structure-cloned, so one left anywhere in a result does not degrade
+    // the call — it makes the whole call throw `DataCloneError` before the caller sees a single
+    // field. Dropping it here means a helper method on an engine object can never take a script
+    // result down with it; anything a caller is meant to USE has to be plain data (see
+    // `buildDensityMap`'s `topSpots`).
+    if (typeof value === "function") return undefined;
+
     if (Array.isArray(value)) return value.map(item => project(item, key, mode, maxFindings));
 
     if (typeof value === "number") {
@@ -82,6 +101,7 @@ function project(value: any, key: string | null, mode: Mode, maxFindings: number
         if (!isPlainObject(value)) return value;
         const out: Record<string, any> = {};
         for (const [k, v] of Object.entries(value)) {
+            if (DROP_KEYS.has(k)) continue;
             // A key that names a mode establishes it for everything beneath; otherwise the
             // container passes down whatever it was given. That inheritance is the whole
             // point: `bounds` is an object whose members are `x`/`y`/`width`/`height`, and

@@ -16,13 +16,17 @@ const i18n = require('../../src/libs/i18next.min');
 
 const utils = require('./utils');
 const { getCore } = require("../templates/javascript/core");
+const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
 
 
 const constants = require("./constants");
 const {rawReqToString, RawBodyTooLargeError, jsonForScript} = require("./utils");
-const {verifyProxyAuth, verifyRpcAuth, csrfTokenMatches} = require("./auth");
+const {
+    verifyProxyAuth, verifyRpcAuth, csrfTokenMatches,
+    proxyAliasAllowedForSession, checkProxyCredentialGate,
+} = require("./auth");
 const { XopatServerRuntime } = require("./server-runtime");
 const { getServerLogging, setLoggingConfig } = require("./logging");
 const { setServerConfigSnapshot } = require("./server-helpers");
@@ -226,6 +230,15 @@ function normalizeFrameAncestors(value) {
  */
 let EXPOSE_SCHEME_ROUTES = DEV_MODE;
 
+/**
+ * `core.server.secure.examples` — sessions this deployment publishes as
+ * ready-to-open URLs in the startup banner. Server-only by construction (the
+ * `server.secure` strip), printed unconditionally: a deployment that bothered to
+ * declare what can be opened should say so in production too. See
+ * `server/node/examples.js`.
+ */
+let PUBLISHED_EXAMPLES = {};
+
 (function bootStorageConfig() {
     try {
         const core = getCore(constants.ABSPATH, PROJECT_PATH,
@@ -302,6 +315,9 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
         }
 
         if (core?.CORE?.server?.exposeSchemeRoutes === true) EXPOSE_SCHEME_ROUTES = true;
+
+        const examples = core?.CORE?.server?.secure?.examples || core?.CORE_SECURE?.examples;
+        if (examples && typeof examples === "object") PUBLISHED_EXAMPLES = examples;
     } catch (e) {
         logger.warn?.('[storage] could not pre-read storage config; using defaults:', e?.message || e);
         setStorageConfig({});
@@ -578,7 +594,12 @@ async function createSession(res, { isSecureRequest = false } = {}) {
         csrfToken,
         createdAt: Date.now(),
         lastSeenAt: Date.now(),
-        // you can attach extra flags here, e.g. which proxies are allowed
+        // Which `/proxy/<alias>` targets this session may reach. 'ALL' is the
+        // unrestricted default — a fresh session is anonymous, so narrowing here
+        // would break every deployment that never logs anyone in. An auth module
+        // narrows it on a completed login with
+        // `XOPAT_SERVER.setSessionAllowedProxies(session, [...])`; enforcement is
+        // in responseProxy via proxyAliasAllowedForSession (server/node/auth.js).
         allowedProxies: 'ALL'
     };
 
@@ -1013,13 +1034,16 @@ async function resolveStaticTarget(pathname) {
     const roots = staticRoots();
     if (!roots.some(r => pathIsInside(candidate, r))) return null;
 
-    let real;
-    try {
-        real = await fsp.realpath(candidate);
-    } catch (_) {
-        return null;                       // missing, or a broken symlink
+    // realpath() is unimplemented on pkg's snapshot fs.
+    let real = candidate;
+    if (typeof process.pkg === "undefined") {
+        try {
+            real = await fsp.realpath(candidate);
+        } catch (_) {
+            return null;                       // missing, or a broken symlink
+        }
+        if (!roots.some(r => pathIsInside(real, r))) return null;
     }
-    if (!roots.some(r => pathIsInside(real, r))) return null;
 
     let stat;
     try {
@@ -1136,7 +1160,7 @@ function sameOrigin(a, b) {
     }
 }
 
-async function responseProxy(req, res, requestUrl) {
+async function responseProxy(req, res, requestUrl, session) {
     // 1. todo parse just core for now, no need to load plugins
     const core = initViewerCoreAndPlugins(req, res, true);
     if (!core) return;
@@ -1155,11 +1179,26 @@ async function responseProxy(req, res, requestUrl) {
         ? proxies[alias]
         : undefined;
 
-    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string") {
+    // 3b. Per-session alias allowlist. Deliberately indistinguishable from the
+    // unknown-alias answer: which aliases exist is not a restricted session's
+    // business. Unrestricted by default — see proxyAliasAllowedForSession.
+    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
+        || !proxyAliasAllowedForSession(session, alias)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         return res.end('Proxy target alias is not allowed or not configured.');
+    }
+
+    // 3c. An alias that attaches operator credentials must enforce authentication.
+    // Session + CSRF only proves same-origin, and both are handed to any anonymous
+    // page load, so without this the operator's API key is reachable by every
+    // visitor. Opt out per alias (`auth.enabled: false`) or deployment-wide
+    // (`secure.proxyCredentialsRequireAuth: false`).
+    const credentialGate = checkProxyCredentialGate(alias, proxyConfig, serverConf.secure);
+    if (!credentialGate.ok) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        return res.end(credentialGate.message);
     }
 
     const baseUrl = proxyConfig.baseUrl.replace(/\/$/, '');
@@ -1386,7 +1425,6 @@ async function responseViewer(req, res, session) {
                 return `
 ${core.requireOpenseadragon()}
 ${core.requireLibs()}
-${core.requireExternal()}
 ${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -1901,6 +1939,12 @@ async function shutdown(signal) {
         // `getServerStorage()` hands back `{storage, cache}`; the broker with the
         // sweeper lease and the drivers is the `storage` half.
         await getServerStorage()?.storage?.dispose?.();
+
+        // 5. Push what the log stream still holds. Its whole contract is that a
+        // record never delays a request, which means at any moment up to one
+        // batch is queued — and the records describing a shutdown are exactly the
+        // ones an operator goes looking for afterwards.
+        await LOGGING?.flushStreams?.();
     } catch (e) {
         logger.error('[process] error during shutdown', e);
     } finally {
@@ -1941,4 +1985,35 @@ function onListening() {
     logger.info(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
     logger.info(`                                      or sent the data using HTTP POST`);
     logger.info(`  The session description is available in src/README.md`);
+    printPublishedExamples(url);
+}
+
+/**
+ * Print `core.server.secure.examples` as ready-to-open URLs.
+ *
+ * Nothing declared prints nothing — no empty header. A malformed record prints a
+ * warning and the rest still print: the whole point is answering "what can I open
+ * here", so one bad entry must not take the answer down with it.
+ */
+function printPublishedExamples(url) {
+    let entries;
+    try {
+        entries = buildExampleEntries(constants.ABSPATH, PUBLISHED_EXAMPLES, url);
+    } catch (e) {
+        logger.warn?.('[examples] could not build example sessions:', e?.message || e);
+        return;
+    }
+    if (!entries.length) return;
+
+    logger.info(`  Example sessions published by this deployment:`);
+    for (const entry of entries) {
+        logger.info(`    [${entry.id}] ${entry.name}`);
+        if (entry.description) logger.info(`      ${entry.description}`);
+        if (entry.url) {
+            logger.info(`      ${entry.url}`);
+        } else {
+            logger.warn?.(`      unavailable: ${entry.warning}`
+                + (entry.source ? ` (${entry.source})` : ""));
+        }
+    }
 }

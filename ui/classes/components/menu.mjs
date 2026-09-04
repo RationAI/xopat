@@ -237,6 +237,31 @@ class Menu extends BaseComponent {
     }
 
     /**
+     * Validate & complete a menu item before a tab is built from it.
+     *
+     * An icon is an affordance, not a requirement: a tab is identifiable as long
+     * as it has an id and something to show (icon or title). Only icon-only
+     * designs have no text to fall back on, so a neutral glyph is substituted
+     * there — otherwise the header button would render blank and unclickable.
+     *
+     * @param {UINamedItem} item
+     * @param {string} [design] the owner's `_design` key ("ICONONLY" | "TITLEONLY" | "TITLEICON")
+     * @return {UINamedItem} item, or a completed copy of it
+     */
+    static normalizeItem(item, design = undefined) {
+        if (!item?.id || !(item.icon || item.title)) {
+            throw new Error("Item for menu needs an id and at least an icon or a title.");
+        }
+        // `_design` is the string key on Menu, but TabsMenu stores the
+        // Menu.DESIGN function itself — its inferred `name` is the same key.
+        const designKey = typeof design === "function" ? design.name : design;
+        if (!item.icon && designKey === "ICONONLY") {
+            return { ...item, icon: Menu.FALLBACK_ICON };
+        }
+        return item;
+    }
+
+    /**
      * @param {Dropdown|object} item. If object, DropDown contructor params are accepted, which among other include support for:
      *   sections: [
      *     { id: "actions" },
@@ -297,9 +322,7 @@ class Menu extends BaseComponent {
             return this.addDropdown(item, componentId);
         }
 
-        if (!(item.id && item.icon && item.title)) {
-            throw new Error("Item for menu needs every property set.");
-        }
+        item = Menu.normalizeItem(item, this._design);
         let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
         this._applyNamespaceToTab(tab, item);
 
@@ -839,6 +862,9 @@ Menu.DESIGN = {
         this._syncLayout();
     }
 };
+
+// Stand-in glyph for icon-less items mounted into an icon-only menu.
+Menu.FALLBACK_ICON = "ph-dot-outline";
 
 Menu.ROUNDED = {
     ENABLE: function () { ui.Join.ROUNDED.ENABLE.call(this.header); },

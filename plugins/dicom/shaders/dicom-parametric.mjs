@@ -15,7 +15,7 @@
  * before this layer ever sees them, and windowing is meaningless.
  *
  * Precision is negotiated from the *data*, not requested by this class: the
- * parametric tiles are RGBA16F packs, which the drawer reports to the renderer,
+ * parametric tiles are half-float packs, which the drawer reports to the renderer,
  * and the emitted shader config also carries `precision: "float16"`. Both are
  * honoured only while the renderer option `precision` is `"auto"` — in xOpat the
  * `webGlPrecision` application option, which is `"unorm8"` by default. The
@@ -33,11 +33,7 @@
  * units — the same units the DICOM object declares.
  */
 
-/** GLSL float literal; `1` alone is an int in GLSL and will not compile. */
-const glslFloat = (value) => {
-    const n = Number.isFinite(value) ? value : 0;
-    return Number.isInteger(n) ? `${n}.0` : String(n);
-};
+import { controlRealGlsl, denormalizeGlsl, initialWindow, resolveValueRange, voiTransformGlsl, windowControlDefinitions, VOI_CUSTOM_PARAMS } from './voi-controls.mjs';
 
 /**
  * @param {object} $ the OpenSeadragon namespace (NOT jQuery — the translator
@@ -68,7 +64,7 @@ export function defineDicomParametricShader($, t) {
          * rather than incidental, and must not be flipped by a future edit.
          *
          * The upgrade itself is not requested here: precision is declared by the
-         * data (the RGBA16F packs from `derived-tile-source.mjs`) and reinforced
+         * data (the half-float packs from `derived-tile-source.mjs`) and reinforced
          * by `precision: "float16"` on the emitted shader config.
          */
         static supportsHighPrecision() { return true; }
@@ -116,6 +112,11 @@ export function defineDicomParametricShader($, t) {
             }];
         }
 
+        /** Read through `voi-controls.mjs`, so declared from there. */
+        static get customParams() {
+            return { ...VOI_CUSTOM_PARAMS };
+        }
+
         static get defaultControls() {
             return {
                 use_channel0: { default: "r" },   // eslint-disable-line camelcase
@@ -141,82 +142,45 @@ export function defineDicomParametricShader($, t) {
             };
         }
 
-        /** Real-world interval the tile samples were normalized against. */
-        _valueRange() {
-            const r = this._params?.valueRange;
-            if (r && Number.isFinite(r.min) && Number.isFinite(r.max) && r.max > r.min) return r;
-            // Objects that declare no Real World Value range are already
-            // normalized by the tile source against this same default.
-            return { min: 0, max: 1 };
-        }
+        /**
+         * Real-world interval the tile samples were normalized against.
+         * Objects that declare no Real World Value range are already normalized
+         * by the tile source against the same `0..1` default.
+         */
+        _valueRange() { return resolveValueRange(this._params); }
 
         /** The object's own window, which is the right thing to open with. */
-        _initialWindow() {
-            const { min, max } = this._valueRange();
-            const preset = Array.isArray(this._params?.voiPresets) ? this._params.voiPresets[0] : null;
-            if (preset && Number.isFinite(preset.center) && preset.width > 0) {
-                return { center: preset.center, width: preset.width };
-            }
-            return { center: (min + max) / 2, width: max - min };
-        }
+        _initialWindow() { return initialWindow(this._params); }
 
         getControlDefinitions() {
             const base = $.extend(true, {}, this.constructor.defaultControls);
-            const { min, max } = this._valueRange();
-            const span = max - min;
-            const initial = this._initialWindow();
-            const units = this._params?.units ? ` [${this._params.units}]` : "";
-
             // Slider bounds follow the data, so the control is usable whether the
             // object measures probabilities in 0..1 or attenuation in Hounsfield
-            // units. A fixed 0..1 range would make the latter unusable.
-            const step = span / 1000;
-
-            base.windowCenter = {
-                default: {
-                    type: "range_input",
-                    default: initial.center,
-                    min: min - span,
-                    max: max + span,
-                    step,
-                    title: t('overlay.windowCenter') + units,
-                },
-                accepts: (type) => type === "float",
-            };
-
-            base.windowWidth = {
-                default: {
-                    type: "range_input",
-                    default: initial.width,
-                    // A zero width divides by zero in the VOI transform.
-                    min: step,
-                    max: span * 2,
-                    step,
-                    title: t('overlay.windowWidth') + units,
-                },
-                accepts: (type) => type === "float",
-            };
-
+            // units. A fixed 0..1 range would make the latter unusable. Shared
+            // with `dicom-window` so the two cannot drift.
+            Object.assign(base, windowControlDefinitions(t, this._params));
             return base;
         }
 
         getFragmentShaderExecution() {
-            const { min, max } = this._valueRange();
+            const range = this._valueRange();
             const sample = this.sampleChannel('v_texture_coords', 0, { baseChannel: 0, raw: true });
 
             return `
 // Tiles carry the sample normalized to [0,1] over the object's declared range;
 // undo that so the window controls below work in real-world units.
-float pmReal = ${glslFloat(min)} + ${sample} * ${glslFloat(max - min)};
-
-float pmC = ${this.windowCenter.sample()};
-float pmW = max(${this.windowWidth.sample()}, 1e-6);
+float pmReal = ${denormalizeGlsl(sample, range)};
 
 // LINEAR_EXACT arithmetic (PS3.3 C.11.2.1.3). The plain LINEAR formula's
 // -0.5 / (w-1) terms count distinct integer stored values and are meaningless
 // for continuous samples — applied literally to a 0..1 map with width 1 they
 // collapse it to a binary mask.
-float pmT = clamp((pmReal - pmC) / pmW + 0.5, 0.0, 1.0);
+//
+// The window controls go through controlRealGlsl, not a bare sample: a float
+// control uploads a 0..1 ratio over its own bounds, so windowing pmReal — which
+// is in the object's real-world units — against the raw uniform clipped the
+// overlay to a mask.
+float pmT = ${voiTransformGlsl('pmReal', controlRealGlsl(this.windowCenter), controlRealGlsl(this.windowWidth))};
 
 if (pmT <= ${this.cutoff.sample()}) return vec4(.0);
 return vec4(${this.color.sample('pmT', 'float')}, 1.0);

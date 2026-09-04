@@ -22,6 +22,13 @@
  *    veto the operation. Owners use `IOResource.create/update/delete` (which
  *    runs guards then dispatches) or call `IOResource.canCreate/…` for the
  *    guard-only check.
+ *  - `pre-export` / `pre-import` / `pre-read` — the same veto phase for the
+ *    directions that used to have none. `pre-export` runs before the owner's
+ *    `exportBundle` hook is even called, `pre-import` before `importBundle`,
+ *    `pre-read` before any sink read/query. This is what lets the rights layer
+ *    gate bundle and read traffic centrally: a refusal happens before a payload
+ *    is produced or a destination is contacted, so **sinks never implement
+ *    authorization themselves**.
  *  - `kv-get` / `kv-set` / `kv-delete` / `kv-clear` / `kv-keys` — key/value store
  */
 type IODirection =
@@ -35,6 +42,9 @@ type IODirection =
     | "pre-create"
     | "pre-update"
     | "pre-delete"
+    | "pre-export"
+    | "pre-import"
+    | "pre-read"
     | "kv-get"
     | "kv-set"
     | "kv-delete"
@@ -118,6 +128,41 @@ interface IOContext {
      * by `viewer-open-pipeline`).
      */
     backgroundId?: string;
+    /**
+     * Which *route* the data is travelling on. Guards use it to answer two
+     * independent questions rather than one conflated one — see
+     * src/USER_ROLES.md "Two routes".
+     *
+     *  - `"sink"` (default) — a bound destination from `ENV.client.io.bindings`
+     *    (`post-data`, `session-memory`, a remote store, …). Gated by the
+     *    owner's own capabilities (`<ownerId>.bundle-export`, …).
+     *  - `"local"` — the local-file escape hatch: the `file-download` last
+     *    resort, the `file-upload` sink, and `IO_PIPELINE.importBundle` with a
+     *    user-picked payload. Gated by the single core capability
+     *    `core.io.local-file`, NOT by the owner's capabilities.
+     *
+     * The split is what makes "do not upload, but let me keep a copy"
+     * expressible without inventing a per-owner destination axis. A guard that
+     * ignores `route` sees every dispatch, exactly as before this field existed.
+     */
+    route?: "sink" | "local";
+    /**
+     * Who asked for this dispatch. Decides whether a refusal is worth
+     * interrupting the user with.
+     *
+     *  - `"user"` (**default**) — the user did something: a gesture, a menu
+     *    action, a file they picked. A refusal is an answer to them, and is
+     *    surfaced through the notifier.
+     *  - `"system"` — the pipeline's own orchestration: boot hydration, the
+     *    restore after a slide opens, the flush of a slide being vacated. The
+     *    user asked for none of it, so a refusal here raises `io:refused` and
+     *    is logged, but never becomes a dialog.
+     *
+     * **Loud by default, on purpose.** A call site that forgets to declare
+     * itself over-warns, which someone notices and fixes; a default of silence
+     * would let a real refusal disappear, which nobody notices at all.
+     */
+    trigger?: "user" | "system";
     /** Free-form metadata, e.g. format hints. */
     meta: Record<string, unknown>;
 }
@@ -135,6 +180,17 @@ type IOResult<T = unknown> =
           reason: string;
           userMessage?: string;
           code?: string;
+          /**
+           * Who the refusal was about. Optional and best-effort, but the only
+           * way a caller can NAME what it could not persist: a flush pushes a
+           * variable number of results per owner (0 when the hook returned
+           * nothing, 1 on a veto, N across sinks, +1 on the local fallback),
+           * so correlating by index is not possible. `IOContext` carries this
+           * but stays local to the dispatch.
+           */
+          ownerId?: string;
+          ownerUid?: string;
+          capabilityId?: string;
       };
 
 /**
@@ -218,6 +274,21 @@ interface IOAcceptDecision {
     accept: false;
     reason: string;
     userMessage?: string;
+    /**
+     * `true` when the sink declined on **policy** grounds ("this user//deployment
+     * may not write here") rather than shape grounds ("I do not handle this
+     * kind of payload").
+     *
+     * The distinction decides whether the local-file fallback may run. A shape
+     * decline means nobody suitable was bound, and handing the user a local
+     * copy is the right rescue. A policy decline means someone said *no* — and
+     * silently downloading the same bytes would make that "no" meaningless.
+     *
+     * Authorization does not belong in a sink (see src/IO_SINK_AUTHORING.md);
+     * this flag exists for sinks whose *upstream* refuses, so the refusal is
+     * not misread as "no sink was interested".
+     */
+    policy?: boolean;
 }
 
 /**
@@ -247,6 +318,17 @@ interface IOSink {
      * The pipeline normalizes to `IOSinkSupport` on registration.
      */
     supports: IOCapabilityKind[] | IOSinkSupport;
+    /**
+     * Which route this sink is (`IOContext.route`, default `"sink"`). Set
+     * `"local"` on a sink that moves data between the app and the user's own
+     * machine — the pipeline then stamps `route: "local"` on its dispatch
+     * context and checks it against the local-file policy rather than the
+     * owner's capability, even when an admin has bound it explicitly.
+     *
+     * This is a statement of *what the sink is*, not of who may use it: policy
+     * still lives in the guards (see src/IO_SINK_AUTHORING.md §0).
+     */
+    route?: "sink" | "local";
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx: IOContext, payload: unknown): Promise<IOResult> | IOResult;
@@ -379,6 +461,19 @@ interface IOResourceDef<T = unknown> {
      * and removed after settle. Pending ops survive page reloads and
      * replay automatically on next boot. Requires `serialize` /
      * `deserialize` that round-trip through JSON.
+     *
+     * **What "requires" costs if you skip it.** Without `serialize` the RAW
+     * item is what gets written — and what gets dispatched. Anything the
+     * structured-clone algorithm refuses (a DOM node, a canvas, a `File`, a
+     * function, a class instance you care about the prototype of) then fails
+     * the IndexedDB write on *every* operation, and this resource silently has
+     * no crash-recovery at all: the dispatch still succeeds, so nothing looks
+     * broken. The same raw payload also cannot cross a worker or `postMessage`
+     * boundary, so a sink that does will fail too.
+     *
+     * `modules/annotations` (raw fabric objects) and `modules/recorder` (a live
+     * `<img>` screenshot) both shipped this way. Neither had a symptom until
+     * someone read the console.
      */
     persistOutbox?: boolean;
     /**
@@ -539,19 +634,33 @@ interface IOResource<T = unknown> {
     query(params: Record<string, unknown>, meta?: Record<string, unknown>): AsyncIterable<T>;
 }
 
-/** Direction(s) a guard listens to. `"*"` matches every CRUD direction. */
-type IOGuardDirection = "pre-create" | "pre-update" | "pre-delete" | "*";
+/**
+ * Direction(s) a guard listens to.
+ *
+ * `"*"` matches every **CRUD write** phase (`pre-create` / `pre-update` /
+ * `pre-delete`) and nothing else. It deliberately does NOT cover `pre-export`,
+ * `pre-import` or `pre-read`: those phases were added after `"*"` was already
+ * in use, and widening it would silently turn every existing write guard into a
+ * veto over exports and reads it was never written to judge. The new phases
+ * must be named explicitly.
+ */
+type IOGuardDirection =
+    | "pre-create" | "pre-update" | "pre-delete"
+    | "pre-export" | "pre-import" | "pre-read"
+    | "*";
 
 /**
  * A registered guard handler. Guards are not routed (they don't appear in
  * `ENV.client.io.bindings`); they're vetoes that run in the pre-action phase
- * of every matching CRUD call.
+ * of every matching call.
  *
  *  - `ownerId`   who registered. If listed in `ENV.client.io.disabled`, all
  *                guards from that owner are silenced (consistent with how
  *                sink/capability disable already works).
- *  - `resource`  matches `IOContext.resourceName`. `"*"` = any resource.
- *  - `direction` `"pre-create" | "pre-update" | "pre-delete" | "*"`.
+ *  - `resource`  matches `IOContext.resourceName`. `"*"` = any resource, and is
+ *                the only value that matches a BUNDLE context (bundle traffic
+ *                carries no `resourceName`).
+ *  - `direction` one `IOGuardDirection`; see the note on `"*"` above.
  *  - `priority`  higher first; default 0.
  *  - `handler`   returns `{ ok: true }` to allow or `{ ok: false, refused: true, … }`
  *                to abort. First refusal short-circuits the call. Per-viewer
@@ -816,12 +925,22 @@ interface IOPipelineLike {
      *    refusal surfaces as an error toast instead of producing an unwanted
      *    file. **Export** (the explicit "give me a file" action) leaves it
      *    `false`.
+     *  - `capabilityId`: restrict the flush to ONE outbound bundle capability.
+     *    Owners that declare several (session state vs. a submission, say) use
+     *    it to drive one from a button without pushing the others.
      */
     flushBundleExport(scope?: {
         ownerUid?: string;
+        capabilityId?: string;
         viewerId?: string;
         backgroundId?: string;
         skipFileFallback?: boolean;
+        /**
+         * `"system"` when the pipeline itself drove this (a slide-leave flush),
+         * so a refusal is logged rather than shown. Default `"user"` — see
+         * {@link IOContext.trigger}.
+         */
+        trigger?: "user" | "system";
     }): Promise<IOResult[]>;
     importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
@@ -836,12 +955,22 @@ interface IOPipelineLike {
     flushAllResources(): Promise<IOResult[]>;
 
     /**
-     * True if any owner has at least one **non-`file-download`** sink bound to
-     * a `bundle-export` capability (i.e. a real persistence destination, not
-     * just the local-file fallback). The Save UI calls this to decide between
-     * a remote flush and degrading to the legacy Export flow.
+     * True if a **user-recoverable** sink is bound for an outbound bundle
+     * capability — a real persistence destination, as opposed to the local-file
+     * fallback or the in-page / in-session dicts the resolver falls back to
+     * (see `NON_REMOTE_BUNDLE_SINKS`).
+     *
+     * This is the honest form of "is anything actually configured?". An empty
+     * flush result is NOT: every bundle capability resolves to `post-data` when
+     * nothing is bound, so a write always looks like it went somewhere.
+     *
+     * The Save UI calls it to decide between a remote flush and degrading to
+     * Export. Pass `capabilityId` when an owner has several outbound channels
+     * (session state vs. a submission) and you mean one of them — asking about
+     * the owner as a whole would answer "yes, somewhere" and let the unbound
+     * channel report success.
      */
-    hasRemoteBundleSinks(ownerUid?: string): boolean;
+    hasRemoteBundleSinks(ownerUid?: string, capabilityId?: string): boolean;
     /**
      * Stream raw items from the first bound sink whose `query` method
      * exists and `accepts(ctx)` (if defined) passes. `ctx.direction` is
@@ -931,7 +1060,17 @@ interface IOPipelineLike {
      * owners' `importBundle`. Driven by boot and by `viewer-open-pipeline` on
      * slide change; owners get their own catch-up from `initIO`.
      */
-    tryRestoreImport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
+    tryRestoreImport(scope?: {
+        ownerUid?: string;
+        viewerId?: string;
+        backgroundId?: string;
+        /**
+         * `"system"` for boot hydration and the restore after a slide opens —
+         * every shipped caller. Default `"user"`, so a new caller has to decide
+         * rather than inherit silence. See {@link IOContext.trigger}.
+         */
+        trigger?: "user" | "system";
+    }): Promise<IOResult[]>;
     /** @internal Apply an element's `include.json` `io` block at load time. */
     applyIncludeBlock(ownerUid: string, block: IOIncludeBlock | undefined): void;
     /** @internal Drop every memoized binding resolution. */

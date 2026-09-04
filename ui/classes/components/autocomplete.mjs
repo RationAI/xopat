@@ -12,7 +12,7 @@ const BTN_SIZE_CLASS = { xs: "btn-xs", sm: "btn-sm", md: "btn-sm", lg: "btn-md" 
  * @typedef {object} AutocompleteOption
  * @property {string} value machine value; unique within the option list
  * @property {string} [label] human label (defaults to `value`)
- * @property {string} [icon] icon class (`ph-*` / `fa-*`) or an image URL
+ * @property {string} [icon] Phosphor icon class (`ph-*`) or an image URL
  * @property {string} [description] secondary line rendered under the label
  * @property {string} [keywords] extra text matched by the filter but not shown
  * @property {boolean} [disabled] rendered, never selectable

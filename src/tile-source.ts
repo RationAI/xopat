@@ -24,6 +24,30 @@ type TileSourceDisplaySection = { title?: string; description?: string; fields?:
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 
 /**
+ * Where the original slide file can be fetched from. Returned by
+ * {@link getSlideFileDownload}; consumed by `UTILITIES.downloadSlideFile`
+ * (`src/classes/app/slide-file-download.ts`). Runtime source of truth for the
+ * shape: the exported `SlideFileDownload` there (this file is a plain core
+ * script and cannot import it — keep the two in sync).
+ */
+type SlideFileDownload = {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when the source knows it without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * Per-source HttpClient the fetch MUST be routed through when the endpoint
+     * needs auth headers. Normally just `this.__xopatHttpClient`. Leave unset
+     * for endpoints authenticated by cookie alone — the driver then hands the
+     * URL to the browser's own download manager instead of buffering the file.
+     */
+    client?: any /* HttpClient */;
+};
+
+/**
  * Focal-plane (z-stack) descriptor a tile source exposes to opt into depth
  * navigation. Runtime source of truth: the exported `ZStackDescriptor` in
  * `src/classes/app/viewer-depth-controller.ts` (this file is a plain core
@@ -42,6 +66,13 @@ type ZStackDescriptor = {
 };
 
 
+/**
+ * Coarse transfer class of a pyramid's tile samples — see
+ * `OpenSeadragonTileSourceWithExtensions.getTilePrecision`.
+ */
+type TileSamplePrecision = "unorm8" | "float16";
+
+
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getMetadata(): TileSourceMetadata | undefined;
     getSensitiveMetadata(): TileSourceMetadata | undefined;
@@ -49,6 +80,8 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
     getLabel(): Promise<ImageLike | undefined>;
+    canDownloadSlideFile(): boolean;
+    getSlideFileDownload(): Promise<SlideFileDownload | undefined>;
     getConfig(type?: string): any;
     /**
      * Optionally report that this source decomposes into multiple aligned
@@ -64,13 +97,75 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * `getThumbnail()`, so slides whose real coarsest level is large (>2k px,
      * several tiles) paint on first open from at most one (cached) preview
      * request. Implemented in `src/classes/preview-level.ts`; any source
-     * implementing `getThumbnail()` is eligible automatically. Idempotent;
-     * returns true when the level is (already) injected. Opt out with
-     * `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
-     * extent, or sources that change their level *count* in place).
+     * implementing `getThumbnail()` is eligible automatically — the layer's
+     * ROLE is irrelevant, a data overlay benefits exactly as a background does.
+     * Idempotent; returns true when the level is (already) injected. Opt out
+     * with `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
+     * extent, or sources that change their level *count* in place), or by
+     * declaring a non-8-bit {@link getTilePrecision}.
      */
     tryInjectPreviewLevel(): boolean;
     __noPreviewLevel?: boolean;
+    /**
+     * Sample encoding this pyramid's tiles carry, as a coarse *transfer class* —
+     * what a generic consumer must match to hand OSD a substitute tile for this
+     * source. Distinct from {@link _dataFormat} (the OSD data type a raw
+     * response is finished as) and from the renderer's colour-target precision.
+     *
+     * The one consumer today is the synthetic preview level, whose tile is an
+     * 8-bit `rasterBlob` (`preview-level.ts` `_servePreviewTile`) and therefore
+     * cannot be grafted onto a pyramid that delivers half-float packs.
+     *
+     * `undefined` means "not declared" and is treated as 8-bit-compatible:
+     * every source that works with the preview level today emits 8-bit rasters,
+     * and defaulting the other way would silently disable the feature for
+     * DICOMweb. A float source that forgets to declare gets a wrong preview —
+     * declare it.
+     */
+    getTilePrecision(): TileSamplePrecision | undefined;
+    /**
+     * Placement this image asks for because of what its FILE says, independent of
+     * anything the session chose — geometry, not preference. The canonical case is
+     * DICOM `ImageOrientationSlide` (0048,0102), which states how the slide sits on
+     * the glass; a viewer that ignores it draws the raster in whatever order the
+     * scanner happened to write it.
+     *
+     * `x`/`y`/`width` describe where this image sits in the frame it belongs to —
+     * the same normalized frame a session placement uses, where `width: 1` is the
+     * whole frame and `y` is scaled by the frame's WIDTH (OSD's convention). The
+     * case for it is an image that covers only part of what it is registered
+     * against: a DICOM Parametric Map declares the slide's total pixel matrix but
+     * may ship a raster covering, say, 92.7% of its width, and stretching that
+     * across the whole matrix misplaces every pixel but the ones at the origin.
+     *
+     * Composes with the session's virtual-viewport placement rather than replacing
+     * it (see `src/VIRTUAL_VIEWPORTS_SPLIT.md`) — the session says which region of
+     * the viewport this image's frame occupies, the file says where the image sits
+     * inside that frame:
+     *
+     * ```
+     * x       = placement.x + placement.width * intrinsic.x
+     * y       = placement.y + placement.width * intrinsic.y
+     * width   = placement.width * intrinsic.width
+     * degrees = placement.degrees + intrinsic.degrees
+     * ```
+     *
+     * Omitted fields default to `(0, 0, 1, 0)`, i.e. the whole frame unrotated, so
+     * a source that returns only `degrees` behaves exactly as before.
+     *
+     * **A sub-region must account for the rotation pivot.** OSD rotates each tiled
+     * image about *its own* bounds centre, so two images sharing an angle but not a
+     * bounding rect drift apart by `(R - I)·dc`. A source returning both a rotation
+     * and a sub-region rect is responsible for rotating that rect's centre about the
+     * frame's centre itself — see `DICOMDerivedTileSource#_placementFor`.
+     *
+     * **Never return a flip.** OpenSeadragon honours `setFlip` when drawing but not
+     * in `imageToViewportCoordinates` / `_pixelFromPoint`, so a flipped image
+     * carries its annotations unmirrored on top of mirrored pixels. A source whose
+     * file asks for a reflection must decompose it into a transpose it applies to
+     * its own raster plus the rotation it returns here.
+     */
+    getIntrinsicPlacement?(): { x?: number, y?: number, width?: number, degrees?: number } | undefined;
     /**
      * Focal-plane (z-stack) opt-in — see `src/ZSTACK.md` for the full design.
      *
@@ -305,12 +400,62 @@ tileSourcePrototype.setSourceOptions = function (options: SlideSourceOptions): S
 tileSourcePrototype.getThumbnail = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
 
 /**
+ * Extension of OpenSeadragon: declare the sample encoding this source's tiles
+ * carry. Undeclared (the default) means 8-bit-compatible — see the interface
+ * doc above for why that is the safe direction.
+ * @memberOf OpenSeadragon.TileSource
+ * @function getTilePrecision
+ * @return {"unorm8"|"float16"|undefined}
+ */
+tileSourcePrototype.getTilePrecision = function (): TileSamplePrecision | undefined { return undefined; };
+
+/**
  * Extension of OpenSeadragon: Retrieve slide label.
  * @memberOf OpenSeadragon.TileSource
  * @function getLabel
  * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
  */
 tileSourcePrototype.getLabel = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
+
+/**
+ * Extension of OpenSeadragon: can the *original* slide file (the scanner output
+ * this pyramid was derived from) be handed back to the user?
+ *
+ * Optional capability, duck-typed like {@link getLabel} — the default answers
+ * "no" and every UI surface hides its entry. Implement it together with
+ * {@link getSlideFileDownload}.
+ *
+ * **Must be synchronous and free of I/O.** Menus consult it while they are
+ * being built: `CanvasContextProvider` is synchronous by contract
+ * (`src/classes/app/canvas-context-menu.ts`), so there is nowhere to await.
+ * Answer from metadata already in hand (e.g. a `raw_download` flag on the
+ * slide-info response, or a URL pushed in through `setSourceOptions`), and
+ * return `false` while the metadata is still missing.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function canDownloadSlideFile
+ * @return {boolean}
+ */
+tileSourcePrototype.canDownloadSlideFile = function (): boolean { return false; };
+
+/**
+ * Extension of OpenSeadragon: describe where the original slide file lives.
+ * Called only after {@link canDownloadSlideFile} returned `true`; returning
+ * `undefined` anyway is allowed and simply cancels the download.
+ *
+ * This resolves a *location*, it does not transfer anything — the core driver
+ * (`UTILITIES.downloadSlideFile`) decides between handing the URL to the
+ * browser's download manager and streaming it through the source's HttpClient
+ * with a progress dialog. Whole-slide images are routinely tens of gigabytes,
+ * so never read the file into memory here.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSlideFileDownload
+ * @return {Promise<SlideFileDownload|undefined>}
+ */
+tileSourcePrototype.getSlideFileDownload = function (): Promise<SlideFileDownload | undefined> {
+    return Promise.resolve(undefined);
+};
 
 /**
  * Extension of OpenSeadragon: probe whether this source splits into multiple

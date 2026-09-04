@@ -21,11 +21,20 @@
         } catch (e) { return {}; }
     }
     function applyTokens(contextId, cfg, tok) {
-        if (!tok) return false;
+        if (!tok) {
+            cancelRenew(contextId);
+            return false;
+        }
         const user = XOpatUser.instance();
         const which = cfg.tokenForServer || "access_token";
         const token = tok[which] || tok.access_token || tok.id_token;
-        if (!token) return false;
+        if (!token) {
+            // No token and none coming: the server's refresh_token is gone or the IdP
+            // revoked it. Re-arming would poll our own server forever for a session
+            // that cannot return without an interactive login.
+            cancelRenew(contextId);
+            return false;
+        }
         const p = decodeJwtPayload(tok.id_token || token);
         const subject = p.sub || "user";
         // Re-assert on a SUBJECT change, not only when logged out: after an account
@@ -37,7 +46,69 @@
             user.login(subject, name, "", contextId);
         }
         user.setSecret(token, "jwt", contextId);
+        scheduleRenew(contextId, cfg, tok.expires_in);
         return true;
+    }
+
+    /**
+     * Longest lead before expiry at which the renew timer fires, clamped per context
+     * against the token's own lifetime (see `scheduleRenew`).
+     */
+    const RENEW_LEAD_SEC = 60;
+    /**
+     * Shortest delay worth arming a timer for. Clamping the lead keeps the delay
+     * positive but not necessarily useful: a token with milliseconds left computes a
+     * 1ms timer, which is a tight loop against our own server wearing a scheduler's
+     * clothes. Below this the token is unusable anyway — let the 401 path have it.
+     */
+    const MIN_RENEW_DELAY_MS = 1000;
+    const renewTimers = new Map();
+
+    /** Drop any pending renew for a context. Idempotent. */
+    function cancelRenew(contextId) {
+        const pending = renewTimers.get(contextId);
+        if (pending === undefined) return;
+        clearTimeout(pending);
+        renewTimers.delete(contextId);
+    }
+
+    /**
+     * Renew ahead of expiry instead of waiting for a request to fail.
+     *
+     * The server already refreshes correctly — `oidc-flow.currentTokens` uses the
+     * stored refresh_token before handing a token out — and already reports
+     * `expires_in`. The client used to discard it, so nothing asked for a new token
+     * until something 401'd: one failed request per token lifetime, per context.
+     *
+     * The arithmetic is an inline copy of `modules/saml-auth/renew-window.ts`, which is
+     * where it is unit-tested. This file cannot import it — it is a plain IIFE loaded
+     * through `include.json` `includes`, not a bundled workspace module — so the two
+     * are kept identical by hand, like the rest of these deliberately parallel files.
+     * Change one, change the other.
+     *
+     * No hint, or a lifetime too short to schedule inside, arms nothing and leaves the
+     * reactive `secret-needs-update` path as it was. That path stays the backstop
+     * regardless — a background tab throttles timers, and a late renew is covered by
+     * the 401 it was trying to avoid.
+     */
+    function scheduleRenew(contextId, cfg, expiresIn) {
+        cancelRenew(contextId);
+        if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) return;
+
+        // Clamp to half the lifetime: a token whose lifetime is at or below the lead
+        // would compute a non-positive delay and renew in a tight loop.
+        const lead = Math.min(RENEW_LEAD_SEC, expiresIn / 2);
+        const delayMs = Math.floor((expiresIn - lead) * 1000);
+        if (delayMs < MIN_RENEW_DELAY_MS) return;
+
+        renewTimers.set(contextId, setTimeout(() => {
+            renewTimers.delete(contextId);
+            // `force`: a timer knows the answer changed, so the boot-burst memo must
+            // not be reused. Success re-enters applyTokens and re-arms; a dead session
+            // cancels instead. Reuses the one adopt path, so coalescing, the transport
+            // retry and the forced bound all still apply.
+            void adoptServerSession(contextId, cfg, { force: true });
+        }, delayMs));
     }
     // The boot-attempt marker used to live here. It is core's now
     // (XOpatAuth._claimBootAttempt), which stamps the current URL before it
@@ -315,6 +386,9 @@
             return (await adoptServerSession(contextId, cfg, { force: true })).ok;
         },
         async logout(contextId) {
+            // First: a signed-out context must stop renewing, or a pending timer fires
+            // mid-sign-out and adopts the session we are tearing down.
+            cancelRenew(contextId);
             try { XOpatUser.instance().logout(contextId); } catch (e) { /* ignore */ }
             try { await serverScope().logout({ contextId }); } catch (e) { /* ignore */ }
         },

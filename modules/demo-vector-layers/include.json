@@ -1,0 +1,32 @@
+{
+  "id": "demo-vector-layers",
+  "name": "%meta.name%",
+  "author": "Aiosa",
+  "description": "%meta.description%",
+  "longDescription": "%meta.longDescription%",
+  "version": "1.0.0",
+  "categories": ["Data"],
+  "keywords": ["mvt", "vector-tiles", "geojson", "demo", "visualization"],
+  "stability": "experimental",
+  "includes": [
+    "index.mjs"
+  ],
+  "requires": [],
+
+  // Off unless a deployment asks for it: this exists for the
+  // visualization-flexibility showcase, not for general use. The
+  // `demo/visualization-flexibility` ENV fragment turns it on.
+  "enabled": false,
+
+  // Deployment knobs, read through `moduleMeta` (deployment-trusted config,
+  // never session data). Override under `ENV.modules.demo-vector-layers`.
+
+  // Register the MVT slide protocol. Turn off when a deployment declares its own.
+  "registerSlideProtocol": true,
+  // Id the protocol registers under; a session references it as
+  // `{"dataID": "...", "protocol": "demo-mvt"}`.
+  "protocolId": "demo-mvt",
+  // Prefix for data ids, so a session can reference "generated/mvt/tiles.json"
+  // instead of a full URL. Absolute ids are used as-is.
+  "protocolBaseUrl": ""
+}

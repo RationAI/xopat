@@ -12,6 +12,46 @@
 } from "./types";
 import { clone, sanitizeName, titleCase, uid } from "./utils";
 
+/**
+ * Every field type the questionnaire can render. Single source of truth for
+ * both normalization and the error a rejected schema reports — a hardcoded
+ * second copy in a message is how the two drift.
+ */
+export const QUESTIONNAIRE_ELEMENT_KINDS = [
+  "text", "textarea", "number", "email", "date", "tel", "url",
+  "select", "multiselect", "checkbox", "radio", "toggle",
+  "content", "rating", "file", "repeat", "matrix",
+  "measurement", "roi",
+] as const;
+
+/**
+ * SurveyJS is what an LLM reaches for when asked to build a form, and its
+ * vocabulary overlaps ours just enough to look right. Naming the equivalent
+ * kind in the refusal turns a guessing game into a one-line correction.
+ */
+const SURVEYJS_KIND_HINTS: Record<string, QuestionnaireElement["kind"]> = {
+  radiogroup: "radio",
+  dropdown: "select",
+  tagbox: "multiselect",
+  comment: "textarea",
+  html: "content",
+  expression: "content",
+  boolean: "toggle",
+  imagepicker: "select",
+  matrixdropdown: "matrix",
+  paneldynamic: "repeat",
+};
+
+/** Field renames that go with the SurveyJS shape, reported alongside the kind. */
+const SURVEYJS_FIELD_HINTS: Array<{ theirs: string; ours: string }> = [
+  { theirs: "type", ours: "kind" },
+  { theirs: "title", ours: "label" },
+  { theirs: "choices", ours: "options" },
+  { theirs: "html", ours: 'text (with kind: "content")' },
+  { theirs: "isRequired", ours: "validation.required" },
+  { theirs: "rateMax", ours: "maxRating" },
+];
+
 export function defaultSchema(): QuestionnaireSchema {
   return {
     version: 1,
@@ -85,9 +125,137 @@ export class QuestionnaireSchemaError extends Error {
  * `{ strict: true }` on the IMPORT path instead: there, degrading would replace
  * the author's form with a one-field default and report success, so a payload
  * that carries no usable pages must throw and leave the current schema alone.
+ *
+ * `{ authored: true }` adds the completeness checks a caller writing the schema
+ * right now should face but a saved file should not — see assertUsableElement.
  */
-export function normalizeSchema(value: any, opts: { strict?: boolean } = {}): QuestionnaireSchema {
+/**
+ * Carry a page's opaque payloads — its captured scene and its bound tours — across a
+ * whole-schema replacement.
+ *
+ * ## The failure this exists for
+ *
+ * A page's `scene` and `recordings` are BULK payloads: a canonical viewer scene, and tour
+ * steps with screenshots and base64 assets. Every read path summarizes them rather than
+ * handing them out — the scripting `getSchema` replaces a scene with `{captured: true, …}`
+ * and each binding with a `{…, stepCount}` descriptor. That is right for a read.
+ *
+ * But `setSchema` accepts the same shape, and the normalizers below reject a payload-less
+ * value: `normalizePageRecordings` drops any entry with no `steps`, and `normalizeScene`
+ * turns a summary into a hollow scene with no backgrounds. So the most natural edit there
+ * is — read the schema, append a page, write it back — silently destroyed every page's
+ * tour and viewer setup, and returned successfully. That is exactly the degradation
+ * `strict` exists to prevent for elements; scene and recordings were the hole in it.
+ *
+ * ## The rule
+ *
+ * For a page matched by `id`, a value that is only a SUMMARY is not an instruction to
+ * clear — it is the caller echoing back what it was shown. Restore the live payload.
+ * Clearing stays expressible and explicit: `recordings: []`, `scene: null`.
+ *
+ * Omission (`undefined`) is treated as "not stated", so it preserves too. The asymmetry is
+ * deliberate: a preserved tour the caller did not want is one `unbindPageRecording` away,
+ * while a dropped one is gone — the snapshot was the only copy.
+ *
+ * Anything that cannot be matched to a live page is reported in `dropped` so the caller
+ * can say so instead of reporting success over it. Pure: `next` is not mutated.
+ */
+export function preservePageOpaques(
+  next: any,
+  currentPages: readonly QuestionnairePage[] | undefined,
+): { schema: any; dropped: Array<{ pageId: string; slotIndex: number; recordingName: string }> } {
+  const dropped: Array<{ pageId: string; slotIndex: number; recordingName: string }> = [];
+  if (!next || typeof next !== "object" || !Array.isArray(next.pages) || !currentPages?.length) {
+    return { schema: next, dropped };
+  }
+  const byId = new Map(currentPages.filter(p => p && typeof p.id === "string").map(p => [p.id, p]));
+
+  const pages = next.pages.map((page: any) => {
+    if (!page || typeof page !== "object" || typeof page.id !== "string") return page;
+    const live = byId.get(page.id);
+    if (!live) {
+      // No live page to restore from, so these summaries are about to be dropped by
+      // `normalizePageRecordings`. Returning early without saying so is the silence this
+      // whole function exists to end — a renamed or removed page id is exactly the case
+      // where a caller would otherwise report success over a tour that is now gone.
+      if (Array.isArray(page.recordings)) {
+        for (const entry of page.recordings) {
+          if (entry && typeof entry === "object" && !hasSteps(entry)) {
+            dropped.push({
+              pageId: page.id,
+              slotIndex: Number(entry.slotIndex) || 0,
+              recordingName: typeof entry.recordingName === "string" ? entry.recordingName : "",
+            });
+          }
+        }
+      }
+      return page;
+    }
+    const merged = { ...page };
+
+    // A canonical scene never carries `captured` — only the read summary does.
+    if (isSceneSummary(page.scene) || page.scene === undefined) {
+      if (live.scene !== undefined) merged.scene = live.scene;
+      else delete merged.scene;
+    }
+
+    if (page.recordings === undefined) {
+      if (live.recordings !== undefined) merged.recordings = live.recordings;
+    } else if (Array.isArray(page.recordings)) {
+      merged.recordings = page.recordings.map((entry: any) => {
+        // Exactly the guard `normalizePageRecordings` applies: no steps, no binding.
+        if (entry && typeof entry === "object" && !hasSteps(entry)) {
+          const restored = findLiveBinding(live.recordings, entry);
+          if (restored) return restored;
+          dropped.push({
+            pageId: page.id,
+            slotIndex: Number(entry.slotIndex) || 0,
+            recordingName: typeof entry.recordingName === "string" ? entry.recordingName : "",
+          });
+        }
+        return entry;
+      });
+    }
+    return merged;
+  });
+
+  return { schema: { ...next, pages }, dropped };
+}
+
+function hasSteps(entry: any): boolean {
+  return Array.isArray(entry?.steps) && entry.steps.filter(Boolean).length > 0;
+}
+
+function isSceneSummary(scene: any): boolean {
+  return !!scene && typeof scene === "object" && (scene as any).captured === true;
+}
+
+/**
+ * The live binding a summary refers to.
+ *
+ * By `recordingId` first, so the exact tour the caller echoed is preferred. Then by slot,
+ * which matters when the slot was RE-BOUND between the read and the write: the summary names
+ * a tour that is no longer there, and the two available answers are "restore whatever the
+ * slot holds now" or "leave the entry payload-less and let normalization delete it". The
+ * first hands back the current truth; the second destroys a binding the caller never asked to
+ * remove. A summary carries no steps, so there is no stale payload to resurrect either way.
+ */
+function findLiveBinding(live: any, entry: any): any {
+  if (!Array.isArray(live) || !live.length) return null;
+  const slot = Number(entry?.slotIndex);
+  if (typeof entry?.recordingId === "string" && entry.recordingId) {
+    const byRecording = live.find((b: any) => b?.recordingId === entry.recordingId
+      && (!Number.isInteger(slot) || b?.slotIndex === slot));
+    if (byRecording) return byRecording;
+  }
+  if (!Number.isInteger(slot)) return null;
+  return live.find((b: any) => b?.slotIndex === slot) ?? null;
+}
+
+export function normalizeSchema(value: any, opts: { strict?: boolean; authored?: boolean } = {}): QuestionnaireSchema {
   const strict = !!opts.strict;
+  // `authored` only means anything under `strict`; see assertUsableElement.
+  const authored = !!opts.authored;
   const fallback = defaultSchema();
   if (strict && (!value || typeof value !== "object" || Array.isArray(value))) {
     throw new QuestionnaireSchemaError("schema is not an object");
@@ -97,13 +265,29 @@ export function normalizeSchema(value: any, opts: { strict?: boolean } = {}): Qu
   }
   const schema: QuestionnaireSchema = {
     version: 1,
+    // Optional stable form identity; travels with submissions. Absent stays
+    // absent — a generated id would differ per browser and defeat the purpose.
+    ...(typeof value?.id === "string" && value.id ? { id: value.id } : {}),
     title: typeof value?.title === "string" ? value.title : fallback.title,
     description: typeof value?.description === "string" ? value.description : fallback.description,
     pages: Array.isArray(value?.pages) ? value.pages : fallback.pages,
   };
-  schema.pages = schema.pages.filter((page: any) => page && Array.isArray(page.elements)).map((page: any, index: number) => ({
+  if (strict) {
+    // The lenient path drops a malformed page silently. For an author that is a
+    // whole page disappearing from a form the call said it applied.
+    const bad = schema.pages.findIndex((page: any) => !page || !Array.isArray(page.elements));
+    if (bad >= 0) {
+      throw new QuestionnaireSchemaError(
+        `page ${bad + 1} has no "elements" array. A page is { title, elements: [...] }.`,
+        $.t("questionaire:messages.schemaFieldInvalid"),
+      );
+    }
+  }
+  schema.pages = schema.pages.filter((page: any) => page && Array.isArray(page.elements)).map((page: any, index: number) => {
+    const pageTitle = typeof page.title === "string" ? page.title : `Page ${index + 1}`;
+    return {
     id: typeof page.id === "string" ? page.id : `page_${index + 1}`,
-    title: typeof page.title === "string" ? page.title : `Page ${index + 1}`,
+    title: pageTitle,
     description: typeof page.description === "string" ? page.description : "",
     // Deprecated legacy field, kept round-tripping for old bundles; never applied.
     xBgSpec: Number.isFinite(Number(page.xBgSpec)) ? Number(page.xBgSpec) : undefined,
@@ -111,8 +295,10 @@ export function normalizeSchema(value: any, opts: { strict?: boolean } = {}): Qu
     scene: normalizeScene(page.scene),
     sceneApplyMode: page.sceneApplyMode === "auto" || page.sceneApplyMode === "prompt" ? page.sceneApplyMode : undefined,
     recordings: normalizePageRecordings(page.recordings, page.pageAnimation),
-    elements: page.elements.map((element: any, elementIndex: number) => normalizeElement(element, page.id || `page_${index + 1}`, elementIndex)),
-  }));
+    elements: page.elements.map((element: any, elementIndex: number) =>
+      normalizeElement(element, page.id || `page_${index + 1}`, elementIndex, { strict, authored, pageTitle })),
+    };
+  });
   if (!schema.pages.length) {
     if (strict) throw new QuestionnaireSchemaError("schema has no usable pages");
     schema.pages = clone(fallback.pages);
@@ -272,9 +458,104 @@ function normalizePageRecordings(value: any, legacyAnimation: any): Questionnair
   return bindings.length ? bindings : undefined;
 }
 
-function normalizeElement(value: any, pageId: string, index: number): QuestionnaireElement {
-  const allowed: QuestionnaireElement["kind"][] = ["text","textarea","number","email","date","tel","url","select","multiselect","checkbox","radio","toggle","content","rating","file","repeat","matrix","measurement","roi"];
-  const kind = allowed.includes(value?.kind) ? value.kind : "text";
+/**
+ * Refuse a field the questionnaire cannot render as asked.
+ *
+ * The lenient path below coerces anything unrecognized to a plain `text` field.
+ * For the designer and for undo that is right — there must always be *some*
+ * form on screen. For a programmatic author (the scripting API) it is the worst
+ * possible outcome: a schema of four choice questions came back as four blank
+ * text boxes and the call reported success, so neither the user nor the caller
+ * had anything to correct. Strict mode throws instead, and the message names
+ * the exact edit to make.
+ *
+ * Two tiers, because the callers differ. The KIND check is structural and runs
+ * on every strict path, file import included: a field whose type was not
+ * understood is not that questionnaire. The completeness checks (`authored`)
+ * only run for a caller writing the schema NOW — refusing to open a saved file
+ * because one select ended up with an empty option list would lock an author
+ * out of their own form instead of letting them fix it in the designer.
+ */
+export function assertUsableElement(
+  value: any,
+  pageTitle: string,
+  index: number,
+  opts: { authored?: boolean } = { authored: true },
+): void {
+  const where = `element ${index + 1} on page "${pageTitle}"`;
+  const kinds = QUESTIONNAIRE_ELEMENT_KINDS.join(", ");
+  const rawKind = value?.kind;
+  const foreignKind = typeof value?.type === "string" ? value.type : undefined;
+
+  const renames = SURVEYJS_FIELD_HINTS
+    .filter(({ theirs }) => value && typeof value === "object" && theirs in value)
+    .map(({ theirs, ours }) => `"${theirs}" -> "${ours}"`);
+  const renameNote = renames.length
+    ? ` This schema is not SurveyJS: ${renames.join(", ")}.`
+    : "";
+
+  if (typeof rawKind !== "string" || !rawKind) {
+    const seen = foreignKind ? ` (it has "type": "${foreignKind}")` : "";
+    const suggestion = foreignKind && SURVEYJS_KIND_HINTS[foreignKind]
+      ? ` A SurveyJS "${foreignKind}" is kind: "${SURVEYJS_KIND_HINTS[foreignKind]}" here.`
+      : "";
+    throw new QuestionnaireSchemaError(
+      `${where} has no "kind"${seen}.${renameNote}${suggestion} Valid kinds: ${kinds}.`,
+      elementRefusalMessage(),
+    );
+  }
+
+  if (!(QUESTIONNAIRE_ELEMENT_KINDS as readonly string[]).includes(rawKind)) {
+    const suggestion = SURVEYJS_KIND_HINTS[rawKind]
+      ? ` Use kind: "${SURVEYJS_KIND_HINTS[rawKind]}".`
+      : "";
+    throw new QuestionnaireSchemaError(
+      `${where} has an unknown kind "${rawKind}".${suggestion}${renameNote} Valid kinds: ${kinds}.`,
+      elementRefusalMessage(),
+    );
+  }
+
+  if (!opts.authored) return;
+
+  // A choice field with nothing to choose from and a static block with nothing
+  // to read are rendered, look finished, and answer nothing. They are authoring
+  // mistakes with a one-word fix, so say which word.
+  if (rawKind === "select" || rawKind === "multiselect" || rawKind === "radio") {
+    const options = value?.options;
+    if (!Array.isArray(options) || !options.length) {
+      throw new QuestionnaireSchemaError(
+        `${where} is a "${rawKind}" with no "options".${renameNote} `
+        + `Pass options: [{ value, label }, ...].`,
+        elementRefusalMessage(),
+      );
+    }
+  }
+  if (rawKind === "content" && typeof value?.text !== "string" && typeof value?.html !== "string") {
+    throw new QuestionnaireSchemaError(
+      `${where} is a "content" block with no "text".${renameNote} Pass text: "…" (markdown, not HTML).`,
+      elementRefusalMessage(),
+    );
+  }
+}
+
+/**
+ * What the USER sees when a refusal surfaces through the IO pipeline. The
+ * technical `message` above is written for whoever authored the schema (a
+ * script, the chat model) and must not be shown verbatim.
+ */
+function elementRefusalMessage(): string {
+  return $.t("questionaire:messages.schemaFieldInvalid");
+}
+
+function normalizeElement(
+  value: any,
+  pageId: string,
+  index: number,
+  opts: { strict?: boolean; authored?: boolean; pageTitle?: string } = {},
+): QuestionnaireElement {
+  const allowed = QUESTIONNAIRE_ELEMENT_KINDS as readonly string[];
+  if (opts.strict) assertUsableElement(value, opts.pageTitle || pageId, index, { authored: opts.authored });
+  const kind = (allowed.includes(value?.kind) ? value.kind : "text") as QuestionnaireElement["kind"];
   const base: QuestionnaireBaseElement = {
     id: typeof value?.id === "string" ? value.id : `${pageId}_element_${index + 1}`,
     kind,
@@ -293,8 +574,9 @@ function normalizeElement(value: any, pageId: string, index: number): Questionna
   }
   if (kind === "content") {
     const variant = value?.variant === "header" ? "header" : "text";
-    // Migrate legacy raw `html` to plain `text` (strips tags) — content is now
-    // rendered with textContent, never innerHTML. See plugin.ts renderElement.
+    // Migrate legacy raw `html` to `text` (strips tags) — content is rendered as
+    // markdown through the `markdown` module, which sanitizes; author HTML is not
+    // a supported input either way. See plugin.ts renderElement.
     const text = typeof value?.text === "string"
       ? value.text
       : typeof value?.html === "string" ? value.html.replace(/<[^>]*>/g, "").trim() : "";
@@ -312,7 +594,7 @@ function normalizeElement(value: any, pageId: string, index: number): Questionna
       minItems: Number.isFinite(Number(value?.minItems)) ? Number(value.minItems) : 0,
       maxItems: Number.isFinite(Number(value?.maxItems)) ? Number(value.maxItems) : 10,
       elements: Array.isArray(value?.elements) ? value.elements.filter(Boolean).map((child: any, childIndex: number) => {
-        const normalized = normalizeElement(child, `${base.id}_repeat`, childIndex);
+        const normalized = normalizeElement(child, `${base.id}_repeat`, childIndex, opts);
         return normalized.kind === "repeat" || normalized.kind === "matrix" ? makeElement("text") : normalized;
       }) : [makeElement("text")],
     } as QuestionnaireRepeatElement;

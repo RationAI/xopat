@@ -57,6 +57,16 @@ export interface AnnotationMappingContext {
     classValueForPreset?: (presetId: unknown) => string | undefined;
     /** EMPAIA class value → xOpat preset id, creating one if needed. */
     presetForClassValue?: (classValue: string | undefined) => string | number | undefined;
+    /**
+     * Preset for a JOB-produced shape that carries no class at all.
+     *
+     * An app may only write what its EAD declares, and TA03/TA04/TA06 declare an
+     * annotation output with no class output — so "unclassified" is a legitimate,
+     * common result, not a defect. The annotations module stamps a preset onto
+     * every imported object regardless, so without this the whole result set is
+     * filed under `unknownPreset` and reads as the literal word "Unknown".
+     */
+    presetForJobOutput?: () => string | number | undefined;
     /** Optional offset applied to every coordinate (BioFormats/OpenSlide crops). */
     coordinateOffset?: { x: number; y: number };
     /**
@@ -141,23 +151,34 @@ export function nativeToEmpaia(
 
     switch (factoryID) {
         case "rect": {
-            const left = num(native.left), top = num(native.top);
+            const origin = coords(native.left, native.top);
+            if (!origin) return undefined;
             const width = num(native.width) * (num(native.scaleX, 1) || 1);
             const height = num(native.height) * (num(native.scaleY, 1) || 1);
             if (!(width > 0) || !(height > 0)) return undefined;
-            return { ...base, type: "rectangle", upper_left: pt(left, top), width: round(width), height: round(height) };
+            return {
+                ...base, type: "rectangle", upper_left: pt(origin[0], origin[1]),
+                width: round(width), height: round(height),
+            };
         }
         case "ellipse": {
+            const origin = coords(native.left, native.top);
+            if (!origin) return undefined;
             const rx = num(native.rx) * (num(native.scaleX, 1) || 1);
             const ry = num(native.ry) * (num(native.scaleY, 1) || 1);
             if (!(rx > 0) || !(ry > 0)) return undefined;
             // `left`/`top` are the bounding box corner (fabric origin left/top),
             // so the centre sits one radius in on each axis.
-            const center = pt(num(native.left) + rx, num(native.top) + ry);
+            const center = pt(origin[0] + rx, origin[1] + ry);
             return { ...base, type: "circle", center, radius: round((rx + ry) / 2) };
         }
         case "point": {
-            return { ...base, type: "point", coordinates: pt(num(native.left), num(native.top)) };
+            // A point whose position did not survive serialization must be
+            // skipped, not posted at the origin: the annotation would look
+            // legitimate to every consumer and sit in the corner of the slide.
+            const at = coords(native.left, native.top);
+            if (!at) return undefined;
+            return { ...base, type: "point", coordinates: pt(at[0], at[1]) };
         }
         case "polygon":
         case "polyline": {
@@ -168,7 +189,9 @@ export function nativeToEmpaia(
             return { ...base, type: factoryID === "polygon" ? "polygon" : "line", coordinates };
         }
         case "line": {
-            const coordinates = [pt(num(native.x1), num(native.y1)), pt(num(native.x2), num(native.y2))];
+            const ends = coords(native.x1, native.y1, native.x2, native.y2);
+            if (!ends) return undefined;
+            const coordinates = [pt(ends[0], ends[1]), pt(ends[2], ends[3])];
             // An imported EMPAIA arrow round-trips back to `arrow` (see file docs).
             if (native.empaiaType === "arrow") {
                 return { ...base, type: "arrow", head: coordinates[0], tail: coordinates[1] };
@@ -243,7 +266,6 @@ export function empaiaToNative(
     const y = (v: number) => v - dy;
 
     const classValue = firstClassValue(annotation);
-    const presetID = ctx.presetForClassValue?.(classValue);
 
     // Two independent routes to "an analysis made this", because either one
     // alone has failed in the field: the wire's `creator_type` casing is not
@@ -253,6 +275,12 @@ export function empaiaToNative(
     const byJob = !!creatorId && ctx.isJobId?.(creatorId) === true;
     const jobCreated = byJob || isJobCreated(annotation);
 
+    // The class decides when there is one. Otherwise a job's output is filed
+    // under its declared output, and only a job's — the user's own unclassified
+    // scratch work is not this app's result and must not be grouped with it.
+    const presetID = ctx.presetForClassValue?.(classValue)
+        ?? (jobCreated && !classValue ? ctx.presetForJobOutput?.() : undefined);
+
     const common: Record<string, any> = {
         ...(presetID !== undefined ? { presetID } : {}),
         ...(typeof annotation.name === "string" ? { name: annotation.name } : {}),
@@ -260,6 +288,11 @@ export function empaiaToNative(
         ...(Number.isFinite(annotation.npp_created) ? { nppCreated: annotation.npp_created } : {}),
         ...(Array.isArray(annotation.npp_viewing) ? { nppViewing: annotation.npp_viewing } : {}),
         ...(typeof annotation.id === "string" ? { empaiaId: annotation.id } : {}),
+        // The board prints `new Date(object.created)`, and the import path never
+        // assigns `created` — only interactive creation does. The wire has the
+        // real value, so carry it rather than leaving the row to say "Invalid
+        // Date". Already in `necessaryProperties`, so it survives the trim.
+        ...(Number.isFinite(annotation.created_at) ? { created: annotation.created_at } : {}),
         ...(classValue ? { empaiaClass: classValue } : {}),
         // The annotations module's own read-only flag: it refuses every mutation
         // at the IO checkpoint and renders the object locked, so this is the whole
@@ -451,9 +484,18 @@ export function registerEmpaiaConvertor(): void {
                 : (Array.isArray(parsed?.items) ? parsed.items : []);
 
             const objects: Record<string, any>[] = [];
+            const dropped: string[] = [];
             for (const item of items) {
                 const native = empaiaToNative(item, ctx);
                 if (native) objects.push(native);
+                else dropped.push(String(item?.type ?? typeof item));
+            }
+            // A record the mapper cannot represent is dropped — and used to be
+            // dropped in total silence, which is indistinguishable from the
+            // analysis having produced nothing. Say what was lost and of what type.
+            if (dropped.length) {
+                console.warn(`[empaia-workbench] ${dropped.length}/${items.length} annotation(s) could not ` +
+                    `be mapped and were skipped (types: ${[...new Set(dropped)].join(", ")}).`);
             }
             return { objects, presets: [] };
         }
@@ -467,6 +509,36 @@ function num(v: unknown, fallback = 0): number {
     return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * A coordinate, or nothing — never a coerced zero.
+ *
+ * `Number()` maps `null`, `""`, `false` and `[]` to **0**, and `Number.isFinite(0)`
+ * is true, so a bare `Number(v)` guard accepts every one of them as the origin.
+ * That is not a theoretical hole: a payload carrying `coordinates: [null, y]`,
+ * or a native snapshot that lost its `left`, mapped to a perfectly valid
+ * annotation sitting in the slide's top-left corner — with nothing logged,
+ * because nothing failed. Only a real number, or a string that is one, counts.
+ */
+function coord(v: unknown): number | undefined {
+    if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+    if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+}
+
+/** Every value finite, or nothing — for geometries that need several at once. */
+function coords(...values: unknown[]): number[] | undefined {
+    const out: number[] = [];
+    for (const value of values) {
+        const n = coord(value);
+        if (n === undefined) return undefined;
+        out.push(n);
+    }
+    return out;
+}
+
 function round(v: number): number {
     // EMPAIA stores integers for pixel coordinates; sub-pixel precision would
     // be rejected by some validators and means nothing at level 0 anyway.
@@ -474,16 +546,16 @@ function round(v: number): number {
 }
 
 function positive(v: unknown): number | undefined {
-    const n = Number(v);
-    return Number.isFinite(n) && n > 0 ? n : undefined;
+    const n = coord(v);
+    return n !== undefined && n > 0 ? n : undefined;
 }
 
 /** A `[x, y]` pair of finite, non-negative numbers, or undefined. */
 function coordPair(v: unknown): [number, number] | undefined {
     if (!Array.isArray(v) || v.length < 2) return undefined;
-    const x = Number(v[0]), y = Number(v[1]);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return undefined;
-    return [x, y];
+    const pair = coords(v[0], v[1]);
+    if (!pair || pair[0] < 0 || pair[1] < 0) return undefined;
+    return [pair[0], pair[1]];
 }
 
 /** A list of at least `minPoints` valid pairs, or undefined. */
@@ -503,8 +575,9 @@ function pointsOf(native: Record<string, any>): Array<{ x: number; y: number }> 
     const points = native?.points;
     if (!Array.isArray(points)) return [];
     return points
-        .filter(p => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
-        .map(p => ({ x: Number(p.x), y: Number(p.y) }));
+        .map(p => coords(p?.x, p?.y))
+        .filter((p): p is number[] => !!p)
+        .map(([x, y]) => ({ x, y }));
 }
 
 /**
@@ -516,9 +589,9 @@ function arrowShaft(native: Record<string, any>): { x1: number; y1: number; x2: 
     const children = Array.isArray(native?.objects) ? native.objects : undefined;
     const line = children?.find((c: any) => c && c.type === "line") ?? children?.[0];
     if (!line) return undefined;
-    const x1 = Number(line.x1), y1 = Number(line.y1), x2 = Number(line.x2), y2 = Number(line.y2);
-    if (![x1, y1, x2, y2].every(Number.isFinite)) return undefined;
-    return { x1, y1, x2, y2 };
+    const ends = coords(line.x1, line.y1, line.x2, line.y2);
+    if (!ends) return undefined;
+    return { x1: ends[0], y1: ends[1], x2: ends[2], y2: ends[3] };
 }
 
 function defaultName(native: Record<string, any>): string {

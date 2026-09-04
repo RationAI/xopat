@@ -29,7 +29,7 @@ const { div } = van.tags;
 /**
  * @typedef {Object} MainLayoutTab
  * @property {string} id - Unique tab identifier.
- * @property {string} [icon] - Icon class name, e.g., "ph-info" (or legacy "fa-circle-info").
+ * @property {string} [icon] - Icon class name, e.g., "ph-info".
  * @property {string} [title] - Human-readable title.
  * @property {VisibilityManager} [visibilityManager] - The visibility manager for this tab. Required.
  * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
@@ -185,6 +185,7 @@ export class MainLayout extends BaseComponent {
             () => {
                 if (!this._syncingDockRequestedState) {
                     this._dockRequestedOpen = false;
+                    this._emptyOpenAllowed = false;
                 }
                 // Snapshot the transient overlay-expanded state synchronously,
                 // before it is torn down, so on() can restore it. Captured here
@@ -211,6 +212,13 @@ export class MainLayout extends BaseComponent {
         // boot-time deferred syncs of cached-visible tabs must not pop it
         // open. Explicit user opens clear the latch and persist as usual.
         this._sessionInitialHidden = initialDockVisible === false || !this._dockRequestedOpen;
+
+        // Unlocks the empty-dock presentation. `_dockRequestedOpen` restored
+        // from the cache is not enough: tabs register asynchronously, so "open
+        // with nothing visible" during boot means the panels have not arrived
+        // yet — rendering the placeholder then would flash it on every reload.
+        // Only an explicit user open of a dock that has nothing to show sets it.
+        this._emptyOpenAllowed = false;
 
         // Tie the dock into the AppBar "hide chrome" registry so that
         // `params.ui.appBar = false` (which calls Chrome.hide()) collapses it
@@ -412,14 +420,12 @@ export class MainLayout extends BaseComponent {
      * @param {boolean} [persist=false] true when the call carries explicit
      *   user intent — the open state is then written to AppCache so reloads
      *   restore it; derived/boot-time calls leave the cache untouched.
+     * @param {boolean} [explicit=false] true when a user action asked for the
+     *   dock. Only such a call may open a dock with no visible tabs (it then
+     *   shows the empty-state placeholder); derived/boot-time opens of an
+     *   empty dock are refused so an empty panel never steals screen space.
      */
-    showGlobalMenu(persist = false) {
-        if (!this._hasVisibleTabs()) {
-            USER_INTERFACE.Dialogs.show($.t("main.globalMenu.noMenuToView"));
-            this._setDockRequestedOpen(false);
-            return false;
-        }
-
+    showGlobalMenu(persist = false, explicit = false) {
         // explicit show intent must also undo a drag-collapsed dock,
         // otherwise the dock stays at 0px and the call looks like a no-op;
         // boot-time deferred-sync calls keep the persisted collapse intact
@@ -427,7 +433,7 @@ export class MainLayout extends BaseComponent {
         if (!narrow && this.collapsed && !this._isFlushingDeferredSync) {
             this._setUserCollapsed(false);
         }
-        this._setDockRequestedOpen(true, persist);
+        if (!this._setDockRequestedOpen(true, persist, explicit)) return false;
         // In overlay mode an explicit open (View-menu tab click, plugin
         // showTab/focus) should actually reveal the floating panel — not just
         // arm the rail. Auto-close on pointer/focus leave still applies.
@@ -449,7 +455,7 @@ export class MainLayout extends BaseComponent {
         this._sessionInitialHidden = false;
         return this.isOpened()
             ? this.hideGlobalMenu(true)
-            : this.showGlobalMenu(true);
+            : this.showGlobalMenu(true, true);
     }
 
     showTab(id) {
@@ -474,7 +480,7 @@ export class MainLayout extends BaseComponent {
             this._menu.focus(id, !this._isFlushingDeferredSync);
         }
         USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
-        return this.showGlobalMenu(!this._isFlushingDeferredSync);
+        return this.showGlobalMenu(!this._isFlushingDeferredSync, !this._isFlushingDeferredSync);
     }
 
     hideTab(id) {
@@ -498,6 +504,25 @@ export class MainLayout extends BaseComponent {
         return true;
     }
 
+    /**
+     * Whether the dock is currently showing anything at all — the same predicate
+     * the AppBar "View" dropdown uses to decide if a tab row reads as "on".
+     * @returns {boolean}
+     */
+    isDockVisible() {
+        return this._isDockEffectivelyVisible();
+    }
+
+    /**
+     * Id of the tab currently focused in the dock's tab strip. Only that tab's
+     * content div is not `display-none`, so it is the other half of "is this
+     * panel actually on screen" next to {@link isDockVisible}.
+     * @returns {string|undefined}
+     */
+    getFocusedTabId() {
+        return this._menu?._focused;
+    }
+
     isOpened() {
         const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
         if (narrow) {
@@ -519,21 +544,58 @@ export class MainLayout extends BaseComponent {
     openGlobalMenuMobile() {
         // Explicit user intent — same latch-clearing as toggleGlobalMenu().
         this._sessionInitialHidden = false;
+
+        // A phone has no comfortable way to walk the "…" config dropdown or the
+        // AppBar "View" tree looking for panels the user (or a previous session)
+        // hid. The bottom-bar button is the only affordance there is, so it must
+        // always produce something: reveal everything that exists, and fall back
+        // to the empty-state placeholder only when nothing does.
+        if (!this._hasVisibleTabs() && this._hasTabs()) {
+            this.revealAllTabs();
+        }
+
         // Deliberately non-persisting: the mobile bottom bar switches panels
         // (viewer / viewer menu / global menu) as transient navigation — it
         // must not overwrite the desktop dock preference in AppCache.
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
 
         if (!narrow) {
-            return this.showGlobalMenu();
+            return this.showGlobalMenu(false, true);
         }
 
-        const shown = this.showGlobalMenu();
+        const shown = this.showGlobalMenu(false, true);
         if (!shown) return false;
 
         if (!this._isFullscreen) {
             this._openFullscreen();
         }
+        return true;
+    }
+
+    /**
+     * Unhide every tab the dock knows about and focus the first one. Used as the
+     * mobile recovery path (see {@link openGlobalMenuMobile}) and by the
+     * empty-state placeholder's "Show all panels" button.
+     *
+     * Persists per-tab visibility (`v::<tabId>`) like {@link showTab} does — an
+     * explicit reveal is a choice worth remembering.
+     * @returns {boolean} false when there is nothing to reveal
+     */
+    revealAllTabs() {
+        const tabs = this._getMenuTabs();
+        if (!tabs.length) return false;
+
+        for (const tab of tabs) {
+            this._setTabVisibleState(tab, true);
+        }
+
+        const first = tabs[0];
+        if (first?.id && typeof this._menu?.focus === "function") {
+            this._menu.focus(first.id, true);
+        }
+
+        USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
+        this._applyDockVisibility();
         return true;
     }
 
@@ -623,10 +685,28 @@ export class MainLayout extends BaseComponent {
         this._applyResponsiveLayout();
         this._updateDockVisibility();
         this._syncToolbars();
+        // The dock can leave fullscreen on its own (the user closed the last
+        // card, a resize crossed the breakpoint). The mobile bar owns the
+        // "which panel is showing" mark and the toolbar container, so it has to
+        // hear about it — otherwise its Global Menu button stays lit and dead.
+        USER_INTERFACE?.MobileBottomBar?.sync?.();
     }
 
-    _setDockRequestedOpen(next, persist = false) {
+    _setDockRequestedOpen(next, persist = false, explicit = false) {
         const desired = !!next;
+
+        // An empty dock is a legal state — it renders the "here be dragons"
+        // placeholder — but only a user asking for it may bring it up. Boot
+        // restores (`ui.globalMenu`, the cached open state), deferred
+        // visibility syncs and other derived opens must not pop a panel that
+        // has nothing to show, so they are refused while no tab is visible.
+        if (desired && !explicit && !this._hasVisibleTabs()) {
+            return false;
+        }
+        // Track whether the *empty* presentation is unlocked, so a later
+        // derived `_applyDockVisibility()` keeps showing what the user opened
+        // (and a close relocks it).
+        this._emptyOpenAllowed = desired ? (this._emptyOpenAllowed || explicit) : false;
 
         // While `params.ui.globalMenu === false` is still in effect (the
         // user hasn't yet explicitly opened the dock), late programmatic
@@ -773,7 +853,11 @@ export class MainLayout extends BaseComponent {
             this._setupMenuConfig(menu);
             if (this._dockEl) {
                 menu.attachTo(this._dockEl);
-                this._syncMenuTabs();
+                // Nothing to sync for an empty strip, and `create()` now builds
+                // the menu before the layout is in the document — where focus /
+                // close-button wiring has no nodes to work with. `addTab` runs
+                // the sweep itself once a tab actually exists.
+                if (this._tabsArr.length) this._syncMenuTabs();
             }
         }
     }
@@ -834,6 +918,13 @@ export class MainLayout extends BaseComponent {
         tab.hidden = !visible;
         APPLICATION_CONTEXT.AppCache.set(`v::${tab.id}`, !!visible);
 
+        // The owning wrapper keeps its own VisibilityManager, and consumers read
+        // THAT (not `tab.hidden`). Hand the decision over or it answers from the
+        // boot-time cache value forever. `adoptTabVisibility` is a no-op when the
+        // state already matches, which is what keeps the `_syncMenuTabs` sweep
+        // and the wrapper's own open()/close() from cycling back here.
+        this._resolveDockable(tab)?.adoptTabVisibility?.(visible);
+
         if (tab.headerButton?.setClass) {
             tab.headerButton.setClass("display", visible ? "" : "hidden");
         } else {
@@ -854,6 +945,7 @@ export class MainLayout extends BaseComponent {
             }
         }
 
+        this._syncEmptyState();
         return true;
     }
 
@@ -863,25 +955,100 @@ export class MainLayout extends BaseComponent {
         return sourceTabs.some(tab => this._isTabVisible(tab));
     }
 
+    /**
+     * @private
+     * Whether any panel is registered at all, hidden or not. The distinction
+     * from {@link _hasVisibleTabs} is what tells "this deployment ships no dock
+     * panels" apart from "they are all hidden and can be brought back".
+     */
+    _hasTabs() {
+        return this._getMenuTabs().length > 0 || this._tabsArr.length > 0;
+    }
+
     _isDockEffectivelyVisible() {
-        return !!this._dockRequestedOpen && this._hasVisibleTabs();
+        if (!this._dockRequestedOpen) return false;
+        // An open dock with nothing in it is a legal state — it renders the
+        // empty-state placeholder — but only after a user explicitly asked for
+        // it (`_emptyOpenAllowed`). Boot-restored open state with no tabs yet
+        // means the panels are still registering, not that the dock is empty.
+        return this._hasVisibleTabs() || this._emptyOpenAllowed;
+    }
+
+    /**
+     * @private
+     * The dock's empty-state placeholder. Built once and reused: the two cases
+     * it covers — nothing registered at all vs. everything hidden — differ only
+     * in the icon, the copy and whether the reveal button is offered, so a tab
+     * appearing or disappearing never rebuilds DOM.
+     */
+    _createEmptyState() {
+        const icon = van.tags.i({
+            class: "ph-light ph-ghost",
+            "aria-hidden": "true",
+            style: "font-size:2.75rem; line-height:1; opacity:0.5;",
+        });
+        const title = van.tags.strong({ style: "font-size:1rem;" }, $.t("main.globalMenu.emptyTitle"));
+        const body = van.tags.p({ style: "max-width:24rem; font-size:0.85rem; opacity:0.7; margin:0;" });
+        const revealButton = new Button({
+            id: `${this.id}-empty-reveal`,
+            size: Button.SIZE.SMALL,
+            onClick: () => this.revealAllTabs(),
+        }, $.t("main.globalMenu.showAllPanels")).create();
+
+        const node = div({
+            id: `${this.id}-empty`,
+            class: "flex flex-col items-center justify-center text-center select-none w-full h-full",
+            style: "gap:0.6rem; padding:2rem 1rem;",
+        }, icon, title, body, revealButton);
+
+        this._emptyStateEls = { node, icon, body, revealButton };
+        return node;
+    }
+
+    /**
+     * @private
+     * Show the placeholder whenever the dock is open with no visible tab, and
+     * keep its copy in step with *why* it is empty. Cheap enough to call from
+     * every visibility mutation.
+     */
+    _syncEmptyState() {
+        const show = this._isDockEffectivelyVisible() && !this._hasVisibleTabs();
+
+        if (!show) {
+            if (this._emptyStateEls?.node) this._emptyStateEls.node.style.display = "none";
+            return;
+        }
+
+        if (!this._emptyStateEls) this._createEmptyState();
+        const { node, icon, body, revealButton } = this._emptyStateEls;
+
+        // The body node only exists once the menu is in the document; until then
+        // there is nothing on screen to place the placeholder in either.
+        const host = this.getDockBodyNode();
+        if (host && node.parentNode !== host) host.appendChild(node);
+
+        const recoverable = this._hasTabs();
+        icon.className = recoverable ? "ph-light ph-eye-slash" : "ph-light ph-ghost";
+        body.textContent = $.t(recoverable
+            ? "main.globalMenu.emptyHiddenBody"
+            : "main.globalMenu.emptyBody");
+        revealButton.style.display = recoverable ? "" : "none";
+        node.style.display = "";
     }
 
     _applyDockVisibility() {
         if (!this._dockEl || !this._handleEl || !this._viewerEl) return;
 
-        const hasVisibleTabs = this._hasVisibleTabs();
-
-        if (!hasVisibleTabs && this._dockRequestedOpen) {
-            this._setDockRequestedOpen(false);
-            return;
-        }
+        this._syncEmptyState();
 
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
         // "menu available" = the user/plugins want the menu present. In docked
         // mode this means the dock is shown; in overlay mode it means the rail
-        // is shown and the panel opens on hover/focus.
-        const menuAvailable = this._dockRequestedOpen && hasVisibleTabs;
+        // is shown and the panel opens on hover/focus. An explicitly opened dock
+        // with no visible tab stays available and shows the empty-state
+        // placeholder — force-closing it here is what used to make the menu
+        // look broken.
+        const menuAvailable = this._isDockEffectivelyVisible();
         const overlay = this._dockMode === "overlay" && !narrow;
 
         if (!menuAvailable && this._isFullscreen) {
@@ -1104,9 +1271,9 @@ export class MainLayout extends BaseComponent {
             // Re-enter the flow layout and reveal the pushing dock.
             this._dockEl.style.position = "relative";
             this._dockEl.style.zIndex = "";
-            if (this._hasVisibleTabs()) {
+            if (this._hasVisibleTabs() || this._emptyOpenAllowed) {
                 if (this.collapsed) this._setUserCollapsed(false);
-                this._setDockRequestedOpen(true);
+                this._setDockRequestedOpen(true, false, this._emptyOpenAllowed);
             }
         }
         // → overlay: keep _dockRequestedOpen so the rail shows; resting state is
@@ -1138,12 +1305,25 @@ export class MainLayout extends BaseComponent {
 
     /** @private */
     _applyVisibility() {
-        if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
+        if (!this._dockEl || !this._isDockEffectivelyVisible()) return;
 
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
         if (this._dockMode === "overlay" && !narrow) {
             // overlay geometry is owned by _applyDockVisibility / _openOverlay
             this._applyDockVisibility();
+            return;
+        }
+
+        if (this._isFullscreen) {
+            // The mobile fullscreen overlay owns the dock's geometry until
+            // `_closeFullscreen` restores it. A narrow layout is permanently
+            // `collapsed` (see `_applyResponsiveLayout`), so falling through
+            // would set width/height to 0 and blank the panel on any incidental
+            // re-layout — closing one of several tabs, a resize, a toolbar sync.
+            this._dockEl.style.width = "100%";
+            this._dockEl.style.height = "100%";
+            this._handleEl.style.display = "none";
+            this._setKnobVisible(false);
             return;
         }
 
@@ -1702,7 +1882,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 if (this._activeToolbarId) this.setToolbarEmbedded(this._activeToolbarId, false);
             }
-        }, iconComponentFor("fa-up-right-from-square")).create();
+        }, iconComponentFor("ph-arrow-square-out")).create();
 
         this._toolbarCollapseBtn = new Button({
             base: "btn btn-ghost btn-xs",
@@ -1712,7 +1892,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 this.toggleEmbeddedToolbarCollapsed(true);
             }
-        }, iconComponentFor("fa-chevron-up")).create();
+        }, iconComponentFor("ph-caret-up")).create();
 
         this._toolbarHostBarEl.append(this._toolbarSwitcherWrap, this._toolbarContentEl, this._toolbarFloatBtn, this._toolbarCollapseBtn);
 
@@ -1725,7 +1905,7 @@ export class MainLayout extends BaseComponent {
                 event.stopPropagation();
                 this.openEmbeddedToolbar();
             }
-        }, iconComponentFor("fa-chevron-left")).create();
+        }, iconComponentFor("ph-caret-left")).create();
         this._toolbarPeekEl.style.position = "fixed";
         this._toolbarPeekEl.style.right = "-6px";
         this._toolbarPeekEl.style.zIndex = "995";
@@ -1814,6 +1994,7 @@ export class MainLayout extends BaseComponent {
         }
         this._ensureFocusedVisibleTab();
         this._reserveHeaderPinSpace();
+        this._syncEmptyState();
         USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
     }
 
@@ -2106,12 +2287,11 @@ export class MainLayout extends BaseComponent {
 
         this._dockEl = dock.create();
 
-        if (this._tabsArr.length) {
-            const menu = this._createMenu();
-            this._menu = menu;
-            this._setupMenuConfig(menu);
-            menu.attachTo(this._dockEl);
-        }
+        // Built unconditionally, even with zero tabs: the strip carries the "…"
+        // config dropdown (the desktop path back to hidden panels) and its body
+        // hosts the empty-state placeholder. A lazily-created menu would also
+        // attach *after* the placeholder and land below it in the DOM.
+        this._ensureMenu();
 
         // The docked<->overlay toggle used to be a corner pin button; it now
         // lives in the tab strip's "…" config menu (see _setupMenuConfig).

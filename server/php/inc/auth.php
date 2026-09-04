@@ -12,13 +12,85 @@ function registerProxyAuthVerifier($name, $fn) {
 }
 
 /**
+ * Whether verifyProxyAuth() will actually run a verifier for this alias.
+ * Mirrors proxyAuthIsEnforced() in server/node/auth.js.
+ */
+function proxyAuthIsEnforced($proxyConfig) {
+    $authCfg = $proxyConfig['auth'] ?? null;
+    if (!$authCfg || ($authCfg['enabled'] ?? true) === false) return false;
+    return !empty($authCfg['verifiers'] ?? []);
+}
+
+/**
+ * Whether this alias injects operator secrets (API keys) upstream.
+ */
+function proxyCarriesOperatorCredentials($proxyConfig) {
+    $headers = $proxyConfig['headers'] ?? null;
+    return is_array($headers) && count($headers) > 0;
+}
+
+/**
+ * Whether `$_SESSION['allowed_proxies']` permits this alias.
+ *
+ * Missing / 'ALL' means unrestricted — sessions are minted anonymously, so
+ * narrowing is opt-in and no existing deployment changes behaviour. An auth
+ * integration narrows it on a completed login by assigning an array (or 'NONE').
+ * Mirrors proxyAliasAllowedForSession() in server/node/auth.js, including the
+ * deny-on-unknown-shape rule: a restriction we cannot read is still a restriction.
+ */
+function proxyAliasAllowedForSession($alias) {
+    $allowed = $_SESSION['allowed_proxies'] ?? 'ALL';
+    if ($allowed === null || $allowed === 'ALL') return true;
+    if ($allowed === 'NONE') return false;
+    if (is_array($allowed)) return in_array($alias, $allowed, true);
+    return false;
+}
+
+/**
+ * Refuse a credential-bearing alias that enforces no authentication.
+ *
+ * Session + CSRF proves same-origin, not authorization: a session is minted to any
+ * anonymous page load and the CSRF token is rendered into that page. So an alias
+ * that attaches `proxies.<alias>.headers` (operator API keys) with no verifier is
+ * an open relay to its upstream for every visitor. Fails closed; opt out either
+ * per alias with `auth: {"enabled": false}` (deliberately public) or
+ * deployment-wide with `server.secure.proxyCredentialsRequireAuth: false`.
+ *
+ * Mirrors checkProxyCredentialGate() in server/node/auth.js.
+ *
+ * @return bool true when the request may proceed; emits the response otherwise.
+ */
+function enforceProxyCredentialGate($alias, $proxyConfig) {
+    if (!proxyCarriesOperatorCredentials($proxyConfig)) return true;
+    if (proxyAuthIsEnforced($proxyConfig)) return true;
+    // An `auth` block saying `enabled: false` is intent; a missing one is not.
+    if (isset($proxyConfig['auth']) && ($proxyConfig['auth']['enabled'] ?? true) === false) return true;
+    if (($GLOBALS['CORE_SECURE']['proxyCredentialsRequireAuth'] ?? true) === false) return true;
+
+    error_log("[proxy] '$alias' injects operator credentials (proxies.$alias.headers) but enforces no " .
+        "authentication, which makes it an open relay to its upstream for every visitor. Refusing. " .
+        "Configure proxies.$alias.auth.verifiers, declare it public with " .
+        "proxies.$alias.auth = {\"enabled\": false}, or set " .
+        "server.secure.proxyCredentialsRequireAuth: false deployment-wide.");
+    header("HTTP/1.1 500 Internal Server Error");
+    header("Content-Type: text/plain; charset=utf-8");
+    // Does not name the alias: this renders on the viewer's own origin.
+    echo "Proxy target is misconfigured: a credential-bearing proxy must enforce authentication.";
+    return false;
+}
+
+/**
  * Verifies the request against configured proxy authentication.
  */
 function verifyProxyAuth($alias, $proxyConfig, &$upstreamHeaders) {
     global $PROXY_AUTH_VERIFIERS, $CORE;
 
     $authCfg = $proxyConfig['auth'] ?? null;
-    if (!$authCfg || ($authCfg['enabled'] ?? false) === false) return true;
+    // `?? true`, not `?? false`. An `auth` block present WITHOUT an explicit
+    // `enabled` used to skip every verifier on PHP while Node ran them
+    // (`authCfg.enabled === false` there) — the exact config an operator writes to
+    // secure an alias failed open on one backend and closed on the other.
+    if (!$authCfg || ($authCfg['enabled'] ?? true) === false) return true;
 
     $verifiers = $authCfg['verifiers'] ?? [];
     $mode = ($authCfg['mode'] ?? 'all') === 'any' ? 'any' : 'all';

@@ -1,0 +1,50 @@
+{
+    "name": "Tutorial App 04 v3",
+    "name_short": "TA04v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_04.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangles": {
+            "type": "collection",
+            "items": {
+                "type": "rectangle",
+                "reference": "io.my_wsi"
+            }
+        },
+        "my_cells": {
+            "type": "collection",
+            "items": {
+                "type": "collection",
+                "reference": "io.my_rectangles.items",
+                "items": {
+                    "type": "point",
+                    "reference": "io.my_wsi"
+                }
+            }
+        },
+        "my_confidences": {
+            "type": "collection",
+            "items": {
+                "type": "collection",
+                "items": {
+                    "type": "float",
+                    "reference": "io.my_cells.items.items"
+                }
+            }
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "my_wsi",
+                "my_rectangles"
+            ],
+            "outputs": [
+                "my_cells",
+                "my_confidences"
+            ]
+        }
+    }
+}

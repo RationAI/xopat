@@ -1,0 +1,8 @@
+{
+  "name": "dicom-browser",
+  "version": "1.0.0",
+  "description": "DICOMweb Slide Browser",
+  "author": "Aiosa",
+  "type": "module",
+  "main": "index.workspace.mjs"
+}

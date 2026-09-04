@@ -1,0 +1,87 @@
+{
+  "$meta": {
+    "description": "Three-role demo gating: guest denied, pathologist fills forms, researcher authors them",
+    "dimension": "roles"
+  },
+  /**
+   * Deployment role rules that name a CLAIM and a CONTEXT, never a protocol —
+   * which is why this one block backs both the SAML and the OIDC deployment.
+   * It used to be copied between `test/env/saml.json` and `test/env/oidc.json`
+   * with a comment asking the reader to keep them byte-identical; sharing the
+   * fragment makes that property structural instead of aspirational.
+   *
+   * The two namespaces are separate on purpose: Keycloak names its groups
+   * (`pathologists`), xOpat names its roles (`pathologist`). Set
+   * `"unmapped": "passthrough"` instead of `map` when they already agree.
+   *
+   * The token is decoded, NOT verified, on the client. That is sound because
+   * these roles gate UI only — the same token is verified server-side by the
+   * RPC verifier the `auth/*` fragment installs. See src/USER_ROLES.md.
+   */
+  "core": {
+    "roles": {
+      /* Applied at boot and reverted to on logout. */
+      "default": ["guest"],
+      "claims": {
+        "claim": "groups",
+        "contextId": "core",
+        "map": {
+          "pathologists": ["pathologist"],
+          "researchers": ["researcher"]
+        }
+      },
+      "definitions": {
+        "guest": {
+          "label": "Not signed in",
+          "deny": ["questionaire.*", "annotations.*"]
+        },
+        /* Fills forms and annotates. Cannot touch the form itself. */
+        "pathologist": {
+          "label": "Pathologist",
+          "grant": [
+            "questionaire.answer",
+            "questionaire.bundle-export",
+            "questionaire.bundle-import",
+            "questionaire.bundle-submit",
+            "questionaire.crud:answer.*",
+            "annotations.*"
+          ],
+          "deny": [
+            "questionaire.edit",
+            "questionaire.import.schema"
+          ]
+        },
+        /* Authors forms. Reads annotations but never writes them. Note the deny
+           list names the WRITE directions rather than `annotations.crud:*`,
+           which would also deny `.read` and hide existing annotations. */
+        "researcher": {
+          "label": "Researcher",
+          "grant": ["questionaire.*", "annotations.bundle-import", "annotations.crud:annotation.read", "annotations.crud:preset.read"],
+          "deny": [
+            "annotations.crud:annotation.create",
+            "annotations.crud:annotation.update",
+            "annotations.crud:annotation.delete",
+            "annotations.crud:preset.create",
+            "annotations.crud:preset.update",
+            "annotations.crud:preset.delete",
+            "annotations.bundle-export"
+          ]
+        }
+      }
+    }
+  },
+  "plugins": {
+    "questionaire": { "enabled": true, "permaLoad": true },
+    /**
+     * Pulls in the `annotations` module, which is what DECLARES the
+     * `crud:annotation` / `bundle-*` capabilities. Without it loaded those ids
+     * are unknown, and `can()` answers `true` for an unknown id by design (role
+     * config naming another deployment's capability must not lock the UI) — so
+     * the read/write split above would look enforced while enforcing nothing.
+     */
+    "gui_annotations": { "enabled": true, "permaLoad": true }
+  },
+  "modules": {
+    "annotations": { "enabled": true, "permaLoad": true }
+  }
+}

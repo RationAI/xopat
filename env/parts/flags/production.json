@@ -1,0 +1,18 @@
+{
+  "$meta": {
+    "description": "production — minified assets, baked locales/dts, per-request config memoized"
+  },
+  /**
+   * Note the consequence for anything that rewrites the ENV at runtime: with
+   * `production: true` the server memoizes the parsed config in
+   * `_productionCoreCache` until the process restarts, so an edit to the
+   * composed file is NOT picked up. Restart, do not rewrite.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "production": true
+      }
+    }
+  }
+}

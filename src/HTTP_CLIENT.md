@@ -66,7 +66,8 @@ Available options:
   contextId: "openai",     // which XOpatUser context to read secrets from
   types: undefined,        // omit: resolved from the context at request time
   handlers: {},            // custom handlers (rarely needed)
-  refreshOn401: true,      // whether to trigger secret refresh on 401
+  refreshOn401: true,      // whether to trigger secret refresh on authn failure
+  refreshOnStatuses: undefined, // which statuses that means; defaults to [401]
   required: false,         // warn when no secret is found; also defaults awaitContext
   awaitContext: undefined, // wait for the context to authenticate; defaults to `required`
   awaitContextTimeoutMs: 8000,
@@ -94,7 +95,18 @@ Available options:
       Optional map of custom auth handlers. By default, `HttpClient` has global auth handlers registered (e.g. `"jwt"`). You can override or extend them.
 
     - `refreshOn401`  
-      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token. The refresh now rejects immediately when no auth module listens for `secret-needs-update` on that context, instead of sitting on a 20 s timer.
+      If `true`, and a request returns 401, the client will fire a `requestSecretUpdate` event so other code (e.g. OIDC auth client) can refresh the token. The refresh rejects immediately when no auth module listens for `secret-needs-update` on that context, instead of sitting on a 20 s timer.
+
+      The 401 is first reported to `XOpatUser.reportSecretRejected` with the credential that was attached, and a subsequent OK calls `reportSecretAccepted`. That pair is what bounds the case a refresh budget cannot: a provider that keeps issuing fresh tokens the server keeps refusing. After `MAX_REFRESH_FAILURES` distinct rejected credentials the context is handed to the interactive-recovery gate and further refreshes are refused. See `src/AUTH.md` → "…and refreshes that SUCCEED are bounded too".
+
+      A request that carried **no credential at all** is not treated as "already superseded": the client asks the provider for every type the context declares. A context that lost its secret (an identity swap drops them — see `src/AUTH.md`) or never received one can therefore recover, instead of retrying bare forever. `XOpatUser.requestSecretUpdate` is budgeted per secret, so a provider that cannot deliver is asked twice, not once per request.
+
+    - `refreshOnStatuses`  
+      Which HTTP statuses count as an authn failure for that refresh. **Default `[401]`**; `refreshOn401: false` still disables the mechanism whatever this lists.
+
+      Widen it only for an upstream that reports a *missing* credential with something else. FastAPI's `HTTPBearer` is the case in the tree: it answers **403** when the `Authorization` header is absent and 401 only once the header is present and rejected — so `modules/empaia-workbench` passes `refreshOnStatuses: [401, 403]`, without which a context whose token went missing is served 403s that nothing retries and the session stays dead. Keep the list narrow: a listed status spends an identity-provider round trip per failing burst, so it must mean "your credential is wrong or missing", never "you are authenticated but not allowed".
+
+      A 401 that is an xOpat **session** error (`RPC_NO_SESSION` / `RPC_BAD_CSRF`, or a "missing or invalid session" body) never reaches this path at all — it is routed to `XOpatSessionRecovery`, because refreshing an identity-provider token cannot revive a dead server session. That detection applies to any **same-origin** target, not just proxied ones: `/__rpc/...` calls travel on clients built with a bare `baseURL` and no proxy alias.
 
     - `required`  
       If `true` and no secret was found, `_authHeaders` warns **once per context** (proxied or not):

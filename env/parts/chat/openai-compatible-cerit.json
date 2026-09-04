@@ -1,0 +1,59 @@
+{
+  "$meta": {
+    "description": "OpenAI-compatible endpoint at CERIT e-INFRA with an operator-held key",
+    "dimension": "chat",
+    "requires": ["CERIT_API_KEY"],
+    "defaults": { "CERIT_BASE_URL": "https://llm.ai.e-infra.cz/v1" }
+  },
+  /**
+   * The `chat-openai-compatible` plugin points at any OpenAI-shaped API;
+   * `CERIT_BASE_URL` is only the default. Swap it for a local vLLM/Ollama
+   * endpoint and the rest of this fragment still holds — but note a
+   * private/loopback base URL is refused by the SSRF guard unless the operator
+   * allowlists it (`XOPAT_SSRF_ALLOWED_HOSTS`).
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-openai-compatible": {
+            "providerDefaults": {
+              "label": "Cerit Provider",
+              "baseUrl": "<% CERIT_BASE_URL:-https://llm.ai.e-infra.cz/v1 %>",
+              "requiresLogin": false,
+              /**
+               * Without this the Token usage panel is permanently blank here: the
+               * default transport is `sendTurnStream`, and the SDK only sends
+               * `stream_options.include_usage` when the provider is built with it.
+               * Verified against llm.ai.e-infra.cz on 2026-09-04 (gpt-oss-120b,
+               * qwen3.8-27b): the field is accepted and the terminal chunk carries
+               * `usage`; without it no chunk carries one.
+               *
+               * ON is safe for THIS endpoint only. The docblock above invites
+               * repointing `CERIT_BASE_URL` at a local vLLM/Ollama — a backend that
+               * rejects the unknown field breaks `doStream`, i.e. chat itself and not
+               * merely the readout. Repointed elsewhere, turn it back off. The plugin
+               * schema default stays `false` for exactly that reason.
+               *
+               * Note the same probe found NO `prompt_tokens_details`, so this endpoint
+               * reports no `cached_tokens`. The panel's cache rows read 0 because the
+               * SDK defaults the field (`cached_tokens ?? 0`), not because a cache was
+               * measured and missed.
+               */
+              "includeUsage": true,
+              "apiKey": "<% CERIT_API_KEY %>"
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-openai-compatible": { "enabled": true, "permaLoad": true },
+    "chat-openai": { "enabled": false },
+    "chat-anthropic": { "enabled": false }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": true }
+  }
+}

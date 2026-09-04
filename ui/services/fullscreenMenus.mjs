@@ -338,7 +338,7 @@ export class FullscreenMenus {
         return state;
     }
 
-    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "", opts = {}) {
         const { menu } = this.ensurePluginMenu(ownerPluginId, opts);
         if (menu.tabs?.[toolsMenuId]) {
             return menu.tabs[toolsMenuId];
@@ -577,7 +577,7 @@ export class FullscreenMenus {
         const reloadOnCheck = (key, ui = false) => function () {
             if (ui) APPLICATION_CONTEXT.setUiOption(key, this.checked);
             else APPLICATION_CONTEXT.setOption(key, this.checked);
-            $('#settings-notification-wrap').removeClass('hidden');
+            document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
         };
 
         // Navigation feel (wheel normalization, drag momentum) is read per
@@ -607,7 +607,7 @@ export class FullscreenMenus {
                 selected: APPLICATION_CONTEXT.getOption("locale"),
                 onchange: function () {
                     APPLICATION_CONTEXT.setOption('locale', this.value);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 }
             },
             { value: "en", text: "English" },
@@ -625,7 +625,7 @@ export class FullscreenMenus {
                 class: "h-8 w-12 cursor-pointer rounded border border-base-300 bg-base-100",
                 onchange: function () {
                     APPLICATION_CONTEXT.setOption('backgroundColor', this.value);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 }
             })
         );
@@ -716,7 +716,7 @@ export class FullscreenMenus {
                 $.t('settings.statusBar'),
                 function () {
                     APPLICATION_CONTEXT.setUiOption('statusBar', this.checked);
-                    $('#viewer-status-bar').toggleClass('hidden');
+                    document.getElementById('viewer-status-bar')?.classList.toggle('hidden');
                 },
                 APPLICATION_CONTEXT.getUiOption('statusBar')
             ),
@@ -806,7 +806,7 @@ export class FullscreenMenus {
                 $.t('settings.cookies'),
                 function () {
                     APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('bypassCookies')
             ),
@@ -815,7 +815,7 @@ export class FullscreenMenus {
                 $.t('settings.debugMode'),
                 function () {
                     APPLICATION_CONTEXT.setOption('debugMode', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('debugMode')
             ),
@@ -824,7 +824,7 @@ export class FullscreenMenus {
                 $.t('settings.debugRender'),
                 function () {
                     APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('webglDebugMode')
             )
@@ -1103,7 +1103,7 @@ export class FullscreenMenus {
             input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: entry.id }),
             div({
                     class: "flex w-full cursor-pointer items-center gap-3 rounded-2xl border border-base-300 bg-base-100 p-3 transition-colors hover:bg-base-200/60",
-                    onclick: function () { $(this.previousElementSibling).click(); }
+                    onclick: function () { this.previousElementSibling?.click(); }
                 },
                 BaseComponent.toNode(iconComponent),
                 text,

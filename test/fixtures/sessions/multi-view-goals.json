@@ -1,0 +1,71 @@
+{
+  "params": {
+    "customBlending": true,
+    "activeBackgroundIndex": [
+      0,
+      1
+    ],
+    "sessionName": "multi-view-goals"
+  },
+  "data": [
+    "slides/slide.tif",
+    "slides/slide-errors.tif",
+    "slides/cancer-inference.tif",
+    "slides/channel-error.tif",
+    "slides/other-error.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "Reference slide"
+    },
+    {
+      "dataReference": 1,
+      "visualizationIndex": 1,
+      "name": "Error slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Prediction overlay",
+      "shaders": {
+        "prediction": {
+          "name": "Cancer prediction",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            2
+          ],
+          "params": {}
+        }
+      }
+    },
+    {
+      "name": "Error comparison",
+      "shaders": {
+        "channel_error": {
+          "name": "Channel error",
+          "type": "identity",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            3
+          ],
+          "params": {}
+        },
+        "other_error": {
+          "name": "Other error edges",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            4
+          ],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

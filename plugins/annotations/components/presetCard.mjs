@@ -4,8 +4,7 @@ const ROW_BASE = "rounded-md border border-base-300/70 bg-base-100 hover:border-
 const ROW_SELECTED = "rounded-md border border-primary bg-base-100 ring-1 ring-primary/30";
 
 function iconNode(icon, extraClass = "", style = "") {
-    const isPh = String(icon ?? '').trim().startsWith('ph-');
-    const cls = isPh ? `ph-light ${icon} ${extraClass}` : `fa-auto ${icon} ${extraClass}`;
+    const cls = `ph-light ${icon ?? ''} ${extraClass}`;
     return i({ class: cls.trim(), style });
 }
 

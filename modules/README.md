@@ -93,6 +93,16 @@ If your entity works with a viewer instance, the xOpat viewer can have multiple 
 ## NPM Support and UI
 Please, [see development basics](../DEVELOPMENT.md) on how to develop with NPM and have live UI support.
 Also, [read ui specification](../ui/README.md) and get to know available UI elements.
+
+### Rendering markdown / rich text
+
+Never re-implement "parse markdown, sanitize, degrade closed". Depend on the
+[`markdown`](markdown/README.md) module and call
+`singletonModule("markdown").renderInto(host, text)`. It also owns the
+`#xopat-<kind>?…` link mechanism: register a kind there and a link written in one
+subsystem's text (an assistant message, a questionnaire description, a recorder
+overlay) becomes clickable in all of them. The built-in `region` kind navigates a
+viewer to a slide region.
     
 ## Modules: Extensions
 Extensions are unconstrained code libraries with no (or little) constrains; but without features. Only basic rules 
@@ -205,7 +215,7 @@ this.loadLocale('cs', {"x":"y"})
 Override ``getLocaleFile`` function to describe module-relative path to the locale file for given `locale` string.
 
 > Modules must not wait with initialization after locales had been loaded: modules define dependency trees that
->are not explicitly synchronized. For delayed translations, ``$.localize([selector])`` of `jqueryI18next` might be useful.
+>are not explicitly synchronized. For delayed translations, re-run the core `data-i18n` pass over your subtree (`localizeDom(node)`, `src/classes/app/i18n-dom.ts`).
 >However, most modules should act only when needed: instantiate your module after it had been used, then you are
 >guaranteed your locales had been loaded if you did so at the module inclusion time.
 
@@ -246,8 +256,9 @@ the functionality appropriately. This includes:
  - visualization swapping
  
 Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
-all measures should be done.
+Instead, use ``viewer.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
+all measures should be done — where `viewer` is the instance derived from the event
+(`e.eventSource`) or from `VIEWER_MANAGER`, never the global `window.VIEWER`.
 
 This is especially important now that viewer opening supports surgical world updates: a `TiledImage` that happened to represent some data earlier may be reused, replaced, or removed as the pipeline synchronizes one viewer independently from others.
 

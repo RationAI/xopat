@@ -5,6 +5,7 @@ import { ViewerVisualizationRuntime } from "./viewer-visualization-runtime";
 import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-shader-source-controller";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
 import { buildShaderIdNamespace, renameShaderIds } from "../visualization/shader-id-namespace";
+import { readPixelScale, computeOverlayWidth } from "./overlay-pixel-scale";
 
 export interface OpenViewerWithOptions {
     dataMode?: "replace" | "merge" | "merge-exact";
@@ -752,6 +753,27 @@ export class ViewerOpenPipeline {
                 USER_INTERFACE.Loading.show(false);
                 throw new Error("Visualization validation failed: " + visualizationValidation.issues.join(" | "));
             }
+            // Non-strict: the offending layers have already been dropped from the
+            // sanitized collection, and until now that happened in silence — the
+            // viewer opened with fewer overlays than the session asked for and
+            // nothing said so. One aggregated message; the individual issue
+            // strings stay in the console above, since they name internal shader
+            // ids and are not translatable.
+            visualizationRuntime.warnVisualization($.t("error.visualizationValidationIssues"));
+        }
+        // Renderer-side verdict on the layers that survived. Report-only: these layers
+        // still render (the renderer substitutes or ignores what it cannot use), but
+        // until now a config whose control types or params were wrong reached the
+        // renderer in silence and the user only found out when the result looked odd —
+        // or, in the worst case, when the resulting program failed to compile. The
+        // individual lines name shader ids and JSON Pointer paths, so they go to the
+        // log, not the toast.
+        if (visualizationValidation.advisories.length > 0) {
+            APPLICATION_CONTEXT.log("app.visualization").warn(
+                `Visualization config rejected by the renderer's own validation (${visualizationValidation.advisories.length} finding(s)):\n`
+                + visualizationValidation.advisories.join("\n")
+            );
+            visualizationRuntime.warnVisualization($.t("error.visualizationParamsIgnored"));
         }
         config.visualizations = visualizationValidation.visualizations as any;
 
@@ -1158,6 +1180,57 @@ export class ViewerOpenPipeline {
                     drawer.setTiledImageSmoothingEnabled(item, (dataSpec as any).imageSmoothingEnabled);
                 }
             }
+
+            applyPixelScale(item, index, ctx);
+        };
+
+        /**
+         * Size an overlay by the pixel scale its data spec declares.
+         *
+         * OSD normalizes every world item to viewport width 1, so an overlay
+         * lands on its background only when their aspect ratios match. An
+         * overlay covering a whole number of blocks of a slide whose width is
+         * NOT a whole number of blocks never matches: its edge block hangs past
+         * the slide, OSD squeezes it back to fit, and every cell ends up
+         * slightly small with the error accumulating across the image.
+         *
+         * `pixelScale` says how many reference pixels one of this image's
+         * pixels covers, which is all that is needed to place it:
+         *
+         *     width = ownPixelWidth * pixelScale / referencePixelWidth
+         *
+         * Only the width is set — OSD derives height from the image's own
+         * aspect ratio, which is already correct when both axes share a scale.
+         *
+         * Runs here rather than at `addTiledImage` time because neither pixel
+         * width is known until the sources are ready. Tiles open sequentially
+         * (see the `await openTile` loop), so a stack's reference is always in
+         * the world before anything that scales against it.
+         */
+        const applyPixelScale = (item: any, index: number, ctx: any) => {
+            const descriptor = ctx && typeof ctx.pixelScaleForItem === "function"
+                ? ctx.pixelScaleForItem(index)
+                : undefined;
+            if (!descriptor) return;
+
+            const reference = item?.viewer?.world?.getItemAt?.(descriptor.referenceIndex);
+            // Scaling the reference against itself is meaningless, and a missing
+            // one means there is nothing to be relative TO.
+            if (!reference || reference === item) return;
+
+            const width = computeOverlayWidth({
+                ownWidth: item?.source?.dimensions?.x || item?.source?.width,
+                referenceWidth: reference?.source?.dimensions?.x || reference?.source?.width,
+                scaleX: descriptor.scaleX,
+                placementWidth: descriptor.placementWidth,
+            });
+            if (width === undefined) return;
+
+            try {
+                item.setWidth(width, true);
+            } catch (e) {
+                console.warn("Failed to apply pixelScale to an opened item:", e);
+            }
         };
 
         const getExistingItemLoadKey = (item: any, fallbackIndex: number) => {
@@ -1332,20 +1405,60 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
-            // Backgrounds only: visualization layers carry shader *data*, for
-            // which an RGB preview image would be semantically wrong.
-            if (kind === "background") {
-                try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
-                    console.warn("Preview-level injection failed:", e);
-                }
+            // Eligibility is the SOURCE's call, not the layer's role: a data
+            // overlay is a tiled image like any other and pays the same
+            // first-paint cost, so it benefits identically. A source for which
+            // a preview would be wrong refuses on its own — via
+            // `__noPreviewLevel`, via a non-8-bit `getTilePrecision()` (the
+            // synthetic tile is an 8-bit raster), or simply by not implementing
+            // `getThumbnail()`, which is why vector sources fall out for free.
+            try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
+                console.warn("Preview-level injection failed:", e);
             }
 
             // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
             // scale (width = region fraction). OSD has no `flipped` ctor option, so
             // it is applied post-add via setFlip. `undefined` placement → OSD default.
-            const placementOpts: any = placement
-                ? { x: placement.x, y: placement.y, width: placement.width, degrees: placement.degrees }
-                : {};
+            //
+            // A source may also ask for a placement of its own — geometry it read
+            // out of the file rather than anything the session chose. The canonical
+            // cases are DICOM `ImageOrientationSlide`, which says how the slide sits
+            // on the glass, and a derived object whose raster covers only part of
+            // the matrix it declares.
+            //
+            // The two COMPOSE rather than override: the session says which region of
+            // the viewport this image's frame occupies, the file says where the image
+            // sits inside that frame, and `degrees` add. A source must never ask for a
+            // flip — OSD honours a flip when drawing and not when converting
+            // coordinates, which would leave annotations unmirrored on mirrored pixels.
+            const intrinsic: any = (() => {
+                try { return (tileSource as any).getIntrinsicPlacement?.() || null; } catch (e) {
+                    console.warn("Intrinsic placement failed:", e);
+                    return null;
+                }
+            })();
+            const degrees = (Number(placement?.degrees) || 0) + (Number(intrinsic?.degrees) || 0);
+            const iX = Number(intrinsic?.x) || 0;
+            const iY = Number(intrinsic?.y) || 0;
+            const iWidth = Number.isFinite(Number(intrinsic?.width)) ? Number(intrinsic.width) : 1;
+            // `(0, 0, 1)` is "the whole frame" — the default, and what a source that
+            // reports only a rotation means. Anything else has to reach OSD even when
+            // the session chose no placement at all.
+            const hasIntrinsicRect = iX !== 0 || iY !== 0 || iWidth !== 1;
+            let placementOpts: any;
+            if (placement) {
+                const pWidth = Number(placement.width) || 1;
+                placementOpts = {
+                    x: (Number(placement.x) || 0) + pWidth * iX,
+                    y: (Number(placement.y) || 0) + pWidth * iY,
+                    width: pWidth * iWidth,
+                    degrees,
+                };
+            } else if (hasIntrinsicRect) {
+                placementOpts = { x: iX, y: iY, width: iWidth, degrees };
+            } else {
+                placementOpts = degrees ? { degrees } : {};
+            }
             return new Promise<boolean>((resolve) => {
                 viewer.addTiledImage({
                     tileSource,
@@ -1363,6 +1476,40 @@ export class ViewerOpenPipeline {
                     }
                 });
             });
+        };
+
+        /**
+         * Apply the viewer's canvas clear color: the opened background's `fill`
+         * override, else the session/deployment `setup.backgroundColor`
+         * (`BackgroundConfig.resolveFillColor`).
+         *
+         * Applied per VIEWER, not per opened tile: a surgical rebuild reuses world
+         * items without going through `openTile`, and the clear color is a property
+         * of the drawer, not of one tiled image. Always applied (never conditionally
+         * skipped) so switching from a `fill`-carrying slide back to a plain one
+         * restores the global default instead of keeping the previous slide's color.
+         *
+         * MUST run before the renderer rebuilds its programs: `setBackground` only
+         * takes effect on the next shader compile (flex-renderer `setBackground`),
+         * which `overrideConfigureAll` below performs.
+         *
+         * `drawerOptions` is restamped too — `OpenSeadragon.makeStandaloneFlexDrawer`
+         * clones them, so offscreen drawers (thumbnails, region exports, vision
+         * inference images) render on the same background as the screen. Existing
+         * offscreen drawers are updated in place for the same reason.
+         */
+        const applyViewerFillColor = (viewer: any, bg: any) => {
+            const color = BackgroundConfig.resolveFillColor(bg);
+            try {
+                viewer.drawer?.renderer?.setBackground?.(color);
+                viewer.navigator?.drawer?.renderer?.setBackground?.(color);
+                const drawerOptions = viewer.drawerOptions?.["flex-renderer"];
+                if (drawerOptions) drawerOptions.backgroundColor = color;
+                viewer.__ofscreenRender?.renderer?.setBackground?.(color);
+                viewer.__scriptVisualizationStandaloneDrawer?.renderer?.setBackground?.(color);
+            } catch (e) {
+                console.warn("Failed to apply background fill color.", e);
+            }
         };
 
         const beginViewerRenderTransaction = (viewer: OpenSeadragon.Viewer) => {
@@ -1507,6 +1654,16 @@ export class ViewerOpenPipeline {
             if (!renderingWithWebGL && Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis) && (!viewerSupportsFlexRendering || !renderingCapability.ok)) {
                 visualizationRuntime.warnRenderingCapability(renderingCapability.error || "Visualization rendering is unavailable; opening image data without visualization shaders.");
             }
+            // An index that points past the end of the collection. `activeV` is
+            // then `undefined`, `assembleVisualizationShaders` returns on the
+            // spot, and the viewer opens background-only — previously with no
+            // signal at all, which is indistinguishable from a session that
+            // deliberately asked for no overlays. That case is NOT this one:
+            // "no visualization" is `visualizationIndex` absent or explicitly
+            // `null`, and neither reaches here (`Number.isInteger` guards both).
+            if (renderingWithWebGL && !activeV) {
+                visualizationRuntime.warnVisualization($.t("error.visualizationIndexMissing", { index: visIndexForThis }));
+            }
 
             const toOpen: any[] = [];
             // Reset per stack (in assembleStack) so two regions referencing the
@@ -1535,7 +1692,17 @@ export class ViewerOpenPipeline {
             // registry (or its protocol declares no transport) and `openTile` falls
             // back to the baseURL-prefix lookup.
             const tileClients: (any | undefined)[] = [];
+            // Per-tile `pixelScale` placement (`{scaleX, referenceIndex, placementWidth}`
+            // | undefined), parallel to `toOpen`. Unlike `tilePlacements` this is
+            // PER ENTRY, not per stack: it says how big one pixel of THIS image is
+            // relative to its stack's background, which is the whole point — a
+            // stack-wide value could not express "the overlay is coarser than the
+            // slide". Consumed by `applyPixelScale` once both sources are ready.
+            const tileScales: (any | undefined)[] = [];
             let stackPlacement: any | undefined = undefined;
+            // World index of the current stack's background — the image every
+            // `pixelScale` in this stack is relative to.
+            let stackBaseWorldIndex: number | undefined = undefined;
 
             // Per-region crop propagation + the bg/viz source factories live inside
             // `assembleStack` below (parameterized by each stack's croppingContext),
@@ -1666,6 +1833,7 @@ export class ViewerOpenPipeline {
                 // Every tile this stack opens gets the stack's viewport placement
                 // (bg + viz are co-registered). Read by buildManagedShaderSourceEntry.
                 stackPlacement = placement;
+                stackBaseWorldIndex = undefined;
                 const stackActiveV = (renderingWithWebGL && Number.isInteger(stackVizIndex)
                     && Array.isArray(vis) && vis[stackVizIndex as number])
                     ? vis[stackVizIndex as number] : undefined;
@@ -1715,21 +1883,32 @@ export class ViewerOpenPipeline {
                     openedSpecOrder.push(cfg.data[dataIndex]);
                     tileKinds.push(kind);
                     tilePlacements.push(placement);
+                    // Scale is relative to THIS stack's background, so it is only
+                    // meaningful once that background has a world slot — which it
+                    // always does here, allocated just below before any call.
+                    const scaleX = readPixelScale(cfg.data[dataIndex],
+                        (message, value) => console.warn(`[open-pipeline] data[${dataIndex}]: ${message}`, value));
+                    tileScales.push(scaleX !== undefined && stackBaseWorldIndex !== undefined
+                        ? { scaleX, referenceIndex: stackBaseWorldIndex, placementWidth: placement?.width }
+                        : undefined);
                     tileClients.push(clientForSource(source));
                     worldIndexEntries.push([dataIndex, allocated]);
                     return allocated;
                 };
 
-                // The stack's primary background image.
+                // The stack's primary background image. It IS the reference, so it
+                // never carries a scale of its own.
                 const baseIndex = stackBg.dataReference;
                 if (!uniqueOsdWorldIndexes.has(baseIndex)) {
                     const allocated = toOpen.length;
                     uniqueOsdWorldIndexes.set(baseIndex, allocated);
+                    stackBaseWorldIndex = allocated;
                     const baseSource = bgUrlFromEntry(stackBg);
                     toOpen.push(baseSource);
                     openedSpecOrder.push(BackgroundConfig.dataSpecification(stackBg));
                     tileKinds.push("background");
                     tilePlacements.push(placement);
+                    tileScales.push(undefined);
                     tileClients.push(clientForSource(baseSource));
                     worldIndexEntries.push([baseIndex, allocated]);
                 }
@@ -1860,6 +2039,11 @@ export class ViewerOpenPipeline {
                     await (window as any).IO_PIPELINE?.flushBundleExport?.({
                         viewerId: viewerUniqueIdBeforeReset,
                         backgroundId: previousBackgroundId,
+                        // Same reasoning as the restore below: this snapshot of
+                        // the slide being left is the pipeline's own upkeep,
+                        // triggered by navigation rather than requested. A
+                        // refusal belongs in the log, not in the user's way.
+                        trigger: "system",
                     });
                 } catch (e) {
                     console.warn("IO flush for vacated slide failed:", e);
@@ -1891,6 +2075,7 @@ export class ViewerOpenPipeline {
                     dataForItem: (i: number) => openedSpecOrder[i],
                     loadKeyForItem: (i: number) => loadKeys[i],
                     clientForItem: (i: number) => tileClients[i],
+                    pixelScaleForItem: (i: number) => tileScales[i],
                 };
 
                 plog(`openIntoViewer PLAN v=${viewerIndex}`, {
@@ -2049,14 +2234,16 @@ export class ViewerOpenPipeline {
                     }
                 };
 
+                // Clear color, before any (re)build below bakes it into the compile.
+                applyViewerFillColor(viewer, bgForViewer);
+
                 // A viewer whose every source failed to instantiate holds only
                 // an inert placeholder and shows the demo overlay below. Feeding
-                // its (faulty) render output into the shared flex renderer — or
-                // hitting the `overrideConfigureAll(undefined)` recovery on the
-                // inevitable failure — corrupts the shared program and races the
-                // grid-cell teardown, cascading into renderer/WebGL crashes that
-                // also break the sibling (valid) viewports. Skip configuration
-                // entirely for a fully-failed viewer.
+                // its (faulty) render output into the shared flex renderer
+                // corrupts the shared program and races the grid-cell teardown,
+                // cascading into renderer/WebGL crashes that also break the
+                // sibling (valid) viewports. Skip configuration entirely for a
+                // fully-failed viewer.
                 if (viewerSupportsFlexRendering && successOpened > 0) {
                     try {
                         plog(`openIntoViewer waitForViewerRenderReady BEGIN v=${viewerIndex}`);
@@ -2133,6 +2320,12 @@ export class ViewerOpenPipeline {
                             await (window as any).IO_PIPELINE?.tryRestoreImport?.({
                                 viewerId: nextViewerUniqueId,
                                 backgroundId: nextBackgroundId,
+                                // The user opened a slide, not a restore. What
+                                // hydrates behind that is the pipeline's
+                                // bookkeeping, so a refusal is logged rather
+                                // than turned into a dialog about an action
+                                // nobody performed.
+                                trigger: "system",
                             });
                         } catch (e) {
                             console.warn("IO restore for new slide failed:", e);

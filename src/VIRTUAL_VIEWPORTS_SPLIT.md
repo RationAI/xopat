@@ -85,6 +85,38 @@ just writes each region's `transform` to align the tissue pieces; the open pipel
 consumes it. Per-region opacity (the identity-shader opacity control) lets you compare overlapping
 cuts.
 
+**A data entry may bring its own scale.** `DataSpecification.pixelScale` says how many pixels of the
+stack's background one pixel of that entry covers — the knob that lets a coarser overlay (a
+prediction map on a 512-px grid, say) sit on its slide instead of being normalized to the slide's
+width. It **multiplies** the region width rather than replacing it: a cropped stack scales its
+overlay by the crop too, or the overlay would ignore the crop entirely. The region says how much of
+the slide this stack shows; `pixelScale` says how big the overlay's pixels are; they are
+independent questions. Unlike `width`, which is stack-wide by construction, `pixelScale` is
+**per data entry** — that is the whole point, since a stack-wide value could not express "the
+overlay is coarser than the background". See `src/classes/app/overlay-pixel-scale.ts`.
+
+**A source may bring its own placement.** `TileSource.getIntrinsicPlacement()` reports placement the
+*file* asks for rather than the session — DICOM `ImageOrientationSlide` is the canonical case for
+the rotation, and a derived object whose raster covers only part of the matrix it declares is the
+case for the rect. Neither overrides the other, because they answer different questions: the session
+says which region of the viewport this image's **frame** occupies, the file says where the image sits
+**inside** that frame.
+
+```
+x       = transform.dx + region.w * intrinsic.x
+y       = transform.dy + region.w * intrinsic.y
+width   = region.w     * intrinsic.width
+degrees = transform.rotation + intrinsic.degrees
+```
+
+Omitted intrinsic fields default to `(0, 0, 1, 0)` — the whole frame, unrotated — so a source that
+reports only a rotation composes exactly as it always did. A source returning both a rotation and a
+sub-region must rotate that rect's centre about the frame's centre itself: OSD rotates each tiled
+image about *its own* bounds centre, so two images sharing an angle but not a bounding rect drift
+apart by `(R - I)·dc`. A source must still never ask for a flip, since OSD honours a flip when
+drawing but not when converting coordinates, which would leave annotations unmirrored on mirrored
+pixels (`src/tile-source.ts`).
+
 ### `sidebyside`
 Each region opens as a **separate viewer**, but all of them resolve identity to the **parent**
 (above), so IO keys by `parent::parent` and binds to the parent's sinks — exactly like the un-split
