@@ -190,3 +190,46 @@ test("`force` bypasses the budget and fetches anyway", async () => {
     expect(results.annotationsWithheld).toBe(undefined);
     expect(results.annotations.length).toBe(1);
 });
+
+test("an annotation output that came back empty reports no count at all", async () => {
+    // `my_cells: 0` was rendered from `annotationCount: 0`, stating as fact what
+    // the module had not established — the run had in fact written 24 690 points
+    // that were not queryable yet. `missing` carries the same information without
+    // asserting a number, and the panel decides what to say about it.
+    const { JobRunner } = await import("../../job-runner.ts");
+    const ead = {
+        io: {
+            my_wsi: { type: "wsi" },
+            my_rects: { type: "collection", items: { type: "rectangle", reference: "io.my_wsi" } },
+            my_cells: {
+                type: "collection",
+                items: {
+                    type: "collection", reference: "io.my_rects.items",
+                    items: { type: "point", reference: "io.my_wsi" },
+                },
+            },
+        },
+        modes: { standalone: { inputs: ["my_wsi", "my_rects"], outputs: ["my_cells"] } },
+    };
+    const client = {
+        scopeId: "scope-1",
+        async queryAnnotations() { return { items: [], item_count: 0, low_npp_centroids: null }; },
+        async queryPrimitives() { return []; },
+        async queryPixelmaps() { return []; },
+        async getCollection() { return undefined; },
+        async queryCollectionItems() { return []; },
+    };
+    const runner = new JobRunner({
+        getClient: () => client, getEad: () => ead,
+        getSlideId: () => "slide-1", getMode: () => "standalone",
+        pollMs: () => 1000, onJobsChanged: () => {},
+    });
+
+    const job = { id: "job-1", mode: "STANDALONE", status: "COMPLETED",
+        inputs: { my_wsi: "slide-1" }, outputs: { my_cells: "coll-1" } };
+    const results = await runner.loadResolvedResults(job, "slide-1", "standalone");
+    const cells = results.outputs.find(o => o.spec.key === "my_cells");
+
+    expect(cells.annotationCount).toBe(undefined);
+    expect(cells.missing).toBe(true);
+});

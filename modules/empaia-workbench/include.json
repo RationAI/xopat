@@ -3,7 +3,6 @@
     "name": "%meta.name%",
     "description": "%meta.description%",
     "version": "0.1.0",
-    "stability": "experimental",
     "categories": ["Data"],
     "keywords": ["empaia", "workbench", "wbs", "pathology", "ai"],
     "icon": "ph-plugs-connected",
@@ -59,6 +58,17 @@
 
     // How many analyses' results stay cached in memory (LRU).
     "jobOutputCache": 12,
+
+    // How many times an analysis that finished but returned no annotations is
+    // re-read before "produced nothing" is believed, and the wall-clock window
+    // those re-reads live in. The workbench flips `status` to COMPLETED before
+    // the app's records are queryable — for a run writing tens of thousands of
+    // shapes the gap is seconds — and one read at that instant used to be
+    // recorded as the answer, permanently. Re-reads ride the poll backoff, so
+    // five of them land at roughly 0/2/6/14/30 s. Only a job that *declared* an
+    // annotation output is retried at all. 0 restores the single-read behaviour.
+    "emptyOutputRetries": 5,
+    "emptyOutputWindowMs": 60000,
 
     // How many analyses "Show all" may paint at once. Every one imports its
     // output onto the canvas, so an app emitting thousands of shapes per run

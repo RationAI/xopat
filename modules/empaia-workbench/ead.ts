@@ -79,7 +79,16 @@ export function leafTypeOf(node: any, depth = 0): { type: string; depth: number 
     if (type !== "collection") return { type, depth };
 
     const items = node.items;
-    if (items && typeof items === "object") return leafTypeOf(items, depth + 1);
+    // `items` is an object in v3. A document that writes it as a one-element
+    // array still names the element type, and refusing to read that is how an
+    // annotation-leaf output came to be treated as "unknown" — which routed it
+    // to the collection-items query and earned a 422 from a backend that has no
+    // `value` to give for a collection of collections.
+    const element = Array.isArray(items) ? items[0] : items;
+    if (element && typeof element === "object") {
+        const leaf = leafTypeOf(element, depth + 1);
+        if (leaf) return leaf;
+    }
     for (const value of Object.values(node)) {
         if (value && typeof value === "object" && typeof (value as any).type === "string") {
             return leafTypeOf(value, depth + 1);

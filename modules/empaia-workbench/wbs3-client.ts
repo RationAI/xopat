@@ -63,6 +63,14 @@ export class Wbs3Client {
             auth: {
                 contextId: options.contextId,
                 refreshOn401: true,
+                // The workbench runs FastAPI's `HTTPBearer`, which answers **403**
+                // when the `Authorization` header is absent and 401 only once it is
+                // present and rejected. With the default `[401]` a context that lost
+                // its token (or never got one) is served 403s nothing retries, and the
+                // session is dead for good behind a single console warning. Listing
+                // 403 makes that one refresh cycle — `secret-needs-update` →
+                // `requestNewToken()` over VACI → retry — reachable.
+                refreshOnStatuses: [401, 403],
                 required: true,
             },
         });
@@ -225,9 +233,11 @@ export class Wbs3Client {
             signal: opts.signal,
             ...BACKGROUND,
         });
+        const items = keepValid(itemsOf(raw), isAnnotationLike, "annotation") as EmpaiaAnnotation[];
+        warnGeometryless(items);
         return {
             item_count: num(raw?.item_count) ?? 0,
-            items: itemsOf(raw).filter(isAnnotationLike) as EmpaiaAnnotation[],
+            items,
             low_npp_centroids: Array.isArray(raw?.low_npp_centroids) ? raw.low_npp_centroids : null,
         };
     }
@@ -306,13 +316,31 @@ export class Wbs3Client {
     /**
      * `PUT /{scope_id}/collections/{collection_id}/items/query`
      *
-     * Collections have no id-list escape hatch server-side, so this route needs a
-     * `creators`/`jobs` selector even for an otherwise empty body.
+     * **This route takes NO creator selector — not `creators`, not `jobs.`** Its
+     * body model is closed (`extra_forbidden`), so either field is a 422 and the
+     * whole read is lost:
+     *
+     *   `{"loc":["body","jobs"],"msg":"Extra inputs are not permitted"}`
+     *   `{"loc":["body","creators"],"msg":"Extra inputs are not permitted"}`
+     *
+     * Both were tried, because every *other* query route (annotations,
+     * primitives, pixelmaps) takes one and the uniformity looked like the rule.
+     * It is not: the collection id already scopes the read completely — a
+     * collection holds one job's output or one scope's input, never a mix — so
+     * there is nothing left to select by, and `_scopedQuery`'s automatic
+     * `creators: [scopeId]` must not be applied here either. That default is why
+     * the *input*-collection fallback 422'd too, silently, and staged-batch
+     * membership then came back empty on reload.
+     *
+     * `references` is the one filter the model does accept.
      */
-    async queryCollectionItems(collectionId: string, body: Record<string, unknown> = {}): Promise<any[]> {
+    async queryCollectionItems(
+        collectionId: string,
+        body: { references?: string[] } = {}
+    ): Promise<any[]> {
         const raw = await this._client.request(
             `/collections/${encodeURIComponent(collectionId)}/items/query`,
-            { method: "PUT", body: this._scopedQuery(body as AnnotationQuery), ...BACKGROUND }
+            { method: "PUT", body, ...BACKGROUND }
         );
         return itemsOf(raw);
     }
@@ -501,6 +529,55 @@ const ANNOTATION_TYPES = new Set(["point", "line", "arrow", "circle", "rectangle
 function isAnnotationLike(v: unknown): boolean {
     return isObject(v) && typeof v.type === "string" && ANNOTATION_TYPES.has(v.type)
         && typeof v.reference_id === "string";
+}
+
+/**
+ * A `[x, y]` pair of real numbers — the atom every annotation geometry is built
+ * from. `Number(null)` is `0` and `Number.isFinite(0)` is true, so a coercing
+ * check would call `[null, 17890]` a valid coordinate and the annotation would
+ * silently land on the slide's edge; only a number, or a string that is one,
+ * counts (the convertor applies the same rule).
+ */
+function isCoord(v: unknown): boolean {
+    if (typeof v === "number") return Number.isFinite(v);
+    return typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v));
+}
+
+function isPair(v: unknown): boolean {
+    return Array.isArray(v) && v.length >= 2 && isCoord(v[0]) && isCoord(v[1]);
+}
+
+/**
+ * Whether the record carries the geometry its own type declares.
+ *
+ * Deliberately NOT part of {@link isAnnotationLike}: the convertor is the one
+ * that decides what is renderable, and a second drop point here would only move
+ * the data loss earlier. This exists so the loss is *reported* — a response of
+ * ten thousand points that all lack `coordinates` currently reaches the canvas
+ * as "nothing appeared", with nothing anywhere naming the cause.
+ */
+function hasDeclaredGeometry(v: any): boolean {
+    switch (v?.type) {
+        case "point": return isPair(v.coordinates);
+        case "line": return Array.isArray(v.coordinates) && v.coordinates.length >= 2
+            && v.coordinates.every(isPair);
+        case "polygon": return Array.isArray(v.coordinates) && v.coordinates.length >= 3
+            && v.coordinates.every(isPair);
+        case "arrow": return isPair(v.head) && isPair(v.tail);
+        case "circle": return isPair(v.center) && Number(v.radius) > 0;
+        case "rectangle": return isPair(v.upper_left) && Number(v.width) > 0 && Number(v.height) > 0;
+        default: return true;
+    }
+}
+
+function warnGeometryless(items: any[]): void {
+    const bad = items.filter(item => !hasDeclaredGeometry(item));
+    if (!bad.length) return;
+    const kind = `annotation-geometry:${[...new Set(bad.map(b => String(b?.type)))].sort().join(",")}`;
+    if (_shapeWarned.has(kind)) return;
+    _shapeWarned.add(kind);
+    console.warn(`[empaia-workbench] ${bad.length}/${items.length} annotation(s) carry no usable ` +
+        `geometry for their declared type and will not render. First one:`, bad[0]);
 }
 
 /**

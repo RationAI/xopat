@@ -22,6 +22,7 @@ import {
     getInputs, getModes, getOutputs, isContainerized, leafTypeOf,
     EAD_ANNOTATION_TYPES, type EadAnnotationType, type EadDocument, type EadMode,
 } from "./ead";
+import { FAILED_JOB_STATUSES, type JobStatus } from "./types";
 
 /** Where the value for an input comes from. */
 export type InputSource =
@@ -159,6 +160,76 @@ export function fromJobInputs(ead: EadDocument | undefined, mode: EadMode): Mode
 }
 
 /**
+ * The mode whose outputs fill `mode`'s `from-job` inputs.
+ *
+ * A `from-job` input is by definition a key some *other* mode declares as an
+ * output ({@link classify}), so this only has to name which one. First match in
+ * `getModes` order wins: an EAD where two modes produce the same key gives no
+ * ordering to appeal to, and the question is "where do these results come from",
+ * not "who uniquely produces them".
+ *
+ * Exists so a refusal can say *which* step is missing. "Built on an earlier
+ * analysis, and none has finished" was true of TA12 and told its user nothing
+ * they could act on — not which step, not that the platform is the one that runs
+ * it, not whether waiting would help.
+ */
+export function sourceModeFor(
+    ead: EadDocument | undefined, mode: EadMode,
+): EadMode | undefined {
+    if (!ead) return undefined;
+    const needed = fromJobInputs(ead, mode);
+    if (!needed.length) return undefined;
+    for (const other of getModes(ead)) {
+        if (other === mode) continue;
+        const outputs = new Set(getOutputs(ead, other));
+        if (needed.some(input => outputs.has(input.key))) return other;
+    }
+    return undefined;
+}
+
+/** Why the results a mode is built on are missing — and whether waiting helps. */
+export type MissingSource =
+    /** No producing mode could be named. Nothing to say beyond the generic. */
+    | { kind: "unknown" }
+    /** A run of the producing mode exists but has not finished. Waiting helps. */
+    | { kind: "pending"; mode: EadMode; status: string }
+    /** The producing mode's last run ended badly. Waiting will not help. */
+    | { kind: "failed"; mode: EadMode; status: string }
+    /** The producing mode is platform-run: nothing here starts it. */
+    | { kind: "platform"; mode: EadMode }
+    /** The producing mode is one the user can start from this viewer. */
+    | { kind: "run"; mode: EadMode };
+
+/**
+ * Classify a missing source, given the most recent job of the producing mode.
+ *
+ * Kept separate from the sentence it becomes so the decision is testable without
+ * i18n, and so the three cases cannot silently collapse back into one. They are
+ * three different next moves: nothing to do, wait, or run the other step.
+ *
+ * `latestSourceJob` is the newest job of the producing mode in *any* state —
+ * deliberately not the COMPLETED filter used to decide runnability, because
+ * "still running" and "never started" are the distinction being drawn.
+ */
+export function missingSourceKind(
+    ead: EadDocument | undefined, mode: EadMode,
+    latestSourceJob?: { status?: string },
+): MissingSource {
+    const source = sourceModeFor(ead, mode);
+    if (!source) return { kind: "unknown" };
+
+    const status = latestSourceJob?.status as JobStatus | undefined;
+    if (status && FAILED_JOB_STATUSES.has(status)) return { kind: "failed", mode: source, status };
+    if (status && status !== "COMPLETED") return { kind: "pending", mode: source, status };
+
+    // Platform-run means no button anywhere starts it; telling the user to "run
+    // it first" sends them looking for one that does not exist.
+    const platformRun = modeBlockers(ead, source)
+        .some(blocker => blocker.key === "ead.blocked.platformRun");
+    return { kind: platformRun ? "platform" : "run", mode: source };
+}
+
+/**
  * Every region shape the user could be asked to draw, across all modes.
  *
  * The fallback the ROI preset uses when the *current* mode declares none — a
@@ -173,6 +244,31 @@ export function allRoiTypes(ead: EadDocument | undefined): EadAnnotationType[] {
         for (const input of roiInputs(ead, mode)) seen.add(input.type as EadAnnotationType);
     }
     return [...seen];
+}
+
+/** The shape regions are drawn with when the app declares none. */
+const DEFAULT_ROI_TYPE: EadAnnotationType = "rectangle";
+
+/**
+ * The shape to draw regions with: what this mode declares, else what any mode
+ * does, else a rectangle.
+ *
+ * Total on purpose. Drawing a region is not running an app — the region is a
+ * scope-owned annotation with an `is_roi` flag, stored without the EAD being
+ * consulted at all — so an app that declares no usable region input is a reason
+ * to draw a *default* shape, not a reason to refuse. It used to return nothing,
+ * which left the ROI preset unmintable and the whole drawing path dead for
+ * TA09; `factoryForRoiType` already ends in `?? "rect"`, so the fallback existed
+ * and was simply never reached.
+ *
+ * Whether *this* analysis will accept what was drawn is a separate question,
+ * answered later by the region verdict and the run button.
+ */
+export function roiTypeForDrawing(
+    ead: EadDocument | undefined, mode: EadMode,
+): EadAnnotationType {
+    const declared = roiInputs(ead, mode)[0]?.type as EadAnnotationType | undefined;
+    return declared ?? allRoiTypes(ead)[0] ?? DEFAULT_ROI_TYPE;
 }
 
 /**

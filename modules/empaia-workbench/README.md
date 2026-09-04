@@ -46,6 +46,10 @@ Only **workbench v3** is supported (`/v3/scopes/...`, EAD with `io` + `modes`).
   "annotationBudget": 5000,
   // How many analyses' results stay cached in memory (LRU).
   "jobOutputCache": 12,
+  // Re-reads allowed before a completed-but-empty annotation output is believed
+  // to be empty, and the window they live in. 0 restores the single read.
+  "emptyOutputRetries": 5,
+  "emptyOutputWindowMs": 60000,
   // Upper bound for "Show all" — every shown analysis imports onto the canvas.
   "maxVisibleJobs": 8,
   // Optional: route every workbench request through a server proxy alias
@@ -190,26 +194,97 @@ existing OIDC/SAML context:
   OIDC flows cannot complete at all.
 
 So `auth-broker.ts` registers a broker for the `empaia` context and owns its
-whole lifecycle. Three consequences worth knowing before editing it:
+whole lifecycle. Four consequences worth knowing before editing it:
 
-- **`setWorkbenchIdentity()` must never call `logout()`.** On a non-core context
-  `XOpatUser.logout()` also clears that context's secrets
-  (`src/classes/user.ts` `_clearContextSecrets`), so a logout/login cycle throws
-  the workbench token away — the next request goes out with no `Authorization`
-  header and the workbench answers 403. `login()` overwrites the identity in
-  place and never touches `_secret`; re-asserting is enough.
+- **The token's `exp` is load-bearing, and `token-expiry.ts` is the only way to
+  read it.** VACI's wire model is `{ value, type }` — there is no `expires_in`
+  and no expiry on the message — so the lifetime comes from decoding the JWT
+  locally. That decode is **never** a verification: the Workbench Service is the
+  only authority on whether a token is acceptable, and a token this module
+  cannot parse is treated as live, because locking a working session out is a
+  worse failure than the one being prevented. Two things depend on it:
+  `isAuthenticated` (below) and the proactive renew armed at `exp − 60 s`
+  (clamped to half the lifetime; `renewDelayMs` is the same arithmetic as
+  `modules/saml-auth/renew-window.ts`, kept identical by hand because neither
+  can import the other). Without the renew, a long session is guaranteed one 401
+  per token lifetime, and it then asks for a replacement at the worst possible
+  moment — after the credential is dead, and possibly after the workbench has
+  stopped answering for this frame at all.
+
+- **`setWorkbenchIdentity()` must never call `logout()` — and must never change
+  the context's identity id.** On a non-core context both `XOpatUser.logout()`
+  *and* a `login()` whose id differs from the one in place clear that context's
+  secrets (`src/classes/user.ts` `_clearContextSecrets`), throwing the workbench
+  token away: the next request goes out with no `Authorization` header and the
+  workbench answers `403 {"detail":"Not authenticated"}`. This bit twice — first
+  as a logout/login cycle, then as "refine the label to `scope.user_id`", which
+  is an identity **swap** because the token listener installs the scope id.
+  The identity id therefore stays the scope id for the session and the workbench
+  user id is carried as the display `name`, which takes `login()`'s re-assert
+  path (refreshes `{id,name,icon}`, raises nothing, keeps `_secret`).
+  Consequence: `getUserId("empaia")` reports the scope id.
 - **Renewal runs through `secret-needs-update:<ctx>`.** `HttpClient`'s
   `refreshOn401` calls `XOpatUser.requestSecretUpdate`, which *rejects* unless a
   provider is subscribed. The handler asks the workbench via `requestNewToken()`.
+  It waits `TOKEN_WAIT_MS`, which must stay **under** core's own refresh window
+  (`XOpatUser.requestSecretUpdate` defaults to 20 s and `_maybeRefreshSecrets`
+  does not override it): waiting longer means core gives up first, drops its
+  `secret-updated` handler and retries with the credential that just failed,
+  while this broker is still waiting for the replacement.
+  The binding is latched separately from the VACI listener, because a call that
+  arrives before `XOpatUser` exists can register the listener but not the
+  handler — latching both together left `requestSecretUpdate` rejecting with
+  *"no provider listens"* for the rest of the session.
 - **`whenSettled` reports readiness.** `init()` only registers the VACI listener;
   the token lands later. Without the hook core waits a blind 1.5 s grace before
   every early request.
 
-A caveat on **403 vs 401**: `HttpClient` refreshes only on 401. The workbench
-returns 403 when the `Authorization` header is *absent* (FastAPI's bearer
-scheme), which is not a refreshable condition and should no longer occur. If a
-deployment turns out to answer 403 for genuine expiry, the refresh path will not
-fire.
+On **403 vs 401**: the workbench returns 403 when the `Authorization` header is
+*absent* (FastAPI's bearer scheme) and 401 only once a header is present and
+rejected. `HttpClient` refreshes on `auth.refreshOnStatuses`, which defaults to
+`[401]`, so `wbs3-client.ts` passes `[401, 403]` — otherwise a context that lost
+its token is served 403s nothing retries and the session is dead for the tab.
+Core pairs with it: a request that carried **no** credential asks the provider
+instead of retrying bare, so the 403 drives `secret-needs-update:empaia` →
+`requestNewToken()` → retry. `job-runner.ts` treats both statuses as "waiting for
+a token" rather than a transport fault.
+
+### An expired token is not a credential
+
+`isAuthenticated` used to answer *"is there a non-empty string?"*. An expired
+token is a non-empty string and nothing ever removes it, so one wrong answer
+propagated everywhere:
+
+- `XOpatAuth.isAuthenticated` prefers the broker's verdict, so the context
+  reported itself authenticated for the rest of the session;
+- `whenContextSettled("empaia")` therefore resolved `"authenticated"` in a
+  microtask — the job runner's "stop and wait for a credential" waited for the
+  dead token it already had, and resumed straight into the next 401. Neither
+  brake applies on that path (`MAX_POLL_FAILURES` deliberately does not count a
+  401, and `startPolling` resets both it and the idle backoff), so the result was
+  `GET /jobs` at round-trip rate for the life of the tab;
+- the escalation in the refresh handler was guarded on the token being *absent*,
+  so the badge, the request hold and the recovery scrim — the whole point of
+  reporting it — were dead surface in exactly the case they were written for.
+
+`isTokenLive` (`token-expiry.ts`) is the predicate now, with a 5 s skew so a
+token that would die in flight is not called live. Everything above follows from
+it being right.
+
+The resume is the second half: `index.ts::_resumePolling` **reads the verdict**.
+On `true` it polls; otherwise it parks and arms a one-shot
+`APPLICATION_CONTEXT.auth.onSettled` watch, so a credential landing by any route
+— a proactive renew, a fresh workbench push, a click on the recovery badge —
+restarts it. It waits with `{awaitInteractive: true}`, so a sign-in the user has
+actually started is waited out rather than answered `"needs-interaction"` the
+moment it begins.
+
+When even that cannot help — the workbench has stopped answering `tokenRequest`
+for this frame, which is what an expired app-frontend token
+(`/v3/frontends/<JWT>/`) looks like from in here — the generic "Sign in" affordance
+is a dead end, because the click lands back in `requestNewToken()`. The module
+says the one thing that does work (`error.tokenUnrecoverable`: reopen the app
+from the Workbench), once per session, re-armed when a token lands.
 
 ---
 
@@ -716,6 +791,35 @@ for those fetched records whose `value` is `undefined` — one wasted request pe
 output per job, and, because `undefined` still created the key,
 a results-table column of blank cells where "—" was meant.
 
+### Shapes that carry no class
+
+TA03, TA04 and TA06 declare an annotation output and **no class output**, and an
+app may only write what its EAD declares — so their shapes legitimately arrive
+unclassified. That is not a "no preset" case: `checkAnnotation` stamps one onto
+every imported object, so the only question is *which*, and the answer used to be
+`unknownPreset` — 24 690 points filed under the literal word "Unknown".
+
+`_ensureOutputPreset` mints one per declared annotation output, named like the ROI
+preset (`"TA06v3 my_cells"` beside `"TA06v3 ROI"`) from `soleAnnotationOutput`,
+with a colour hashed from its id so a result set does not change colour on every
+reload. Shared across runs of the same app, so recolouring it once recolours every
+run. Only a **job's** shapes get it (`jobCreated && !classValue`): the user's own
+unclassified scratch work is not the app's result.
+
+Two constraints it must respect, both of which the id encodes:
+
+- **It carries no class, and its id must not look like one.** `_classValueForPreset`
+  derives a class value from the id suffix of anything under `empaia:`, so the id
+  prefix is `empaia-out:` instead — otherwise `empaia:output:my_cells` would be
+  offered to `POST /classes`, which answers 400 for a value outside the app's
+  namespace. The vocabulary permits a class-less preset explicitly
+  (`allowUnclassified: true`), so drawing with it stores geometry and posts
+  nothing the service can refuse.
+- **Several annotation outputs name nothing per-output.** The pooled
+  `annotations/query` cannot say which output a shape came from without one
+  collection query per output — the same reason `annotationCount` is only claimed
+  for a single output. The preset falls back to `"{{app}} results"`.
+
 Values that describe an *annotation* rather than a region (TA04's confidences,
 TA10's `model_confidences`) go onto the annotation itself. It costs no request:
 `queryPrimitives({jobs})` already returned them, and a per-object one names its
@@ -745,7 +849,10 @@ expensive habit. Four rules, each of which is a bug that shipped:
 - **A 401 is a wait, not a fault.** `HttpClient` refreshes through the auth broker,
   so a 401 reaching the runner means the new token is on its way. Polling stops and
   calls `onAuthStalled`; the module awaits `whenContextSettled(authContext)` and
-  restarts. Retrying on the timer is what filled a session's log with
+  restarts **only if the wait says it is authenticated** — otherwise it parks on an
+  `onSettled` watch (see *An expired token is not a credential*). Resuming
+  unconditionally turned this deliberately brake-free branch into the fastest loop
+  in the module. Retrying on the timer is what filled a session's log with
   `"Access Token expired."`. The failure budget (`MAX_POLL_FAILURES`) is for
   transport faults only.
 - **Idle ticks back off.** `jobPollMs` is a floor; each tick whose signature is
@@ -790,10 +897,33 @@ short-circuits on set equality.
 - **`_jobOutputs` is an LRU** (`jobOutputCache`, default 12) and a **non-terminal
   job is never cached**: a result read while RUNNING is empty, and caching that
   forever is why a run could finish and still show nothing.
+- **Nor is an empty read that has not earned it.** `COMPLETED` is not the same
+  as *readable*: the workbench flips the status before the app's records are
+  queryable, and for TA06 — 24 690 points — the gap is seconds. A read fired on
+  that same tick answers `[]`, and it used to be latched in two places at once
+  (`_jobOutputs` and `_emptyJobs`), so the analysis reported nothing for the rest
+  of the session and the retry button could not clear it. Now a job that
+  *declared* an annotation output and returned none opens a bounded **output
+  wait** (`emptyOutputRetries` / `emptyOutputWindowMs`), which rides the poll
+  backoff (~0/2/6/14/30 s) and keeps the loop alive through `isAwaitingOutputs`.
+  An app that declares no annotation output is still conclusive on read one, so
+  `_emptyJobs` keeps doing the job it was written for.
+- **"Load anyway" imports.** Fetching filled the cache and stopped; the import
+  lives in `syncJobAnnotations`, behind a reconcile. So the button said "loading
+  annotations" and then showed nothing until the user toggled the eye — which is
+  what finally reconciled. Both it and the retry now queue a reconcile.
 - **Eviction yields.** `dropAnnotations` is a synchronous loop; taking a
   ten-thousand-point analysis off the slide is chunked so the tab stays alive.
 - **Polling gives up.** Five consecutive `GET /jobs` failures stop it, and a
   hidden tab stops it too — it used to loop every 2 s for the life of the tab.
+- **And polling actually stops.** The done-check is `isJobTerminal &&
+  isJobValidationTerminal && !isAwaitingOutputs`. The middle one is written as a
+  deny-list — only `"RUNNING"` is pending — because the allow-list it replaces
+  accepted `undefined` but not the declared literal `"NONE"`, while
+  `TERMINAL_JOB_STATUSES` calls that same literal terminal for `status`. A
+  validation that never runs cannot transition, so a `COMPLETED` job reporting
+  `output_validation_status: "NONE"` polled forever while the panel showed
+  "completed" throughout.
 
 ---
 
@@ -814,6 +944,52 @@ bespoke GPU path.
 
 Buffers are length-checked against the declared geometry before being viewed as
 a typed array.
+
+### Attaching a map costs a re-open — so re-opens are coalesced
+
+A pixel map becomes a `config.data` entry plus a shader layer in the slide's
+overlay visualization, and the overlay is assembled in `before-open`. Attaching
+one therefore means re-opening the slide, which tears the world down and
+re-downloads every visible tile. Three rules keep that from happening more than
+once:
+
+- `openSlide` **preloads** the pixel maps of the analyses the slide is showing
+  before it opens, so the first open already carries their layers. Discovering
+  them afterwards used to cost a second full open, seconds after the slide
+  appeared.
+- `registerPixelmaps` marks the overlay dirty and re-opens on a trailing
+  `OVERLAY_REFRESH_DEBOUNCE_MS` window, so a burst of job results (one
+  `loadJobOutputs` per visible analysis) shares one re-open. It still resolves
+  only when the re-open has finished — `_reconcileVisibility` depends on that
+  ordering, since the teardown must not land under annotations it just drew.
+- Maps registered for a slide that is not open re-open nothing; the marker is
+  dropped and the next open builds them in.
+
+`config.data` entries are reused per `(slideId, pixelmapId, channel)` rather than
+appended per rebuild, so repeated opens do not grow the session — or the world's
+tiled-image count, which the renderer relinks its second-pass program to follow.
+
+### Performance in the sandboxed embedding
+
+Three costs are deployment-side, not code, and they dominate a captured session:
+
+- **A CORS preflight per tile.** The Workbench sandboxes the app-UI frame without
+  `allow-same-origin`, so the document's origin is opaque (`Origin: null`) and
+  *every* request is cross-origin. The `Authorization` header then makes each tile
+  a non-simple request, so a GET is preceded by an OPTIONS. `Access-Control-Max-Age`
+  does not help: the preflight cache is keyed per URL and every tile URL is
+  distinct. The only client-side escape would be authenticating tiles through the
+  URL, which xOpat does not do (`AGENTS.md` §7 — no tokens in URLs).
+- **Tile responses carry no `Cache-Control`.** Nothing is reusable from the browser
+  cache, so any re-open pays full network cost for tiles it already had. This is
+  what makes the point above expensive rather than merely wasteful.
+- **HTTP/1.1 on the EATS reverse proxy.** With ~6 sockets per origin and two
+  requests per tile, queueing — not the server — is most of the latency (in the
+  captured session: 703 ms queued of a 897 ms average tile GET, against 193 ms of
+  actual server time).
+
+A deployment that adds `Cache-Control` to tile responses and serves the API over
+HTTP/2 removes most of the remaining cost without any change here.
 
 ---
 

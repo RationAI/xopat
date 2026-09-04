@@ -8,6 +8,7 @@
         "notV3App": "This app does not provide an EMPAIA App Description v3 (no 'io'/'modes' block). Only workbench v3 apps are supported.",
         "noSession": "The EMPAIA workbench session is not ready yet.",
         "handshakeTimeout": "The EMPAIA Workbench client did not send a scope, token and backend URL in time.",
+        "tokenUnrecoverable": "The EMPAIA Workbench stopped issuing access tokens for this app, so this session can no longer reach the workbench. Close the app and open it again from the Workbench to continue.",
         "batchNotReady": "There is no staged run for this slide.",
         "modeNotRunnable": "This analysis cannot be started from here."
     },
@@ -29,7 +30,11 @@
         "presetNameApp": "{{app}} ROI"
     },
     "presets": {
-        "classMetaName": "EMPAIA class"
+        "classMetaName": "EMPAIA class",
+        "outputNameApp": "{{app}} {{output}}",
+        "outputName": "{{output}}",
+        "outputNameAppGeneric": "{{app}} results",
+        "outputNameGeneric": "Analysis results"
     },
     "overlay": {
         "pixelmap": "Pixel map",
@@ -69,7 +74,28 @@
             "noWsi": "This app declares no slide input for this step.",
             "singleAndMulti": "This app mixes single region inputs with region collection inputs.",
             "sameInputTypes": "This app declares several inputs of the same region type.",
-            "noSourceJob": "This step is built on an earlier analysis, and none has finished on this slide yet."
+            "noSourceJob": "This step is built on an earlier analysis, and none has finished on this slide yet.",
+            "noSourceJobPlatform": "This step is built on the results of the {{mode}} analysis, which the workbench starts by itself when the examination opens. None has run on this slide yet.",
+            "noSourceJobRun": "Run the {{mode}} analysis on this slide first — this step is built on its results.",
+            "sourceJobPending": "The {{mode}} analysis this step is built on is {{status}}. This step can be started once it has finished.",
+            "sourceJobFailed": "The {{mode}} analysis this step is built on {{status}}, so there are no results to build on. Open the analyses window for its messages."
+        },
+        "mode": {
+            "standalone": "standalone",
+            "preprocessing": "preprocessing",
+            "postprocessing": "postprocessing"
+        },
+        "status": {
+            "NONE": "not started",
+            "ASSEMBLY": "being assembled",
+            "READY": "ready to start",
+            "SCHEDULED": "scheduled",
+            "RUNNING": "still running",
+            "COMPLETED": "completed",
+            "FAILED": "failed",
+            "TIMEOUT": "timed out",
+            "ERROR": "ended in an error",
+            "INCOMPLETE": "ended incomplete"
         }
     }
 }

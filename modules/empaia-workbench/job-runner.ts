@@ -81,6 +81,25 @@ export interface JobRunnerDeps {
      * can re-render exactly the list that moved.
      */
     onJobsChanged(slideId: string, jobs: Job[]): void;
+    /**
+     * Fired after **every** successful poll, for every slide bucket — unlike
+     * `onJobsChanged`, which fires only when a bucket's signature moved.
+     *
+     * The heartbeat for a caller waiting on something the job list cannot show.
+     * A job that completed before its output was queryable changes no field
+     * `signatureOf` reads, so the de-duplicated emit above never fires for it
+     * again and a retry driven by it would never run.
+     */
+    onPollTick?(slideId: string, jobs: Job[]): void;
+    /**
+     * Is the caller still waiting on this job for something a further tick would
+     * help with — an output that has not appeared yet?
+     *
+     * Keeps the loop alive past `isJobTerminal`. The BOUND is the caller's: the
+     * runner does not second-guess it, and a caller that never answers false
+     * re-creates the unbounded loop this same change removes.
+     */
+    isAwaitingOutputs?(job: Job): boolean;
 }
 
 export interface RunStandaloneRequest {
@@ -229,6 +248,11 @@ export class JobRunner {
     private _failures = 0;
     /** Consecutive ticks that changed nothing — drives the idle backoff. */
     private _idleTicks = 0;
+    /**
+     * The last read stopped on 401/403, so the loop is waiting for a credential
+     * rather than giving up. Consumed by the tick, after `stopPolling`.
+     */
+    private _authStalled = false;
 
     constructor(deps: JobRunnerDeps) {
         this._deps = deps;
@@ -429,9 +453,9 @@ export class JobRunner {
     /**
      * Ordered member ids of a collection.
      *
-     * `item_ids` when the record carries them; otherwise the query, which needs a
-     * selector — the default `creators: [scopeId]` is the right one here, because
-     * an *input* collection holds annotations this scope authored.
+     * `item_ids` when the record carries them; otherwise the items query, which
+     * takes no selector at all — the collection id is the selector (see
+     * `Wbs3Client.queryCollectionItems`).
      */
     private async _collectionMembers(collectionId: string): Promise<string[]> {
         const client = this._deps.getClient();
@@ -505,7 +529,17 @@ export class JobRunner {
                 console.warn("[empaia-workbench] job polling failed:", e?.message ?? e);
                 if (++this._failures >= MAX_POLL_FAILURES) done = true;
             }
-            if (done) { this.stopPolling(); return; }
+            if (done) {
+                // Stop FIRST, then hand over. The resume path calls
+                // `startPolling`, which is a no-op while `_polling` is still
+                // true — so the order here is the difference between a loop
+                // that comes back and one that is gone for the session.
+                const stalled = this._authStalled;
+                this._authStalled = false;
+                this.stopPolling();
+                if (stalled) this._deps.onAuthStalled?.();
+                return;
+            }
             this._timer = setTimeout(tick, this._nextDelay());
         };
 
@@ -563,14 +597,26 @@ export class JobRunner {
         } catch (e: any) {
             if (controller.signal.aborted) return false;
 
-            // A 401 is not a transport fault — `HttpClient` refreshes through the
+            // A 401/403 is not a transport fault — `HttpClient` refreshes through the
             // auth broker, so it means the new token has not landed *yet*.
             // Retrying it on the poll timer is what filled a session's network log
             // with `"Access Token expired."`. Wait for the credential instead;
             // the budget is for faults nobody is already fixing.
-            if (Number(e?.statusCode) === 401) {
+            //
+            // 403 belongs here for the same reason it is in the client's
+            // `refreshOnStatuses`: FastAPI's bearer scheme reports a *missing*
+            // header that way, and counting those as faults stopped polling
+            // permanently while the refresh was still in progress.
+            if (Number(e?.statusCode) === 401 || Number(e?.statusCode) === 403) {
                 console.warn("[empaia-workbench] job listing unauthorized — waiting for a token.");
-                this._deps.onAuthStalled?.();
+                // Recorded, NOT called here. `onAuthStalled` restarts the loop
+                // once the credential lands, and this branch returns "done" —
+                // so calling it now races the `stopPolling()` the tick is about
+                // to run. When the context was already settled the resume won
+                // that race, hit `startPolling`'s `if (this._polling) return`
+                // guard, and the stop that followed ended polling for the rest
+                // of the session: a job submitted after that never came back.
+                this._authStalled = true;
                 return true;
             }
 
@@ -628,15 +674,33 @@ export class JobRunner {
             this._deps.onJobsChanged(slideId, jobs);
         }
 
+        // The heartbeat, after the de-duplicated emit so the listener's own
+        // bookkeeping has already run for anything that did move.
+        for (const slideId of touched) {
+            this._deps.onPollTick?.(slideId, next.get(slideId) ?? []);
+        }
+
         // The same comparison that decides whether to re-render also decides how
         // hard to keep asking: a tick that changed nothing earns a longer wait.
         this._idleTicks = moved ? 0 : this._idleTicks + 1;
 
         // Nothing anywhere is still moving.
         for (const jobs of next.values()) {
-            if (!jobs.every(job => isJobTerminal(job) && isJobValidationTerminal(job))) return false;
+            if (!jobs.every(job => this._isFinished(job))) return false;
         }
         return true;
+    }
+
+    /**
+     * Is there any reason left to ask about this job?
+     *
+     * Three questions, not one. A job can be terminal by `status`, done
+     * validating, and still owe the caller an output that was not queryable when
+     * it settled — which is the one the loop used to have no way to express.
+     */
+    private _isFinished(job: Job): boolean {
+        if (!isJobTerminal(job) || !isJobValidationTerminal(job)) return false;
+        return !this._deps.isAwaitingOutputs?.(job);
     }
 
     // ── results ─────────────────────────────────────────────────────────────
@@ -824,15 +888,31 @@ export class JobRunner {
                     ? base.annotations.length
                     : undefined;
                 outputs.push({
-                    spec, id: String(id), kind, annotationCount: count,
+                    spec, id: String(id), kind,
+                    // A zero is not a count, it is the absence of one — and
+                    // "my_cells: 0" states as fact what was never established.
+                    // `missing` already carries it; the panel decides what to say.
+                    annotationCount: count || undefined,
                     missing: kind === "annotation" && annotationOutputs.length === 1 && !count,
                 });
                 continue;
             }
 
-            if (spec.type === "collection") {
-                const items = await this._outputCollectionItems(String(id), job.id);
+            // Only a collection of PRIMITIVES has anything to fetch: its members
+            // are the per-region values the results table renders. Every other
+            // leaf either arrived through one of the flat queries or has no
+            // `value` at all — and asking anyway is not merely a wasted request,
+            // a collection whose members are themselves collections (TA03's
+            // `collection<collection<point>>`) is answered with 422. Dispatching
+            // on `spec.type === "collection"` alone sent every leaf we failed to
+            // classify down this route.
+            if (spec.type === "collection" && kind === "primitive") {
+                const items = await this._outputCollectionItems(String(id));
                 outputs.push({ spec, id: String(id), kind, items, missing: !items.length });
+                continue;
+            }
+            if (spec.type === "collection") {
+                outputs.push({ spec, id: String(id), kind, missing: false });
                 continue;
             }
 
@@ -881,23 +961,23 @@ export class JobRunner {
     /**
      * Members of a collection the JOB produced.
      *
-     * The `jobs` selector is mandatory here and is the detail that makes the
-     * difference between "the app produced nothing" and the actual values: the
-     * items were created by the job, so `_scopedQuery`'s default
-     * `creators: [scopeId]` — right for an input collection, whose members this
-     * scope authored — selects nothing at all for an output one.
+     * No creator selector is passed, and none may be: this route's body model
+     * forbids both `creators` and `jobs` (see `queryCollectionItems`). The
+     * collection id is the whole selector — an output collection holds exactly
+     * the items of the job that produced it.
      */
-    private async _outputCollectionItems(collectionId: string, jobId: string): Promise<OutputItem[]> {
+    private async _outputCollectionItems(collectionId: string): Promise<OutputItem[]> {
         const client = this._deps.getClient();
         if (!client) return [];
         try {
-            const items = await client.queryCollectionItems(collectionId, { jobs: [jobId] });
+            const items = await client.queryCollectionItems(collectionId);
             return (items ?? []).map((item: any) => ({
                 value: item?.value,
                 reference_id: typeof item?.reference_id === "string" ? item.reference_id : undefined,
             }));
         } catch (e: any) {
-            console.warn("[empaia-workbench] output collection query failed:", e?.message ?? e);
+            console.warn("[empaia-workbench] output collection query failed:",
+                e?.message ?? e, "\n  body:", e?.textData ?? "(none)");
             return [];
         }
     }

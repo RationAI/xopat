@@ -132,7 +132,31 @@ test("a 401 stops the timer and asks for a credential instead of retrying", asyn
     // broker, so retrying on the 2 s timer is what filled a log with
     // "Access Token expired."
     expect(await runner.refresh()).toBe(true);
+    // The stall is RECORDED here and notified by the tick, after stopPolling —
+    // notifying from inside `refresh` races the stop (see the next test).
+    expect(runner._authStalled).toBe(true);
+    expect(calls.authStalled).toBe(0);
+});
+
+test("a 401 whose credential is already there restarts the loop, not ends it", async () => {
+    // The session-killer: `onAuthStalled` resolved synchronously, so the resume
+    // called `startPolling()` while `_polling` was still true — a no-op — and the
+    // `stopPolling()` that followed left the loop dead. A job submitted after
+    // that never came back for the rest of the session.
+    let fail = true;
+    const { runner, calls } = runnerWith(
+        async () => { if (fail) throw httpError(401); return [job({ status: "RUNNING" })]; },
+        { onAuthStalled() { calls.authStalled++; fail = false; runner.startPolling(); } },
+    );
+
+    runner.startPolling();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     expect(calls.authStalled).toBe(1);
+    expect(runner._polling).toBe(true);
+    expect(calls.lists).toBeGreaterThan(1);
+    runner.stopPolling();
 });
 
 test("a 401 does not burn the failure budget", async () => {
@@ -214,5 +238,109 @@ test("startPolling clears both the failure streak and the backoff", async () => 
     // The user acted: a slide opened, a job ran. That is a fresh chance.
     runner.startPolling();
     expect(runner._nextDelay()).toBe(1000);
+    runner.stopPolling();
+});
+
+// ── validation status decides when the loop may stop ────────────────────────
+
+test("a COMPLETED job whose validation never ran does not poll forever", async () => {
+    // The TA06 session: the panel said "completed" (the UI reads `status`) while
+    // `GET /jobs` kept firing, because "NONE" fell through every arm of the
+    // done-list even though TERMINAL_JOB_STATUSES calls the same literal
+    // terminal for `status`. A validation that never runs cannot transition, so
+    // the wait had no end.
+    const { runner } = runnerWith(async () => [job({
+        status: "COMPLETED", output_validation_status: "NONE", input_validation_status: "NONE",
+    })]);
+    expect(await runner.refresh()).toBe(true);
+});
+
+test("only RUNNING keeps the loop alive", async () => {
+    const { isJobValidationTerminal } = await import("../../types.ts");
+    for (const status of ["NONE", "COMPLETED", "ERROR", "FAILED", undefined, null, ""]) {
+        expect(isJobValidationTerminal({ output_validation_status: status })).toBe(true);
+    }
+    expect(isJobValidationTerminal({ output_validation_status: "RUNNING" })).toBe(false);
+    expect(isJobValidationTerminal({ input_validation_status: "RUNNING" })).toBe(false);
+});
+
+test("output validation still running is not done", async () => {
+    const { runner } = runnerWith(async () => [job({
+        status: "COMPLETED", output_validation_status: "RUNNING",
+    })]);
+    expect(await runner.refresh()).toBe(false);
+});
+
+// ── waiting for an output the job list cannot show ──────────────────────────
+
+test("a caller waiting on outputs holds the loop open, and releases it", async () => {
+    // TA06 completes before its 24 690 points are queryable. Without this the
+    // loop stops on the settle tick and nothing ever reads again.
+    let awaiting = true;
+    const { runner } = runnerWith(
+        async () => [job({ status: "COMPLETED", output_validation_status: "NONE" })],
+        { isAwaitingOutputs: () => awaiting },
+    );
+
+    expect(await runner.refresh()).toBe(false);
+    awaiting = false;
+    expect(await runner.refresh()).toBe(true);
+});
+
+test("the heartbeat fires on a tick that changed nothing — the emit does not", async () => {
+    // The asymmetry the retry rides: a job waiting for its output moves no field
+    // in `signatureOf`, so `onJobsChanged` is silent from the second tick on.
+    const ticks = [];
+    const { runner, calls } = runnerWith(
+        async () => [job({ status: "COMPLETED", output_validation_status: "NONE" })],
+        { onPollTick: (slideId, jobs) => ticks.push([slideId, jobs.length]) },
+    );
+
+    await runner.refresh();
+    const changedAfterFirst = calls.changed.length;
+    await runner.refresh();
+    await runner.refresh();
+
+    expect(calls.changed.length).toBe(changedAfterFirst);   // silent
+    expect(ticks.length).toBe(3);                            // one per poll
+    expect(ticks[2]).toEqual(["slide-1", 1]);
+});
+
+test("the heartbeat covers the active slide even when it has no jobs", async () => {
+    const ticks = [];
+    const { runner } = runnerWith(async () => [], {
+        onPollTick: (slideId, jobs) => ticks.push([slideId, jobs.length]),
+    });
+    await runner.refresh();
+    expect(ticks).toEqual([["slide-1", 0]]);
+});
+
+// ── what the pre-open seed relies on ────────────────────────────────────────
+
+test("one refresh fills the slide bucket, so the pre-open seed runs once", async () => {
+    // `openSlide` calls `_ensureJobsKnown`, which polls only while
+    // `jobsFor(slideId)` is still empty. Before this existed, the boot auto-open
+    // ran before any poll at all, so `_visibleJobs` was empty, `_prefetchPixelmaps`
+    // returned at its first line, and the first open of a slide could never carry
+    // a pixel-map layer — the user got a full re-open a moment later instead.
+    //
+    // The guard is only sound if a single refresh actually populates the bucket.
+    const { runner, calls } = runnerWith(async () => [job()]);
+
+    expect(runner.jobsFor("slide-1").length).toBe(0);   // the guard would poll
+    await runner.refresh();
+    expect(calls.lists).toBe(1);
+    expect(runner.jobsFor("slide-1").length).toBe(1);   // and now it would not
+    runner.stopPolling();
+});
+
+test("a slide with no analyses stays empty, and is polled again next open", async () => {
+    // The counterpart: an empty bucket is indistinguishable from an unknown one,
+    // so re-opening that slide costs one more list. Cheap, and the alternative —
+    // remembering "checked, nothing there" — goes stale the moment a job lands.
+    const { runner, calls } = runnerWith(async () => []);
+    await runner.refresh();
+    expect(calls.lists).toBe(1);
+    expect(runner.jobsFor("slide-1").length).toBe(0);
     runner.stopPolling();
 });

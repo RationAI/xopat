@@ -303,10 +303,45 @@ export function isJobTerminal(job: Pick<Job, "status">): boolean {
     return TERMINAL_JOB_STATUSES.has(job.status);
 }
 
+/**
+ * A job that ended without a usable result.
+ *
+ * Narrower than "terminal": `ASSEMBLY` and `NONE` are terminal because nothing
+ * moves them without the user, but they are *before* the run, not after a bad
+ * one. Anything waiting on a job's output has to tell those apart — "it has not
+ * started" and "it will not produce anything" are different things to say.
+ */
+export const FAILED_JOB_STATUSES: ReadonlySet<JobStatus> = new Set<JobStatus>([
+    "FAILED", "TIMEOUT", "ERROR", "INCOMPLETE",
+]);
+
+/**
+ * The only validation state that is still moving. Everything else is over.
+ *
+ * Written as a deny-list on purpose. The allow-list this replaces accepted
+ * `undefined` (via `!s`) but not the declared literal `"NONE"` — while
+ * {@link TERMINAL_JOB_STATUSES} lists `"NONE"` as terminal for `status`, so one
+ * wire literal was read two ways. A validation that never runs cannot
+ * transition, so waiting on it never terminates: a `COMPLETED` job reporting
+ * `output_validation_status: "NONE"` kept `GET /jobs` polling for the life of
+ * the tab, and the panel showed "completed" throughout because the UI consults
+ * `status` alone.
+ *
+ * The tradeoff, accepted deliberately: a genuinely-pending literal added to the
+ * enum later (`"PENDING"`, `"QUEUED"`) would read as done here and stop the poll
+ * early. That is recoverable — any user action calls `startPolling`, and the
+ * `isAwaitingOutputs` keep-alive is independent of this — whereas an
+ * enumerate-the-done-states predicate fails *unrecoverably* on every literal it
+ * has not been taught.
+ */
+export function isJobValidationPending(status?: JobValidationStatus | null): boolean {
+    return String(status ?? "").toUpperCase() === "RUNNING";
+}
+
 /** Validation finished (or never ran) — used to decide when polling may stop. */
 export function isJobValidationTerminal(job: Job): boolean {
-    const done = (s?: JobValidationStatus) => !s || s === "COMPLETED" || s === "ERROR" || s === "FAILED";
-    return done(job.input_validation_status) && done(job.output_validation_status);
+    return !isJobValidationPending(job.input_validation_status)
+        && !isJobValidationPending(job.output_validation_status);
 }
 
 /**

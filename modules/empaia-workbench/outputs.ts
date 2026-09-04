@@ -141,40 +141,35 @@ export function perItemOutputs(specs: OutputSpec[], referenceKey: string | undef
 }
 
 /**
- * The label an annotation carrying per-object values should show.
+ * One value, as a user reads it.
  *
- * `class · name 0.93`. The class leads because it is what the annotation *is*;
- * the numbers follow because they are what an analysis said about it. Overwriting
- * the class outright would trade a permanent fact for a per-run one.
+ * Floats are trimmed to four decimals — a raw `0.9327239990234375` in a label is
+ * noise, and the exact value stays readable under its own key in `meta`.
  *
- * Floats are trimmed to four decimals — a raw `0.9327239990234375` in a board row
- * is noise, and the exact value stays readable under its own key in `meta`.
+ * There used to be a `describeAnnotationValues` beside this, composing
+ * `class · name 0.93` into the annotation's *name* (`meta.category`) because the
+ * label area could not be written to. That produced `"Tumor ratio 0 6"` once the
+ * board appended the annotation's own label, and it was not idempotent — its
+ * output was fed back in as a lead, so re-showing an analysis grew the string.
+ * The label is a value slot now (`object.displayValue`), so a value goes where a
+ * value belongs and the name is left alone.
  */
-export function describeAnnotationValues(
-    object: { empaiaClass?: string } | undefined,
-    values: Array<{ name?: string; value: unknown }>,
-    existingCategory?: unknown,
-): string {
-    const parts: string[] = [];
-    const lead = typeof existingCategory === "string" && existingCategory.trim()
-        ? existingCategory.trim()
-        : shortClassName(object?.empaiaClass);
-    if (lead) parts.push(lead);
-
-    for (const entry of values ?? []) {
-        const name = String(entry?.name ?? "").trim();
-        const value = formatOutputValue(entry?.value);
-        if (!value) continue;
-        parts.push(name ? `${name} ${value}` : value);
-    }
-    return parts.join(" · ");
-}
-
-/** `org.empaia.vendor.app.v1.classes.tumor` reads as `tumor` in a list. */
-function shortClassName(classValue: string | undefined): string {
-    if (typeof classValue !== "string" || !classValue) return "";
-    const last = classValue.split(".").filter(Boolean).pop();
-    return last ?? "";
+/**
+ * One value with the name of what it measures — what an annotation's label shows.
+ *
+ * `0` on its own is not a reading, it is a digit: nothing on screen says whether
+ * it is a ratio, a count or a score. The app already names its outputs (`Tumor
+ * Ratio`), so the label carries that name and the number together.
+ *
+ * The name is the *display* one only. An output with no name falls back to the
+ * bare value rather than to its io key or record id, which would be worse than
+ * saying nothing — `bfc1a2e4-… 0` is noise, not an explanation.
+ */
+export function labelForOutputValue(name: unknown, value: unknown): string {
+    const text = formatOutputValue(value);
+    if (!text) return "";
+    const label = String(name ?? "").trim();
+    return label ? `${label} ${text}` : text;
 }
 
 export function formatOutputValue(value: unknown): string {
@@ -252,4 +247,150 @@ export function zipRegionResults(
         }
     }
     return rows;
+}
+
+// ── per-annotation values ───────────────────────────────────────────────────
+
+/** A value an analysis produced *about one annotation*, ready to render. */
+export interface AnnotationValueRow {
+    /** EMPAIA annotation id the value describes — what a focus click needs. */
+    annotationId: string;
+    name: string;
+    value: unknown;
+    description?: string;
+}
+
+/** What a whole group of same-named values looks like, without listing them. */
+export interface AnnotationValueSummary {
+    name: string;
+    count: number;
+    /** Numeric groups only. */
+    min?: number;
+    max?: number;
+    mean?: number;
+    /** True when every value in the group is identical — the honest headline. */
+    uniform: boolean;
+    /** Non-numeric groups: value → how many carry it, most common first. */
+    tally?: Array<{ value: string; count: number }>;
+}
+
+export interface AnnotationValues {
+    /** Rows to render, already capped. Empty when `truncated` and nothing fits. */
+    rows: AnnotationValueRow[];
+    /** Every value, grouped and reduced. Always present — cheap, and the headline. */
+    summary: AnnotationValueSummary[];
+    /** Total values, before any cap. */
+    total: number;
+    /** True when `rows` is a prefix of the data rather than all of it. */
+    truncated: boolean;
+}
+
+/**
+ * Per-annotation values, aggregated first and listed second.
+ *
+ * A real analysis produces one of these per detected object — tens of thousands
+ * for a nucleus detector. Rendering a row each is not a long list, it is a dead
+ * tab: every row is a van binding and a DOM node, and the browser stops before
+ * the user has learned anything the first screenful did not already say.
+ *
+ * So the summary is unconditional and the rows are the extra. Above `limit`
+ * nothing is listed at all — a truncated list is worse than none, because it
+ * silently answers "what is the range?" with whatever happened to sort first.
+ *
+ * `uniform` earns its own field because it is the one shape that makes a caller
+ * doubt the integration rather than the data: ten identical confidences read as
+ * a bug until something says "all ten are 0.9".
+ */
+export function summarizeAnnotationValues(
+    primitives: Array<Record<string, any>> | undefined,
+    limit = 200,
+): AnnotationValues {
+    const rows: AnnotationValueRow[] = [];
+    for (const primitive of primitives ?? []) {
+        if (primitive?.reference_type !== "annotation") continue;
+        const annotationId = typeof primitive.reference_id === "string" ? primitive.reference_id : "";
+        if (!annotationId || primitive.value === undefined) continue;
+        rows.push({
+            annotationId,
+            name: String(primitive.name ?? "").trim() || "value",
+            value: primitive.value,
+            description: typeof primitive.description === "string" ? primitive.description : undefined,
+        });
+    }
+
+    const groups = new Map<string, AnnotationValueRow[]>();
+    for (const row of rows) {
+        const list = groups.get(row.name);
+        if (list) list.push(row);
+        else groups.set(row.name, [row]);
+    }
+
+    const summary: AnnotationValueSummary[] = [];
+    for (const [name, list] of groups) {
+        const numbers = list
+            .map(r => (typeof r.value === "number" && Number.isFinite(r.value) ? r.value : undefined))
+            .filter((n): n is number => n !== undefined);
+
+        if (numbers.length === list.length && numbers.length) {
+            const min = Math.min(...numbers);
+            const max = Math.max(...numbers);
+            summary.push({
+                name, count: list.length, min, max,
+                mean: numbers.reduce((a, b) => a + b, 0) / numbers.length,
+                uniform: min === max,
+            });
+            continue;
+        }
+
+        const counts = new Map<string, number>();
+        for (const row of list) {
+            const key = formatOutputValue(row.value);
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+        const tally = [...counts.entries()]
+            .map(([value, count]) => ({ value, count }))
+            .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+        summary.push({ name, count: list.length, uniform: tally.length === 1, tally });
+    }
+    summary.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+    const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
+    const truncated = rows.length > cap;
+    return { rows: truncated ? [] : rows, summary, total: rows.length, truncated };
+}
+
+// ── attributing shapes to the output that produced them ─────────────────────
+
+/** The one annotation output of a mode, when there is exactly one. */
+export interface AnnotationOutputIdentity {
+    /** The io key, e.g. `"my_cells"`. */
+    key: string;
+    /** What to call it: the io node's own `name` when it declares one. */
+    label: string;
+}
+
+/**
+ * Which declared output a job's shapes came from — when that is answerable.
+ *
+ * Three of the tutorial apps (TA03, TA04, TA06) declare an annotation output and
+ * **no class output**, and an app may only write what its EAD declares, so those
+ * shapes arrive carrying no class at all. Something still has to name them: the
+ * annotations module stamps a preset onto every imported object, so the choice is
+ * *which* preset, not whether — and without this the answer was `unknownPreset`,
+ * which renders as the literal "Unknown" for the whole result set.
+ *
+ * `undefined` for zero outputs (nothing to name) and for **several** (nothing
+ * honest to say): the pooled `annotations/query` cannot tell which output a shape
+ * came from without one collection query per output, which `loadResolvedResults`
+ * already refuses to pay for `annotationCount`. Same rule, deliberately — if one
+ * of them ever learns to split a multi-output response, so should the other.
+ */
+export function soleAnnotationOutput(
+    ead: EadDocument | undefined, mode: EadMode,
+): AnnotationOutputIdentity | undefined {
+    const annotationOutputs = describeOutputs(ead, mode)
+        .filter(spec => outputKind(spec) === "annotation");
+    if (annotationOutputs.length !== 1) return undefined;
+    const spec = annotationOutputs[0];
+    return { key: spec.key, label: spec.name?.trim() || spec.key };
 }

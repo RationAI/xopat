@@ -219,3 +219,50 @@ test("every tutorial app either resolves every input or names a blocker", () => 
         }
     }
 });
+
+test("a refused app reaches the panel with something to say, not just an empty section", () => {
+    // The banner (`state.incompatibility`), the run button and the canvas
+    // right-click all read this same list. TA09 used to reach the user as a
+    // missing region section plus one console line, so pin that the list is
+    // non-empty and every entry is translatable — an untranslated key would
+    // render as its own last segment and say nothing.
+    const blockers = modeBlockers(ead("ta09"), "standalone");
+    expect(blockers.length).toBeGreaterThan(0);
+    for (const blocker of blockers) {
+        expect(typeof blocker.key).toBe("string");
+        expect(blocker.key.startsWith("ead.blocked.")).toBe(true);
+    }
+
+    // And that the region section has nothing to offer, which is what makes the
+    // reason the only thing left to show.
+    expect(roiInputs(ead("ta09"), "standalone")).toEqual([]);
+});
+
+// ── what the region tool draws ─────────────────────────────────────────────
+
+test("the drawing shape is total, so the region tool is never dead", async () => {
+    const { roiTypeForDrawing } = await import("../../inputs.ts");
+
+    // The mode's own declaration wins.
+    expect(roiTypeForDrawing(ead("ta01"), "standalone")).toBe("rectangle");
+    expect(roiTypeForDrawing(ead("ta02"), "standalone")).toBe("rectangle");
+
+    // TA09 declares regions nested two deep — unusable as an input, and it used
+    // to leave `_ensureRoiPreset` with no type, no preset, and every drawing
+    // surface dead on a console warning. A region is storable regardless, so the
+    // answer is a default, not nothing.
+    expect(roiTypeForDrawing(ead("ta09"), "standalone")).toBe("rectangle");
+
+    // No EAD at all is the same question with less information.
+    expect(roiTypeForDrawing(undefined, "standalone")).toBe("rectangle");
+});
+
+test("a mode with no regions of its own borrows another mode's shape", async () => {
+    // TA11's preprocessing declares no ROI input; its standalone mode declares a
+    // rectangle. The preset still has to carry some factory, and a mode switch
+    // must not leave the user drawing the wrong shape.
+    const { roiTypeForDrawing } = await import("../../inputs.ts");
+    expect(roiInputs(ead("ta11"), "preprocessing")).toEqual([]);
+    expect(roiTypeForDrawing(ead("ta11"), "preprocessing"))
+        .toBe(roiTypeForDrawing(ead("ta11"), "standalone"));
+});
