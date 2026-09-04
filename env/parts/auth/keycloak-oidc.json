@@ -1,0 +1,84 @@
+{
+  "$meta": {
+    "description": "Local Keycloak over OpenID Connect (browser PKCE public client, no secret)",
+    "dimension": "auth",
+    "requires": ["XOPAT_SSRF_ALLOWED_HOSTS"],
+    "defaults": { "KEYCLOAK_URL": "http://localhost:8081", "KEYCLOAK_REALM": "xopat" }
+  },
+  /**
+   * Bring the IdP up with `test/fixtures/keycloak/` first.
+   *
+   * `XOPAT_SSRF_ALLOWED_HOSTS=localhost` is REQUIRED, not optional: the `oidc`
+   * RPC verifier fetches the JWKS through the core SSRF guard, which blocks
+   * private upstreams and fails CLOSED — without it every authenticated RPC is
+   * refused, which presents as a working login and a dead application.
+   *
+   * The `contexts` block is PUBLIC static config, deliberately not under
+   * `core.server.secure.modules`: the broker reads it in the browser
+   * (`auth-broker.js` → `readStaticContexts`), and a public client has nothing
+   * to hide. The confidential shape lives in `oidc-server-ts`, whose config is
+   * server-only for exactly that reason.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        /**
+         * ONE ENTRY ONLY: "", "core" and "default" are three spellings of the
+         * main context and the CLIENT picks which it sends, so a split entry
+         * would let a caller land on a disabled one and skip OIDC entirely.
+         */
+        "rpcVerifiers": {
+          "core": {
+            "verifiers": {
+              "oidc": {
+                "jwksUri": "<% KEYCLOAK_URL:-http://localhost:8081 %>/realms/<% KEYCLOAK_REALM:-xopat %>/protocol/openid-connect/certs",
+                "issuer": "<% KEYCLOAK_URL:-http://localhost:8081 %>/realms/<% KEYCLOAK_REALM:-xopat %>",
+                /* MUST match what the token actually carries — see tokenForServer. */
+                "audience": "xopat-viewer-oidc"
+              }
+            },
+            "mode": "all"
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "oidc-client-ts": {
+      "enabled": true,
+      "permaLoad": true,
+      "contexts": {
+        /* "" / null / "core" are all the MAIN viewer identity. See src/AUTH.md. */
+        "core": {
+          "oidc": {
+            "authority": "<% KEYCLOAK_URL:-http://localhost:8081 %>/realms/<% KEYCLOAK_REALM:-xopat %>",
+            "client_id": "xopat-viewer-oidc",
+            "scope": "openid profile email"
+          },
+          "authMethod": "redirect",
+          "autoLogin": false,
+          /**
+           * The ID token, not the access token: Keycloak's access token carries
+           * `aud: ["account"]` and names this client only in `azp`, so the
+           * `audience` check above would fail against it until an
+           * `oidc-audience-mapper` is added. The id token's `aud` IS the client
+           * id, so both halves agree with no extra mapper. Both carry `groups`.
+           */
+          "tokenForServer": "id_token",
+          /**
+           * Point the silent/popup redirect at the module's bare
+           * `auth-callback.html` so a `prompt=none` frame does not boot a SECOND
+           * viewer inside a watchdog it then trips. Requires the realm to have
+           * that URL among its redirect URIs — an IdP matches them exactly.
+           */
+          "useCallbackPage": true,
+          "serviceName": "Keycloak OIDC"
+        }
+      }
+    },
+    /* Two brokers racing to claim "core" is a misconfiguration, and only one
+       context per page load can complete a redirect. */
+    "saml-auth": { "enabled": false },
+    "oidc-server-ts": { "enabled": false }
+  }
+}

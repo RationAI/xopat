@@ -44,8 +44,8 @@ Test files are `*.test.mjs`. Cypress owns `*.cy.js`; the two never overlap.
 | `unit` | none | pure logic; no server, no browser |
 | `legacy` | none | the not-yet-ported scripts, run unmodified |
 | `default` | `env/env.default.json` | the ordinary dev deployment |
-| `secure` | `test/env/secure.json` | `client.secureMode` on |
-| `production` | `test/env/production.json` | `client.production` on — config cache + asset baking |
+| `secure` | `test/env/secure.json` | `flags/secure-mode` over the default deployment |
+| `production` | `test/env/production.json` | `flags/production` — config cache + asset baking |
 | `synthetic` | `test/env/synthetic.json` | serves a generated slide; the only project that renders image data |
 | `errors` | `test/env/errors.json` | the same slide plus a destination that is not there; failure rendering |
 | `saml` | `test/env/saml.json` | a real identity provider and role-based rules; skips without the Keycloak fixture |
@@ -69,6 +69,31 @@ project's deployment and a developer's hand-run deployment cannot mean different
 things. `createEnvScratch({ envFile })` accepts an array directly, and a layer
 disagreement throws rather than resolving last-wins. See
 [`env/README.md`](../env/README.md).
+
+### Why the fragments live in `env/`, not here
+
+`env/parts/` and `env/presets.json` are a **product surface**, not test
+scaffolding. `npm run up -- keycloak-oidc` is how an operator deploys xOpat —
+it is the path documented in `env/README.md`, `docs/web/xopat_deployment.md`,
+`server/ENVIRONMENT.md` and the Docker READMEs — and a packaged build that
+shipped without `test/` would lose the ability to compose a deployment at all.
+
+What lives here is the other half: **deltas that are only meaningful to the
+suite.** `errors.json`'s destination-that-is-not-there is not a deployment
+anybody should be offered; the port-pinned `saml`/`oidc` files exist because a
+realm's redirect URIs name concrete origins.
+
+The line to hold is that a matrix file restates **no configuration** — every
+one of them is a `$base` and the handful of keys that differ. `secure.json` and
+`production.json` used to spell their flag out inline while `env/parts/flags/`
+already carried it; they are now `["base/core", "data/wsi-service", "flags/<x>"]`,
+so what a project tests and what `npm run up -- default flags/secure-mode`
+composes are the same thing.
+
+The exception is the two Cypress-era files (`runtime.json`,
+`viewer.env.test-custom.json`): `test/run-env.sh` hands `XOPAT_ENV` straight to
+`node index.js`, and the server does not resolve `$base`. They stay whole until
+those specs are ported.
 
 ### The `saml` project
 
@@ -146,7 +171,7 @@ a destination that is not there, a visualization index pointing at nothing, a
 shader type nothing registers.
 
 ```bash
-npm run test:slides           # once; the same pyramid the synthetic project uses
+npm run fixtures:synthetic           # once; the same pyramid the synthetic project uses
 npm test -- --project=errors
 ```
 
@@ -275,15 +300,45 @@ Assert on `APPLICATION_CONTEXT.env.setup.<key>`, not `getOption("<key>")`: the
 boot call passes an explicit default for some keys, and an explicit caller
 default outranks the ENV `setup` block in the core resolver.
 
-## Slides
+## Fixtures: slides, data and sessions
 
-`test/env/synthetic.json` + `ensureSyntheticSlide()` generate a DeepZoom pyramid
-(pure Node, no dependencies, cached on disk) and serve it from the viewer's own
-static handler. Regenerate by hand with `npm run test:slides`.
+Everything a deployment can be pointed at lives under `test/fixtures/`, in three
+tiers by cost. Nothing depends on the state of one developer's disk.
 
-Tests that genuinely need real data call `requireSlides()`, which **skips with a
-reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set — rather than
-failing with a timeout whose cause has to be explained in prose.
+| | What | How | Tracked? |
+| --- | --- | --- | --- |
+| **generated** | `slides/generated/synthetic.dzi` — a DeepZoom pyramid, pure Node, content-stamped | `npm run fixtures:synthetic` | output gitignored, generator tracked |
+| **fetched** | `data/slides/*` — the real H&E slides and prediction masks | `npm run fixtures:fetch` | `data/manifest.json` tracked, slides gitignored |
+| **derived** | `data/generated/*` — vector / MVT / grid / mask-pyramid overlays | `npm run fixtures:derive` | gitignored, generator tracked |
+| **sessions** | `sessions/*.json` — one per viewer capability | `npm run fixtures:urls` | **tracked**, indexed by `sessions/index.json` |
+
+The synthetic pyramid is what lets a clean checkout run browser tests at all —
+no image server, no download, no credentials, and its tile pattern is diagnostic
+rather than decorative. `ensureSyntheticSlide()` is importable from the harness;
+`test/env/synthetic.json` is now nothing but a layer list over
+`env/parts/data/synthetic-dzi.json`, so `npm run up:dev -- synthetic` and the
+`synthetic` project run the same deployment rather than two that drift.
+
+The fetched slides are **checksum-verified**: a mismatch deletes the download
+and fails, because a truncated TIFF opens far enough to render a
+plausible-looking wrong demo. See `test/fixtures/data/README.md` for the
+publishing procedure, and `test/fixtures/sessions/README.md` for the session
+conventions.
+
+Tests that genuinely need a live slide service call `requireSlides()`, which
+**skips with a reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set
+— rather than failing with a timeout whose cause has to be explained in prose.
+
+## Testing by hand
+
+`test/MANUAL_TESTING.md` walks every deployment reachable through
+`npm run up:dev -- <preset>`, ordered by setup cost: what to run first, which
+containers and keys it needs, which session to open, and what to actually look
+at. A unit test asserts every preset in `env/presets.json` appears there, so a
+new deployment cannot be added without saying how to exercise it.
+
+Start at tier 0 (`synthetic`, `dicom-idc`) — a failure that reproduces there is
+a viewer bug; one that does not is a data or deployment bug.
 
 ## Plugin and module tests
 

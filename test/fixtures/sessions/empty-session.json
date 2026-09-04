@@ -1,0 +1,9 @@
+{
+  "params": {
+    "sessionName": "Data declared, nothing asked for",
+    "customBlending": true
+  },
+  "data": ["slides/slide.tif", "slides/cancer-inference.tif"],
+  "background": [],
+  "visualizations": []
+}

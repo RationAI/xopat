@@ -1,0 +1,51 @@
+{
+  "params": {
+    "customBlending": true,
+    "background": "#000000FF",
+    "sessionName": "viz-flex-multichannel"
+  },
+  "data": [
+    "slides/LuCa-7color_Scan1.ome.tiff",
+    "slides/slide.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "Fluorescence (5 channels)",
+      "shaders": [
+        {
+          "name": "DAPI",
+          "type": "single_channel",
+          "params": { "use_channel_base0": 0, "color": "#3b6cff", "use_gamma": 2 }
+        },
+        {
+          "name": "Cytokeratin",
+          "type": "single_channel",
+          "params": { "use_channel_base0": 1, "color": "#00ff4c", "use_gamma": 2 }
+        },
+        {
+          "name": "CD8",
+          "type": "single_channel",
+          "params": { "use_channel_base0": 2, "color": "#ff004c", "use_gamma": 2 }
+        },
+        {
+          "name": "PD-L1",
+          "type": "single_channel",
+          "params": { "use_channel_base0": 3, "color": "#d4ff00", "use_gamma": 2 }
+        },
+        {
+          "name": "Autofluorescence (heatmap)",
+          "type": "heatmap",
+          "visible": 0,
+          "params": { "use_channel_base0": 4, "use_channel0": "r" }
+        },
+        {
+          "name": "Brightfield reference",
+          "type": "identity",
+          "visible": 0,
+          "dataReferences": [1]
+        }
+      ]
+    }
+  ]
+}

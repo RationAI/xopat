@@ -15,8 +15,9 @@
  *  - the fragment library still reproduces `env/env.default.json` exactly, so
  *    splitting the shipped deployment into layers lost nothing.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, fromRoot } from "@xopat/test-harness";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,7 @@ const composer = await import(
 
 const {
     mergeDeep, composeEnv, composeLayers, readJsonc, loadEnvFile,
-    collectPlaceholders, scanForLiteralSecrets, listFragments, loadPresets,
+    collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, listFragments, loadPresets,
 } = composer;
 
 const layer = (id, data, extra = {}) =>
@@ -150,6 +151,25 @@ test("literal credentials are detected, placeholders are not @unit", () => {
     expect(hits.map((h) => h.path)).toEqual(["real.apiKey"]);
 });
 
+test("non-public hosts are detected, public and templated ones are not @unit", () => {
+    const hits = scanForPrivateHosts({
+        tailscale: { url: "http://100.123.110.98:9000/api" },
+        internal: { issuer: "https://auth-xopat.dyn.cloud.e-infra.cz/realms/xopat" },
+        rfc1918: { url: "https://10.0.0.4/dicomWeb" },
+        loopback: { url: "http://localhost:9000" },
+        loopbackIp: { url: "http://127.0.0.1:9100/files" },
+        publicCerit: { url: "https://llm.ai.e-infra.cz/v1" },
+        publicIdc: { url: "https://proxy.imaging.datacommons.cancer.gov/current/viewer-only-no-downloads-see-tinyurl-dot-com-slash-3j3d9jyp/dicomWeb" },
+        templated: { url: "<% GOOGLE_DICOM_SERVICE_URL %>" },
+        templatedHost: { url: "https://<% WSI_HOST %>:8080/v3" },
+    });
+    expect(hits.map((h) => h.path).sort()).toEqual([
+        "internal.issuer", "rfc1918.url", "tailscale.url",
+    ]);
+    expect(hits.find((h) => h.path === "tailscale.url").kind).toBe("private-ip");
+    expect(hits.find((h) => h.path === "internal.issuer").kind).toBe("unlisted-host");
+});
+
 /* ---------------------------------------------------- the shipped library */
 
 test("base/core + data/wsi-service reproduces env/env.default.json exactly @unit", () => {
@@ -167,6 +187,24 @@ test("every shipped preset composes without conflicts @unit", () => {
 test("no tracked fragment carries a literal credential @unit", () => {
     for (const fragment of listFragments()) {
         expect(scanForLiteralSecrets(readJsonc(fragment.file)), fragment.id).toEqual([]);
+    }
+});
+
+test("every preset is documented in test/MANUAL_TESTING.md @unit", () => {
+    // The matrix is hand-written where it matters (what to verify), so it
+    // cannot be generated — but a preset nobody wrote a check for is a
+    // deployment nobody will ever exercise. This is what makes adding one
+    // force the question.
+    const doc = fs.readFileSync(fromRoot("test", "MANUAL_TESTING.md"), "utf8");
+    const undocumented = Object.keys(loadPresets()).filter((name) => !doc.includes(`up:dev -- ${name}`));
+    expect(undocumented).toEqual([]);
+});
+
+test("no tracked fragment names a non-public host @unit", () => {
+    // The whole-ENV pile this library replaced leaked no keys — it leaked
+    // topology. This is the assertion that keeps the replacement honest.
+    for (const fragment of listFragments()) {
+        expect(scanForPrivateHosts(readJsonc(fragment.file)), fragment.id).toEqual([]);
     }
 });
 

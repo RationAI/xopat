@@ -1,5 +1,5 @@
 /**
- * The geometry and encoders behind `npm run demo:data`.
+ * The geometry and encoders behind `npm run fixtures:derive`.
  *
  * These are hand-rolled on purpose — a TIFF reader, a TIFF writer, a contour
  * tracer and a protobuf/MVT writer, so that regenerating the demo data needs
@@ -17,11 +17,11 @@ import path from "node:path";
 
 import {
     traceCellRings, assemblePolygons, signedArea, pointInRing, mergeCollinear,
-} from "../../../docs/data/tools/lib/contour.mjs";
-import { encodeTile, encodePolygonGeometry, clipRing } from "../../../docs/data/tools/lib/mvt-write.mjs";
-import { decodeTile } from "../../../docs/data/tools/lib/mvt-read.mjs";
-import { encodeTiff, boxResample } from "../../../docs/data/tools/lib/tiff-write.mjs";
-import { openTiff } from "../../../docs/data/tools/lib/tiff-read.mjs";
+} from "../../harness/data/lib/contour.mjs";
+import { encodeTile, encodePolygonGeometry, clipRing } from "../../harness/data/lib/mvt-write.mjs";
+import { decodeTile } from "../../harness/data/lib/mvt-read.mjs";
+import { encodeTiff, boxResample } from "../../harness/data/lib/tiff-write.mjs";
+import { openTiff } from "../../harness/data/lib/tiff-read.mjs";
 
 /** Build a binary grid from an ASCII picture; `#` is inside. */
 function grid(rows) {

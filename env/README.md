@@ -85,7 +85,91 @@ secret-free — `npm run up:check` fails on a literal credential.
 A file may also declare `"$base": [...]` — selectors merged in before it, as
 `role: "base"` layers. That is how `test/env/saml.json` and `test/env/oidc.json`
 share one copy of their role rules instead of two copies a comment asks you to
-keep identical.
+keep identical, and how `test/env/synthetic.json` is nothing but a layer list
+over `data/synthetic-dzi`: the deployment a developer runs
+(`npm run up:dev -- synthetic`) and the deployment the `synthetic` Playwright
+project tests are then the same one, not two that drift.
+
+#### What `up:check` refuses in a tracked fragment
+
+Two separate gates, because they catch different mistakes:
+
+- **A literal credential** — API-key, PAT, PEM and JWT shapes. Exit 4.
+- **A non-public hostname** — an RFC1918/CGNAT/link-local address, or any host
+  outside the small allowlist in `env-compose.mjs`. Exit 5.
+
+The second exists because the ~33 whole-ENV files this library replaced leaked
+**no keys at all**. What they leaked was topology: a Tailscale-range IP, three
+internal `*.dyn.cloud.e-infra.cz` services, an institutional login endpoint. A
+key-shaped regex cannot see any of that. Write the host as `<% VAR %>` and put
+the value in `env/.env`; add it to `PUBLIC_HOSTS` only if it is genuinely public
+(the CERIT LLM endpoint and the NCI IDC store are, and are listed there).
+
+`<% VAR %>` never matches either scanner, which is the point: a composed
+artifact stays pasteable into a bug report.
+
+Those legacy files are archived under `env/.legacy/` (gitignored, like the rest
+of `env/`). Nothing reads them; they are there to be mined, not run.
+
+### Publishing example sessions (`core.server.secure.examples`)
+
+A composed deployment knows exactly which data source it was built with, yet used
+to publish nothing runnable — "what can I actually open here" lived in fragment
+comments, plugin READMEs and `test/fixtures/sessions/`. A fragment that configures a
+data source should also ship the sessions that exercise it. The server prints
+them as ready-to-open URLs in its startup banner:
+
+```
+  Example sessions published by this deployment:
+    [dicom-seg-pmap] DICOM: slide with segmentation + parametric map overlays
+      IDC study 2.25.802… — a BINARY nuclei segmentation and a float …
+      http://localhost:9000/#%7B%22params%22%3A…
+```
+
+Printing is unconditional — not gated on dev mode, and there is no opt-in flag. A
+deployment that bothered to declare what can be opened says so in production too.
+Declaring nothing prints nothing.
+
+```jsonc
+"core": { "server": { "secure": { "examples": {
+  "dicom-seg-pmap": {
+    "name": "DICOM: slide with segmentation + parametric map overlays",
+    "description": "One sentence on what it demonstrates.",
+    "order": 10,                                          // optional; ties broken by id
+    "session": { "params": {}, "background": [] }         // inline session JSON
+  },
+  "viz-flex-geojson": {
+    "name": "viz-flex: GeoJSON vector layer",
+    "sessionFile": "test/fixtures/sessions/viz-flex-geojson.json"   // …or by repo-relative path
+  }
+}}}}
+```
+
+Exactly one of `session` / `sessionFile` per record. `sessionFile` keeps fragments
+readable and lets the existing `test/fixtures/sessions/*.json` fixtures be referenced
+rather than duplicated.
+
+**Why `server.secure`, and why an object:**
+
+- `server.secure` is the one block stripped before the browser-bound page payload,
+  so an example naming a private study UID cannot become an anonymous discovery
+  endpoint. There is deliberately no client consumer and no `/scheme` exposure.
+- It is a **keyed object, never an array** — the composer replaces arrays wholesale
+  and treats a cross-layer array replacement as a fatal conflict (see [Conflicts
+  are an error](#conflicts-are-an-error-not-a-merge)), so two fragments each
+  contributing a list could not compose at all. Objects deep-merge, while two
+  layers claiming the same id with different content still fail loudly — which is
+  the wanted behaviour, for free.
+
+A malformed record warns and is skipped; the rest still print. A session too long
+to survive a URL (>6000 characters encoded) prints a pointer to `/dev_setup`
+instead of a link that would silently truncate. The session travels in the URL
+**hash**, which `src/parse-input.js` parses locally, so refresh and share stay
+stable — unlike `?visualization=`, which self-POSTs and drops out of the address
+bar.
+
+Implemented in `server/node/examples.js`; Node-only (the PHP renderer has no
+startup-banner equivalent).
 
 ### Secrets: `env/.env`
 

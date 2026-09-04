@@ -47,7 +47,7 @@ A factory protocol sidesteps it entirely. `AbstractMVTTileSource` passes its
 options straight to `super()`, so constructing the source with an explicit
 `width`/`height` bypasses `configure()` and its square derivation. The tiles are
 generated on that same non-square grid by
-`docs/data/tools/make-visualization-demo.mjs`, so alignment is exact at every
+`test/harness/data/derive.mjs`, so alignment is exact at every
 level.
 
 The request for TileJSON to be able to describe a non-square world is filed in

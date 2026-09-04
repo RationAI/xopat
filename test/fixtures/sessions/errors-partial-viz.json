@@ -1,0 +1,50 @@
+{
+  "params": {
+    "sessionName": "One layer resolves, one does not",
+    "customBlending": true
+  },
+  "data": ["slides/absent-overlay.tif", "slides/cancer-inference.tif", "slides/slide.tif"],
+  "background": [
+    {
+      "dataReference": 2,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Mixed goal — one shader's data is missing",
+      "shaders": {
+        "broken": {
+          "name": "Missing overlay",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [0],
+          "params": {}
+        },
+        "working": {
+          "name": "Cancer prediction",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    },
+    {
+      "name": "Fully broken goal",
+      "shaders": {
+        "broken": {
+          "name": "Missing overlay",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [0],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

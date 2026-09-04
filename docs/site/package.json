@@ -4,7 +4,7 @@
   "private": true,
   "description": "xOpat documentation site (Docusaurus). Self-contained: not part of the root npm workspaces.",
   "scripts": {
-    "sync": "node scripts/sync-docs.mjs && node scripts/generate-catalogue.mjs",
+    "sync": "node scripts/sync-docs.mjs && node scripts/generate-catalogue.mjs && node scripts/generate-fixtures.mjs",
     "prestart": "npm run sync",
     "start": "docusaurus start",
     "prebuild": "npm run sync",

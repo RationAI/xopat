@@ -1,0 +1,20 @@
+{
+  "$meta": {
+    "description": "pluginSelectionMode=whitelist — only elements explicitly `enabled` in this ENV load"
+  },
+  /**
+   * The mode a production deployment usually wants: a plugin ships with the
+   * checkout but does not load unless this ENV says so.
+   *
+   * Compose it LAST and read the layer list: `permaLoad` alone does not opt an
+   * element in, so anything a fragment enables implicitly is dropped here. Every
+   * fragment in this library spells `enabled` out for exactly that reason.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "pluginSelectionMode": "whitelist"
+      }
+    }
+  }
+}

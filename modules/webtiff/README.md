@@ -573,7 +573,7 @@ configures the deprecated `geotiff` module).
   fallback tints. Upstream item.
 - **A plane stack has bounds.** A file storing each channel as its own full-size
   IFD — the common OME-TIFF layout, e.g. the five 34560 × 24960
-  `SamplesPerPixel = 1` directories of `docs/data/slides/LuCa-7color_Scan1.ome.tiff` —
+  `SamplesPerPixel = 1` directories of `test/fixtures/data/slides/LuCa-7color_Scan1.ome.tiff` —
   is read as one N-channel tile, but: at most 32 planes stack (`MAX_PLANES`) and the
   rest are dropped with a warning; planes group by size *and* sample format, so a
   file mixing 8-bit and 16-bit planes stacks only the group its full-resolution

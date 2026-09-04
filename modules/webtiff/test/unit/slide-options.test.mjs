@@ -81,7 +81,7 @@ test("channels are filtered to a bounded list of real indices", () => {
 });
 
 test('WSI-Service\'s "all" is accepted and means no selection', () => {
-    // Sessions in `docs/data/sessions/` carry `{format: "tiff", channels: "all"}`
+    // Sessions in `test/fixtures/sessions/` carry `{format: "tiff", channels: "all"}`
     // because that is what the WSI-Service sources take. It must mean the same
     // thing here — every channel — rather than being an unrecognised value that
     // happens to produce the same result by accident.

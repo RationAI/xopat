@@ -1,0 +1,55 @@
+{
+  "params": {
+    "sessionName": "Two backgrounds, one per visualization",
+    "customBlending": true,
+    "activeBackgroundIndex": [0, 1]
+  },
+  "data": ["slides/slide.tif", "slides/cancer-inference.tif"],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 1,
+      "name": "H&E, sobel goal",
+      "microns": 0.6
+    },
+    {
+      "dataReference": 1,
+      "visualizationIndex": 0,
+      "name": "Prediction, heatmap goal",
+      "microns": 0.6
+    },
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E again, heatmap goal"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Heatmap goal",
+      "shaders": {
+        "prediction": {
+          "name": "Cancer prediction",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    },
+    {
+      "name": "Sobel goal",
+      "shaders": {
+        "prediction": {
+          "name": "Cancer prediction, edges",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "$meta": {
+    "description": "NCI Imaging Data Commons DICOMweb — public, no credentials",
+    "dimension": "data"
+  },
+  /**
+   * The one data source that needs nothing configured: IDC is public, so this
+   * composes with `auth/none` and still opens slides.
+   *
+   * Two plugins, deliberately: `dicom` is the protocol half (tile sources,
+   * shaders, the SR sink) and opens nothing on its own; `dicom-browser` is the
+   * application half (boot defaults, the study explorer, derived SEG /
+   * Parametric Map discovery). Loading the browser is what makes a store
+   * browsable — see `project_dicom_protocol_split_and_radiology`.
+   */
+  "plugins": {
+    "dicom": {
+      "enabled": true,
+      "permaLoad": true,
+      "serviceUrl": "https://proxy.imaging.datacommons.cancer.gov/current/viewer-only-no-downloads-see-tinyurl-dot-com-slash-3j3d9jyp/dicomWeb",
+      /* IDC does not implement QIDO /patients; declaring it here skips the
+         runtime probe, which otherwise logs a loud CORS error the JS recovers
+         from. */
+      "supportsPatients": false
+    },
+    "dicom-browser": {
+      "enabled": true,
+      "permaLoad": true,
+      "renderDerivedObjects": true,
+      "patientUID": null,
+      /* Picked to exercise segmentation overlays. */
+      "studyUID": "2.25.80243218818500960592170645250812550533"
+    },
+    "rationai-wsi-file-browser": { "enabled": false }
+  },
+  "modules": {
+    "rationai-wsi-tile-source": { "enabled": false }
+  },
+  /**
+   * What this deployment can actually open, printed by the server at startup.
+   * `dicom-browser` seeds the study above at boot, but that only helps someone who
+   * already knows what they are looking at — and the seed is exactly what preset
+   * `dicom-regress` nulls out.
+   *
+   * `expand: "case"` resolves the primary series from the study itself (no
+   * seriesUID to keep in sync here), and `derived: "auto"` is the whole overlay
+   * mechanism: one memoized study-wide probe attaches every SEG / Parametric Map
+   * attributable to the slide, building the shader params from the DICOM objects.
+   */
+  "core": { "server": { "secure": { "examples": {
+    "dicom-seg-pmap": {
+      "name": "DICOM: slide with segmentation + parametric map overlays",
+      "description": "IDC study 2.25.802… — a BINARY nuclei segmentation and a float Aggressiveness Score Map over one SM slide. Both overlay shaders at once.",
+      "order": 10,
+      "session": {
+        "params": {
+          "sessionName": "DICOM: SEG + parametric map",
+          /* The parametric shader uploads half-float packs; "auto" is what lets it. */
+          "webGlPrecision": "auto"
+        },
+        "background": [
+          {
+            "name": "IDC slide with derived overlays",
+            "dataReference": {
+              "protocol": "dicom",
+              "dataID": {
+                "studyUID": "2.25.80243218818500960592170645250812550533",
+                "expand": "case",
+                "derived": "auto"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }}}}
+}

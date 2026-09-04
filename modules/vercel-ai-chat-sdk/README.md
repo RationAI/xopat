@@ -515,6 +515,84 @@ The accumulator itself is pure and lives in `shared/usage-stats.ts` (unit-tested
 `test/unit/usage-stats.test.mjs`); the wire shape is `ChatTurnResult.usage`, projected in
 `chat.server.ts` by `projectUsage`.
 
+### Measuring cost against an OpenAI-compatible endpoint
+
+The panel answers *what does an xOpat turn cost here* with no instrumentation: the two numbers worth
+having are **differences in real `Input` tokens**, and both differences come out of controls the UI
+already has. Real tokens from the endpoint's own tokenizer beat any character count the viewer could
+compute.
+
+**Probe the endpoint first.** Two `curl`s decide whether the readout can work at all, and they cost
+two tokens:
+
+```bash
+# 1. does it report cache detail?
+curl -s -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"model":"<id>","messages":[{"role":"user","content":"ok"}],"max_tokens":1}' \
+  "$BASE/chat/completions" | jq .usage
+# look for prompt_tokens_details.cached_tokens
+
+# 2. is stream_options accepted?
+curl -s -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"model":"<id>","messages":[{"role":"user","content":"ok"}],"max_tokens":1,
+       "stream":true,"stream_options":{"include_usage":true}}' \
+  "$BASE/chat/completions" | grep usage
+# a terminal chunk must carry `usage`, and the request must not 4xx
+```
+
+Probe 2 is what licenses `includeUsage: true` in that deployment's `providerDefaults` — the default
+transport is `sendTurnStream`, so without the flag the panel stays blank no matter what the endpoint
+supports. Probe 1 decides whether the cache rows mean anything, and **it cannot be skipped**: the SDK
+does `cached_tokens ?? 0` (`@ai-sdk/openai-compatible`, `convert-openai-compatible-chat-usage.ts`),
+so on this adapter `cacheRead` is *always* a number and `hasCacheDetail` is structurally always true.
+The dash rule above — correct for Anthropic — cannot protect you here, and an endpoint that reports
+nothing renders as a confident **0%** hit rate.
+
+> **CERIT, verified 2026-09-04** (`llm.ai.e-infra.cz`, `gpt-oss-120b` and `qwen3.8-27b`):
+> `stream_options` accepted and the terminal chunk carries `usage`; without it no chunk carries one.
+> Hence `includeUsage: true` in `env/parts/chat/openai-compatible-cerit.json`. But **no
+> `prompt_tokens_details`** — cache detail is not reported there, so *Read from cache* and *Cache hit
+> rate* are the SDK's default rather than a measurement. Both models also return
+> `completion_tokens_details.reasoning_tokens`, which `projectUsage` does not carry.
+
+**Fix the variables.** One model, held fixed. A **fresh conversation per measurement** — a growing
+conversation raises `Input` for an unrelated reason. A prompt that forces a one-token answer
+(`Reply with exactly the word OK and nothing else.`) so `Output` is noise and the assistant loop
+makes a single upstream call. **Check *Model requests*: if it is not 1, the model emitted a script
+fence and you are reading a sum over several calls, not a measurement.** Read from *Last message*,
+which resets per user message.
+
+**System-prompt floor.** Fresh conversation, that prompt, read *Input*. That number is the whole
+xOpat system prompt — session preamble, scripting manifest, personality, region-link block, live
+viewer context — plus a handful of tokens for the message itself.
+
+**Manifest cost, by difference.** Repeat with scripting consent revoked. With no manifest,
+`scriptSystemContent` renders a four-line "scripting disabled" stub rather than nothing, so the
+difference is *manifest minus stub*. The manifest is the only contributor the UI can isolate;
+personality, region-link and live viewer context are not independently togglable.
+
+**Cache effectiveness**, on an endpoint that passed probe 1: repeat the identical prompt in a **new
+conversation** several times and watch *Read from cache* climb while *Input* stays flat. New
+conversations rather than repeated turns in one, so the conversation tail is not the thing that
+changed. A flat zero is evidence of no hit, not proof — replica routing, TTL expiry, or another
+tenant evicting the block all look identical from here.
+
+**What these numbers are not:**
+
+- **A floor, not a turn.** One real user message drives an assistant loop of many upstream calls;
+  this procedure pins it to one on purpose.
+- **Not attributable past the manifest.** Pricing personality vs region-link vs live viewer context
+  separately would need per-block instrumentation that does not exist.
+- **Not evidence about xOpat's cache segmentation.** `SYSTEM_MERGING_ADAPTERS` is `{'anthropic'}`, so
+  for an OpenAI-compatible provider `buildSystemInstructions` returns one joined system message with
+  no `providerOptions` — no explicit breakpoints reach the wire. Any hit is the backend's own
+  automatic prefix caching. The stable → sticky → volatile ordering still helps such a cache; the
+  breakpoints simply are not there.
+- **Reasoning tokens are invisible.** `outputTokenDetails.reasoningTokens` exists in the SDK but
+  `projectUsage` does not project it, so on a reasoning model *Output* is the total with the
+  reasoning share hidden.
+- Not a bill, not persisted, not aggregated across tabs or users — as above.
+
 ## BYOK — per-user API keys
 
 Provider plugins register their type + managed instance **even when the deployment configures no

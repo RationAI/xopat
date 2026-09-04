@@ -1,0 +1,45 @@
+{
+  "$meta": {
+    "description": "Tiered storage plus a 30-day retention policy for chat history",
+    "dimension": "storage"
+  },
+  /**
+   * `storage/tiered-sessions` with retention made explicit. Once this data
+   * outlives the process, how long it is kept is a data-retention decision
+   * rather than an incidental one; the shipped default is 72 h / 2000 sessions.
+   *
+   * Reachability is ALSO bounded by the browser-session TTL
+   * (`XOPAT_SESSION_TTL_SEC`, 24 h idle) for anonymous owners. Raise it, or
+   * require login — a `user:<id>` principal is stable regardless of the browser
+   * session and is the robust answer for long-lived history.
+   *
+   * Point `root` at a real volume in production: a container's writable layer
+   * is not persistence, and transcripts of clinical discussions are as
+   * sensitive as the slides they describe.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "storage": {
+          // "root": "/var/lib/xopat-storage",
+          "bindings": {
+            "core": { "kv:sessions": ["tiered"] },
+            "vercel-ai-chat-sdk": {
+              "kv:sessions": ["tiered"],
+              "log:messages": ["tiered"],
+              "log:attachment-index": ["tiered"],
+              "blob:attachments": ["file"]
+            }
+          },
+          "retention": {
+            "vercel-ai-chat-sdk": {
+              "kv:sessions": { "ttlMs": 2592000000, "maxEntries": 20000 },
+              "log:messages": { "maxEntries": 500 },
+              "blob:attachments": { "ttlMs": 2592000000 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

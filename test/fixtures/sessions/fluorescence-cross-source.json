@@ -1,0 +1,50 @@
+{
+  "params": {
+    "sessionName": "Background shader array reading two different data entries",
+    "customBlending": true,
+    "background": "#000000ff"
+  },
+  "data": [
+    {
+      "dataID": "slides/LuCa-7color_Scan1.ome.tiff",
+      "options": {
+        "format": "tiff",
+        "channels": "all"
+      }
+    },
+    "slides/slide.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "Fluorescence, gamma-corrected, one layer retargeted",
+      "shaders": [
+        {
+          "type": "single_channel",
+          "params": {
+            "use_channel_base0": 2,
+            "use_gamma": 2,
+            "color": "#00ff4c"
+          }
+        },
+        {
+          "type": "single_channel",
+          "params": {
+            "use_channel_base0": 4,
+            "use_gamma": 2,
+            "color": "#d4ff00"
+          }
+        },
+        {
+          "type": "single_channel",
+          "dataReferences": [1],
+          "params": {
+            "use_channel_base0": 1,
+            "use_gamma": 4,
+            "color": "#ff2d55"
+          }
+        }
+      ]
+    }
+  ]
+}

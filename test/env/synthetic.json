@@ -1,36 +1,14 @@
 /**
- * The `synthetic` project: the default deployment, serving a generated slide.
+ * The `synthetic` project: the standalone deployment, serving a generated slide.
  *
- * Points the background protocol at a DeepZoom pyramid produced by
- * `test/harness/slides/make-synthetic.mjs` and served by the viewer's own
- * static handler — no WSI service, no downloaded slide, no credentials, so a
- * clean checkout can run rendering tests.
+ * There is nothing here but the layer list, on purpose. The protocol, the static
+ * root and the reasoning behind both live in `env/parts/data/synthetic-dzi.json`,
+ * so the deployment a developer reaches by `npm run up:dev -- synthetic` and the
+ * deployment this project tests are the same one rather than two copies that
+ * drift. `test/env/errors.json` chains off this file.
  *
- * Two details worth knowing:
- *
- *  - `core.server.staticRoots` has to opt the fixture directory in. Static
- *    serving resolves against an allowlist of roots, not "any path that exists"
- *    (that is what keeps `env/env.json` and `*.server.ts` unreachable), and
- *    `test/` is deliberately not a default root.
- *  - The protocol template is absolute rather than relative so the URL survives
- *    OpenSeadragon's own tile-URL derivation (`<name>.dzi` → `<name>_files/`).
- *    `<% XOPAT_NODE_PORT %>` is substituted server-side from the port the test
- *    fixture booted on.
+ * Generate the pyramid first: `npm run fixtures:synthetic`.
  */
 {
-  "$base": "env/env.default.json",
-  "core": {
-    "client": {
-      "localhost": {
-        "slide_protocols": {
-          "static": "`http://localhost:<% XOPAT_NODE_PORT:-9000 %>/test/fixtures/slides/generated/${data}`"
-        },
-        "default_background_protocol": "static",
-        "default_visualization_protocol": "static"
-      }
-    },
-    "server": {
-      "staticRoots": ["test/fixtures/slides"]
-    }
-  }
+  "$base": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off"]
 }

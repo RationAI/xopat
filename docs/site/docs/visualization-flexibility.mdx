@@ -1,0 +1,261 @@
+---
+title: Visualization Flexibility
+sidebar_label: Visualization Flexibility
+---
+
+import DemoFrame from '@site/src/components/DemoFrame';
+import {
+  multichannelConfig,
+  geojsonConfig,
+  mvtConfig,
+  gridConfig,
+  maskCoarseConfig,
+  maskPreviewConfig,
+  LOCAL_SETUP,
+} from '@site/src/data/visualizationFlexibilityDemos';
+
+# Visualization Flexibility
+
+A layer in xOpat is not one thing. The six viewers below all describe the same
+model output over the same tissue, but they arrive as structurally different
+kinds of data: raw fluorescence channels, vector polygons, vector tiles, a
+128-kilobyte raster, and two pyramids that differ only in where they stop. The
+viewer's job is to make that irrelevant to the person looking at the slide.
+
+Every layer here is **derived from real inference**, not drawn to look good.
+`test/harness/data/derive.mjs` reads the actual prediction masks
+and re-expresses them in each format. The prediction grid in particular is
+measured, not chosen: nonzero runs in the source mask are multiples of 4 pixels
+at pyramid level 7 and 32 at level 4 — both 512 full-resolution pixels — so the
+model emitted 512 × 512 squares, and every artifact on this page respects that.
+
+:::note Running it yourself
+
+The six sessions read fixture data by local, fileserver-relative id, so the
+hosted demo cannot serve them — each section below prints these commands instead
+of an embed. Three terminals; the first two stay running.
+
+```bash
+npm run fixtures:fetch                       # once: the source slides, checksum-verified
+npm run fixtures:derive                      # once: derive the overlays from those masks
+npm run fixtures:serve                       # terminal 1 — fixture data on :9100, with ranges
+npm run up:dev -- viz-flex-demo              # terminal 2 — the viewer on :9000
+npm run fixtures:urls -- --group viz-flex    # terminal 3 — one link per session
+```
+
+`fixtures:serve` matters: xOpat's own static handler answers with the whole file
+and no `206`, which is fine for a script and useless for a 2 GB pyramid that a
+client-side decoder reads by range. It is a separate process on `:9100`, and
+`TIFF_FILESERVER` in the deployment points at it.
+
+**One** decoder reads everything here. `webtiff` owns the `tiff` protocol and
+serves both the JPEG/YCbCr H&E slides and the mask pyramids; the older `geotiff`
+module registers the same protocol id, so the deployment disables it
+(`env/parts/data/tiff-webtiff.json`) — load one decoder, not both. This used to
+be a split: neither could do the whole set, and the demo named two protocol ids
+to work around it. Both gaps closed, so the workaround went away rather than
+being kept for the picture. Mixing decoders per data item is still what
+`DataSpecification.protocol` exists for — it is simply not needed here.
+
+The session travels in the URL **hash**, which `src/parse-input.js` parses
+locally — so refresh and share stay stable, and all six fit in under 2 KB. To
+edit one by hand instead, open <code>http://localhost:9000/dev_setup</code> and
+paste the JSON from `test/fixtures/sessions/viz-flex-*.json` into its
+`visualization` field. Every session on this page is that tracked file — the
+page and the deployment cannot disagree, because they read the same JSON.
+
+:::
+
+## 1. One file, many channels, many layers
+
+A 5-channel OME-TIFF, decoded in the browser — no image server, the file is read
+by HTTP range requests and decoded client-side. Each channel is bound to its own
+shader layer, and the layers do not have to be the same kind: four
+`single_channel` tints plus a `heatmap`.
+
+The channels are not stored together. This file keeps each one as its own
+full-size directory with `SamplesPerPixel = 1`, five of them, each with its own
+SubIFD pyramid — the common OME-TIFF layout, and the reason the section needed a
+change in the decoder rather than in the session: a tile is now assembled from
+all five directories in **one** request and arrives as a 5-channel tile in two
+RGBA8 packs, instead of plane 0 replicated across RGB. Reading a single plane is
+still available, as the explicit opt-out `options.planeIndex`.
+
+The file also names its own channels. The OME-XML carries `Name=` and `Color=`
+per channel, so the same slide **with no `shaders` block at all** configures
+itself as DAPI, FITC, CY3, Texas Red and CY5 in the acquisition colours, each
+windowed to its measured range. This demo overrides that with its own names and
+tints, which is the other half of the point: the automatic configuration is a
+starting position, not a policy.
+
+**Config highlight — a shader layer picks its own channel and its own data.**
+
+```json
+{ "type": "single_channel", "params": { "use_channel_base0": 2, "color": "#ff004c" } },
+{ "type": "identity", "dataReferences": [1] }
+```
+
+`use_channel_base0` selects the channel within the bound image; `dataReferences`
+overrides *which image* is bound at all. The last layer therefore reaches out of
+the fluorescence file entirely and renders the brightfield slide, in the same
+stack.
+
+<DemoFrame config={multichannelConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## 2. GeoJSON as a rendered layer
+
+The same predictions as polygons, rendered on the GPU as a tiled vector layer —
+not imported as editable annotations. Polygon boundaries follow the prediction
+cells exactly, because contouring an iso-line through a grid of squares would
+invent diagonals the model never produced.
+
+**Config highlight — this needs no xOpat code at all.** OpenSeadragon's
+`determineType` tests `supports` on each candidate's *prototype* and never
+instantiates one, so pointing an ordinary URL protocol at a descriptor is enough
+to autodetect `flex-renderer`'s GeoJSON tile source:
+
+```json
+{
+  "type": "geojson",
+  "url": "masks.geojson",
+  "width": 105185, "height": 221772,
+  "style": { "classProperty": "class", "classes": { "tumor": "#e5484d" } },
+  "aggregation": { "enabled": true, "threshold": 50 }
+}
+```
+
+`classProperty` colours by a feature property, so recolouring is a style change
+rather than a re-export. `aggregation` collapses dense tiles into a count badge
+at coarse zoom.
+
+<DemoFrame config={geojsonConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## 3. Mapbox Vector Tiles
+
+The same polygons again, cut into a `.pbf` tile pyramid. Vector tiles pay off
+where a single GeoJSON does not: the viewer fetches only the tiles in view, so
+the cost stops scaling with the size of the annotation set.
+
+**The interesting problem here is geometry, not format.** Web-map tiling is
+square, because the Mercator world is square — `MVTTileSource` derives its extent
+as `2^maxLevel × tileSize` in both axes. A slide is not square. This one is
+105185 × 221772, an aspect of 1 : 2.108, and OpenSeadragon normalizes every
+tiled image to viewport width 1. So a square vector world aligned 1 : 1 with the
+slide covers only its top 47%, and rescaling it to cover the full height instead
+draws the layer at 2.108× the slide's scale — which looks plausible and is
+completely wrong.
+
+xOpat's answer is a factory slide protocol: the source is constructed directly
+with the real `width` and `height`, which bypasses the square derivation, and the
+tiles are generated on that same non-square grid. Alignment is then exact at
+every level. The request for TileJSON to be able to describe a non-square world
+is filed in `UPSTREAM.md`; the module goes away when it lands.
+
+<DemoFrame config={mvtConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## 4. One pixel per prediction square
+
+A model that predicts on a 512-pixel grid has no reason to ship a gigapixel
+raster. This overlay is a **206 × 434 PNG** — about 9 KB — with one pixel per
+prediction square, stretched over a 23-gigapixel slide.
+
+**Config highlight — two declarations, and both are load-bearing.**
+
+```json
+{
+  "dataID": "generated/grid/mask-grid.json",
+  "imageSmoothingEnabled": false,
+  "pixelScale": 512
+}
+```
+
+`imageSmoothingEnabled: false` switches that image's sampling to `gl.NEAREST`, so
+each pixel stays a hard-edged square instead of being blurred into a smooth field
+the model never predicted.
+
+`pixelScale: 512` says how big one of those pixels is — and without it the
+overlay lands in the wrong place. 105,185 ÷ 512 is 205.44, so the mask is **206**
+cells wide and covers 105,472 slide pixels: slightly *more* than the slide,
+because the model's edge square is clipped by the slide rather than by the model.
+OpenSeadragon normalizes every image in the world to viewport width 1, so it
+squeezes those 206 cells back into 105,185 px — making each one 510.61 px instead
+of 512, an error that accumulates to nearly a full cell by the bottom-right
+corner. Declaring the scale lets the overlay overhang by the 287 × 436 pixels it
+genuinely covers, and the cells land on true 512-px multiples.
+
+The white `grid` layer is the independent check. It is anchored to the *slide*
+at exact 512-px intervals, so it knows nothing about the overlay: if the raster
+and the lines coincide at the far corner as well as the near one, the placement
+is right.
+
+That check earned its keep — it caught a bug in the ruler rather than the thing
+being measured. `flex-renderer`'s grid shader used to position itself in
+framebuffer pixels while scaling itself in CSS ones, so on any
+`devicePixelRatio != 1` display it drew cells at `1/DPR` of the configured size:
+426.7 px instead of 512 on a DPR 1.2 screen. The overlay was correct and the
+ruler was 20 % short, which looks identical to the overlay being 20 % long. Fixed
+upstream and re-vendored.
+
+A residual of the same shape is still open (`UPSTREAM.md`): the device-pixel
+scale is a single scalar taken from the X axis, while framebuffer dimensions are
+rounded per axis, so the grid's *vertical* period is 512.106 px rather than 512.
+That is 0.02 %, invisible near the top of the slide and about 46 px by the bottom
+— enough to see if you go looking, which is the point of a check like this.
+
+To confirm numerically rather than by eye:
+
+```js
+var w = VIEWER.world; var s0 = w.getItemAt(0).source;
+var it = w.getItemAt(1); var b = it.getBounds();
+(b.width * s0.width) / it.source.width      // 512.000 when correctly placed
+```
+
+<DemoFrame config={gridConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## 5. A pyramid that stops early
+
+The same prediction, stored as a three-level TIFF pyramid topping out at
+1945 × 4100 — 43 KB for a layer covering the whole slide. The viewer upscales it
+across 54× the stored resolution.
+
+Because its coarsest level is 1025 pixels on the long edge, xOpat's synthetic
+preview level **declines to engage**: the pyramid is already cheap enough that
+grafting a thumbnail under it would buy nothing.
+
+<DemoFrame config={maskCoarseConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## 6. …and one that triggers preview injection
+
+The same data again, this time as a two-level pyramid whose coarsest level is
+1945 × 4100 — 128 tiles. Opening it means OSD must cover the viewport from that
+level, so first paint waits on all of them.
+
+xOpat handles this generically: when a source exposes a `getThumbnail()` and its
+coarsest level exceeds 2048 pixels, a synthetic single-tile level 0 is grafted on
+in front of the real pyramid, so the layer paints from **one** cached request and
+then refines.
+
+That used to be restricted to background slides — a visualization layer was
+excluded on the grounds that an RGB preview would be semantically wrong for
+shader data. The real constraint turned out to be narrower: the synthetic tile is
+an 8-bit raster, so it must not stand in for half-float tiles. Eligibility is now
+the source's own call (`getTilePrecision()`, `__noPreviewLevel`, or simply not
+implementing `getThumbnail()` — which is why the vector layers above opt out for
+free), and overlays like this one benefit like anything else.
+
+<DemoFrame config={maskPreviewConfig} height="600px" localSetup={LOCAL_SETUP} />
+
+## What this is really showing
+
+None of the six required a change to the slide, the session schema, or the
+renderer. They differ in the tile source and in one or two lines of layer
+configuration, which is the point: the format a producer finds convenient should
+not decide what a pathologist can look at.
+
+The awkward cases are documented rather than hidden. The non-square vector world
+still has an entry in `UPSTREAM.md`; the multi-channel layout used to have one
+too, and §1 works because that request landed in the decoder instead of being
+worked around here. What is left of it is written down in the same file — the
+library's version did not move across the re-vendor, so nothing can
+feature-detect it, and its warnings name no slide. A demo that quietly works
+around its library is a demo that stops being true.

@@ -95,6 +95,19 @@ project renders a generated slide, so none of them needs a WSI service.
   reply into one message, deliberately. Nothing pins it, so the next reader will "fix" it back into
   per-utterance sends. The assertion that matters is the module's own rule: silence must never reach
   the driver (the speech-evidence gate), which is what prevents `"Thank you."`-style hallucinations.
+- **`HttpClient` feature surface** [reported] — proxy alias resolution, JWT/CSRF injection, and
+  `auth.required` waiting on `whenContextSettled` rather than racing the login. §0.3 makes this the
+  only sanctioned way out of the browser, so an untested regression here is silent everywhere.
+- **The server proxy refusing non-session requests** [reported] — a session cookie plus a CSRF token
+  is authentication, not authorization; `session.allowedProxies` is what decides. Assert the refusal,
+  because the failure mode is an open relay rather than an error.
+- **Script-manager safety and usability** [reported] — `src/classes/scripting` is the only sanctioned
+  route for model- or user-authored code (§7). What needs pinning is the refusal side: the limits
+  come from `getStaticMeta`, so a hostile session bundle must not be able to widen them.
+- **`activeBackgroundIndex: []` means nothing open** — covered by `test/fixtures/sessions/empty-session.json`
+  as a fixture, but nothing asserts it. The historical bug was reading `[]` as "open everything".
+- **Side-by-side viewing: unchecking the checkbox does not remove the subviewer** [reported] — a live
+  bug, and exactly the multi-viewport family above.
 
 ---
 

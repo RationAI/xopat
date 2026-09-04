@@ -28,6 +28,8 @@ const sidebars = {
       items: [
         'generated/showcases/overview',
         'summer-school-demo',
+        'visualization-flexibility',
+        'generated/showcases/demo-data',
         'dev-setup-playground',
         'byok-chat-demo',
       ],

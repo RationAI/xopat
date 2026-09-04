@@ -1,0 +1,95 @@
+{
+  "$meta": {
+    "description": "visualization-flexibility showcase — vector layers and derived mask geometries; layer over data/tiff-webtiff",
+    "clientKey": "localhost",
+    /* Deliberately dimensionless (no `dimension` key) so it STACKS on top of a
+       `data` fragment rather than competing with one — a one-option dimension
+       would make `npm run up` ask a question with no "none" answer.
+       Layer it over `data/tiff-webtiff`, which is what decodes the slides and
+       what sets `webGlPrecision`; the `viz-flex-demo` preset does exactly that.
+       (`$meta.requires` is not the place to say so — it lists required
+       environment VARIABLES, not layers.) */
+    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+  },
+  /**
+   * Run order:
+   *
+   *   npm run fixtures:derive      derive the vector/grid/mask artifacts from the
+   *                          real prediction masks in test/fixtures/data/slides/
+   *   npm run fixtures:serve   serve test/fixtures/data over HTTP with range support
+   *   npm run up -- viz-flex-demo
+   *
+   * `webGlPrecision: "auto"` is NOT restated here — `data/tiff-webtiff` already
+   * sets it and `requires` states the dependency. Neither is
+   * `syntheticPreviewLevel`, which defaults to true in `src/config.json`.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          /**
+           * Plain URL template for everything that is NOT decoded by webtiff:
+           * the GeoJSON descriptor and the single-level grid mask. Both are
+           * picked up by OpenSeadragon's own autodetection — `determineType`
+           * tests `supports` on each candidate's prototype, so pointing at the
+           * descriptor URL is all it takes.
+           *
+           * MVT is the one thing that cannot go through here: its tile source
+           * derives a square world from the zoom range, which cannot describe a
+           * non-square slide. That is what `modules/demo-vector-layers`
+           * registers the `demo-mvt` factory protocol for.
+           */
+          "demo-static": "`<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>/${data}`"
+        }
+      }
+    },
+    /**
+     * The six showcase sessions, printed as open-me URLs by the server at
+     * startup. Referenced by path rather than inlined so `test/fixtures/sessions/`
+     * stays the single copy — `npm run fixtures:urls` prints the same set and is
+     * still the way to get them without booting the server.
+     *
+     * All six need `npm run fixtures:derive` + `npm run fixtures:serve`; without the
+     * fileserver the links open a viewer that cannot fetch its slides.
+     */
+    "server": { "secure": { "examples": {
+      "viz-flex-multichannel": {
+        "name": "viz-flex: multichannel",
+        "sessionFile": "test/fixtures/sessions/viz-flex-multichannel.json",
+        "order": 20
+      },
+      "viz-flex-geojson": {
+        "name": "viz-flex: GeoJSON vector layer",
+        "sessionFile": "test/fixtures/sessions/viz-flex-geojson.json",
+        "order": 21
+      },
+      "viz-flex-mvt": {
+        "name": "viz-flex: MVT vector tiles",
+        "sessionFile": "test/fixtures/sessions/viz-flex-mvt.json",
+        "order": 22
+      },
+      "viz-flex-grid": {
+        "name": "viz-flex: single-level grid mask",
+        "sessionFile": "test/fixtures/sessions/viz-flex-grid.json",
+        "order": 23
+      },
+      "viz-flex-mask-coarse": {
+        "name": "viz-flex: coarse derived mask",
+        "sessionFile": "test/fixtures/sessions/viz-flex-mask-coarse.json",
+        "order": 24
+      },
+      "viz-flex-mask-preview": {
+        "name": "viz-flex: mask with synthetic preview level",
+        "sessionFile": "test/fixtures/sessions/viz-flex-mask-preview.json",
+        "order": 25
+      }
+    }}}
+  },
+  "modules": {
+    "demo-vector-layers": {
+      "enabled": true,
+      "permaLoad": true,
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>"
+    }
+  }
+}

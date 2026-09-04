@@ -1,52 +1,45 @@
 {
   "params": {
-    "customBlending": true,
-    "activeBackgroundIndex": [0, 1]
+    "sessionName": "Nothing in this session resolves",
+    "customBlending": true
   },
-  "data": ["tiff/slide.tif","tiff/data.tif"],
+  "data": ["slides/absent-background.tif", "slides/absent-overlay.tif"],
   "background": [
     {
       "dataReference": 0,
       "visualizationIndex": 1,
-      "name": "slide 1",
-      "microns": 0.6
+      "name": "Missing background A"
     },
     {
       "dataReference": 1,
       "visualizationIndex": 0,
-      "name": "slide 2",
-      "microns": 0.6
-    },
-    {
-      "dataReference":0 ,
-      "visualizationIndex": 0,
-      "name": "slide 3"
+      "name": "Missing background B"
     }
   ],
   "visualizations": [
     {
-      "name": "My visualization",
+      "name": "Heatmap goal",
       "shaders": {
-        "shader_id_1": {
-          "name": "Layer 1",
+        "broken": {
+          "name": "Missing overlay",
           "type": "heatmap",
           "visible": 1,
           "fixed": false,
           "dataReferences": [1],
-          "params": { }
+          "params": {}
         }
       }
     },
     {
-      "name": "My Second GOal",
+      "name": "Sobel goal",
       "shaders": {
-        "shader_id_1": {
-          "name": "Layer 1",
+        "broken": {
+          "name": "Missing overlay",
           "type": "sobel",
           "visible": 1,
           "fixed": false,
           "dataReferences": [1],
-          "params": { }
+          "params": {}
         }
       }
     }

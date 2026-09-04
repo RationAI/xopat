@@ -26,7 +26,7 @@
  * options straight to `super()`, so constructing the source directly with an
  * explicit `width`/`height` bypasses `configure()` and its square derivation.
  * The tiles are generated on that same non-square grid by
- * `docs/data/tools/make-visualization-demo.mjs`, so the alignment is exact.
+ * `test/harness/data/derive.mjs`, so the alignment is exact.
  *
  * ## The second thing TileJSON cannot say: which tiles exist
  *

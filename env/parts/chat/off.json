@@ -1,0 +1,16 @@
+{
+  "$meta": {
+    "description": "No chat assistant",
+    "dimension": "chat"
+  },
+  /* Named rather than omitted so the composed layer list says so out loud —
+     several data fragments pull plugins that would otherwise light one up. */
+  "plugins": {
+    "chat-openai": { "enabled": false },
+    "chat-anthropic": { "enabled": false },
+    "chat-openai-compatible": { "enabled": false }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": false }
+  }
+}

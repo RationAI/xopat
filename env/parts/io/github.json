@@ -1,0 +1,82 @@
+{
+  "$meta": {
+    "description": "Annotation bundles round-trip to a GitHub repository",
+    "dimension": "io",
+    "requires": ["GITHUB_TOKEN", "GITHUB_SINK_REPO"]
+  },
+  /**
+   * The PAT lives ONLY in the server-side proxy header, so the browser never
+   * sees it: the sink calls `/proxy/github/…` and the server attaches the
+   * credential. `auth.enabled: false` means the viewer need not be logged in;
+   * flip it to require a login before anything is proxied.
+   *
+   * That `enabled: false` is load-bearing, and it is a real trade-off: the server
+   * refuses a credential-bearing alias with no verifier unless the operator says
+   * so explicitly, precisely because session + CSRF only prove same-origin — any
+   * visitor of this deployment can spend the PAT through `/proxy/github/…`. It is
+   * acceptable for a local dev deployment; for anything shared, set
+   * `"enabled": true`.
+   *
+   * Binding names capabilities, not plugins — swapping `["github"]` for
+   * `["mlflow"]` or `["file-download"]` re-targets annotation storage with no
+   * plugin change, which is what makes the owning plugin sink-agnostic.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "io": {
+          "bindings": {
+            "annotations": {
+              "bundle-export": ["github"],
+              "bundle-import": ["github"]
+            }
+          }
+        }
+      }
+    },
+    "server": {
+      "secure": {
+        "proxies": {
+          "github": {
+            "baseUrl": "https://api.github.com/",
+            "headers": {
+              "Authorization": "Bearer <% GITHUB_TOKEN %>"
+            },
+            "auth": {
+              "enabled": false,
+              "verifiers": ["jwt"],
+              "mode": "all",
+              "jwt": {
+                /* Strip the viewer's JWT before the upstream call: GitHub sees
+                   the deployment credential, not the user's identity token. */
+                "forward": false,
+                "userClaimHeader": "x-user-sub"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "io-github-sink": {
+      "enabled": true,
+      "permaLoad": true,
+      "github": {
+        "branch": "main",
+        "apiBase": "https://api.github.com",
+        "proxy": "github",
+        "repo": "<% GITHUB_SINK_REPO %>",
+        "pathTemplate": "xopat/{ownerId}/{viewerId}.json",
+        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
+        "committer": null,
+        "author": null,
+        "auth": null
+      }
+    },
+    "annotations": { "enabled": true, "permaLoad": true }
+  },
+  "plugins": {
+    "gui_annotations": { "enabled": true, "permaLoad": true }
+  }
+}

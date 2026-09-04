@@ -1,0 +1,33 @@
+{
+  "params": {
+    "sessionName": "Google DICOM — standalone",
+    "activeBackgroundIndex": [0],
+    "customBlending": true,
+    "webGlPrecision": "auto",
+    "ui": {
+      "mainMenu": true,
+      "scaleBar": true,
+      "toolBar": true,
+      "statusBar": true,
+      "navigator": true,
+      "appBar": true,
+      "globalMenu": true
+    }
+  },
+  "data": [
+    {
+      "protocol": "dicom",
+      "dataID": {
+        "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+        "seriesUID": "1.2.826.0.1.3680043.8.498.77278192630710008320308486728784799314",
+        "derived": "auto"
+      }
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "Google DICOM slide"
+    }
+  ]
+}

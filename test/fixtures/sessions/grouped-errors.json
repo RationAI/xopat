@@ -1,0 +1,79 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "grouped-errors"
+  },
+  "data": [
+    "slides/slide-errors.tif",
+    "slides/channel-error.tif",
+    "slides/other-error.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "Slide with error overlays"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Nested error groups",
+      "shaders": {
+        "error_group": {
+          "name": "Error group",
+          "type": "group",
+          "visible": 1,
+          "fixed": false,
+          "shaders": {
+            "channel_layer": {
+              "name": "Channel error",
+              "type": "identity",
+              "visible": 1,
+              "fixed": false,
+              "dataReferences": [
+                1
+              ],
+              "params": {}
+            },
+            "derived_group": {
+              "name": "Derived detail",
+              "type": "group",
+              "visible": 1,
+              "fixed": false,
+              "shaders": {
+                "other_edges": {
+                  "name": "Other error edges",
+                  "type": "sobel",
+                  "visible": 1,
+                  "fixed": false,
+                  "dataReferences": [
+                    2
+                  ],
+                  "params": {}
+                },
+                "other_fill": {
+                  "name": "Other error fill",
+                  "type": "identity",
+                  "visible": 1,
+                  "fixed": false,
+                  "dataReferences": [
+                    2
+                  ],
+                  "params": {}
+                }
+              },
+              "order": [
+                "other_edges",
+                "other_fill"
+              ]
+            }
+          },
+          "order": [
+            "channel_layer",
+            "derived_group"
+          ]
+        }
+      }
+    }
+  ]
+}

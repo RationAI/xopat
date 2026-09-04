@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-09-03
+//! Built on 2026-09-04
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -4571,7 +4571,6 @@
      * @property {number} visible      1 = use for rendering, 0 = do not use for rendering
      * @property {OpenSeadragon.TiledImage[] | number[]} tiledImages images that provide the data
      * @property {object} params          settings for the ShaderLayer
-     * @property {object} _controls       storage for the ShaderLayer's controls
      * @property {object} cache          cache object used by the ShaderLayer's controls
      * @property {"float16"|"unorm8"} [precision] per-instance override of the first-pass color
      *      target precision, honored only while the renderer option `precision` is `"auto"`.
@@ -4580,6 +4579,11 @@
      *      is the veto: this layer requires values clamped to [0,1], and forces the whole
      *      renderer back to 8-bit even when the data carries float. Under a float16 target,
      *      sampleChannel()/osd_channel() no longer guarantee values in [0,1].
+     *
+     * `_`-prefixed keys are never part of this config: they are ShaderLayer instance state
+     * (e.g. `_controls`, populated in the constructor) and FlexRenderer.jsonReplacer strips
+     * them on export, so no persisted config carries one. The published JSON Schema is
+     * closed against them accordingly.
      */
 
     /**
@@ -28966,16 +28970,17 @@ function resolveTileTemplate(template, dataUrl) {
                         usage: "Shader-specific settings, built-in use_* options, UI-control configs, and custom parameters."
                     },
                     {
-                        key: "_controls",
-                        type: "object",
-                        required: false,
-                        usage: "Renderer-managed control storage present on ShaderConfig."
-                    },
-                    {
                         key: "cache",
                         type: "object",
                         required: false,
                         usage: "Persistent runtime state used by controls and reset* helpers."
+                    },
+                    {
+                        key: "precision",
+                        type: "string",
+                        required: false,
+                        allowedValues: ["float16", "unorm8"],
+                        usage: "Optional per-layer override of the first-pass color target precision, honored only while the renderer option `precision` is \"auto\"."
                     }
                 ]
             };
@@ -29078,6 +29083,12 @@ function resolveTileTemplate(template, dataUrl) {
                 cache: {
                     type: "object",
                     description: "Runtime value store owned by the shader's controls (ShaderLayer.cache / loadProperty / storeProperty). Populated by the renderer, persisted with the config, and reapplied on load. Keys are control-defined, so the shape is open."
+                },
+                // Enumerated rather than left open: the schema stays closed, so a typo in this
+                // key is still reported instead of being silently accepted as an unknown value.
+                precision: {
+                    enum: ["float16", "unorm8"],
+                    description: "Per-instance override of the first-pass color target precision, honored only while the renderer option `precision` is \"auto\". \"float16\" demands a high-precision (RGBA16F) target even over 8-bit data and upgrades the target for the whole renderer; \"unorm8\" is the veto and forces the renderer back to 8-bit even when the data carries float."
                 }
             };
 
@@ -29311,8 +29322,19 @@ function resolveTileTemplate(template, dataUrl) {
         },
 
         _compileCustomParamJsonSchema(Shader, item) {
-            const schema = this._compileSpecialCustomParamJsonSchema(Shader, item) ||
+            let schema = this._compileSpecialCustomParamJsonSchema(Shader, item) ||
                 this._compileTypeExpressionSchema(item.type, firstDefined(item.required, item.default));
+
+            // Mirrors _compileBuiltInParamJsonSchema: a null default has to be admitted by the
+            // type, or _synthesizeExampleParamsFromDefaults emits an example the schema rejects.
+            // The raw declaration is the only source of truth here -- _compileShaderParamsSchema
+            // coerces an *absent* default to null, so `item.default === null` cannot tell
+            // "declared null" from "no default" and would make every such param nullable.
+            const declared = (Shader && Shader.customParams && Shader.customParams[item.key]) || null;
+            if (declared && declared.default === null) {
+                schema = this._withNullableSchema(schema);
+            }
+
             if (item.default !== undefined && item.default !== null) {
                 schema.default = deepClone(item.default);
             }
@@ -30894,7 +30916,7 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-09-03
+//! Built on 2026-09-04
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -31550,7 +31572,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-09-03
+//! Built on 2026-09-04
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -32259,7 +32281,7 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-09-03
+//! Built on 2026-09-04
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

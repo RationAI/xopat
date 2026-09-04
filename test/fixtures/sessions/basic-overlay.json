@@ -1,0 +1,56 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "basic-overlay"
+  },
+  "data": [
+    "slides/slide.tif",
+    "slides/cancer-inference.tif",
+    "slides/annotations.tif",
+    "slides/explainability.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "Reference slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Inference stack",
+      "shaders": {
+        "prediction": {
+          "name": "Cancer prediction",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            1
+          ],
+          "params": {}
+        },
+        "annotations": {
+          "name": "Annotations",
+          "type": "identity",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            2
+          ],
+          "params": {}
+        },
+        "explainability": {
+          "name": "Explainability",
+          "type": "sobel",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            3
+          ],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

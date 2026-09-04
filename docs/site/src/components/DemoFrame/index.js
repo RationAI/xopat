@@ -20,6 +20,11 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
  *            (avoids the cramped mobile menus in the narrow docs column).
  *   showSource - when a `config` is given, render an expandable block with the
  *            pretty-printed session JSON so readers can see how it is built.
+ *   localSetup - commands that make this demo runnable locally. Passing it
+ *            declares that the session names data only a local fixture server
+ *            resolves, so the public deployment cannot render it: the frame is
+ *            replaced by those commands plus the session, rather than an iframe
+ *            that boots a viewer and then shows nothing.
  */
 export default function DemoFrame({
   path = '',
@@ -27,6 +32,7 @@ export default function DemoFrame({
   config = null,
   scale = 1,
   showSource = true,
+  localSetup = null,
 }) {
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
@@ -37,6 +43,18 @@ export default function DemoFrame({
   // scrolled off-screen doesn't boot at all until the reader reaches it.
   const [isLoaded, setIsLoaded] = useState(false);
 
+  const sourceBlock = config && showSource && (
+    <details>
+      <summary>View session configuration</summary>
+      <CodeBlock language="json" title="xOpat session config">
+        {JSON.stringify(config, null, 2)}
+      </CodeBlock>
+    </details>
+  );
+
+  // Two reasons an iframe would be dishonest, and they are separate questions:
+  // there is no deployment to point at, or there is one but it cannot serve
+  // this session's data.
   if (!demoUrl) {
     return (
       <div className="alert alert--info" role="alert">
@@ -45,6 +63,19 @@ export default function DemoFrame({
         <Link to="/generated/getting-started/quick-start">Quick Start</Link>{' '}
         guide.
       </div>
+    );
+  }
+
+  if (localSetup) {
+    return (
+      <>
+        <div className="alert alert--info" role="alert">
+          This demo reads fixture data that only a local file server resolves,
+          so it cannot run on the hosted demo. Reproduce it in five commands:
+        </div>
+        <CodeBlock language="bash">{localSetup.join('\n')}</CodeBlock>
+        {sourceBlock}
+      </>
     );
   }
 
@@ -138,15 +169,6 @@ export default function DemoFrame({
     </div>
   );
 
-  const sourceDetails = config && showSource && (
-    <details>
-      <summary>View session configuration</summary>
-      <CodeBlock language="json" title="xOpat session config">
-        {JSON.stringify(config, null, 2)}
-      </CodeBlock>
-    </details>
-  );
-
   return (
     <>
       {frame}
@@ -155,7 +177,7 @@ export default function DemoFrame({
           Open the demo in a new tab ↗
         </a>
       </p>
-      {sourceDetails}
+      {sourceBlock}
     </>
   );
 }

@@ -1,0 +1,41 @@
+{
+  "$meta": {
+    "description": "Route slide traffic through the server proxy alias `image-server` instead of straight to the tile server",
+    "dimension": "transport",
+    "clientKey": "localhost",
+    "defaults": { "WSI_PORT": "8080" }
+  },
+  /**
+   * Overlay for `data/wsi-service`: the same slides, reached through the
+   * server's proxy plumbing rather than directly. `/proxy/image-server/…` is
+   * forwarded to the upstream, which exercises the whole HttpClient path —
+   * CSRF injection, URL rewriting, and the patched
+   * `OpenSeadragon.makeAjaxRequest` / `downloadTileStart`.
+   *
+   * Worth running whenever a change touches tile fetching: a direct-URL
+   * deployment will not catch a proxy-path regression, and vice versa.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          "wsi_service": {
+            "url": "`/v3/slides/info?slide_id=${data}`",
+            "proxy": "image-server"
+          }
+        }
+      }
+    },
+    "server": {
+      "secure": {
+        "proxies": {
+          /* No `auth.enabled` block = no JWT requirement. CSRF is still checked
+             on the viewer side. */
+          "image-server": {
+            "baseUrl": "http://localhost:<% WSI_PORT:-8080 %>"
+          }
+        }
+      }
+    }
+  }
+}
