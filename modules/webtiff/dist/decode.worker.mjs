@@ -1,40 +1,40 @@
-class E extends Error {
+class T extends Error {
   constructor(e, t) {
     super(e, t), this.name = "WebTiffError";
   }
 }
-class S extends E {
+class U extends T {
   constructor(e, { status: t = null, statusText: s = "", url: r = null, range: n = null, body: i = null, cause: o } = {}) {
     super(e, o ? { cause: o } : void 0), this.name = "WebTiffHttpError", this.status = t, this.statusText = s, this.url = r, this.range = n, this.body = i;
   }
 }
-class y extends E {
+class y extends T {
   constructor(e, { code: t = null, cause: s } = {}) {
     super(e, s ? { cause: s } : void 0), this.name = "WebTiffDecodeError", this.code = t;
   }
 }
-class $ extends E {
+class I extends T {
   constructor(e, { code: t = null } = {}) {
     super(e), this.name = "WebTiffUnsupportedError", this.code = t;
   }
 }
-class C extends E {
+class D extends T {
   constructor(e = "aborted") {
     super(e), this.name = "AbortError";
   }
 }
-function F(a, e) {
+function v(a, e) {
   const t = e || `web-tiff status ${a}`;
   switch (a) {
     case -4:
-      return new $(t, { code: a });
+      return new I(t, { code: a });
     case -7:
-      return new C(t);
+      return new D(t);
     default:
       return new y(t, { code: a });
   }
 }
-const x = 0, H = 1, D = 0, I = {
+const N = 0, H = 1, L = 0, j = {
   0: Uint8Array,
   1: Uint16Array,
   2: Uint32Array,
@@ -45,8 +45,8 @@ const x = 0, H = 1, D = 0, I = {
   // half floats travel as raw bits
   7: Float32Array,
   8: Float64Array
-}, v = 4294967295, M = 32;
-class L {
+}, K = 4294967295, P = 32, W = 32, x = 2, $ = 32;
+class Y {
   #t;
   #s;
   #r = /* @__PURE__ */ new Map();
@@ -80,14 +80,14 @@ class L {
     for (const { offset: n, length: i } of this.#c(e)) {
       const o = await t.read(n, i, s);
       if (!o.length) continue;
-      const c = r._wt_cache_reserve(e, n, o.length);
-      if (c === 0) throw new y("out of memory reserving a block");
-      r.HEAPU8.set(o, c), r._wt_cache_commit(e, n, o.length);
+      const l = r._wt_cache_reserve(e, n, o.length);
+      if (l === 0) throw new y("out of memory reserving a block");
+      r.HEAPU8.set(o, l), r._wt_cache_commit(e, n, o.length);
     }
   }
   #n(e, t) {
     const s = this.#t.UTF8ToString(this.#t._wt_last_error(e));
-    return F(t, s);
+    return v(t, s);
   }
   /**
    * Open a file and parse every directory.
@@ -97,18 +97,23 @@ class L {
   async open(e, { blockSize: t = 65536, cacheBytes: s = 32 * 1024 * 1024, signal: r } = {}) {
     const n = this.#t, i = await e.getSize(), o = n._wt_file_create(i, t, s);
     if (o <= 0) throw new y(`cannot open: status ${o}`);
-    let c = n._wt_open(o), l = 0;
-    for (; c === H; ) {
-      if (await this.#e(o, e, r), ++l > M)
+    let l = n._wt_open(o), h = 0;
+    for (; l === H; ) {
+      if (await this.#e(o, e, r), ++h > $)
         throw n._wt_file_close(o), new y("the header did not resolve after 32 fetches");
-      c = n._wt_open(o);
+      l = n._wt_open(o);
     }
-    if (c !== x) {
-      const m = this.#n(o, c);
-      throw n._wt_file_close(o), m;
+    if (l !== N) {
+      const b = this.#n(o, l);
+      throw n._wt_file_close(o), b;
     }
-    const u = this.#i++;
-    return this.#r.set(u, { handle: o, source: e }), { id: u, meta: JSON.parse(n.UTF8ToString(n._wt_meta_json(o))) };
+    const u = JSON.parse(n.UTF8ToString(n._wt_meta_json(o)));
+    if (u.abi !== x)
+      throw n._wt_file_close(o), new y(
+        `[web-tiff] this build speaks ABI ${x} but the WebAssembly module speaks ${u.abi}. The .mjs and the .wasm are versioned together; re-copy the whole folder rather than one file of it.`
+      );
+    const _ = this.#i++;
+    return this.#r.set(_, { handle: o, source: e }), { id: _, meta: u };
   }
   close(e) {
     const t = this.#r.get(e);
@@ -116,12 +121,17 @@ class L {
   }
   #o(e, t) {
     const s = this.#t, r = s.HEAPU32, n = s.HEAP32, i = s.HEAPF32, o = e / 4;
-    s.HEAPU8.fill(0, e, e + this.#s.req), r[o + 0] = t.dir ?? 0, n[o + 1] = t.subifd ?? -1, r[o + 2] = t.sx0, r[o + 3] = t.sy0, r[o + 4] = t.sx1, r[o + 5] = t.sy1, r[o + 6] = t.outWidth ?? t.sx1 - t.sx0, r[o + 7] = t.outHeight ?? t.sy1 - t.sy0, r[o + 8] = t.resample ?? 0, r[o + 9] = t.interpretation ?? 0, r[o + 10] = t.packFlags ?? 0, r[o + 11] = t.output ?? D, i[o + 12] = t.padAlpha ?? 1;
-    const c = t.channels ?? [];
-    r[o + 13] = c.length;
-    for (let l = 0; l < 16; l++) n[o + 14 + l] = c[l] ?? -1;
-    for (let l = 0; l < 4; l++)
-      r[o + 30 + l] = t.rgbaChannels?.[l] ?? v;
+    s.HEAPU8.fill(0, e, e + this.#s.req), r[o + 0] = t.dir ?? 0, n[o + 1] = t.subifd ?? -1, r[o + 2] = t.sx0, r[o + 3] = t.sy0, r[o + 4] = t.sx1, r[o + 5] = t.sy1, r[o + 6] = t.outWidth ?? t.sx1 - t.sx0, r[o + 7] = t.outHeight ?? t.sy1 - t.sy0, r[o + 8] = t.resample ?? 0, r[o + 9] = t.interpretation ?? 0, r[o + 10] = t.packFlags ?? 0, r[o + 11] = t.output ?? L, i[o + 12] = t.padAlpha ?? 1;
+    const l = t.channels ?? [];
+    r[o + 13] = Math.min(l.length, P);
+    for (let c = 0; c < P; c++) n[o + 14 + c] = l[c] ?? -1;
+    const h = o + 14 + P;
+    for (let c = 0; c < 4; c++)
+      r[h + c] = t.rgbaChannels?.[c] ?? K;
+    const u = t.planes ?? [], _ = Math.min(u.length, W), b = h + 4, d = b + 1, f = d + W;
+    r[b] = _;
+    for (let c = 0; c < _; c++)
+      r[d + c] = u[c].dir ?? 0, n[f + c] = u[c].subifd ?? -1;
   }
   /**
    * Copy bytes out of the WebAssembly heap into a transferable ArrayBuffer.
@@ -149,33 +159,33 @@ class L {
       packCount: s[i + 6],
       bandCount: s[i + 7],
       flags: s[i + 8]
-    }, c = [], l = t._wt_result_bands_ptr(e), u = [];
-    for (let w = 0; w < o.bandCount; w++) {
-      const h = (l + w * this.#s.band) / 4, d = s[h + 0], p = s[h + 1], A = s[h + 2], T = I[A] ?? Uint8Array, g = this.#a(d, p);
+    }, l = [], h = t._wt_result_bands_ptr(e), u = [];
+    for (let d = 0; d < o.bandCount; d++) {
+      const f = (h + d * this.#s.band) / 4, c = s[f + 0], g = s[f + 1], E = s[f + 2], S = j[E] ?? Uint8Array, m = this.#a(c, g);
       u.push({
-        data: new T(g),
-        sampleType: A,
-        flags: s[h + 3],
-        channel: r[h + 4]
-      }), c.push(g);
+        data: new S(m),
+        sampleType: E,
+        flags: s[f + 3],
+        channel: r[f + 4]
+      }), l.push(m);
     }
-    const m = t._wt_result_packs_ptr(e), P = [];
-    for (let w = 0; w < o.packCount; w++) {
-      const h = m + w * this.#s.pack, d = h / 4, p = s[d + 0] === 0 ? "RGBA8" : "RGBA16F", A = s[d + 1], T = s[d + 2], g = p === "RGBA8" ? Uint8Array : Uint16Array, k = this.#a(A, T), B = [];
-      for (let f = 0; f < 4; f++) B.push(r[d + 4 + f]);
+    const _ = t._wt_result_packs_ptr(e), b = [];
+    for (let d = 0; d < o.packCount; d++) {
+      const f = _ + d * this.#s.pack, c = f / 4, g = s[c + 0] === 0 ? "RGBA8" : "RGBA16F", E = s[c + 1], S = s[c + 2], m = g === "RGBA8" ? Uint8Array : Uint16Array, B = this.#a(E, S), M = [];
+      for (let w = 0; w < 4; w++) M.push(r[c + 4 + w]);
       const R = [], O = [];
-      for (let f = 0; f < 4; f++)
-        R.push(n[(h + 32) / 8 + f]), O.push(n[(h + 64) / 8 + f]);
-      P.push({
-        format: p,
-        data: new g(k),
-        channels: B,
-        normalized: s[d + 3] === 1,
+      for (let w = 0; w < 4; w++)
+        R.push(n[(f + 32) / 8 + w]), O.push(n[(f + 64) / 8 + w]);
+      b.push({
+        format: g,
+        data: new m(B),
+        channels: M,
+        normalized: s[c + 3] === 1,
         scale: R,
         offset: O
-      }), c.push(k);
+      }), l.push(B);
     }
-    return { header: o, bands: u, packs: P, transfer: c };
+    return { header: o, bands: u, packs: b, transfer: l };
   }
   /** Read a window. Fetches whatever the decode needs first. */
   async read(e, t, { signal: s } = {}) {
@@ -183,21 +193,21 @@ class L {
     if (!r) throw new y(`unknown file ${e}`);
     const n = this.#t, i = n._malloc(this.#s.req), o = n._malloc(4);
     try {
-      let c = 0;
+      let l = 0;
       for (; ; ) {
         if (s?.aborted) throw new DOMException("aborted", "AbortError");
         this.#o(i, t), n._wt_plan_region(r.handle, i, 0), await this.#e(r.handle, r.source, s), this.#o(i, t);
         const u = n._wt_read(r.handle, i, o);
-        if (u === x) break;
+        if (u === N) break;
         if (u !== H) throw this.#n(r.handle, u);
-        if (++c > M)
+        if (++l > $)
           throw new y("the tile did not resolve after 32 fetches");
       }
-      const l = n.HEAPU32[o / 4];
+      const h = n.HEAPU32[o / 4];
       try {
-        return this.#l(l);
+        return this.#l(h);
       } finally {
-        n._wt_result_free(l);
+        n._wt_result_free(h);
       }
     } finally {
       n._free(i), n._free(o);
@@ -213,25 +223,25 @@ class L {
     }
   }
 }
-const b = {
+const A = {
   INIT: "init",
   OPEN: "open",
   READ: "read",
   CLOSE: "close",
   ABORT: "abort"
-}, N = {
+}, F = {
   READY: "ready",
   WARN: "warn"
 };
-async function j(a) {
-  const { BlobSource: e, BytesSource: t } = await Promise.resolve().then(() => V);
+async function G(a) {
+  const { BlobSource: e, BytesSource: t } = await Promise.resolve().then(() => Z);
   switch (a.kind) {
     case "blob":
       return new e(a.blob);
     case "bytes":
       return new t(a.bytes);
     case "url": {
-      const { HttpSource: s } = await Promise.resolve().then(() => Z);
+      const { HttpSource: s } = await Promise.resolve().then(() => et);
       return new s(a.url, {
         headers: a.headers,
         credentials: a.credentials,
@@ -242,46 +252,46 @@ async function j(a) {
       throw new TypeError(`unknown source kind: ${a.kind}`);
   }
 }
-let _ = null;
-const W = /* @__PURE__ */ new Map(), U = /* @__PURE__ */ new Map();
-async function K({ wasmUrl: a }) {
+let p = null;
+const C = /* @__PURE__ */ new Map(), k = /* @__PURE__ */ new Map();
+async function J({ wasmUrl: a }) {
   const { default: e } = await import(
     /* @vite-ignore */
     a
   ), t = await e();
-  return _ = new L(t), { buildInfo: _.buildInfo };
+  return p = new Y(t), { buildInfo: p.buildInfo };
 }
 function z() {
-  if (_)
-    for (const a of _.drainWarnings())
-      self.postMessage({ kind: N.WARN, ...a });
+  if (p)
+    for (const a of p.drainWarnings())
+      self.postMessage({ kind: F.WARN, ...a });
 }
-async function Y(a) {
+async function X(a) {
   switch (a.op) {
-    case b.INIT:
-      return { result: await K(a) };
-    case b.OPEN: {
-      const e = await j(a.src), { id: t, meta: s } = await _.open(e, a.options ?? {});
-      return W.set(t, e), { result: { id: t, meta: s } };
+    case A.INIT:
+      return { result: await J(a) };
+    case A.OPEN: {
+      const e = await G(a.src), { id: t, meta: s } = await p.open(e, a.options ?? {});
+      return C.set(t, e), { result: { id: t, meta: s } };
     }
-    case b.READ: {
+    case A.READ: {
       const e = new AbortController();
-      U.set(a.id, e);
+      k.set(a.id, e);
       try {
-        const { header: t, bands: s, packs: r, transfer: n } = await _.read(
+        const { header: t, bands: s, packs: r, transfer: n } = await p.read(
           a.file,
           a.req,
           { signal: e.signal }
         );
         return { result: { header: t, bands: s, packs: r }, transfer: n };
       } finally {
-        U.delete(a.id);
+        k.delete(a.id);
       }
     }
-    case b.CLOSE:
-      return _.close(a.file), W.delete(a.file), { result: null };
-    case b.ABORT:
-      return U.get(a.target)?.abort(), { result: null };
+    case A.CLOSE:
+      return p.close(a.file), C.delete(a.file), { result: null };
+    case A.ABORT:
+      return k.get(a.target)?.abort(), { result: null };
     default:
       throw new Error(`unknown op: ${a.op}`);
   }
@@ -289,7 +299,7 @@ async function Y(a) {
 self.onmessage = async (a) => {
   const e = a.data;
   try {
-    const { result: t, transfer: s } = await Y(e);
+    const { result: t, transfer: s } = await X(e);
     z(), self.postMessage({ id: e.id, ok: !0, result: t }, s ?? []);
   } catch (t) {
     z(), self.postMessage({
@@ -307,8 +317,8 @@ self.onmessage = async (a) => {
     });
   }
 };
-self.postMessage({ kind: N.READY });
-class G {
+self.postMessage({ kind: F.READY });
+class V {
   #t;
   constructor(e) {
     this.#t = e instanceof Uint8Array ? e : new Uint8Array(e);
@@ -321,7 +331,7 @@ class G {
     return this.#t.subarray(s, r);
   }
 }
-class J {
+class Q {
   #t;
   constructor(e) {
     this.#t = e;
@@ -337,12 +347,12 @@ class J {
     return new Uint8Array(n);
   }
 }
-const V = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Z = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  BlobSource: J,
-  BytesSource: G
-}, Symbol.toStringTag, { value: "Module" })), X = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
-class Q {
+  BlobSource: Q,
+  BytesSource: V
+}, Symbol.toStringTag, { value: "Module" })), q = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
+class tt {
   #t;
   #s;
   #r;
@@ -374,7 +384,7 @@ class Q {
         credentials: this.#i
       });
     } catch (n) {
-      throw n?.name === "AbortError" ? n : new S(`[web-tiff] cannot reach ${this.#t}: ${n.message}`, {
+      throw n?.name === "AbortError" ? n : new U(`[web-tiff] cannot reach ${this.#t}: ${n.message}`, {
         url: this.#t,
         range: e,
         cause: n
@@ -388,7 +398,7 @@ class Q {
           n = i.replace(/\s+/g, " ").slice(0, 200), i.length > 200 && (n += "...");
         } catch {
         }
-      throw new S(
+      throw new U(
         `[web-tiff] HTTP ${r.status} for ${this.#t}${n ? `: ${n}` : ""}`,
         {
           status: r.status,
@@ -405,7 +415,7 @@ class Q {
     try {
       return await this.#a(e, t);
     } catch (s) {
-      if (s?.name === "AbortError" || !(s.status == null || X.has(s.status))) throw s;
+      if (s?.name === "AbortError" || !(s.status == null || q.has(s.status))) throw s;
       return await new Promise((n) => setTimeout(n, 250)), this.#a(e, t);
     }
   }
@@ -425,7 +435,7 @@ class Q {
     }
     const s = t.headers.get("Content-Range"), r = s ? Number(s.split("/")[1]) : NaN;
     if (!Number.isFinite(r))
-      throw new S(
+      throw new U(
         `[web-tiff] ${this.#t} answered a range request without a usable Content-Range; the server must support byte ranges`,
         { status: t.status, url: this.#t }
       );
@@ -441,11 +451,11 @@ class Q {
       return this.#u.subarray(r, n);
     const i = `${r}-${n}`, o = this.#o.get(i);
     if (o) return o;
-    const c = this.#l({ start: r, end: n }, s).then(async (l) => new Uint8Array(await l.arrayBuffer())).finally(() => this.#o.delete(i));
-    return this.#o.set(i, c), c;
+    const l = this.#l({ start: r, end: n }, s).then(async (h) => new Uint8Array(await h.arrayBuffer())).finally(() => this.#o.delete(i));
+    return this.#o.set(i, l), l;
   }
 }
-const Z = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const et = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  HttpSource: Q
+  HttpSource: tt
 }, Symbol.toStringTag, { value: "Module" }));

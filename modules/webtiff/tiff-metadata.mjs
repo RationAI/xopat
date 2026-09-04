@@ -55,6 +55,18 @@ const asArray = (value, fallback) => {
  * @return {TiffDescriptor}
  */
 export function describeFromDecoder(described, origin = "tileSource:getTiffDescriptor") {
+    // The decoder reports channel identity per channel, on the encoding, where a
+    // stacked plane carries the OME-XML `Name=`/`Color=` of the plane it came
+    // from. Flattened here because that is the shape every consumer reads
+    // (`auto-config.mjs` names and tints a layer from it) and the shape the
+    // other two chain steps already produce.
+    const channels = Array.isArray(described.encoding?.channels)
+        ? described.encoding.channels : [];
+    const names = described.channelNames?.length ? described.channelNames
+        : (channels.some(c => c.name) ? channels.map(c => c.name) : undefined);
+    const colors = described.channelColors?.length ? described.channelColors
+        : (channels.some(c => c.color) ? channels.map(c => c.color) : undefined);
+
     return {
         bitsPerSample: asArray(described.bitsPerSample, [8]).map(Number),
         sampleFormat: asArray(described.sampleFormat, undefined)?.map(Number),
@@ -65,8 +77,8 @@ export function describeFromDecoder(described, origin = "tileSource:getTiffDescr
         hasColorMap: !!described.hasColorMap,
         interpretation: described.interpretationResolved,
         encoding: described.encoding,
-        channelNames: described.channelNames?.length ? described.channelNames : undefined,
-        channelColors: described.channelColors?.length ? described.channelColors : undefined,
+        channelNames: names,
+        channelColors: colors,
         origin,
     };
 }
