@@ -164,6 +164,21 @@
         return r;
     };
 
+    // A pure reorder changes nothing the spatial index's cache key can see — not
+    // the member count, not the viewport, not the selection — but `visibleObjects`
+    // returns its result in canvas z-order, so a cached answer would keep the old
+    // stacking. Add/remove already invalidate through the hooks above; these are
+    // the paths that move an object without adding or removing one.
+    for (const method of ['bringToFront', 'sendToBack', 'bringForward', 'sendBackwards', 'moveTo']) {
+        const original = fabric.Canvas.prototype[method];
+        if (typeof original !== 'function') continue;
+        fabric.Canvas.prototype[method] = function (...args) {
+            const r = original.apply(this, args);
+            this.__spatialIndex?.invalidateVisibleCache();
+            return r;
+        };
+    }
+
     const _origSetCoords = fabric.Object.prototype.setCoords;
     fabric.Object.prototype.setCoords = function (skipCorners) {
         const r = _origSetCoords.call(this, skipCorners);
@@ -432,17 +447,26 @@
 
     /**
      * Label string for one object with a cheap per-object cache. Recomputed only
-     * when a lightweight geometry token changes (bbox + point/path count), so a
-     * static polygon does not re-run its area math every frame; an edited shape
-     * refreshes because its bbox changes. Always-fresh while an object is being
-     * actively transformed (its bbox moves each frame).
+     * when a lightweight token changes, so a static polygon does not re-run its
+     * area math every frame; an edited shape refreshes because its bbox changes.
+     * Always-fresh while an object is being actively transformed (its bbox moves
+     * each frame).
+     *
+     * The token carries `displayValue` and `presetID` as well as the geometry,
+     * because the label is a value slot rather than a measurement readout: an
+     * integration attaching a value to a *static* shape changes no geometry at
+     * all, and a geometry-only token would pin the stale string for the lifetime
+     * of the object. Both are scalars already on the object — the point of the
+     * cache is to skip the area math, and neither adds work to the render path.
      */
     function _measurementLabelFor(mod, obj) {
         const token = obj.factoryID + '|'
             + Math.round((obj.width || 0) * (obj.scaleX || 1)) + '|'
             + Math.round((obj.height || 0) * (obj.scaleY || 1)) + '|'
             + (obj.points ? obj.points.length : 0) + '|'
-            + (obj.path ? obj.path.length : 0);
+            + (obj.path ? obj.path.length : 0) + '|'
+            + (obj.displayValue == null ? '' : obj.displayValue) + '|'
+            + (obj.presetID == null ? '' : obj.presetID);
         const cached = obj.__mLabel;
         if (cached && cached.token === token) return cached.text;
         const text = mod.getMeasurementLabel(obj) || '';
@@ -1033,7 +1057,23 @@
             const zoom = transform.zoom;
             const canvas = this._fabricCanvas;
             canvas.__osdViewportScale = zoom;
-            canvas.setViewportTransform(transform.matrix);
+
+            // Only re-apply a transform that actually differs.
+            //
+            // OSD raises `update-viewport` once per rendered frame whether or not
+            // the viewport moved (tile arrivals and forceRedraw raise it too), and
+            // setViewportTransform recomputes vptCoords and bumps the spatial
+            // index's setCoords version. Applying an identical matrix therefore
+            // cost a full re-cluster of the viewport on frames where nothing had
+            // moved — and, because it ran before any consumer could compare the
+            // cache key, on the hit-tests between those frames as well.
+            const current = canvas.viewportTransform;
+            const m = transform.matrix;
+            if (!current
+                || current[0] !== m[0] || current[1] !== m[1] || current[2] !== m[2]
+                || current[3] !== m[3] || current[4] !== m[4] || current[5] !== m[5]) {
+                canvas.setViewportTransform(m);
+            }
 
             // square root will make closer zoom a bit larger -> nicer
             const smallZoom = Math.sqrt(zoom) / 2;
