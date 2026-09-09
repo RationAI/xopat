@@ -127,7 +127,11 @@ xOpat is multi-language (i18next). **No user-facing English may be hardcoded** �
 2. Reference it with `$.t('namespace.key')` in JS/TS, or `data-i18n="namespace.key"` in HTML. Interpolate with `{{var}}` in the value and `$.t('key', { var })` at the call site (e.g. `inspector.smallerRadiusPx` → `$.t('inspector.smallerRadiusPx', { px })`).
 3. `ui/` components reuse `src/locales/*.json` directly via the global `$.t` — there is **no** separate `ui/` locale dir. Plugins/modules instead ship their own `locales/<lang>.json` and load it with `this.loadLocale(locale, data)`, then read it under their own namespace (e.g. `$.t('annotations.key')`).
 
-**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/classes/app/i18n-dom.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes (from `src/store.ts`, `src/loader.ts` and the UI bundle, idempotently). After init, `$.t` *always returns a string* — for a missing key it returns the key's last segment (`common.confirm` → `"confirm"`). Therefore:
+**The dummy-`$.t` gotcha — do NOT write literal fallbacks.** `src/classes/app/i18n-dom.ts` installs `$.t = (x) => last-dot-segment(x)` before i18next initializes (from `src/store.ts`, `src/loader.ts` and the UI bundle, idempotently). `$.t` *always returns a string* — but **which** string tells you which translator you got:
+- **before init** the placeholder returns the key's last segment (`common.confirm` → `"confirm"`);
+- **after init** `$.t` is bare `i18next.t`, and a missing key comes back as the **full dotted key** (`common.confirm` → `"common.confirm"`).
+
+So a raw `namespace.key` on screen is not "i18n is not up yet" — it is the opposite: i18next *is* up and that **namespace bundle is not registered**. Plugin/module bundles are fetched asynchronously (`loadLocale`), so any label built during boot must await that load; a name written into config (a background `name`, a shader-layer title) is never recomputed once the bundle lands. Therefore:
 - `$.t('x') ?? 'English'`, `$.t('x') || 'English'`, and `typeof $.t === 'function' ? $.t('x') : 'English'` are **dead code** — the English literal never shows. Don't write them. The real fix for a missing string is always *define the key in `en.json`*.
 - For statics evaluated at module-load time (e.g. a class `static DEFAULT_*` array), don't call `$.t` in the static — it may run before init and capture the wrong value. Store a `titleKey` and resolve it with `$.t(titleKey)` at consumption time (see `Menu.DEFAULT_NAMESPACES` + its constructor loop).
 
@@ -353,6 +357,7 @@ Security is paramount. xOpat is meant to work with sensitive medical/pathology d
 - **No PII / tokens / session keys** in `console.log`, `localStorage`, or URL parameters.
 - **No third-party scripts** loaded without integrity (SRI) or a hard same-origin allowlist.
 - **No feature hardcoding an auth method.** A plugin/module that needs login declares a *context* (`authMode` + `authContext` static meta → `this.requireAuthContext()`), never a broker method, and never `requires`/`modules` an auth module (`oidc-client-ts`, `saml-auth`) in `include.json`. Read `auth.types` from `APPLICATION_CONTEXT.auth.getSecretTypes(contextId)`. Server-side, take the required context from the *resource*, never from `ctx.contextId` (client-supplied). See `src/AUTH.md`.
+- **No re-exporting what a `sensitive` scripting namespace gates.** Revoking `patient` must mean it. A namespace flag stops calls *into* that namespace; it does nothing about `visualization.describeData()` returning the same slide path, `questionnaire.listPageViewerSlots()` returning the raw `viewer.uniqueId`, or an error message interpolating one. If your method returns a raw path/filename, a study/series UID, unfiltered `getMetadata()`, **or a fact derived from any of those**, gate it on `this.mayExposeSensitive` and mask through the `XOpatScriptingApi` helpers (`maskDataEntries` / `unmaskDataEntries` / `maskedHandle` / `scrubSensitiveMetadata`), and route viewer ids through `toPresentedViewerId`. A closed vocabulary bounds *what* may be emitted, never *whether* — "lung" matched out of a file name is withheld data as much as the file name. Never reach a sensitive namespace by handing `getApi()` a **synthetic** context: that path is trusted main-thread and does not check the grant — forward the real context's `mayExposeSensitiveData` and alias hooks. See `src/classes/scripting/README.md`.
 - **No security decisions read via `getOption` / `APPLICATION_CONTEXT.config.plugins`.** That config is session/POST_DATA-derived and **third-party controllable** (embedding app, URL params, imported peer session). Auth mode/context, `requiresLogin`, credential & endpoint selection, and scripting limits must come from `getStaticMeta` (ENV/`include.json`) or server-secure config, so an untrusted bundle can't downgrade them. See §3 *Metadata and Configs*. The converse also holds: `setup.bypassCache` / `bypassCookies` are genuine **user preferences** about persistence and legitimately live in `getOption`, while *operator* storage policy (which KV driver a deployment binds) belongs in the server-only `ENV.client.io.bindings` block.
 
 ### Server-side rendering: never interpolate into a `<script>` unescaped
@@ -374,6 +379,15 @@ Static serving resolves against an explicit **allowlist of roots**
 that exists". Anything else publishes `env/env.json`, the storage root, and
 `*.server.ts` sources to anonymous callers. When you add an asset directory, add
 the root — do not widen the rule. See `server/README.md` → "Serving static files".
+
+Bulk data is a **second, separate opt-in**: `core.server.media` declares which
+directories are served streamed and `Range`-aware, and a deployment that declares
+nothing has the feature entirely off. Do not reach for it to make an asset
+directory "work better", and never fold it into `staticRoots` — ranged streaming
+holds handles open per response and is more capability than serving a bundle. Its
+`extensions` list is a reachability rule (non-matching = 404), not a delivery
+hint. Data outside the application root is deliberately not expressible; that is
+what `npm run fixtures:serve` is for.
 
 ### Framing the viewer is three walls, not one
 

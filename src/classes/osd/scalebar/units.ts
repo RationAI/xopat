@@ -169,44 +169,65 @@ function getWithUnit(value, unitSuffix) {
     return (negative ? "-" : "") + getWithSpaces(value / 1000, "k" + unitSuffix);
 }
 
-function getWithUnitRounded(value, unitSuffix) {
+/**
+ * Which SI prefix a magnitude is rendered with, as `{divisor, prefix}`.
+ *
+ * Split out of the formatters below so a *series* of values can be rendered on one
+ * shared prefix. Formatting each value independently is right for a lone readout and
+ * wrong for a column: two annotations on the same slide came out as "7 138.95 kpx²"
+ * and "919 076.44 px²", which the reader has to rescale in their head before the two
+ * can be compared at all.
+ *
+ * The ladders reproduce the previous branch-per-magnitude behaviour exactly,
+ * including the area ladder's `k` meaning a plain factor of 1000 rather than the
+ * dimensionally-consistent 1e6.
+ */
+function unitScale(value) {
+    const v = Math.abs(value);
+    if (v < 0.000001) return { divisor: 1e-9, prefix: " n" };
+    if (v < 0.001) return { divisor: 1e-6, prefix: " μ" };
+    if (v < 1) return { divisor: 1e-3, prefix: " m" };
+    if (v < 1000) return { divisor: 1, prefix: "" };
+    return { divisor: 1e3, prefix: " k" };
+}
+
+function squareUnitScale(value) {
+    const v = Math.abs(value);
+    // No support for NM
+    if (v < 0.000001) return { divisor: 1e-12, prefix: " μ" };
+    if (v < 1) return { divisor: 1e-6, prefix: " m" };
+    if (v < 1000000) return { divisor: 1, prefix: "" };
+    return { divisor: 1e3, prefix: " k" };
+}
+
+/** The scale that suits a whole series: the largest magnitude decides for all. */
+function scaleForSeries(values, pick) {
+    let largest = 0;
+    for (const value of values) {
+        const v = Math.abs(value);
+        if (Number.isFinite(v) && v > largest) largest = v;
+    }
+    return pick(largest);
+}
+
+function formatWithScale(value, unitSuffix, scale) {
     const negative = value < 0;
-    value = Math.abs(value);
-    if (value < 0.000001) {
-        return (negative ? "-" : "") + (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
-    }
-    if (value < 0.001) {
-        return (negative ? "-" : "") + (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
-    }
-    if (value < 1) {
-        return (negative ? "-" : "") + (Math.round(value * 100000) / 100) + " m" + unitSuffix;
-    }
-    if (value < 1000) {
-        return (negative ? "-" : "") + (Math.round(value * 100) / 100) + unitSuffix;
-    }
-    if (value >= 1000) {
-        return (negative ? "-" : "") + (Math.round(value / 10) / 100) + " k" + unitSuffix;
-    }
-    return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+    const v = Math.abs(value) / scale.divisor;
+    return (negative ? "-" : "") + (Math.round(v * 100) / 100) + scale.prefix + unitSuffix;
+}
+
+function formatWithSquareScale(value, unitSuffix, scale) {
+    const negative = value < 0;
+    const v = Math.abs(value) / scale.divisor;
+    return (negative ? "-" : "") + getWithSpaces(Math.round(v * 100) / 100, scale.prefix + unitSuffix);
+}
+
+function getWithUnitRounded(value, unitSuffix) {
+    return formatWithScale(value, unitSuffix, unitScale(value));
 }
 
 function getWithSquareUnitRounded(value, unitSuffix) {
-    const negative = value < 0;
-    value = Math.abs(value);
-    // No support for NM
-    if (value < 0.000001) {
-        return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000000000) / 100, " μ" + unitSuffix);
-    }
-    if (value < 1) {
-        return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000) / 100, " m" + unitSuffix);
-    }
-    if (value < 1000000) {
-        return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100) / 100, unitSuffix);
-    }
-    if (value >= 1000000) {
-        return (negative ? "-" : "") + getWithSpaces(Math.round(value / 10) / 100, " k" + unitSuffix);
-    }
-    return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+    return formatWithSquareScale(value, unitSuffix, squareUnitScale(value));
 }
 
 function getWithSpaces(value, unitSuffix) {
@@ -230,6 +251,11 @@ export {
     tiledImageViewportToImageZoom,
     getWithUnitRounded,
     getWithSquareUnitRounded,
+    unitScale,
+    squareUnitScale,
+    scaleForSeries,
+    formatWithScale,
+    formatWithSquareScale,
     isDefined,
     toSignedRotation,
 };

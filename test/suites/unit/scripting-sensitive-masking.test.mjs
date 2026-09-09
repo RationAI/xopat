@@ -4,8 +4,8 @@
  * Chat denies the `patient` namespace by default (`defaultScriptConsentMode:
  * 'all-but-sensitive'`; the namespace is flagged `sensitive` in
  * `src/classes/scripting/patient-api.ts`). The promise that makes is: identifying slide
- * data does not reach the upstream LLM. Three non-sensitive namespaces re-export exactly
- * what `patient` gates, so today the switch does not hold:
+ * data does not reach the upstream LLM. Three non-sensitive namespaces used to re-export
+ * exactly what `patient` gates, which is what these tests pin:
  *
  *  - `visualization.captureState()` returns the whole `config.data` array verbatim —
  *    every raw slide path, the same strings `patient.getSlidePaths().serverPath` gates.
@@ -23,14 +23,14 @@
  * (`presentTextForUser`), so a correctly-anonymized reply and a leaking one look the
  * same to the eye. Assert on the API, not on the bubble.
  *
- * THE MASKING ASSERTIONS FAIL TODAY. That failure is the bug report; the fix is not
- * part of this file.
- *
  * The gate: these tests install `mayExposeSensitiveData()` on the scripting context —
  * the same chokepoint shape the viewer alias already uses (`setViewerIdAlias` /
- * `toPresentedViewerId` on `HostScriptContext`). A fix is free to compute that flag
+ * `toPresentedViewerId` on `HostScriptContext`). A host is free to compute that flag
  * however it likes (e.g. from the `__self__` grant of every `sensitive` namespace) as
  * long as the context answers the question; only `context()` below would change.
+ *
+ * Both postures are asserted, because a blanket redaction would pass a leak test and
+ * still be wrong: consented callers must get the real values back verbatim.
  */
 import { test, expect } from "@xopat/test-harness";
 

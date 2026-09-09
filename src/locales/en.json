@@ -92,7 +92,7 @@
       "viewerFilesNotConfigured": "Viewer does not show all files - some were not properly configured!",
       "visualizationShaderSkipped": "Some visualization layers cannot be displayed in this deployment and were skipped.",
       "visualizationValidationIssues": "Some visualization layers are invalid and were not displayed.",
-      "visualizationParamsIgnored": "Some visualization settings are not valid for their shader and were ignored. The layers are shown with defaults — see the console for details.",
+      "visualizationParamsIgnored": "Some visualization settings are not recognised by their shader. The layers are still rendered, but those settings may have no effect — see the console for details.",
       "visualizationIndexMissing": "The requested visualization (#{{index}}) does not exist; the image is shown without overlays.",
       "slide": {
         "401": "Your login session has expired: please refresh the window to log in.",
@@ -101,7 +101,8 @@
         "pending": "The loading seems to be stuck: an image server might be unresponsive or slow.",
         "failed": "The loading of the image failed. Please, try again later.",
         "imageLoadFail": "Could not load the image source:",
-        "tilesFaulty": "An image failed to load its tiles. The server may be temporarily unresponsive."
+        "tilesFaulty": "An image failed to load its tiles. The server may be temporarily unresponsive.",
+        "overlayFailed": "An overlay layer could not be loaded and is not being shown. Open the layers panel to see which one."
       }
     },
     "user": {
@@ -189,6 +190,7 @@
         "expand": "Expand",
         "rotationHint": "Rotation in degrees — type a value and press Enter",
         "slideLabel": "Slide label (hover to enlarge)",
+        "slideLabelAlt": "Slide label",
         "noLabel": "no label",
         "noLabelTitle": "No slide label available"
       },
@@ -735,6 +737,10 @@
       "enableTitle": "Sync this viewport (Shift-click: pick points manually)",
       "disableTitle": "Stop syncing this viewport",
       "cancelCalibration": "Cancel calibration",
+      "labelBusy": "…",
+      "labelLink": "LINK",
+      "labelRef": "REF",
+      "labelSync": "SYNC",
       "autoProgress": "auto…",
       "enabled": "Sync enabled",
       "enabledApproximate": "Viewports linked, but the slides could not be matched precisely — alignment is approximate. Shift-click SYNC to calibrate by hand.",

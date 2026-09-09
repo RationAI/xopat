@@ -1202,10 +1202,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     if (!entry.isIntersecting) continue;
                     const target = entry.target;
                     this._unobserveThumb(target);
-                    // The explorer measures row height by mounting a probe card
-                    // and removing it in a microtask. It "intersects" while
-                    // mounted, so without this it would generate a full preview
-                    // for the first item on every page swap.
+                    // The explorer measures its row pitch by mounting a probe card
+                    // into the list and removing it again in the same task. It
+                    // "intersects" while mounted, so without this it would generate
+                    // a full preview for the first item on every page swap.
                     if (!target.isConnected) continue;
                     const jobs = this._thumbJobs.get(target);
                     this._thumbJobs.delete(target);

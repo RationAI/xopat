@@ -653,6 +653,14 @@ interface ApplicationContext {
      * switches.
      */
     scene: XOpatSceneApi;
+    /**
+     * The visualization sanitizer + renderer-schema validator the open pipeline
+     * runs (`classes/app/viewer-visualization-runtime.ts`). Exposed so a config
+     * can be checked *without* opening it — authoring tools and tests must not
+     * re-implement the check, or they pin a second opinion that drifts from the
+     * one that actually decides.
+     */
+    visualizationRuntime: ViewerVisualizationRuntimeLike;
     readonly sessionName: string;
     readonly secureMode: boolean;
     readonly env: any;
@@ -767,6 +775,23 @@ interface XOpatSceneApi {
  * instance hooks only while the Render Debug window is open, so a normal
  * session pays nothing.
  */
+/**
+ * `APPLICATION_CONTEXT.visualizationRuntime` — the same object the open pipeline
+ * validates through (`viewer-open-pipeline.ts` → `validateVisualizationCollection`).
+ *
+ * `issues` are structural and xOpat-owned: they drop layers and fail a strict
+ * open. `advisories` are the renderer's own JSON-schema findings: they never
+ * mutate the config and never drop anything, so a config carrying them still
+ * renders — which is exactly why they need somewhere to be *read*.
+ */
+interface ViewerVisualizationRuntimeLike {
+    validateVisualizationCollection(
+        visualizations?: any[],
+        data?: any[],
+    ): { visualizations: any[]; issues: string[]; advisories: string[] };
+    [key: string]: any;
+}
+
 interface RenderDebugLike {
     readonly available: boolean;
     readonly active: boolean;

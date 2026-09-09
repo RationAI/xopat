@@ -207,9 +207,19 @@ module.exports = function(grunt) {
         });done();
         } catch (e) {grunt.fail.warn(e.message);}
     });
+    // The clean full build, and the only way to get a correct stylesheet after
+    // editing `tailwind-spec.css` or `tailwind.config.js`: the `twinc` watcher
+    // merges per-file deltas onto a cached baseline it never invalidates, so an
+    // input change leaves a stale copy of `@layer components` in the output.
+    // `--minify` is not cosmetic — the shipped artifact is minified, and without
+    // it the source comments in the spec end up served to every client.
     grunt.registerTask('css', async function() {
         const done = this.async();
-        await BuildLogic.spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
+        await BuildLogic.spawnAsync("npx", ["tailwindcss",
+            "-c", "./tailwind.config.js",
+            "-i", "./src/assets/tailwind-spec.css",
+            "-o", "./src/libs/tailwind.min.css",
+            "--minify"]);
         done();
     });
     grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {

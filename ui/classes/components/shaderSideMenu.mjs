@@ -98,6 +98,12 @@ export class ShaderSideMenu extends BaseComponent {
                 parentShader.shaderLayerOrder = [...listItems];
             } else {
                 // todo no change on the navigator...
+                // An EMPTY list means "no explicit order" and renders every
+                // registered layer — it used to mean the opposite, "render
+                // nothing", which was a bug: `[]` is truthy, so the order stayed
+                // pinned at nothing however many layers were registered later,
+                // and the viewer went blank. Sending `[]` to hide everything
+                // will not work; hide the layers instead.
                 viewer.drawer.renderer.setShaderLayerOrder(listItems);
             }
             viewer.drawer.rebuild();

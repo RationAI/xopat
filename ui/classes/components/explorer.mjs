@@ -701,12 +701,22 @@ export class Explorer extends BaseComponent {
         if (this._ioMore) { try { this._ioMore.disconnect(); } catch {} this._ioMore = null; }
 
         const header = this._renderHeader(levelIndex);
-        // `scrollbar-gutter: stable` reserves the scrollbar track so content
-        // height changes cannot toggle the scrollbar, which would otherwise
-        // resize the viewport and feed back into the windowing observers.
-        const listWrap = div({ class: "flex-1 overflow-auto", style: "scrollbar-gutter: stable;" });
+        // Only virtual mode scrolls here. `scrollbar-gutter: stable` reserves the
+        // scrollbar track so content height changes cannot toggle the scrollbar,
+        // which would otherwise resize the viewport and feed back into the
+        // windowing observers.
+        //
+        // Paged mode brings its OWN scroller (`_renderPagedList`'s `viewport`)
+        // inside a `h-full` host, which — given this element's definite flex
+        // height — can never overflow it. Leaving `overflow-auto` here therefore
+        // produced a scroller that never scrolls plus a permanently reserved,
+        // dead scrollbar gutter next to the real one: two tracks, one usable.
+        const isVirtual = lvl.mode === "virtual";
+        const listWrap = isVirtual
+            ? div({ class: "flex-1 min-h-0 overflow-auto", style: "scrollbar-gutter: stable;" })
+            : div({ class: "flex-1 min-h-0 overflow-hidden" });
 
-        if (lvl.mode === "virtual") {
+        if (isVirtual) {
             // The scroller, not the <ul> — see _renderVirtualList.
             listWrap.appendChild(this._renderVirtualList(levelIndex, parent, bucket, listWrap));
         } else {
@@ -739,7 +749,17 @@ export class Explorer extends BaseComponent {
         // Scrollable viewport. `scrollbar-gutter: stable` keeps the scrollbar
         // track reserved so a content-height change cannot make the scrollbar
         // appear/disappear and resize the viewport under the windowing maths.
-        const viewport = div({ class: "flex-1 overflow-auto", style: "scrollbar-gutter: stable;" });
+        //
+        // `overflow-anchor: none` is DEFENSIVE, not the mechanism that keeps this
+        // list still — the height invariant documented on `renderWindow` is. It
+        // is here because `renderWindow` detaches rows outside the overscan, which
+        // can remove the browser's chosen scroll anchor and provoke a `scrollTop`
+        // adjustment the model never asked for. Do not read this line as a licence
+        // to weaken the invariant.
+        const viewport = div({
+            class: "flex-1 overflow-auto",
+            style: "scrollbar-gutter: stable; overflow-anchor: none;"
+        });
 
         // UL we’ll reuse; we’ll put spacers + visible items into it
         const listEl = ul({ class: "menu p-1 gap-1" });
@@ -760,20 +780,83 @@ export class Explorer extends BaseComponent {
         // Config
         // ------- Windowed rendering (cached) -------
         const OVERSCAN = 8;
-        let rowH = 0;
+        // PITCH, not row height: the row-to-row distance, i.e. the row's border
+        // box PLUS the flex gap `listEl` charges between every child. See
+        // `measurePitch` and the invariant on `renderWindow`.
+        let pitch = 0;
         let start = 0, end = -1;
         const topSpacer = div({ style: "height:0px" });
         const bottomSpacer = div({ style: "height:0px" });
         const renderedItems = new Map(); // index -> li Node
 
+        /**
+         * Measure the row-to-row pitch, or 0 when it cannot be measured yet.
+         *
+         * Two things this MUST keep doing, both of which it once got wrong and
+         * both of which produced a per-frame oscillation at the bottom of the list:
+         *
+         * 1. The probe is mounted IN FLOW inside `listEl`. It used to be mounted
+         *    absolutely-positioned inside `viewport`, i.e. outside `ul.menu` — and
+         *    DaisyUI styles rows through descendant selectors rooted at `.menu`
+         *    (`.menu :where(li:not(.menu-title)>:not(ul,details,.menu-title,.btn))`
+         *    adds `padding:.5rem 1rem`, `:where(.menu li)` forces `flex-direction:
+         *    column`). None of that reached the probe, so every real row was
+         *    materially taller than the number the windowing maths was using.
+         * 2. The flex gap is added. `listEl` is `gap-1`, so it charges 4px between
+         *    every child — and the child count is the WINDOW SIZE. Measuring the
+         *    row alone therefore left a term that changed as the user scrolled.
+         *
+         * Returns 0 rather than guessing when the panel is not laid out (a closed
+         * dock, an inactive dock tab: every ancestor `display:none`, so the rect
+         * is 0). The old `|| 40` fallback latched that guess permanently — the
+         * ResizeObserver that fires on reveal skipped its body because 40 is
+         * truthy — leaving the list windowed at 40px against a real ~96px pitch.
+         *
+         * @returns {number} pitch in px, or 0 if not measurable right now
+         */
+        const measurePitch = () => {
+            if (!viewport.isConnected || !viewport.clientHeight) return 0;
+
+            const probe = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
+            probe.style.visibility = "hidden";
+            listEl.appendChild(probe);
+            let h = 0;
+            try {
+                h = probe.getBoundingClientRect().height;
+            } finally {
+                listEl.removeChild(probe);
+            }
+            if (!(h > 0)) return 0;
+            const gap = parseFloat(getComputedStyle(listEl).rowGap) || 0;
+            return h + gap;
+        };
+
+        /**
+         * THE INVARIANT: `viewport.scrollHeight` must not depend on the window.
+         *
+         * With `pitch === rowHeight + gap`, the top of row `i` is
+         * `padTop + gap + i*pitch` and the total content height is
+         * `padTop + gap + maxIdx*pitch + padBottom` — for EVERY choice of
+         * `start`/`end`, including `start === 0`, `end === maxIdx` and an empty
+         * list. That is what makes this safe at the bottom of the list, where
+         * `scrollTop` is pinned to `scrollHeight - clientHeight`: a window-dependent
+         * height there gets clamped by the browser, the clamp fires `scroll`, the
+         * scroll picks a different window, and the height flips back — a stable
+         * two-state limit cycle at frame rate. The early-out below does not damp
+         * it, because the two states genuinely differ.
+         *
+         * So: measure in PITCH units, and keep this function the only writer of
+         * the spacer heights (see the ResizeObserver comment below, which is the
+         * earlier, separate oscillation this same function already had).
+         */
         const renderWindow = (force = false) => {
             const vpH = viewport.clientHeight || 0;
             const scrollTop = viewport.scrollTop || 0;
-            if (!rowH) return;
+            if (!pitch) return;
 
             const maxIdx = items.length;
-            const visStart = Math.max(0, Math.floor(scrollTop / rowH));
-            const visEnd = Math.min(maxIdx, Math.ceil((scrollTop + vpH) / rowH));
+            const visStart = Math.max(0, Math.floor(scrollTop / pitch));
+            const visEnd = Math.min(maxIdx, Math.ceil((scrollTop + vpH) / pitch));
             const nextStart = Math.max(0, visStart - OVERSCAN);
             const nextEnd = Math.min(maxIdx, visEnd + OVERSCAN);
             if (!force && nextStart === start && nextEnd === end) return;
@@ -782,8 +865,8 @@ export class Explorer extends BaseComponent {
             end = nextEnd;
 
             // Update spacer heights
-            topSpacer.style.height = `${start * rowH}px`;
-            bottomSpacer.style.height = `${(maxIdx - end) * rowH}px`;
+            topSpacer.style.height = `${start * pitch}px`;
+            bottomSpacer.style.height = `${(maxIdx - end) * pitch}px`;
 
             // Keep order: topSpacer, [items in window], bottomSpacer
             // Remove old nodes not in range
@@ -817,44 +900,29 @@ export class Explorer extends BaseComponent {
             while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
             renderedItems.clear();
             items.splice(0, items.length, ...(seg.items || [])); // mutate array contents to keep references stable
-            rowH = 0; start = 0; end = -1;
-            // re-probe row height for the new page
-            const probeRow = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
-            probeRow.style.visibility = "hidden";
-            probeRow.style.position = "absolute";
-            const probeWrap = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow);
-            viewport.appendChild(probeWrap);
+            pitch = 0; start = 0; end = -1;
             queueMicrotask(() => {
-                rowH = Math.max(1, probeRow.getBoundingClientRect().height || 40);
-                try { viewport.removeChild(probeWrap); } catch {}
+                // re-measure the pitch for the new page: rows are rendered by the
+                // level, so a different page can legitimately have a different one
+                pitch = measurePitch();
+                pageState.val = (currentPage + 1);
+                if (!pitch) return;  // not laid out yet; the ResizeObserver recovers
                 listEl.appendChild(topSpacer);
                 listEl.appendChild(bottomSpacer);
                 viewport.scrollTop = 0; // reset scroll for new page
-                pageState.val = (currentPage + 1);
                 renderWindow(true);
             });
         };
 
-        // Initial draw: we need a measured row height
-        // Render one probe row off-DOM to measure natural height
-        const probeRow = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
-        probeRow.style.visibility = "hidden";
-        probeRow.style.position = "absolute";
-        // mount probe temporarily to measure
-        const probeWrap = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow);
-        viewport.appendChild(probeWrap);
-
-        // After browser paints, measure and kick first window render
+        // Initial draw: we need a measured pitch before any windowing can happen.
+        // The spacers are mounted only once that succeeded — `measurePitch` needs
+        // `listEl` to hold nothing but the probe's own layout context, and a list
+        // with no pitch has no windowing to do anyway.
         queueMicrotask(() => {
-            rowH = Math.max(1, probeRow.getBoundingClientRect().height || 40);
-            // clean probe
-            try { viewport.removeChild(probeWrap); } catch {}
-
-            // initialize spacers + first window
+            pitch = measurePitch();
+            if (!pitch) return;  // hidden panel; the ResizeObserver measures on reveal
             listEl.appendChild(topSpacer);
             listEl.appendChild(bottomSpacer);
-
-            // ensure viewport height is known
             renderWindow(true);
         });
 
@@ -867,21 +935,54 @@ export class Explorer extends BaseComponent {
         // `renderWindow` is the ONLY writer of the spacer heights. This observer
         // used to size them itself from the *visible* range while renderWindow
         // sized them from the *overscanned* range — the two disagree by up to
-        // 16 * rowH of content height, which toggles the scrollbar, which
+        // 16 * pitch of content height, which toggles the scrollbar, which
         // resizes the viewport, which re-fires this observer: a per-frame
         // oscillation of a few pixels, worst at the bottom where the bottom
         // spacer reaches zero. renderWindow(false) never corrected it either,
         // because start/end were unchanged so it early-returned.
-        let lastW = 0, lastH = 0;
+        //
+        // It is also the recovery path for a list that first rendered while its
+        // panel was not laid out (closed dock, inactive dock tab): `measurePitch`
+        // refuses to guess there, so this callback — which fires exactly when the
+        // panel gains a box — is what finally measures it. Hence `-1` seeds
+        // (a panel that starts at 0x0 must not read its first real callback as
+        // "unchanged") and a bail on a missing pitch that MEASURES instead of
+        // returning.
+        let lastW = -1, lastH = -1;
         const ro = new ResizeObserver(() => {
             const w = viewport.clientWidth, h = viewport.clientHeight;
             // Ignore callbacks caused by our own spacer writes; react only to a
             // genuine change of the viewport box.
             if (w === lastW && h === lastH) return;
+            const widthChanged = w !== lastW;
             lastW = w; lastH = h;
             requestAnimationFrame(() => {
-                if (!rowH || !document.body.contains(viewport)) return;
+                if (!document.body.contains(viewport)) return;
+                if (pitch && !widthChanged) {
+                    renderWindow(true);
+                    return;
+                }
+                // A width change can change the pitch (wrapping, truncation), so
+                // re-measure rather than keep windowing on a stale unit.
+                const measured = measurePitch();
+                if (!measured) return;
+
+                // Hold the user's place across the unit change: the scroll offset
+                // is only meaningful in pitch units, so carry the fractional row
+                // index over instead of the raw pixel offset. Re-window FIRST so
+                // the spacers already describe the new total height — otherwise
+                // the assignment below is clamped against the old one.
+                const anchorIdx = pitch ? viewport.scrollTop / pitch : 0;
+                pitch = measured;
+                if (!topSpacer.isConnected) {
+                    listEl.appendChild(topSpacer);
+                    listEl.appendChild(bottomSpacer);
+                }
                 renderWindow(true);
+                if (anchorIdx) {
+                    viewport.scrollTop = anchorIdx * pitch;
+                    renderWindow(false);
+                }
             });
         });
         ro.observe(viewport);

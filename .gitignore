@@ -2,6 +2,7 @@
 # Only top-level entries in modules/ and plugins/ are ignored;
 # once a directory below is un-ignored, all of its contents are tracked normally.
 /modules/*
+!/modules/annotation-measurements
 !/modules/annotations
 !/modules/basic-auth
 !/modules/chat
@@ -122,7 +123,6 @@ tmp
 /test/fixtures/slides/generated/
 /test/fixtures/data/slides/
 /test/fixtures/data/generated/
-/wsi_data
 
 #sensitive data
 cypress.env.*

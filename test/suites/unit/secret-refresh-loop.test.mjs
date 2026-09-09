@@ -12,54 +12,22 @@
  * accepted request proves the credential works, and N distinct rejected credentials
  * end the asking and hand the context to the interactive gate.
  */
-import { test, expect } from "@xopat/test-harness";
-
-globalThis.window = globalThis.window ?? globalThis;
-
-/** The slice of OpenSeadragon.EventSource that XOpatUser actually uses. */
-class TestEventSource {
-    constructor() { this._h = new Map(); }
-    addHandler(event, cb) {
-        if (!this._h.has(event)) this._h.set(event, []);
-        this._h.get(event).push(cb);
-    }
-    removeHandler(event, cb) {
-        const list = this._h.get(event) || [];
-        const i = list.indexOf(cb);
-        if (i >= 0) list.splice(i, 1);
-    }
-    numberOfHandlers(event) { return (this._h.get(event) || []).length; }
-    raiseEvent(event, payload) {
-        for (const cb of [...(this._h.get(event) || [])]) cb(payload || {});
-    }
-    async raiseEventAwaiting(event, payload) {
-        for (const cb of [...(this._h.get(event) || [])]) await cb(payload || {});
-    }
-}
+import { test, expect, freshXOpatUser } from "@xopat/test-harness";
 
 /**
- * Fresh module instance per test: XOpatUser is a singleton guarded by a static, and
- * the breaker state lives on the instance.
+ * Fresh singleton per test: the breaker state lives on the instance.
+ *
+ * These vectors deliberately pass no thresholds — the DEFAULT
+ * `MAX_REFRESH_FAILURES` is the subject, since it is what a deployment runs with.
+ * That is exactly what used to break: the statics live on a class the whole worker
+ * shares, and `secret-refresh-budget` left its own value behind. `freshXOpatUser`
+ * restores the pristine values per test.
  */
 async function freshUser(interactionSink) {
-    globalThis.window.OpenSeadragon = { EventSource: TestEventSource };
-    globalThis.window.HttpClient = { knowsSecretType: () => true };
-    globalThis.$ = globalThis.$ ?? { t: (k) => k };
-    globalThis.document = globalThis.document ?? { getElementById: () => null };
-    globalThis.USER_INTERFACE = { AppBar: { rightMenu: { getTab: () => ({ setTitle() {} }) } } };
-    globalThis.Dialogs = { show() {}, MSG_ERR: "err" };
-    globalThis.window.APPLICATION_CONTEXT = {
-        auth: {
-            markNeedsInteraction: (ctx, opts) => interactionSink?.push({ ctx, ...opts }),
-        },
-    };
-
-    const mod = await import(`../../../src/classes/user.ts?t=${Math.random()}`);
-    // The query cache-buster is not reliably honoured by the TS loader, so the module
-    // — and with it the singleton's breaker state — can survive into the next test.
-    // Drop the static explicitly; `__self` is private to TypeScript only.
-    mod.XOpatUser.__self = undefined;
-    return mod.XOpatUser.instance();
+    const { user } = await freshXOpatUser({
+        markNeedsInteraction: (ctx, opts) => interactionSink?.push({ ctx, ...opts }),
+    });
+    return user;
 }
 
 /**

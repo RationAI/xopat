@@ -237,6 +237,19 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     let REGISTERED_ELEMENTS: IXOpatElement[] = [];
     let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
     const REQUIRED_SINGLETONS = new Set<any>();
+    /**
+     * Singletons that declared themselves while a module's include chain was still being
+     * evaluated. Instantiating one at that moment builds it against a half-loaded namespace,
+     * so the sweep waits until the chain finishes. See `requireViewerSingletonPresence`.
+     */
+    const PENDING_SINGLETON_SWEEPS = new Set<any>();
+    /**
+     * Eagerly-registered modules waiting for their own include chain to finish. `addModule`
+     * runs from whichever file declares the class, which is rarely the last one, so building
+     * the singleton right there runs the constructor against a namespace the module's
+     * remaining files have not populated. Keyed by module id; see `flushPendingEagerInit`.
+     */
+    const PENDING_EAGER_INIT = new Map<string, any>();
     /** Runtime plugin loads in flight, so a second request joins instead of re-injecting. */
     const PENDING_PLUGIN_LOADS = new Map<string, { promise: Promise<void>, settle: () => void }>();
 
@@ -989,13 +1002,41 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
         if (eager && typeof ModuleClass.instance === "function") {
-            try { withHandlerOwner(id, () => ModuleClass.instance()); }
-            catch (e) {
-                console.error(`[loader] eager init of module "${id}" failed:`, e);
-                cleanUpModule(id, e);
+            // Called from inside the module's own chain — the normal case, since `addModule`
+            // lives in one of the module's files. Defer to the end of that chain so the
+            // constructor sees every file. `addModule` invoked outside a chain (a test, the
+            // console) still builds inline, exactly as before.
+            if (MODULE_LOAD_STACK.has(id)) {
+                PENDING_EAGER_INIT.set(id, ModuleClass);
+                return;
             }
+            runEagerInit(id, ModuleClass);
         }
     };
+
+    /**
+     * Build an eagerly-registered module singleton. A throw here is a genuinely broken
+     * constructor, so it keeps the original quarantine: report it and disable the module.
+     */
+    function runEagerInit(id: string, ModuleClass: any) {
+        try { withHandlerOwner(id, () => ModuleClass.instance()); }
+        catch (e) {
+            console.error(`[loader] eager init of module "${id}" failed:`, e);
+            cleanUpModule(id, e);
+        }
+    }
+
+    /**
+     * Run the eager init deferred above, once this module's files are all on the page.
+     * Per module rather than "once nothing is loading": with `A requires B`, B's chain ends
+     * while A is still on the stack, and A's own files may resolve against B.
+     */
+    function flushPendingEagerInit(id: string) {
+        const ModuleClass = PENDING_EAGER_INIT.get(id);
+        if (!ModuleClass) return;
+        PENDING_EAGER_INIT.delete(id);
+        runEagerInit(id, ModuleClass);
+    }
 
     /**
      * Register viewer singleton globally.
@@ -1039,8 +1080,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
     }
 
+    /** Instantiate a required singleton for every viewer that is already open. */
+    function sweepSingletonOverViewers(SingletonClass: XOpatViewerSingletonClass) {
+        if (!window.VIEWER_MANAGER) return;
+        for (let v of VIEWER_MANAGER.viewers) {
+            ensureSingletonForViewer(SingletonClass, v);
+        }
+    }
+
     /**
      * Force the SingletonClass class definition to be instantiated automatically per active viewer.
+     *
+     * The sweep is deferred while a module's include chain is in flight. Modules declare their
+     * singletons from a top-level statement in one of their files, and that file is rarely the
+     * last one: `annotations-canvas.js` is entry 10 of 23, and the FabricWrapper constructor
+     * reaches back into `OSDAnnotations`, whose own constructor needs `presets.js` (entry 19)
+     * and `freeFormTool.js` (entry 23). At boot this was invisible because no viewer is open
+     * yet, so the sweep found nothing and the REQUIRED_SINGLETONS drain on `open` did the work
+     * once everything was on the page; loading the same module mid-session, with a slide
+     * already open, built the singleton nine files too early and quarantined the module.
      */
     const requireViewerSingletonPresence = (window as any).requireViewerSingletonPresence = function (SingletonClass: XOpatViewerSingletonClass) {
         if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
@@ -1051,11 +1109,22 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             registerViewerSingleton(SingletonClass);
         }
         REQUIRED_SINGLETONS.add(SingletonClass);
-        if (window.VIEWER_MANAGER) {
-            for (let v of VIEWER_MANAGER.viewers) {
-                ensureSingletonForViewer(SingletonClass, v);
-            }
+        if (MODULE_LOAD_STACK.size > 0) {
+            PENDING_SINGLETON_SWEEPS.add(SingletonClass);
+            return;
         }
+        sweepSingletonOverViewers(SingletonClass);
+    }
+
+    /**
+     * Run the sweeps deferred above, once no module chain is left in flight. Called from
+     * `loadModuleOnce`; a no-op when nothing deferred.
+     */
+    function flushPendingSingletonSweeps() {
+        if (MODULE_LOAD_STACK.size > 0 || PENDING_SINGLETON_SWEEPS.size === 0) return;
+        const pending = [...PENDING_SINGLETON_SWEEPS];
+        PENDING_SINGLETON_SWEEPS.clear();
+        for (const SingletonClass of pending) sweepSingletonOverViewers(SingletonClass);
     }
 
     function extendWith(target: Record<string, any>, source: Record<string, any>, ...properties: string[]) {
@@ -1139,6 +1208,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         })().then(settle!, fail!).finally(() => {
             MODULE_LOAD_STACK.delete(id);
             delete (module as any).__loading;
+            // The module's own bootstrap first: a singleton sweep below may reach into it.
+            flushPendingEagerInit(id);
+            // Every file of this module is now on the page, so any singleton that declared
+            // itself mid-chain can safely be built. Also runs after a failed chain: a
+            // singleton from a module that only partly loaded still gets its one attempt,
+            // and `ensureSingletonForViewer` quarantines it if that attempt throws.
+            flushPendingSingletonSweeps();
         });
 
         return loading;
@@ -2174,6 +2250,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 throw `Module '${Ctor.$id}' failed to load and was disabled: ${Ctor.__failed}`;
             }
             if (Ctor.__self) return Ctor.__self;
+
+            // The module's own files are still being injected. `addModule` runs from whichever
+            // file declares the class — usually not the last one — so the constructor would be
+            // executing against a namespace its later files have not populated yet. That is a
+            // timing condition, not a broken module: refuse *without* quarantining, so the same
+            // call succeeds once the chain finishes. Quarantining here is what turned a
+            // mid-session load into a module disabled for the rest of the session.
+            if (MODULE_LOAD_STACK.has(Ctor.$id)) {
+                throw `Module '${Ctor.$id}' is still loading; instance() must wait for its files.`;
+            }
 
             try {
                 return Ctor.__self = withHandlerOwner(Ctor.$id, () => new Ctor());
@@ -4323,20 +4409,6 @@ form.submit();
         return VIEWER_MANAGER.getMenu(this);
     };
 
-    // A deferred flex rebuild can call forceRedraw() after viewer.destroy() has
-    // deleted OSD's private per-viewer state slot (THIS[hash]); the vendored
-    // forceRedraw then throws "Cannot set properties of undefined". Treat a
-    // post-teardown redraw as a no-op. Safety net until flex-renderer is
-    // re-vendored with a tracked/guarded deferred timer.
-    const _origForceRedraw = OpenSeadragon.Viewer.prototype.forceRedraw;
-    OpenSeadragon.Viewer.prototype.forceRedraw = function () {
-        try {
-            return _origForceRedraw.call(this);
-        } catch (_) {
-            return this;
-        }
-    };
-
     /**
      * Monkey-patches drawer/renderer methods to log the flex-renderer init/reload sequence.
      * Enabled by APPLICATION_CONTEXT.getOption("webglDebugMode").
@@ -4556,6 +4628,8 @@ form.submit();
         active: OpenSeadragon.Viewer | null;
         layout: any;
         _singletonsKey: symbol;
+        _cellSeq: number;
+        _dupWarnedUids: Set<string>;
 
         /**
          * Create a ViewerManager.

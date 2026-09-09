@@ -519,6 +519,11 @@ function initXOpatLayers() {
             mutated = true;
         }
 
+        // An empty `layerOrder` reaches the renderer as "no explicit order",
+        // which renders every registered layer. That is the current library
+        // semantics and what we keep — but it is the reverse of what it used to
+        // do, so a session exported by an older build with an empty order now
+        // restores as "everything visible" rather than "nothing".
         const incomingOrder = Array.isArray(payload.layerOrder) ? payload.layerOrder : null;
         if (incomingOrder && typeof renderer.setShaderLayerOrder === "function") {
             const localOrder = namespace

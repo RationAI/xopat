@@ -30,6 +30,17 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         const present = (id: string | null | undefined): string | null =>
             id != null ? this.scriptingContext.toPresentedViewerId?.(id) ?? id : null;
 
+        // Visualization names are operator/author-authored free text, the same class of value
+        // as a background name — so a consumer that masks names must not receive them either.
+        // Probe the alias rather than duplicate its policy: a resolver that masks names answers
+        // a nameless query with a handle, one that does not answers with null (and so does the
+        // identity default). Nulling rather than substituting the handle, because a
+        // visualization called `viewer-1` would be a worse answer than no name at all.
+        const namesAreMasked = viewers.length > 0 &&
+            this.scriptingContext.presentViewerName?.(viewers[0].uniqueId, null) != null;
+        const presentAuthoredName = (name: string | null | undefined): string | null =>
+            namesAreMasked ? null : (name ?? null);
+
         return viewers.map((viewer: OpenSeadragon.Viewer) => {
             const realContextId = viewer.uniqueId;
             const contextId = present(realContextId) as string;
@@ -85,7 +96,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     kind,
                     dataReference: itemDataRef,
                     backgroundId: present(itemBg?.id ?? null),
-                    visualizationName: itemViz?.name ?? null,
+                    visualizationName: presentAuthoredName(itemViz?.name),
                 });
             }
 
@@ -103,7 +114,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                 } : null,
                 visualization: activeViz ? {
                     index: activeVizIndex,
-                    name: activeViz.name ?? null,
+                    name: presentAuthoredName(activeViz.name),
                     shaders: activeViz.shaders || {},
                 } : null,
                 worldItems,

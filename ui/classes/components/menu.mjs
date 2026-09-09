@@ -30,6 +30,9 @@ class Menu extends BaseComponent {
      * @param {keyof typeof Menu.SCROLL} [options.bodyScroll] - The body scroll behavior
      * @param {keyof typeof Menu.DESIGN} [options.design] - The design of the menu
      * @param {keyof typeof Menu.ROUNDED} [options.rounded] - The rounded corners of the menu
+     * @param {(tabId: string) => boolean} [options.initialOpenResolver] - Decides whether a tab boots
+     *   open. Defaults to the user's cached `<tabId>-open` toggle; owners whose panels follow
+     *   deployment/session config pass their own (see `resolveSideMenuTabOpen`).
      * @param {boolean} [options.namespacedTabs] - Whether to namespace tabs
      * @param {string} [options.defaultNamespace] - The default namespace for tabs
      * @param {Array<object>} [options.namespaces] - An array of namespaces to be registered
@@ -62,6 +65,13 @@ class Menu extends BaseComponent {
         this._configMenuPlacement = options?.configMenuPlacement || "auto";
         this._configSections = [];
         this._configMenu = undefined;
+
+        // Initial open/closed state of a tab. Default is the user's cached
+        // toggle; an owner that sources it from deployment/session config (the
+        // per-viewer side menu) injects a resolver so EVERY entry point —
+        // the owner's own boot loop, append(), appendExtended() — agrees.
+        this._initialOpenResolver = typeof options?.initialOpenResolver === "function"
+            ? options.initialOpenResolver : null;
 
         this._namespacedTabs = options?.namespacedTabs === true || Array.isArray(options?.namespaces);
         this.defaultNamespace = options?.defaultNamespace || Menu.NAMESPACE.SYSTEM;
@@ -709,6 +719,18 @@ class Menu extends BaseComponent {
         this._syncLayout();
     }
 
+    /**
+     * Initial open state of a tab. Defaults to the user's persisted toggle;
+     * owners that pass `options.initialOpenResolver` decide it themselves
+     * (see `resolveSideMenuTabOpen` in rightSideViewerMenu.mjs).
+     * @param {string} id tab id
+     * @return {boolean}
+     */
+    _initialTabOpen(id) {
+        if (this._initialOpenResolver) return !!this._initialOpenResolver(id);
+        return APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true);
+    }
+
     append(title, titleItem, item, id, pluginId, bg=undefined) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
@@ -724,7 +746,7 @@ class Menu extends BaseComponent {
         this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
 
         // todo implement focus manager, similar to visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else {
             this.tabs[id]._removeFocus();
@@ -754,7 +776,7 @@ class Menu extends BaseComponent {
         this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
 
         // todo move to focus manager like visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else{
             this.tabs[id]._removeFocus();

@@ -4,34 +4,13 @@ import {ShaderSideMenu} from "./shaderSideMenu.mjs";
 import {MultiPanelMenu} from "./multiPanelMenu.mjs";
 import {Menu} from "./menu.mjs";
 import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
+import {resolveSideMenuCompact, resolveSideMenuTabOpen} from "./sideMenuPreferences.mjs";
 
+// Re-exported: `ui/services/fullscreenMenus.mjs` (Settings) has always imported
+// the compact resolver from here, and both resolvers describe this menu.
+export {resolveSideMenuCompact, resolveSideMenuTabOpen};
 
 const {div} = van.tags
-
-/**
- * Resolve the compact side-menu preference. Like `globalMenuMode` this is NOT
- * read via `getUiOption` — that helper defaults every unset flag to `true`,
- * while compact mode must default to `false`. Precedence mirrors getUiOption:
- * explicit session param > cached user toggle (Settings checkbox, persisted by
- * `setUiOption`) > deployment default > false.
- * @returns {boolean}
- */
-export function resolveSideMenuCompact() {
-    const readUi = (source) => {
-        const ui = source?.ui;
-        if (ui && typeof ui === "object" && ui.sideMenuCompact !== undefined && ui.sideMenuCompact !== null) {
-            return !!ui.sideMenuCompact;
-        }
-        return undefined;
-    };
-    const fromParams = readUi(APPLICATION_CONTEXT.config?.params);
-    if (fromParams !== undefined) return fromParams;
-    const cached = APPLICATION_CONTEXT.AppCache?.get("sideMenuCompact");
-    if (cached !== undefined && cached !== null) return cached === true || cached === "true";
-    const fromDefaults = readUi(APPLICATION_CONTEXT.config?.defaultParams);
-    if (fromDefaults !== undefined) return fromDefaults;
-    return false;
-}
 
 /**
  * @class RightSideViewerMenu
@@ -82,6 +61,9 @@ export class RightSideViewerMenu extends BaseComponent {
                 // global key: tab ids are stable across viewer cells, so all grid
                 // cells share one consistent, persisted panel order
                 orderCacheKey: "sideViewerMenu-tab-order",
+                // Panels appended later (plugins, via Menu.append) must honor
+                // the same deployment/session default as the boot loop below.
+                initialOpenResolver: resolveSideMenuTabOpen,
                 onOrderChange: () => {
                     for (const viewerMenu of Object.values(window.VIEWER_MANAGER?.viewerMenus || {})) {
                         if (viewerMenu !== this) {
@@ -163,14 +145,15 @@ export class RightSideViewerMenu extends BaseComponent {
             // todo focus manager similar to visibility manager
             // `params.ui.navigator = false` defaults the navigator tab
             // to closed (the OSD navigator element hangs off this tab's
-            // body, so closing the tab is what actually hides it). Other
-            // tabs continue to follow the user's cached open/closed
-            // preference.
+            // body, so closing the tab is what actually hides it) and wins
+            // over `sideMenuTabs`, because it hides the navigator element
+            // itself rather than just collapsing a panel. Every other tab
+            // goes through the shared resolver.
             let shouldOpen;
             if (i === "navigator" && APPLICATION_CONTEXT.getUiOption?.("navigator") === false) {
                 shouldOpen = false;
             } else {
-                shouldOpen = APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true);
+                shouldOpen = resolveSideMenuTabOpen(i);
             }
             if (shouldOpen) {
                 this.menu.tabs[i]._setFocus();
@@ -411,7 +394,9 @@ export class RightSideViewerMenu extends BaseComponent {
             this.setClass("mobile", "");
             this.setClass("display", "");
             for (let i of Object.keys(this.menu.tabs)) {
-                if (!APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
+                // Same resolver as the boot loop: leaving the mobile breakpoint
+                // must not resurrect a tab the deployment/session closed.
+                if (!resolveSideMenuTabOpen(i)) {
                     this.menu.getTab(i).close();
                 }
             }

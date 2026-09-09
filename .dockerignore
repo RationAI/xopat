@@ -37,6 +37,9 @@ modules/**/build
 # env.default.json is the committed reference and stays. Excluding *.json rather
 # than env*.json on purpose — the directory also holds differently-named configs
 # (e.g. test-kc-public.env.json), and an allowlist of one is the safer shape.
-env/*.json
+env/
+!env/parts/
+!env/.env.example
 !env/env.default.json
+!env/presets.json
 server/.cache

@@ -10,42 +10,11 @@
  * a re-asserted identity raises no `login`, and a rotation raises `secret-updated`
  * ALONE.
  */
-import { test, expect } from "@xopat/test-harness";
-
-globalThis.window = globalThis.window ?? globalThis;
-
-class TestEventSource {
-    constructor() { this._h = new Map(); }
-    addHandler(event, cb) {
-        if (!this._h.has(event)) this._h.set(event, []);
-        this._h.get(event).push(cb);
-    }
-    removeHandler(event, cb) {
-        const list = this._h.get(event) || [];
-        const i = list.indexOf(cb);
-        if (i >= 0) list.splice(i, 1);
-    }
-    numberOfHandlers(event) { return (this._h.get(event) || []).length; }
-    raiseEvent(event, payload) {
-        for (const cb of [...(this._h.get(event) || [])]) cb(payload || {});
-    }
-    async raiseEventAwaiting(event, payload) {
-        for (const cb of [...(this._h.get(event) || [])]) await cb(payload || {});
-    }
-}
+import { test, expect, freshXOpatUser } from "@xopat/test-harness";
 
 async function freshUser() {
-    globalThis.window.OpenSeadragon = { EventSource: TestEventSource };
-    globalThis.window.HttpClient = { knowsSecretType: () => true };
-    globalThis.$ = globalThis.$ ?? { t: (k) => k };
-    globalThis.document = globalThis.document ?? { getElementById: () => null };
-    globalThis.USER_INTERFACE = { AppBar: { rightMenu: { getTab: () => ({ setTitle() {} }) } } };
-    globalThis.Dialogs = { show() {}, MSG_ERR: "err" };
-    globalThis.window.APPLICATION_CONTEXT = { auth: { markNeedsInteraction: () => {} } };
-
-    const mod = await import(`../../../src/classes/user.ts?t=${Math.random()}`);
-    mod.XOpatUser.__self = undefined;   // the query cache-buster is not reliably honoured
-    return mod.XOpatUser.instance();
+    const { user } = await freshXOpatUser();
+    return user;
 }
 
 /** What a feature subscribing the CORRECT way would see. */

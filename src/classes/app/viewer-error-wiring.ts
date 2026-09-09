@@ -69,6 +69,33 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
         Dialogs.show($.t('error.slide.tilesFaulty'), 8000, Dialogs.MSG_WARN);
     });
 
+    /**
+     * An overlay that never instantiated.
+     *
+     * `tile-source-failed` fires for backgrounds and overlays alike, but only
+     * backgrounds had anywhere to show up: the failed slot is stamped
+     * `__xopatFaultyBackground`, which drives the full-viewport failure page
+     * (and only when *nothing* in the viewer opened), the navigator's "Faulty"
+     * title and the slide switcher's flag. An overlay gets none of those — the
+     * background opens, the viewer looks healthy, and the only trace is an inline
+     * alert inside the layers panel, which is closed most of the time.
+     *
+     * So the layer silently is not there. Toast it: a transient warning is the
+     * right weight for "the slide is fine, one layer is missing", and the panel
+     * remains the place that says *which* one.
+     *
+     * Backgrounds are deliberately left alone — they already have three
+     * surfaces, and a fourth would fire alongside the failure page.
+     */
+    viewerManager.broadcastHandler('tile-source-failed', (e: any) => {
+        if (e?.kind === "background") return;
+        if (APPLICATION_CONTEXT.networkStatus?.isOffline) return;
+        // Generic on purpose, like the handler above: Toast collapses identical
+        // text into one notification with a ×N badge, so a session with several
+        // broken overlays reports once rather than N times.
+        Dialogs.show($.t('error.slide.overlayFailed'), 8000, Dialogs.MSG_WARN);
+    });
+
     let notified = false;
 
     /**

@@ -11,47 +11,11 @@
  * These vectors pin both directions, and the warning that makes the destructive
  * one audible.
  */
-import { test, expect } from "@xopat/test-harness";
-
-globalThis.window = globalThis.window ?? globalThis;
-
-/** The slice of OpenSeadragon.EventSource XOpatUser actually uses. */
-function installOpenSeadragonEventSource() {
-    class EventSource {
-        constructor() { this.__handlers = new Map(); }
-        addHandler(event, cb) {
-            if (!this.__handlers.has(event)) this.__handlers.set(event, []);
-            this.__handlers.get(event).push(cb);
-        }
-        removeHandler(event, cb) {
-            const list = this.__handlers.get(event) || [];
-            const i = list.indexOf(cb);
-            if (i >= 0) list.splice(i, 1);
-        }
-        numberOfHandlers(event) { return (this.__handlers.get(event) || []).length; }
-        raiseEvent(event, payload) {
-            for (const cb of [...(this.__handlers.get(event) || [])]) cb(payload || {});
-        }
-        async raiseEventAwaiting(event, payload) {
-            for (const cb of [...(this.__handlers.get(event) || [])]) await cb(payload || {});
-        }
-    }
-    globalThis.window.OpenSeadragon = { ...(globalThis.window.OpenSeadragon || {}), EventSource };
-}
+import { test, expect, freshXOpatUser } from "@xopat/test-harness";
 
 async function freshUser() {
-    installOpenSeadragonEventSource();
-    globalThis.window.HttpClient = { knowsSecretType: () => true };
-    globalThis.HttpClient = globalThis.window.HttpClient;
-    globalThis.$ = globalThis.$ ?? { t: (k) => k };
-    // No DOM here; the constructor looks for its app-bar panel. Probe for the
-    // method rather than for *a* document — unit suites share a worker.
-    if (typeof globalThis.document?.getElementById !== "function") {
-        globalThis.document = { getElementById: () => null };
-    }
-    const mod = await import(`../../../src/classes/user.ts?t=${Math.random()}`);
-    mod.XOpatUser.__self = undefined;
-    return new mod.XOpatUser();
+    const { user } = await freshXOpatUser();
+    return user;
 }
 
 /** Capture console.warn for the duration of `fn`. */

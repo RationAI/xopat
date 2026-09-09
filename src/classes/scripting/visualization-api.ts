@@ -315,7 +315,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     ): Promise<boolean> {
         const appContext: any = APPLICATION_CONTEXT;
         const visualizations = Array.isArray(snapshot.visualizations) ? cloneJson(snapshot.visualizations) : [];
-        const data = Array.isArray(snapshot.data) ? cloneJson(snapshot.data) : [];
+        // A snapshot that went out masked comes back carrying handles; resolve them before
+        // they reach `openViewerWith`, which would otherwise open a slide that does not exist.
+        const data = Array.isArray(snapshot.data) ? this.unmaskDataEntries(cloneJson(snapshot.data)) : [];
         const activeIndex = snapshot.activeVisualizationIndex === undefined
             ? undefined
             : cloneJson(snapshot.activeVisualizationIndex);
@@ -1001,9 +1003,15 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
     /**
      * Captures the current visualization-related session state so it can be restored later.
+     *
+     * `data` is the deployment's raw slide ids/paths, which routinely embed the case — so on a
+     * context that denies sensitive data they leave as positional handles. The array keeps its
+     * length and order because `dataReference` indexes it, and `restoreState` maps the handles
+     * back, so a capture → restore round-trip is unaffected by the masking.
      */
     captureState(): VisualizationStateSnapshot {
-        return this.buildVisualizationStateSnapshot();
+        const snapshot = this.buildVisualizationStateSnapshot();
+        return { ...snapshot, data: this.maskDataEntries(snapshot.data) };
     }
 
     /**
@@ -1919,11 +1927,20 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             const contentSize = item?.getContentSize?.();
             const layers = referencedBy.get(index) || [];
 
+            const rawDataId = typeof entry === "string" ? entry : (entry?.id ?? null);
+            const rawTileSourceId = source?.tileSourceId ?? null;
+            const mask = !this.mayExposeSensitive;
+
             return {
                 dataReference: index,
-                // `config.data` entries are opaque ids/paths chosen by the deployment.
-                dataId: typeof entry === "string" ? entry : (entry?.id ?? null),
-                tileSourceId: source?.tileSourceId ?? null,
+                // `config.data` entries are opaque ids/paths chosen by the deployment — opaque to
+                // xOpat, not to a reader: they routinely embed the case. Same for `tileSourceId`,
+                // which for DICOMweb is the store URL with the study/series UIDs in it. Masked
+                // positionally so `dataReference` still joins the rows together.
+                dataId: mask && rawDataId != null ? this.maskedHandle("data", index) : rawDataId,
+                tileSourceId: mask && rawTileSourceId != null
+                    ? this.maskedHandle("source", index)
+                    : rawTileSourceId,
                 role: backgroundRefs.has(index)
                     ? "background"
                     : (layers.length ? "overlay" : "unbound"),
@@ -1931,7 +1948,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 worldIndex,
                 width: contentSize?.x ?? null,
                 height: contentSize?.y ?? null,
-                metadata: cloneJson(metadata),
+                metadata: this.scrubSensitiveMetadata(cloneJson(metadata)),
                 referencedBy: layers,
             };
         });

@@ -159,6 +159,17 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     /** @static */
     private static __self: XOpatUser | undefined = undefined;
 
+    /**
+     * Disposer for the claiming instance's `_capRegistry` subscription.
+     *
+     * The registry is static and the subscription closes over `this`, so a
+     * subscription outlives the instance that made it — it keeps recomputing
+     * capabilities for a user nobody can reach any more. One page only ever has one
+     * instance, so this is invisible in the app; the test suites, which release the
+     * singleton claim to build a clean one, accumulated dozens.
+     */
+    private static __capRegistryDisposer: (() => void) | undefined = undefined;
+
     constructor() {
         super();
         const staticContext = XOpatUser;
@@ -185,7 +196,11 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
         });
 
         // Recompute capabilities whenever a new one is declared (lazy plugin load).
-        XOpatUser._capRegistry.onDeclared(() => this._recomputeEffective([]));
+        // The previous claimant's subscription goes first: `onDeclared` hands back a
+        // disposer precisely because the registry outlives its subscribers.
+        XOpatUser.__capRegistryDisposer?.();
+        XOpatUser.__capRegistryDisposer =
+            XOpatUser._capRegistry.onDeclared(() => this._recomputeEffective([]));
 
         // Apply the deployment default role(s) immediately so calls to `can(...)`
         // before any rights-resolver plugin runs still answer correctly.

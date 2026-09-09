@@ -437,6 +437,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     };
 
     const visualizationRuntime = new ViewerVisualizationRuntime(APPLICATION_CONTEXT);
+    // Published so a visualization can be checked without being opened. The open
+    // pipeline is otherwise the only caller, which made the renderer's own
+    // schema findings reachable only by opening a session and reading a console
+    // warning — and left authoring tools and tests to re-implement the check,
+    // i.e. to pin a second opinion that drifts from the deciding one.
+    APPLICATION_CONTEXT.visualizationRuntime = visualizationRuntime;
     const viewerStateBindings = new ViewerStateBindingController(APPLICATION_CONTEXT);
     const viewerOpenPipeline = new ViewerOpenPipeline({
         appContext: APPLICATION_CONTEXT,

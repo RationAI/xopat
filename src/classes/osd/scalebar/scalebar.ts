@@ -59,6 +59,11 @@ import {
     tiledImageViewportToImageZoom,
     getWithUnitRounded,
     getWithSquareUnitRounded,
+    unitScale,
+    squareUnitScale,
+    scaleForSeries,
+    formatWithScale,
+    formatWithSquareScale,
     isDefined,
     toSignedRotation,
 } from "./units";
@@ -458,6 +463,37 @@ OSD.Scalebar.prototype = {
     formatLength: function (unit) {return getWithUnitRounded(unit, this.lengthMetric())},
     formatArea: function (unit) {return getWithSquareUnitRounded(unit, this.areaMetric())},
 
+    /**
+     * Format several image-space measurements on ONE shared unit.
+     *
+     * `imageLengthToGivenUnits` / `imageAreaToGivenUnits` pick a prefix per value,
+     * which is right for a single readout and wrong for a column: two regions of the
+     * same slide came out as "7 138.95 kpx²" and "919 076.44 px²", and nothing on
+     * screen said the two were a thousand apart. Here the largest value picks the
+     * unit and every value is rendered with it, so a column is directly comparable.
+     *
+     * @param {number[]} lengths image-space lengths
+     * @return {string[]} one formatted string per input, same order
+     */
+    imageLengthsToGivenUnits: function (lengths) {
+        const values = lengths.map((px) => this.imageLength(px));
+        const scale = scaleForSeries(values, unitScale);
+        const metric = this.lengthMetric();
+        return values.map((v) => formatWithScale(v, metric, scale));
+    },
+
+    /**
+     * Area counterpart of {@link imageLengthsToGivenUnits}.
+     * @param {number[]} areas image-space areas
+     * @return {string[]}
+     */
+    imageAreasToGivenUnits: function (areas) {
+        const values = areas.map((px2) => this.imageArea(px2));
+        const scale = scaleForSeries(values, squareUnitScale);
+        const metric = this.areaMetric();
+        return values.map((v) => formatWithSquareScale(v, metric, scale));
+    },
+
     _init: function (options) {
         if (!this._ui) {
             this._ui = {
@@ -498,6 +534,7 @@ OSD.Scalebar.prototype = {
             }
             this._applyDockLayout();
             this.viewer.container.appendChild(this.dock);
+            this._registerChrome();
 
             if (!this.scalebarContainer) {
                 this.scalebarContainer = document.createElement("div");
@@ -1303,6 +1340,11 @@ OSD.Scalebar.prototype = {
                 this.dock.remove();
                 this.dock = null;
             }
+            // Before the dock reference is gone, and unconditionally: the
+            // registry holds the vm (and through it this scalebar) until told
+            // otherwise, so a viewer opened and closed repeatedly would leave
+            // one dead entry per cycle for `hide()` to walk.
+            this._unregisterChrome();
 
             if (this._ui?.labelObjectUrl) {
                 try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
@@ -1493,6 +1535,39 @@ OSD.Scalebar.prototype = {
         this.scalebarContainer.textContent = text;
         this.scalebarContainer.style.width = size + "px";
     },
+    /**
+     * Enrol the dock in the top bar's "hide UI" registry.
+     *
+     * The dock is appended straight to `viewer.container`, so it is outside
+     * every AppBar-managed subtree and gets no enrolment for free — and
+     * `Chrome.hide()` walks only what registered, by design. Without this the
+     * hide-UI button cleared the interface and left the scalebar, magnification
+     * panel, quick-zoom row and SYNC button floating over the slide.
+     *
+     * Registration is idempotent (`register` replaces by id), which matters
+     * because this runs on every (re)attach of the dock, not only the first.
+     */
+    _registerChrome: function () {
+        const chrome = window.USER_INTERFACE?.AppBar?.Chrome;
+        if (!chrome || !this.dock) return;
+        // Driven through `setActive`, not a second display channel of its own:
+        // that is what already owns dock visibility, and it also detaches the
+        // `update-viewport` handler — so hidden chrome stops doing per-frame
+        // work instead of merely becoming invisible. `hide()` snapshots `is()`
+        // and `show()` restores it, so a scalebar that was inactive to begin
+        // with is not switched on by unhiding the interface.
+        chrome.register(this.id + "-dock", {
+            is: () => !!this._active,
+            on: () => this.setActive(true),
+            off: () => this.setActive(false),
+        });
+    },
+
+    /** Drop the registry entry, so a destroyed scalebar is not kept alive by it. */
+    _unregisterChrome: function () {
+        window.USER_INTERFACE?.AppBar?.Chrome?.unregister?.(this.id + "-dock");
+    },
+
     /**
      * Arrange the dock for the current collapse state. Collapsed the panel
      * is a single control row and the metric bar sits to its right, wrapping

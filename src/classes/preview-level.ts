@@ -373,7 +373,7 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
  * @function tryInjectPreviewLevel
  * @return {boolean} true when the level was injected
  */
-(window as any).OpenSeadragon.TileSource.prototype.tryInjectPreviewLevel = function (): boolean {
+const tryInjectPreviewLevel = function (this: AnyTileSource): boolean {
     const source: AnyTileSource = this;
     if (source.__previewLevelInjected) return true;
     if (source.__noPreviewLevel === true) return false;
@@ -404,4 +404,23 @@ function _injectPreviewLevel(source: AnyTileSource): boolean {
     }
 };
 
-export {};
+/**
+ * Install the extension onto an OpenSeadragon namespace.
+ *
+ * Called once below for the application. It exists as a callable because the
+ * assignment is the module's only import-time side effect, and a side effect
+ * fires once per module instance: two consumers that each set up their own
+ * `window.OpenSeadragon` (test suites sharing a worker do exactly this) would
+ * otherwise race, and the loser silently gets an unpatched prototype whose
+ * `tryInjectPreviewLevel` is `undefined`. Everything else here already resolves
+ * the namespace lazily at call time, so an explicit install is the whole fix.
+ *
+ * Idempotent, and safe to call against any namespace.
+ */
+export function installPreviewLevel(namespace: any = (window as any).OpenSeadragon): void {
+    const proto = namespace?.TileSource?.prototype;
+    if (!proto) return;
+    proto.tryInjectPreviewLevel = tryInjectPreviewLevel;
+}
+
+installPreviewLevel();

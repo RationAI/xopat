@@ -95,12 +95,16 @@ function SyncToggleButton(viewer, tool) {
                 ? window.$.t('sync.cancelCalibration')
                 : (enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle')))
         },
-        // Use a simple Link icon or text abbreviation
+        // A text abbreviation rather than an icon: three states have to be told
+        // apart at a glance. Resolved through `$.t` at render time, not as
+        // literals — note that `sync.*` prose elsewhere quotes these tokens
+        // ("Shift-click SYNC to calibrate by hand"), so a locale that renames
+        // the button must rename them there too; they sit in the same block.
         van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
             () => {
-                if (busy.val) return "...";
-                if (!enabled.val) return "LINK";
-                return isRef.val ? "REF" : "SYNC";
+                if (busy.val) return window.$.t('sync.labelBusy');
+                if (!enabled.val) return window.$.t('sync.labelLink');
+                return isRef.val ? window.$.t('sync.labelRef') : window.$.t('sync.labelSync');
             }
         )
     );
@@ -132,7 +136,7 @@ function renderImageLikeInto(container, src) {
         return null;
     }
     if (node.tagName === "IMG") {
-        node.alt = "Slide label";
+        node.alt = window.$.t('main.scalebar.slideLabelAlt');
         node.loading = "lazy";
     }
     node.style.maxWidth = "100%";

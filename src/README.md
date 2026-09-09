@@ -178,6 +178,17 @@ behaves: `"overlay"` (default) hides it to a thin edge rail that floats over the
 viewer on hover/focus; `"docked"` keeps it as a flex sibling that pushes the viewer.
 The user's runtime pin toggle (persisted in AppCache) overrides this default.
 
+`params.ui.sideMenuTabs` (bool \| `Record<string, boolean>`) picks which panels of
+the **per-viewer right-side menu** boot open. A boolean applies to every tab; a map
+is keyed by tab id with `"*"` as the fallback for tabs it does not name — e.g.
+`{"*": false, "navigator": true}` boots a clean viewer with only the navigator open.
+Also honored by panels plugins append later. Unset means every panel opens. Like
+`sideMenuCompact` it is not a boolean flag read via `getUiOption`; the user's cached
+per-panel open/closed toggle overrides this deployment default, so put it in the
+session `params.ui` when the boot state must be deterministic for returning users.
+`ui.navigator: false` still wins for the navigator tab (it hides the OSD navigator
+element, not just a panel).
+
 ### `background` — `BackgroundItem[]`
 
 Each item is an image group rendered as one OSD layer (`BackgroundItem` in `src/types/app.d.ts`):

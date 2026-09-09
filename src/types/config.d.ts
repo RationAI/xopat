@@ -131,10 +131,28 @@ type XOpatUiSetup = {
      * Unlike the boolean visibility flags above this defaults to `false` and
      * is therefore NOT read via `getUiOption` (which defaults unset keys to
      * `true`) — see `resolveSideMenuCompact` in
-     * `ui/classes/components/rightSideViewerMenu.mjs`. The user's Settings
+     * `ui/classes/components/sideMenuPreferences.mjs`. The user's Settings
      * toggle persists to AppCache and this session param overrides it.
      */
     sideMenuCompact?: boolean | null;
+    /**
+     * Initial open/closed state of the per-viewer right-side menu panels.
+     * Either a boolean applying to every tab, or a map of tab id → boolean
+     * where `"*"` is the fallback for tabs the map does not name, e.g.
+     * `{"*": false, "navigator": true}` boots with only the navigator open.
+     * Unset (`null`) means every panel opens.
+     *
+     * Not read via `getUiOption` (boolean-only). Resolution lives in
+     * `resolveSideMenuTabOpen` (`ui/classes/components/sideMenuPreferences.mjs`)
+     * and applies to panels appended later by plugins too — the side menu
+     * hands it to `Menu` as `options.initialOpenResolver`.
+     *
+     * Precedence (mirrors `sideMenuCompact`): session param > the user's
+     * cached `<tabId>-open` toggle > deployment default > open. Note the
+     * navigator's `ui.navigator === false` still wins over this, because it
+     * hides the OSD navigator element rather than only collapsing a panel.
+     */
+    sideMenuTabs?: boolean | Record<string, boolean> | null;
 };
 
 type XOpatSetup = {
