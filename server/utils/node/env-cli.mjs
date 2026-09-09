@@ -200,6 +200,11 @@ function printList() {
 function report(result, childEnv, { force, json, provenance }) {
     const { conflicts, warnings, env, layers } = result;
     const placeholders = collectPlaceholders(env);
+    // A placeholder written into a value that BECOMES a process env var can
+    // never resolve — those are injected verbatim and the server substitutes
+    // only the ENV body, once. Collected during expansion, because `$meta` is
+    // stripped before the body is ever walked.
+    const unresolvable = result.unresolvableVars ?? [];
     const missing = [...placeholders.values()].filter(
         (p) => !p.hasDefault && (childEnv[p.name] === undefined || childEnv[p.name] === ""));
     const required = new Set();
@@ -229,6 +234,7 @@ function report(result, childEnv, { force, json, provenance }) {
             placeholders: [...placeholders.values()],
             missingVariables: missing.map((m) => m.name),
             missingRequired: [...required],
+            unresolvableVariables: unresolvable,
             literalSecrets: trackedSecrets,
             privateHosts: trackedHosts,
             provenance: result.provenance,
@@ -245,6 +251,13 @@ function report(result, childEnv, { force, json, provenance }) {
             console.error(c.yellow(`warning: <% ${m.name} %> is unset and has no default (${m.paths[0]})`));
         }
         for (const r of required) console.error(c.red(`missing required variable: ${r}`));
+        for (const u of unresolvable) {
+            console.error(c.red(
+                `unresolvable placeholder: ${u.source} → ${u.variable} contains ${u.tokens.join(", ")}. ` +
+                `That value is injected into the server's process environment verbatim and is never ` +
+                `substituted, so the token reaches the browser as text. Put it in the ENV body instead ` +
+                `(the one place substitution runs), or use a value that needs no interpolation.`));
+        }
         for (const s of trackedSecrets) {
             console.error(c.red(`literal secret in a tracked fragment: ${s.layer} → ${s.path} (${s.kind})`));
         }
@@ -259,7 +272,10 @@ function report(result, childEnv, { force, json, provenance }) {
 
     if (trackedSecrets.length) return EXIT.SECRET;
     if (trackedHosts.length) return EXIT.PRIVATE_HOST;
-    if (required.size) return EXIT.MISSING_VAR;
+    // Same class as a missing variable: the value will not be what the fragment
+    // says it is. Ranked above conflicts because it is unconditionally broken,
+    // not merely ambiguous.
+    if (unresolvable.length || required.size) return EXIT.MISSING_VAR;
     if (conflicts.length && !force) return EXIT.CONFLICT;
     return EXIT.OK;
 }

@@ -140,6 +140,61 @@ const CACHE_DIR = process.env.XOPAT_CACHE_DIR
 let EXTRA_STATIC_ROOTS = [];
 
 /**
+ * Bulk-media serving (`core.server.media`). **Absent means the feature does not
+ * exist** — no root is reachable through it, no response advertises
+ * `Accept-Ranges`, and `staticRoots` behaviour is unchanged byte for byte.
+ *
+ * It is a separate allowlist from `staticRoots` rather than a flag on it,
+ * because they are different powers. `staticRoots` says "this directory holds
+ * client assets", which the handler answers with one buffered `readFile` and a
+ * `200` — correct for a 40 kB bundle, useless for a 2 GB pyramid a client-side
+ * decoder reads by byte range, and a memory hazard if you point it at one.
+ * `media` says "stream this directory, honour `Range`", which is genuinely more
+ * capability: long-lived open handles, concurrent partial reads, an
+ * amplification lever a static asset directory does not have. A deployment that
+ * wants one does not thereby want the other, so declaring one never implies the
+ * other, and neither changes how the other's files are served.
+ *
+ * Development convenience only. In production, bulk media belongs behind a
+ * reverse proxy — see `server/README.md` § *Serving static files*.
+ */
+let MEDIA_CONFIG = null;
+
+/** Default ceiling on one ranged read. A decoder asks for tiles, not gigabytes. */
+const MEDIA_DEFAULT_MAX_RANGE_BYTES = 32 * 1024 * 1024;
+/** Default ceiling on simultaneously open media streams, process-wide. */
+const MEDIA_DEFAULT_MAX_CONCURRENT_STREAMS = 32;
+
+/**
+ * Validate and freeze the operator's `core.server.media` block once at boot —
+ * here rather than beside the handler, because `bootStorageConfig` below reads
+ * the config long before the request path is ever entered.
+ *
+ * Roots are resolved lazily (`mediaRoots()`) for the same reason `staticRoots`
+ * is: the handler must not pay for path work per request.
+ */
+function normalizeMediaConfig(media) {
+    const exts = Array.isArray(media.extensions)
+        ? media.extensions
+            .filter(e => typeof e === "string" && e.trim())
+            .map(e => (e.startsWith(".") ? e : `.${e}`).toLowerCase())
+        : null;
+    const num = (v, fallback, min) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= min ? n : fallback;
+    };
+    return Object.freeze({
+        roots: media.roots.filter(r => typeof r === "string" && r.trim()),
+        // An empty array would mean "serve nothing", which is a configuration
+        // mistake dressed as a policy — treat only a declared, non-empty list as
+        // a restriction, and no list as "every extension inside the root".
+        extensions: exts && exts.length ? Object.freeze(exts) : null,
+        maxRangeBytes: num(media.maxRangeBytes, MEDIA_DEFAULT_MAX_RANGE_BYTES, 1),
+        maxConcurrentStreams: num(media.maxConcurrentStreams, MEDIA_DEFAULT_MAX_CONCURRENT_STREAMS, 1),
+    });
+}
+
+/**
  * Baseline security-header policy, `core.server.security`. Read once at boot.
  *
  * Defaults are the safe-but-non-breaking set: framing denied to other origins
@@ -252,6 +307,12 @@ let PUBLISHED_EXAMPLES = {};
         setLoggingConfig(core?.CORE?.server?.logging || {});
         const roots = core?.CORE?.server?.staticRoots;
         if (Array.isArray(roots)) EXTRA_STATIC_ROOTS = roots.filter(r => typeof r === "string");
+
+        const media = core?.CORE?.server?.media;
+        if (media && typeof media === "object" && !Array.isArray(media)
+            && Array.isArray(media.roots) && media.roots.some(r => typeof r === "string" && r.trim())) {
+            MEDIA_CONFIG = normalizeMediaConfig(media);
+        }
 
         const sec = core?.CORE?.server?.security;
         if (sec && typeof sec === "object") {
@@ -996,6 +1057,55 @@ function staticRoots() {
     return out;
 }
 
+let _mediaRootsCache = null;
+/**
+ * Media roots, resolved through exactly the containment rule `staticRoots()`
+ * uses: under the application root or refused loudly. A root that escapes is a
+ * configuration bug, and honouring it would turn an ENV typo into a filesystem
+ * read primitive — which is why slides living outside the repository still go
+ * through `npm run fixtures:serve` instead.
+ */
+function mediaRoots() {
+    if (_mediaRootsCache) return _mediaRootsCache;
+    if (!MEDIA_CONFIG) return (_mediaRootsCache = []);
+    const root = constants._ABSPATH_NO_SLASH || constants.ABSPATH;
+    const seen = new Set();
+    const out = [];
+    for (const rel of MEDIA_CONFIG.roots) {
+        const abs = path.resolve(root, rel.replace(/[\\/]+/g, path.sep));
+        if (!pathIsInside(abs, root)) {
+            logger.warn(`[media] ignoring media.roots entry '${rel}': resolves outside the application root.`);
+            continue;
+        }
+        const key = _samePathCase(abs);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(abs);
+    }
+    _mediaRootsCache = out;
+    return out;
+}
+
+/** Currently open media streams, process-wide. Bounded by `maxConcurrentStreams`. */
+let _mediaStreamsOpen = 0;
+
+/**
+ * Is this resolved path served as media?
+ *
+ * A static root wins a tie. Overlap should not happen, but if a deployment
+ * declares one, the *existing* asset behaviour is the one that must not change.
+ * The extension allowlist is NOT consulted here — it decides reachability, in
+ * `resolveStaticTarget`, so a disallowed extension inside a media root is a 404
+ * rather than a file quietly served through the asset path instead.
+ */
+function isMediaPath(realPath) {
+    if (!MEDIA_CONFIG) return false;
+    const roots = mediaRoots();
+    if (!roots.length) return false;
+    if (!roots.some(r => pathIsInside(realPath, r))) return false;
+    return !staticRoots().some(r => pathIsInside(realPath, r));
+}
+
 /**
  * Second gate, applied *inside* the allowed roots. The roots already exclude
  * `env/` and `server/.cache/`; this is what keeps server-side material that
@@ -1022,6 +1132,12 @@ function isDeniedStaticPath(relPath) {
  * so no URL that used to resolve stops resolving. Containment is checked twice:
  * once on the resolved path (traversal) and once on the realpath (a symlink
  * inside an allowed root pointing out of it).
+ *
+ * BOTH gates run on the realpath, not just containment. Containment alone asks
+ * "does this land inside SOME allowed root", which a symlink to `.git/config`,
+ * `server.json` or a `*.server.ts` sitting next to a client bundle answers
+ * `yes` — the deny-list would then have been applied only to the request path
+ * the attacker chose, never to the file actually served.
  */
 async function resolveStaticTarget(pathname) {
     // Backslash is not a path separator to the URL parser but IS one to `fs` on
@@ -1031,7 +1147,10 @@ async function resolveStaticTarget(pathname) {
 
     const root = constants._ABSPATH_NO_SLASH || constants.ABSPATH;
     const candidate = path.resolve(root, rel);
-    const roots = staticRoots();
+    // Both allowlists grant reachability; which one matched decides how the file
+    // is *delivered* (see `isMediaPath`). With no `media` block this is exactly
+    // the previous set.
+    const roots = [...staticRoots(), ...mediaRoots()];
     if (!roots.some(r => pathIsInside(candidate, r))) return null;
 
     // realpath() is unimplemented on pkg's snapshot fs.
@@ -1043,6 +1162,17 @@ async function resolveStaticTarget(pathname) {
             return null;                       // missing, or a broken symlink
         }
         if (!roots.some(r => pathIsInside(real, r))) return null;
+        // Re-run the deny gate on what the symlink actually points AT.
+        if (isDeniedStaticPath(path.relative(root, real).replace(/\\/g, "/"))) return null;
+    } else {
+        // No realpath here, so the link cannot be followed to be judged — and an
+        // unjudged link is exactly the bypass above. Refuse symlinks outright;
+        // serving one unchecked is the worse failure.
+        try {
+            if ((await fsp.lstat(candidate)).isSymbolicLink()) return null;
+        } catch (_) {
+            return null;
+        }
     }
 
     let stat;
@@ -1054,7 +1184,137 @@ async function resolveStaticTarget(pathname) {
     // A directory used to reach `fs.readFile` and answer 500 with the errno.
     if (!stat.isFile()) return null;
 
-    return { path: real, stat };
+    const media = isMediaPath(real);
+    // The extension allowlist is a reachability rule, not a delivery rule: a
+    // media root declared for `.tif` must not become a way to read the `.md`
+    // sitting next to the slides.
+    if (media && MEDIA_CONFIG?.extensions
+        && !MEDIA_CONFIG.extensions.includes(path.extname(real).toLowerCase())) {
+        return null;
+    }
+
+    return { path: real, stat, media };
+}
+
+/**
+ * Parse a single `Range` header against a known size.
+ *
+ * Multi-range (`bytes=0-9,20-29`) returns `"multi"`, which the caller answers
+ * with the whole body — a legal response, and one that keeps us out of
+ * multipart/byteranges assembly for a case no slide decoder issues.
+ *
+ * @returns {{start:number,end:number}|"multi"|"unsatisfiable"|null} `null` = no
+ *          usable range header, serve normally.
+ */
+function parseRangeHeader(header, size) {
+    if (typeof header !== "string") return null;
+    const m = /^bytes=(.+)$/i.exec(header.trim());
+    if (!m) return null;
+    const specs = m[1].split(",").map(s => s.trim()).filter(Boolean);
+    if (!specs.length) return null;
+    if (specs.length > 1) return "multi";
+
+    const spec = /^(\d*)-(\d*)$/.exec(specs[0]);
+    if (!spec) return "unsatisfiable";
+    const [, rawStart, rawEnd] = spec;
+    if (rawStart === "" && rawEnd === "") return "unsatisfiable";
+
+    let start;
+    let end;
+    if (rawStart === "") {
+        // `bytes=-N` — the final N bytes. N === 0 asks for nothing.
+        const suffix = Number(rawEnd);
+        if (!Number.isFinite(suffix) || suffix <= 0) return "unsatisfiable";
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+    } else {
+        start = Number(rawStart);
+        if (!Number.isFinite(start) || start >= size) return "unsatisfiable";
+        end = rawEnd === "" ? size - 1 : Number(rawEnd);
+        if (!Number.isFinite(end)) return "unsatisfiable";
+        end = Math.min(end, size - 1);
+        if (end < start) return "unsatisfiable";
+    }
+    return { start, end };
+}
+
+/**
+ * Serve a file from a `core.server.media` root: streamed, `Range`-aware, and
+ * bounded.
+ *
+ * The bounds are the reason this is a separate path rather than a flag on the
+ * asset handler. Ranged reads keep a file handle open for the life of the
+ * response, so an unbounded version of this is a cheap way to pin a process's
+ * descriptors and memory from anonymous requests. `maxConcurrentStreams` caps
+ * how many can be in flight and `maxRangeBytes` caps how much one of them may
+ * ask for; both are operator-set, and neither is reachable from a session (§7).
+ */
+function responseMediaFile(req, res, target, headers, etag) {
+    const size = target.stat.size;
+    headers["Accept-Ranges"] = "bytes";
+
+    const isHead = req.method === "HEAD";
+    const rawRange = req.headers["range"];
+
+    // `If-Range` with a non-matching validator means "the entity changed, send
+    // me the whole thing" — not an error, and not a partial response.
+    const ifRange = req.headers["if-range"];
+    const rangeUsable = !ifRange || ifRange.trim() === etag;
+
+    let range = rangeUsable ? parseRangeHeader(rawRange, size) : null;
+    if (range === "multi") range = null;
+    if (range === "unsatisfiable") {
+        res.writeHead(416, { ...headers, "Content-Range": `bytes */${size}` });
+        return res.end();
+    }
+
+    let start = 0;
+    let end = size - 1;
+    let status = 200;
+    if (range) {
+        start = range.start;
+        // Clamp rather than refuse: a decoder asking for more than the operator
+        // allows should get a short read it can continue from, not a failure it
+        // has no way to interpret.
+        end = Math.min(range.end, start + MEDIA_CONFIG.maxRangeBytes - 1);
+        status = 206;
+        headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+    }
+    headers["Content-Length"] = end - start + 1;
+
+    if (isHead) {
+        res.writeHead(status, headers);
+        return res.end();
+    }
+
+    if (_mediaStreamsOpen >= MEDIA_CONFIG.maxConcurrentStreams) {
+        logger.warn(`[media] refusing '${target.path}': ${_mediaStreamsOpen} streams already open `
+            + `(media.maxConcurrentStreams = ${MEDIA_CONFIG.maxConcurrentStreams}).`);
+        res.writeHead(503, { "Content-Type": "text/plain", "Retry-After": "1" });
+        return res.end("Server busy, retry shortly.");
+    }
+
+    _mediaStreamsOpen++;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        _mediaStreamsOpen--;
+    };
+
+    const stream = fs.createReadStream(target.path, { start, end });
+    stream.on("error", (e) => {
+        logger.warn(`[media] read failed for '${target.path}':`, e?.code || e);
+        if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end();
+        release();
+    });
+    stream.on("close", release);
+    // A client that navigates away mid-tile must not leave the handle open.
+    res.on("close", () => stream.destroy());
+
+    res.writeHead(status, headers);
+    stream.pipe(res);
 }
 
 async function responseStaticFile(req, res, target, urlObj) {
@@ -1063,7 +1323,12 @@ async function responseStaticFile(req, res, target, urlObj) {
 
     // Cheap, correct validators — the previous handler had none, so an
     // unversioned asset was re-read and re-sent in full on every request.
-    const etag = `W/"${target.stat.size.toString(16)}-${Math.floor(target.stat.mtimeMs).toString(16)}"`;
+    //
+    // Media gets a STRONG validator: RFC 7233 requires a strong one for
+    // `If-Range`, so a weak ETag there would silently disable resumption and
+    // turn every conditional range into a full-file transfer.
+    const validator = `"${target.stat.size.toString(16)}-${Math.floor(target.stat.mtimeMs).toString(16)}"`;
+    const etag = target.media ? validator : `W/${validator}`;
     const lastModified = target.stat.mtime.toUTCString();
 
     const headers = {
@@ -1071,8 +1336,21 @@ async function responseStaticFile(req, res, target, urlObj) {
         "ETag": etag,
         "Last-Modified": lastModified,
     };
-    if (version) {
+    if (version && DEV_MODE) {
+        // `?v=` carries the APP version (`src/config.json`), not the file's — so
+        // `immutable` is only true across releases. In development it means an
+        // edit to a module or plugin source is invisible until a hard reload,
+        // because the URL does not change when the file does. That is a
+        // debugging trap, not a caching win: it silently runs stale code while
+        // the server serves the new file. Revalidate instead; the ETag below
+        // keeps a 304 cheap.
+        headers["Cache-Control"] = "no-cache";
+    } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
+    } else if (target.media) {
+        // `no-store` would forbid keeping the partial responses a tile decoder
+        // re-reads constantly; revalidation against the ETag is what we want.
+        headers["Cache-Control"] = "no-cache";
     } else {
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
         headers["Pragma"] = "no-cache";
@@ -1084,6 +1362,8 @@ async function responseStaticFile(req, res, target, urlObj) {
         res.writeHead(304, headers);
         return res.end();
     }
+
+    if (target.media) return responseMediaFile(req, res, target, headers, etag);
 
     let content;
     try {
@@ -2009,6 +2289,7 @@ function printPublishedExamples(url) {
     for (const entry of entries) {
         logger.info(`    [${entry.id}] ${entry.name}`);
         if (entry.description) logger.info(`      ${entry.description}`);
+        if (entry.note) logger.info(`      ${entry.note}`);
         if (entry.url) {
             logger.info(`      ${entry.url}`);
         } else {

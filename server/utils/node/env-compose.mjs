@@ -197,10 +197,11 @@ function suggestions(selector, presets) {
  * hand-written deployment first-class — `up -- env/env.mine.json logging/chat`
  * layers a fragment over a whole custom ENV.
  *
- * @returns {{layers: Layer[], defaults: object, env: object}}
+ * @returns {{layers: Layer[], defaults: object, env: object, unresolvableVars: object[]}}
  *   `defaults` are `$meta.defaults` from fragments (lowest precedence process
  *   env), `env` are preset `env` blocks (values the server reads *before* any
- *   config, so they cannot live in the ENV file itself).
+ *   config, so they cannot live in the ENV file itself). `unresolvableVars`
+ *   are placeholders written into either of those — see `scanProcessEnvValues`.
  */
 export function expandSelectors(selectors, opts = {}) {
     const presets = opts.presets ?? loadPresets();
@@ -208,6 +209,7 @@ export function expandSelectors(selectors, opts = {}) {
     const byId = new Map();
     const defaults = {};
     const env = {};
+    const unresolvableVars = [];
     const seen = new Set();
 
     const push = (layer) => {
@@ -234,6 +236,7 @@ export function expandSelectors(selectors, opts = {}) {
         // role it declares for itself.
         for (const base of bases) resolve(base, "base");
         seen.delete(absFile);
+        scanProcessEnvValues(meta.defaults, `${id} $meta.defaults`, unresolvableVars);
         Object.assign(defaults, meta.defaults ?? {});
         push({
             id,
@@ -255,6 +258,7 @@ export function expandSelectors(selectors, opts = {}) {
             addPreset(parent, role);
         }
         for (const sel of asList(preset.layers)) resolve(sel, role);
+        scanProcessEnvValues(preset.env, `preset:${name} env`, unresolvableVars);
         Object.assign(env, preset.env ?? {});
         if (isPlainObject(preset.override) && Object.keys(preset.override).length) {
             push({
@@ -300,7 +304,7 @@ export function expandSelectors(selectors, opts = {}) {
         }
         resolve(selector, undefined);
     }
-    return { layers, defaults, env };
+    return { layers, defaults, env, unresolvableVars };
 }
 
 /* -------------------------------------------------------------- composition */
@@ -426,7 +430,7 @@ export function composeLayers(layers) {
 
 /** Selector list → composed ENV, in one call. */
 export function composeEnv(selectors, opts = {}) {
-    const { layers, defaults, env: presetEnv } = expandSelectors(selectors, opts);
+    const { layers, defaults, env: presetEnv, unresolvableVars } = expandSelectors(selectors, opts);
     const extra = [];
     for (const [p, value] of Object.entries(opts.set ?? {})) extra.push({ path: p, value });
     if (extra.length) {
@@ -440,7 +444,7 @@ export function composeEnv(selectors, opts = {}) {
         layers.push({ id: "--set", kind: "override", file: null, role: "override", dimension: null, meta: {}, data });
     }
     const result = composeLayers(layers);
-    return { ...result, defaults, presetEnv };
+    return { ...result, defaults, presetEnv, unresolvableVars };
 }
 
 /**
@@ -491,6 +495,38 @@ export function collectPlaceholders(env) {
         }
     });
     return found;
+}
+
+/**
+ * A `<% VAR %>` written into a value that becomes a PROCESS ENVIRONMENT
+ * variable — a `$meta.defaults` entry or a preset `env` entry — can never
+ * resolve, and the literal text reaches the browser.
+ *
+ * Two facts make it unresolvable, and neither is visible from the fragment:
+ *
+ *  - those values are injected verbatim (`env-cli.mjs` `buildChildEnv` →
+ *    `dotenv.js` `layerEnv`); the composer deliberately never substitutes;
+ *  - the server's substitution is a single pass over the ENV *body*
+ *    (`server/templates/javascript/core.js` `parseEnvConfig`), so a token
+ *    inside a value it just substituted is not re-scanned.
+ *
+ * It also escaped every other check here: `splitBody` strips `$meta` before the
+ * body is walked, so `collectPlaceholders` never saw these strings. Hence a
+ * dedicated scan — the failure mode is a viewer that renders a broken URL with
+ * `<% … %>` still in it, which is expensive to trace back to an ENV fragment.
+ *
+ * The fix is always one of: move the token into the ENV body (the one place
+ * substitution runs), or write a value that needs no interpolation — a relative
+ * URL rather than one that has to know the port.
+ */
+export function scanProcessEnvValues(obj, source, sink) {
+    if (!isPlainObject(obj)) return sink;
+    for (const [key, value] of Object.entries(obj)) {
+        if (typeof value !== "string") continue;
+        const tokens = [...value.matchAll(PLACEHOLDER_RE)].map(m => m[0]);
+        if (tokens.length) sink.push({ source, variable: key, value, tokens });
+    }
+    return sink;
 }
 
 const SECRET_PATTERNS = [
