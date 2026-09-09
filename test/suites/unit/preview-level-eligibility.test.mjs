@@ -41,7 +41,12 @@ globalThis.window.OpenSeadragon = { TileSource: { prototype: tileSourcePrototype
 globalThis.window.APPLICATION_CONTEXT = { getOption: (key) => key !== "__never" };
 globalThis.window.UTILITIES = { imageLikeToImage: async () => null };
 
-await import("../../../src/classes/preview-level.ts");
+// Installed explicitly rather than relying on the import's side effect: that
+// fires once per module instance, and another suite in the same worker sets up
+// its own `window.OpenSeadragon` — whichever imported second used to get an
+// unpatched prototype and an undefined `tryInjectPreviewLevel`.
+const { installPreviewLevel } = await import("../../../src/classes/preview-level.ts");
+installPreviewLevel(globalThis.window.OpenSeadragon);
 
 const tryInject = tileSourcePrototype.tryInjectPreviewLevel;
 

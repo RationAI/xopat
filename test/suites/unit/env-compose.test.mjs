@@ -26,7 +26,8 @@ const composer = await import(
 
 const {
     mergeDeep, composeEnv, composeLayers, readJsonc, loadEnvFile,
-    collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, listFragments, loadPresets,
+    collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, scanProcessEnvValues,
+    listFragments, loadPresets,
 } = composer;
 
 const layer = (id, data, extra = {}) =>
@@ -198,6 +199,72 @@ test("every preset is documented in test/MANUAL_TESTING.md @unit", () => {
     const doc = fs.readFileSync(fromRoot("test", "MANUAL_TESTING.md"), "utf8");
     const undocumented = Object.keys(loadPresets()).filter((name) => !doc.includes(`up:dev -- ${name}`));
     expect(undocumented).toEqual([]);
+});
+
+/* ------------------------------------------------- session fixture parameters */
+
+test("no session fixture sets a viewer parameter the app will drop @unit", () => {
+    // `src/app.ts` sanitizes `params` against the `core.setup` defaults and drops
+    // anything not declared, warning once. Five fixtures set `background` when
+    // the parameter is `backgroundColor` — so every one of them silently lost its
+    // black backdrop, which on a fluorescence session is the difference between
+    // "dark field with three tinted channels" and "white".
+    //
+    // Pure comparison against `src/config.json` rather than a browser: the
+    // allowed set *is* the default set, and a fixture that names something else
+    // is wrong regardless of what any deployment configures.
+    const allowed = new Set(Object.keys(readJsonc("src/config.json").setup));
+    const dir = fromRoot("test", "fixtures", "sessions");
+    const offenders = [];
+    for (const file of fs.readdirSync(dir)) {
+        if (!file.endsWith(".json") || file === "index.json") continue;
+        const params = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8")).params ?? {};
+        for (const key of Object.keys(params)) {
+            if (!allowed.has(key)) offenders.push(`${file}: ${key}`);
+        }
+    }
+    expect(offenders).toEqual([]);
+});
+
+/* ------------------------------------------- placeholders in process-env values */
+
+test("a placeholder in a $meta.defaults value is reported as unresolvable @unit", () => {
+    // The failure this prevents: `$meta.defaults` values are injected into the
+    // server's process environment VERBATIM, and the server substitutes the ENV
+    // body exactly once — so a token inside a value it just substituted is never
+    // re-scanned and reaches the browser as literal text. It shipped once
+    // because nothing looked: `splitBody` strips `$meta` before the body is
+    // walked, so `collectPlaceholders` could not see it either.
+    const found = scanProcessEnvValues(
+        { GOOD: "http://127.0.0.1:9100/files", BAD: "http://localhost:<% XOPAT_NODE_PORT:-9000 %>/x" },
+        "probe $meta.defaults", []);
+    expect(found.map(f => f.variable)).toEqual(["BAD"]);
+    expect(found[0].tokens).toEqual(["<% XOPAT_NODE_PORT:-9000 %>"]);
+});
+
+test("no fragment or preset writes a placeholder into a process-env value @unit", () => {
+    const offenders = [];
+    for (const fragment of listFragments()) {
+        const meta = readJsonc(fragment.file).$meta ?? {};
+        scanProcessEnvValues(meta.defaults, `${fragment.id} $meta.defaults`, offenders);
+    }
+    for (const [name, preset] of Object.entries(loadPresets())) {
+        scanProcessEnvValues(preset.env, `preset:${name} env`, offenders);
+    }
+    expect(offenders.map(o => `${o.source} → ${o.variable}`)).toEqual([]);
+});
+
+test("the TIFF deployments resolve their base URL without interpolation @unit", () => {
+    // Relative, so it follows whatever port and origin the server bound —
+    // including `--port` and the harness's floating per-worker port. An absolute
+    // default would have to interpolate XOPAT_NODE_PORT, and the placeholder
+    // grammar cannot nest one token inside another's default.
+    for (const [preset, module] of [["webtiff", "webtiff"], ["geotiff", "geotiff"]]) {
+        const { env, unresolvableVars } = composeEnv([preset], {});
+        expect(unresolvableVars, preset).toEqual([]);
+        expect(env.modules[module].protocolBaseUrl, preset)
+            .toBe("<% TIFF_FILESERVER:-/test/fixtures/data %>");
+    }
 });
 
 test("no tracked fragment names a non-public host @unit", () => {

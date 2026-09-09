@@ -20,6 +20,8 @@ globalThis.window.OpenSeadragon = globalThis.window.OpenSeadragon ?? {
 };
 
 const { decoderOptionsFrom } = await import("../../tile-source.mjs");
+// The bound is the decoder's, not a number restated here — see the cap test.
+const { MAX_CHANNELS } = await import("../../dist/web-tiff.mjs");
 
 test("no options is no options", () => {
     expect(decoderOptionsFrom(undefined)).toEqual({});
@@ -76,16 +78,29 @@ test("channels are filtered to a bounded list of real indices", () => {
     expect(decoderOptionsFrom({ channels: [-1, "x"] })).toEqual({});
     expect(decoderOptionsFrom({ channels: [] })).toEqual({});
 
+    // Bounded by the decoder's own MAX_CHANNELS rather than a local number: the
+    // decoder now THROWS on a longer selection, and it validates per read, so a
+    // local cap that drifted above it would turn one clean refusal into a
+    // failure on every tile.
     const huge = decoderOptionsFrom({ channels: Array.from({ length: 500 }, (_, i) => i) });
-    expect(huge.format.channels).toHaveLength(64);
+    expect(huge.format.channels).toHaveLength(MAX_CHANNELS);
 });
 
-test('WSI-Service\'s "all" is accepted and means no selection', () => {
+test('WSI-Service\'s "all" is handed to the decoder, which means every channel', () => {
     // Sessions in `test/fixtures/sessions/` carry `{format: "tiff", channels: "all"}`
     // because that is what the WSI-Service sources take. It must mean the same
     // thing here — every channel — rather than being an unrecognised value that
     // happens to produce the same result by accident.
-    expect(decoderOptionsFrom({ format: "tiff", channels: "all" })).toEqual({});
+    //
+    // It used to be dropped here, which reached that result by accident: the
+    // decoder never saw the string. It now validates the string forms itself
+    // (`"all"`, and the `"r g b a x"` swizzle) and says once that it resolved
+    // one, so forwarding is what makes the promise above true rather than
+    // coincidental.
+    expect(decoderOptionsFrom({ format: "tiff", channels: "all" }))
+        .toEqual({ format: { channels: "all" } });
+    // Whitespace-only is not a selection.
+    expect(decoderOptionsFrom({ channels: "   " })).toEqual({});
 });
 
 test("interpretation is an allowlist", () => {

@@ -1,40 +1,103 @@
-class x extends Error {
+class P {
+  /**
+   * @param {object} init
+   * @param {string} init.code stable identifier; the message may name an index,
+   *   the code may not, because the code is what deduplication keys on
+   * @param {string} init.message human-readable, already prefixed with [web-tiff]
+   *   when it came from the decoder
+   * @param {"warn"|"info"} [init.severity="warn"] `info` reports a decision that
+   *   is correct but worth naming, such as a plane stack being read as channels
+   * @param {number|null} [init.file=null] the file this was raised against, in
+   *   whatever id space the caller holds; null for one raised before any file
+   * @param {string|null} [init.label=null] a name for that file, for a host
+   *   showing several slides at once
+   */
+  constructor({ code: e, message: t, severity: r = "warn", file: i = null, label: s = null }) {
+    this.code = e, this.message = t, this.severity = r, this.file = i, this.label = s;
+  }
+  toString() {
+    return this.message;
+  }
+  toJSON() {
+    return {
+      code: this.code,
+      message: this.message,
+      severity: this.severity,
+      file: this.file,
+      label: this.label
+    };
+  }
+}
+function S(n, e, t = "warn", r = {}) {
+  return new P({ code: n, message: e, severity: t, ...r });
+}
+const L = /* @__PURE__ */ new Set(), Pe = /* @__PURE__ */ new Set(), ue = /* @__PURE__ */ new WeakMap(), de = /* @__PURE__ */ new WeakMap();
+function pe(n, e) {
+  let t = n.get(e);
+  return t === void 0 && (t = /* @__PURE__ */ new Set(), n.set(e, t)), t;
+}
+function Ie(n, e) {
+  if (e) {
+    const t = pe(ue, e);
+    return t.add(n), () => t.delete(n);
+  }
+  return L.add(n), () => L.delete(n);
+}
+function ge(n, e) {
+  if (typeof e?.report == "function") {
+    e.report(n);
+    return;
+  }
+  const t = e ? pe(de, e) : Pe, r = e ? n.code : `${n.file ?? n.label ?? ""} ${n.code}`;
+  if (t.has(r)) return;
+  t.add(r);
+  const s = [...(e ? ue.get(e) : void 0) ?? [], ...L];
+  if (s.length === 0) {
+    console[n.severity === "info" ? "info" : "warn"](n.message);
+    return;
+  }
+  for (const a of s) a(n);
+}
+function ke(n) {
+  n && de.delete(n);
+}
+class b extends Error {
   constructor(e, t) {
     super(e, t), this.name = "WebTiffError";
   }
 }
-class R extends x {
-  constructor(e, { status: t = null, statusText: s = "", url: i = null, range: r = null, body: a = null, cause: o } = {}) {
-    super(e, o ? { cause: o } : void 0), this.name = "WebTiffHttpError", this.status = t, this.statusText = s, this.url = i, this.range = r, this.body = a;
+class U extends b {
+  constructor(e, { status: t = null, statusText: r = "", url: i = null, range: s = null, body: a = null, cause: o } = {}) {
+    super(e, o ? { cause: o } : void 0), this.name = "WebTiffHttpError", this.status = t, this.statusText = r, this.url = i, this.range = s, this.body = a;
   }
 }
-class w extends x {
-  constructor(e, { code: t = null, cause: s } = {}) {
-    super(e, s ? { cause: s } : void 0), this.name = "WebTiffDecodeError", this.code = t;
+class w extends b {
+  constructor(e, { code: t = null, cause: r } = {}) {
+    super(e, r ? { cause: r } : void 0), this.name = "WebTiffDecodeError", this.code = t;
   }
 }
-class re extends x {
+class me extends b {
   constructor(e, { code: t = null } = {}) {
     super(e), this.name = "WebTiffUnsupportedError", this.code = t;
   }
 }
-class fe extends x {
+class We extends b {
   constructor(e = "aborted") {
     super(e), this.name = "AbortError";
   }
 }
-function de(n, e) {
+function Re(n, e) {
   const t = e || `web-tiff status ${n}`;
   switch (n) {
     case -4:
-      return new re(t, { code: n });
+      return new me(t, { code: n });
     case -7:
-      return new fe(t);
+      return new We(t);
     default:
       return new w(t, { code: n });
   }
 }
-const D = 0, H = 1, se = 0, ie = 1, C = 2, pe = {
+const G = 0, V = 1, we = 0, ye = 1, B = 2, $e = {
   0: Uint8Array,
   1: Uint16Array,
   2: Uint32Array,
@@ -45,12 +108,15 @@ const D = 0, H = 1, se = 0, ie = 1, C = 2, pe = {
   // half floats travel as raw bits
   7: Float32Array,
   8: Float64Array
-}, me = 4294967295, M = 32, z = 32, j = 2, V = 32;
-class ge {
+}, Ue = 4294967295, v = 32, K = 32, X = 2, Y = 8, Z = 4096, J = 16384;
+class Fe {
   #e;
   #t;
   #r = /* @__PURE__ */ new Map();
-  #s = 1;
+  /** Native handle -> the entry it belongs to, for attributing a drained record. */
+  #s = /* @__PURE__ */ new Map();
+  #i = /* @__PURE__ */ new Set();
+  #n = 1;
   constructor(e) {
     this.#e = e, e._wt_init(0), this.#t = {
       req: e._wt_read_req_size(),
@@ -64,74 +130,124 @@ class ge {
     return JSON.parse(this.#e.UTF8ToString(this.#e._wt_build_info()));
   }
   /** Ranges the decoder is waiting on, already block-aligned and coalesced. */
-  #i(e) {
-    const t = this.#e, s = t._wt_wants_count(e), i = t._wt_wants_ptr(e), r = [];
-    for (let a = 0; a < s; a++) {
+  #o(e) {
+    const t = this.#e, r = t._wt_wants_count(e), i = t._wt_wants_ptr(e), s = [];
+    for (let a = 0; a < r; a++) {
       const o = i + a * this.#t.range;
-      r.push({
+      s.push({
         offset: t.HEAPF64[o / 8],
         length: t.HEAPU32[(o + 8) / 4]
       });
     }
-    return r;
+    return s;
   }
-  async #n(e, t, s) {
+  async #a(e, t, r) {
     const i = this.#e;
-    for (const { offset: r, length: a } of this.#i(e)) {
-      const o = await t.read(r, a, s);
+    for (const { offset: s, length: a } of this.#o(e)) {
+      const o = await t.read(s, a, r);
       if (!o.length) continue;
-      const l = i._wt_cache_reserve(e, r, o.length);
+      const l = i._wt_cache_reserve(e, s, o.length);
       if (l === 0) throw new w("out of memory reserving a block");
-      i.HEAPU8.set(o, l), i._wt_cache_commit(e, r, o.length);
+      i.HEAPU8.set(o, l), i._wt_cache_commit(e, s, o.length);
     }
   }
-  #o(e, t) {
-    const s = this.#e.UTF8ToString(this.#e._wt_last_error(e));
-    return de(t, s);
+  #l(e, t) {
+    const r = this.#e.UTF8ToString(this.#e._wt_last_error(e));
+    return Re(t, r);
+  }
+  /**
+   * A number that grows while an operation is getting somewhere, and stops when
+   * it is not.
+   *
+   * The decoder reports how many reads its last attempt served out of the cache.
+   * An attempt is a full re-run over a warmer cache, so a round trip that let it
+   * get further shows up as a larger count and one that changed nothing shows up
+   * as the same count -- which is exactly the difference between a loop working
+   * and a loop stuck.
+   *
+   * The fallback covers new JavaScript over an old .wasm, a combination this
+   * library already ships into: with no counter to read, a round that ends
+   * waiting on precisely the ranges it was already waiting on is the stalled one.
+   */
+  #c(e) {
+    const t = this.#e;
+    if (typeof t._wt_progress == "function")
+      return () => t._wt_progress(e);
+    let r = 0, i = null;
+    return () => {
+      const s = this.#o(e).map((a) => `${a.offset}:${a.length}`).join(",");
+      return s !== i && (i = s, r++), r;
+    };
+  }
+  /**
+   * Bound the round trips that achieve nothing, and say which bound was hit.
+   *
+   * Returns a `step(progress)` to call once per round with the current progress
+   * value; it throws when the operation has stopped resolving.
+   */
+  #h(e) {
+    let t = -1, r = 0, i = 0;
+    return (s) => {
+      if (i++, s > t)
+        t = s, r = 0;
+      else if (++r > Y)
+        throw new w(
+          `${e} stopped resolving: ${Y} fetches in a row advanced nothing, after ${i} fetches in total. The source is not returning the ranges being asked for.`
+        );
+      if (i > Z)
+        throw new w(
+          `${e} did not resolve within ${Z} fetches, which is the runaway limit rather than a budget; the file is deeper than anything this library expects to see.`
+        );
+    };
   }
   /**
    * Open a file and parse every directory.
    *
    * @param {{getSize(): Promise<number>, read(offset, length, signal): Promise<Uint8Array>}} source
+   * @param {object} [options]
+   * @param {string|null} [options.label] a name for this file, carried on the
+   *   diagnostics it raises
    */
-  async open(e, { blockSize: t = 65536, cacheBytes: s = 32 * 1024 * 1024, signal: i } = {}) {
-    const r = this.#e, a = await e.getSize(), o = r._wt_file_create(a, t, s);
-    if (o <= 0) throw new w(`cannot open: status ${o}`);
-    let l = r._wt_open(o), c = 0;
-    for (; l === H; ) {
-      if (await this.#n(o, e, i), ++c > V)
-        throw r._wt_file_close(o), new w("the header did not resolve after 32 fetches");
-      l = r._wt_open(o);
+  async open(e, { blockSize: t = 65536, cacheBytes: r = 32 * 1024 * 1024, signal: i, label: s = null } = {}) {
+    const a = this.#e, o = await e.getSize(), l = a._wt_file_create(o, t, r);
+    if (l <= 0) throw new w(`cannot open: status ${l}`);
+    const c = this.#n++, h = { id: c, handle: l, source: e, label: s };
+    this.#s.set(l, h);
+    try {
+      const f = this.#c(l), u = this.#h("the header");
+      let d = a._wt_open(l);
+      for (; d === V; )
+        await this.#a(l, e, i), d = a._wt_open(l), u(f());
+      if (d !== G) throw this.#l(l, d);
+      const g = JSON.parse(a.UTF8ToString(a._wt_meta_json(l)));
+      if (g.abi !== X)
+        throw new w(
+          `[web-tiff] this build speaks ABI ${X} but the WebAssembly module speaks ${g.abi}. The .mjs and the .wasm are versioned together; re-copy the whole folder rather than one file of it.`
+        );
+      return this.#r.set(c, h), { id: c, meta: g };
+    } catch (f) {
+      throw this.#f(), a._wt_file_close(l), this.#s.delete(l), f;
+    } finally {
+      this.#f();
     }
-    if (l !== D) {
-      const u = this.#o(o, l);
-      throw r._wt_file_close(o), u;
-    }
-    const h = JSON.parse(r.UTF8ToString(r._wt_meta_json(o)));
-    if (h.abi !== j)
-      throw r._wt_file_close(o), new w(
-        `[web-tiff] this build speaks ABI ${j} but the WebAssembly module speaks ${h.abi}. The .mjs and the .wasm are versioned together; re-copy the whole folder rather than one file of it.`
-      );
-    const f = this.#s++;
-    return this.#r.set(f, { handle: o, source: e }), { id: f, meta: h };
   }
   close(e) {
     const t = this.#r.get(e);
-    t && (this.#e._wt_file_close(t.handle), this.#r.delete(e));
+    t && (this.#e._wt_file_close(t.handle), this.#r.delete(e), this.#s.delete(t.handle));
   }
-  #a(e, t) {
-    const s = this.#e, i = s.HEAPU32, r = s.HEAP32, a = s.HEAPF32, o = e / 4;
-    s.HEAPU8.fill(0, e, e + this.#t.req), i[o + 0] = t.dir ?? 0, r[o + 1] = t.subifd ?? -1, i[o + 2] = t.sx0, i[o + 3] = t.sy0, i[o + 4] = t.sx1, i[o + 5] = t.sy1, i[o + 6] = t.outWidth ?? t.sx1 - t.sx0, i[o + 7] = t.outHeight ?? t.sy1 - t.sy0, i[o + 8] = t.resample ?? 0, i[o + 9] = t.interpretation ?? 0, i[o + 10] = t.packFlags ?? 0, i[o + 11] = t.output ?? se, a[o + 12] = t.padAlpha ?? 1;
+  #u(e, t) {
+    const r = this.#e, i = r.HEAPU32, s = r.HEAP32, a = r.HEAPF32, o = e / 4;
+    r.HEAPU8.fill(0, e, e + this.#t.req), i[o + 0] = t.dir ?? 0, s[o + 1] = t.subifd ?? -1, i[o + 2] = t.sx0, i[o + 3] = t.sy0, i[o + 4] = t.sx1, i[o + 5] = t.sy1, i[o + 6] = t.outWidth ?? t.sx1 - t.sx0, i[o + 7] = t.outHeight ?? t.sy1 - t.sy0, i[o + 8] = t.resample ?? 0, i[o + 9] = t.interpretation ?? 0, i[o + 10] = t.packFlags ?? 0, i[o + 11] = t.output ?? we, a[o + 12] = t.padAlpha ?? 1;
     const l = t.channels ?? [];
-    i[o + 13] = Math.min(l.length, M);
-    for (let d = 0; d < M; d++) r[o + 14 + d] = l[d] ?? -1;
-    const c = o + 14 + M;
-    for (let d = 0; d < 4; d++)
-      i[c + d] = t.rgbaChannels?.[d] ?? me;
-    const h = t.planes ?? [], f = Math.min(h.length, z), u = c + 4, p = u + 1, m = p + z;
+    i[o + 13] = Math.min(l.length, v);
+    for (let p = 0; p < v; p++) s[o + 14 + p] = l[p] ?? -1;
+    const c = o + 14 + v;
+    for (let p = 0; p < 4; p++)
+      i[c + p] = t.rgbaChannels?.[p] ?? Ue;
+    const h = t.planes ?? [], f = Math.min(h.length, K), u = c + 4, d = u + 1, g = d + K;
     i[u] = f;
-    for (let d = 0; d < f; d++)
-      i[p + d] = h[d].dir ?? 0, r[m + d] = h[d].subifd ?? -1;
+    for (let p = 0; p < f; p++)
+      i[d + p] = h[p].dir ?? 0, s[g + p] = h[p].subifd ?? -1;
   }
   /**
    * Copy bytes out of the WebAssembly heap into a transferable ArrayBuffer.
@@ -144,155 +260,289 @@ class ge {
    * This copy is the one irreducible cost of the boundary: a view into the heap
    * cannot be transferred, and the heap itself must not be.
    */
-  #l(e, t) {
-    const s = new ArrayBuffer(t);
-    return new Uint8Array(s).set(this.#e.HEAPU8.subarray(e, e + t)), s;
+  #d(e, t) {
+    const r = new ArrayBuffer(t);
+    return new Uint8Array(r).set(this.#e.HEAPU8.subarray(e, e + t)), r;
   }
-  #c(e) {
-    const t = this.#e, s = t.HEAPU32, i = t.HEAP32, r = t.HEAPF64, a = t._wt_result_header_ptr(e) / 4, o = {
-      width: s[a + 0],
-      height: s[a + 1],
-      mode: s[a + 2] === 0 ? "image" : "data",
-      channelCount: s[a + 3],
-      encodingVersion: s[a + 4],
-      output: s[a + 5],
-      packCount: s[a + 6],
-      bandCount: s[a + 7],
-      flags: s[a + 8]
+  #p(e) {
+    const t = this.#e, r = t.HEAPU32, i = t.HEAP32, s = t.HEAPF64, a = t._wt_result_header_ptr(e) / 4, o = {
+      width: r[a + 0],
+      height: r[a + 1],
+      mode: r[a + 2] === 0 ? "image" : "data",
+      channelCount: r[a + 3],
+      encodingVersion: r[a + 4],
+      output: r[a + 5],
+      packCount: r[a + 6],
+      bandCount: r[a + 7],
+      flags: r[a + 8]
     }, l = [], c = t._wt_result_bands_ptr(e), h = [];
-    for (let p = 0; p < o.bandCount; p++) {
-      const m = (c + p * this.#t.band) / 4, d = s[m + 0], y = s[m + 1], g = s[m + 2], A = pe[g] ?? Uint8Array, P = this.#l(d, y);
+    for (let d = 0; d < o.bandCount; d++) {
+      const g = (c + d * this.#t.band) / 4, p = r[g + 0], y = r[g + 1], m = r[g + 2], T = $e[m] ?? Uint8Array, W = this.#d(p, y);
       h.push({
-        data: new A(P),
-        sampleType: g,
-        flags: s[m + 3],
-        channel: i[m + 4]
-      }), l.push(P);
+        data: new T(W),
+        sampleType: m,
+        flags: r[g + 3],
+        channel: i[g + 4]
+      }), l.push(W);
     }
     const f = t._wt_result_packs_ptr(e), u = [];
-    for (let p = 0; p < o.packCount; p++) {
-      const m = f + p * this.#t.pack, d = m / 4, y = s[d + 0] === 0 ? "RGBA8" : "RGBA16F", g = s[d + 1], A = s[d + 2], P = y === "RGBA8" ? Uint8Array : Uint16Array, W = this.#l(g, A), L = [];
-      for (let _ = 0; _ < 4; _++) L.push(i[d + 4 + _]);
-      const $ = [], O = [];
-      for (let _ = 0; _ < 4; _++)
-        $.push(r[(m + 32) / 8 + _]), O.push(r[(m + 64) / 8 + _]);
+    for (let d = 0; d < o.packCount; d++) {
+      const g = f + d * this.#t.pack, p = g / 4, y = r[p + 0] === 0 ? "RGBA8" : "RGBA16F", m = r[p + 1], T = r[p + 2], W = y === "RGBA8" ? Uint8Array : Uint16Array, D = this.#d(m, T), z = [];
+      for (let A = 0; A < 4; A++) z.push(i[p + 4 + A]);
+      const H = [], j = [];
+      for (let A = 0; A < 4; A++)
+        H.push(s[(g + 32) / 8 + A]), j.push(s[(g + 64) / 8 + A]);
       u.push({
         format: y,
-        data: new P(W),
-        channels: L,
-        normalized: s[d + 3] === 1,
-        scale: $,
-        offset: O
-      }), l.push(W);
+        data: new W(D),
+        channels: z,
+        normalized: r[p + 3] === 1,
+        scale: H,
+        offset: j
+      }), l.push(D);
     }
     return { header: o, bands: h, packs: u, transfer: l };
   }
   /** Read a window. Fetches whatever the decode needs first. */
-  async read(e, t, { signal: s } = {}) {
+  async read(e, t, { signal: r } = {}) {
     const i = this.#r.get(e);
     if (!i) throw new w(`unknown file ${e}`);
-    const r = this.#e, a = r._malloc(this.#t.req), o = r._malloc(4);
+    const s = this.#e, a = s._malloc(this.#t.req), o = s._malloc(4);
     try {
-      let l = 0;
+      const l = this.#c(i.handle), c = this.#h("the tile");
       for (; ; ) {
-        if (s?.aborted) throw new DOMException("aborted", "AbortError");
-        this.#a(a, t), r._wt_plan_region(i.handle, a, 0), await this.#n(i.handle, i.source, s), this.#a(a, t);
-        const h = r._wt_read(i.handle, a, o);
-        if (h === D) break;
-        if (h !== H) throw this.#o(i.handle, h);
-        if (++l > V)
-          throw new w("the tile did not resolve after 32 fetches");
+        if (r?.aborted) throw new DOMException("aborted", "AbortError");
+        this.#u(a, t), s._wt_plan_region(i.handle, a, 0), await this.#a(i.handle, i.source, r), this.#u(a, t);
+        const f = s._wt_read(i.handle, a, o);
+        if (f === G) break;
+        if (f !== V) throw this.#l(i.handle, f);
+        c(l());
       }
-      const c = r.HEAPU32[o / 4];
+      const h = s.HEAPU32[o / 4];
       try {
-        return this.#c(c);
+        return this.#p(h);
       } finally {
-        r._wt_result_free(c);
+        s._wt_result_free(h);
       }
     } finally {
-      r._free(a), r._free(o);
+      s._free(a), s._free(o), this.#f();
     }
   }
-  /** Warnings accumulated since the last drain, deduplicated by code. */
-  drainWarnings() {
-    const e = this.#e, t = e._malloc(4096);
+  /**
+   * Subscribe to diagnostics. Returns an unsubscribe function.
+   *
+   * Subscribe or call `drainWarnings()` yourself, not both: the ring is drained
+   * once, so whichever runs first is the only one that sees a given record.
+   *
+   * @param {(d: Diagnostic) => void} fn
+   * @returns {() => void}
+   */
+  onWarning(e) {
+    return this.#i.add(e), () => this.#i.delete(e);
+  }
+  /**
+   * Deliver whatever is waiting.
+   *
+   * For a caller that subscribes after opening -- which is every caller, since
+   * the file id it filters on does not exist until then. Without this, a host
+   * that opens a file and only reads its metadata never hears what the parse
+   * found.
+   */
+  flushWarnings() {
+    this.#f();
+  }
+  /**
+   * Drain and dispatch.
+   *
+   * Called in a `finally` around every entry point that can warn, which is what
+   * makes the in-process decoder deliver diagnostics at all: draining used to
+   * happen only in the worker, so a host without workers -- a custom source, a
+   * caller-supplied fetch, Node -- saw none of them ever.
+   *
+   * With nobody listening it drains nothing, deliberately: the records stay in
+   * the ring for a subscriber that has not attached yet. They are not unbounded
+   * -- the ring holds 32, closing a file forgets its own, and an overflow is
+   * reported rather than silent.
+   */
+  #f() {
+    if (this.#i.size === 0) return;
+    let e;
     try {
-      return e._wt_drain_warnings(t, 4096) > 0 ? JSON.parse(e.UTF8ToString(t)) : [];
+      e = this.drainWarnings();
+    } catch {
+      return;
+    }
+    for (const t of e)
+      for (const r of this.#i) r(t);
+  }
+  /**
+   * Diagnostics accumulated since the last drain, deduplicated by (file, code).
+   *
+   * The native handle each carries is translated into this decoder's file id and
+   * label, because a handle is an implementation detail of the module and is
+   * reused as files close.
+   *
+   * @returns {Diagnostic[]}
+   */
+  drainWarnings() {
+    const e = this.#e, t = e._malloc(J);
+    try {
+      return e._wt_drain_warnings(t, J) <= 0 ? [] : JSON.parse(e.UTF8ToString(t)).map((s) => {
+        const a = s.file ? this.#s.get(s.file) : void 0;
+        return new P({
+          code: s.code,
+          message: s.message,
+          // Defaulted rather than required: new JavaScript over an old .wasm is
+          // a combination this library already ships into, and a diagnostic that
+          // arrives without a severity is still worth showing.
+          severity: s.severity ?? "warn",
+          file: a?.id ?? null,
+          label: a?.label ?? null
+        });
+      });
     } finally {
       e._free(t);
     }
   }
 }
-function oe(n, e) {
-  const t = new RegExp(`<(?:\\w+:)?${e}\\b([^>]*)>`, "g"), s = [];
-  for (const i of n.matchAll(t)) s.push(i[1]);
-  return s;
+function be(n, e) {
+  const t = new RegExp(`<(?:\\w+:)?${e}\\b([^>]*)>`, "g"), r = [];
+  for (const i of n.matchAll(t)) r.push(i[1]);
+  return r;
 }
-function S(n, e) {
+function k(n, e) {
   const t = new RegExp(`\\b${e}\\s*=\\s*("([^"]*)"|'([^']*)')`).exec(n);
   return t ? t[2] !== void 0 ? t[2] : t[3] : null;
 }
-function we(n) {
+function Me(n) {
   if (n == null || n === "") return null;
   const e = Number(n);
   return Number.isFinite(e) ? `#${(e >>> 0 >>> 8 & 16777215).toString(16).padStart(6, "0")}` : null;
 }
-function ye(n) {
-  const e = oe(n, "TiffData"), t = /* @__PURE__ */ new Map();
-  for (const s of e) {
-    const i = S(s, "IFD"), r = S(s, "FirstC");
-    i === null || r === null || t.set(Number(i), Number(r));
+function Ne(n) {
+  const e = be(n, "TiffData"), t = /* @__PURE__ */ new Map();
+  for (const r of e) {
+    const i = k(r, "IFD"), s = k(r, "FirstC");
+    i === null || s === null || t.set(Number(i), Number(s));
   }
   return t.size ? t : null;
 }
-function ae(n) {
+function _e(n) {
   if (typeof n != "string" || !/<(?:\w+:)?OME\b/.test(n)) return null;
   const e = /<(?:\w+:)?Image\b[\s\S]*?(?=<(?:\w+:)?Image\b|$)/.exec(
     n
-  ), t = e ? e[0] : n, s = oe(t, "Channel").map((i) => ({
-    name: S(i, "Name"),
-    color: we(S(i, "Color")),
-    samplesPerPixel: Number(S(i, "SamplesPerPixel") ?? 1) || 1
+  ), t = e ? e[0] : n, r = be(t, "Channel").map((i) => ({
+    name: k(i, "Name"),
+    color: Me(k(i, "Color")),
+    samplesPerPixel: Number(k(i, "SamplesPerPixel") ?? 1) || 1
   }));
-  return s.length ? { scope: t, channels: s } : null;
+  return r.length ? { scope: t, channels: r } : null;
 }
-function st(n) {
-  return ae(n)?.channels ?? null;
+function _t(n) {
+  return _e(n)?.channels ?? null;
 }
-function be(n, e) {
-  const t = ae(n);
+function ve(n, e) {
+  const t = _e(n);
   if (!t) return null;
-  const s = t.channels, i = ye(t.scope), r = [];
+  const r = t.channels, i = Ne(t.scope), s = [];
   return e.forEach((a, o) => {
-    const l = i?.get(a.index) ?? o, c = s[l] ?? null, h = a.samplesPerPixel || 1;
+    const l = i?.get(a.index) ?? o, c = r[l] ?? null, h = a.samplesPerPixel || 1;
     for (let f = 0; f < h; f++)
-      r.push(c ? { name: c.name, color: c.color } : null);
-  }), r;
+      s.push(c ? { name: c.name, color: c.color } : null);
+  }), s;
 }
-const _e = 1;
-function Ae(n) {
+const R = {
+  interpretation: "auto",
+  channels: null,
+  gpu: {
+    preferRGBA8: !0,
+    forceRGBA16F: !1,
+    packMode: "packsOf4",
+    padAlpha: 1
+  },
+  image: {
+    rgbaChannels: null
+  },
+  hints: {
+    layout: {
+      pyramid: "auto",
+      // Deliberately absent rather than 0: unset reads every plane as a channel,
+      // and 0 would pin plane 0 and hide the rest.
+      planeIndex: void 0
+    }
+  }
+}, Q = 32, q = { r: 0, g: 1, b: 2, a: 3, x: -1 }, ee = 4;
+function O(n, e) {
+  if (n == null) return null;
+  if (typeof n == "string") {
+    const t = n.trim().toLowerCase();
+    if (t === "all")
+      return ge(
+        new P({
+          code: "channels_all",
+          message: '[web-tiff] format.channels: "all" is accepted as an alias for null (every channel). Prefer null, or omit the option.',
+          severity: "info",
+          file: e?.file ?? null,
+          label: e?.label ?? null
+        }),
+        e
+      ), null;
+    if (t.length === 0 || t.length > ee)
+      throw new b(
+        `[web-tiff] format.channels: a swizzle names 1 to ${ee} lanes; got ${JSON.stringify(n)}. Use an array to name more.`
+      );
+    const r = [];
+    for (const i of t) {
+      if (!(i in q))
+        throw new b(
+          `[web-tiff] format.channels: ${JSON.stringify(n)} is not a channel swizzle. Letters are r g b a x (0 1 2 3 padding), or use "all", null, or an array of indices.`
+        );
+      r.push(q[i]);
+    }
+    return r;
+  }
+  if (!Array.isArray(n))
+    throw new b(
+      `[web-tiff] format.channels must be an array of indices, a swizzle string, "all", or null; got ${typeof n}.`
+    );
+  if (n.length === 0) return null;
+  if (n.length > Q)
+    throw new b(
+      `[web-tiff] format.channels names ${n.length} channels; at most ${Q} can be read in one request.`
+    );
+  for (let t = 0; t < n.length; t++) {
+    const r = n[t];
+    if (!Number.isInteger(r) || r < -1)
+      throw new b(
+        `[web-tiff] format.channels[${t}] must be a channel index, or -1 for a padding lane; got ${JSON.stringify(r)}.`
+      );
+  }
+  return n;
+}
+const xe = 1;
+function Ce(n) {
   const t = ((n?.imageDescription ?? "").split(`
 `)[1] ?? "").toLowerCase();
   return t.includes("macro") || t.includes("label");
 }
-function G(n, e, t) {
+function te(n, e, t) {
   return {
     min: n / (e + t),
     max: e - t > 0 ? n / (e - t) : 1 / 0
   };
 }
-function Te(n, e, t, s, i = _e) {
-  const r = G(n, t, i), a = G(e, s, i);
-  return r.min <= a.max && a.min <= r.max;
+function Le(n, e, t, r, i = xe) {
+  const s = te(n, t, i), a = te(e, r, i);
+  return s.min <= a.max && a.min <= s.max;
 }
-function K(n) {
+function ne(n) {
   if (n.length < 2) return !1;
-  for (let s = 1; s < n.length; s++)
-    if (n[s].width >= n[s - 1].width || n[s].height >= n[s - 1].height) return !1;
+  for (let r = 1; r < n.length; r++)
+    if (n[r].width >= n[r - 1].width || n[r].height >= n[r - 1].height) return !1;
   const { width: e, height: t } = n[0];
-  return n.every((s, i) => i === 0 || Te(e, t, s.width, s.height));
+  return n.every((r, i) => i === 0 || Le(e, t, r.width, r.height));
 }
-function U(n) {
+function M(n) {
   const e = n.height ? n.width / n.height : 0;
   return [
     n.width,
@@ -305,21 +555,24 @@ function U(n) {
     n.sampleFormat ?? 0
   ].join("|");
 }
-function Ee(n, e) {
+function Be(n, e) {
   return e.width - n.width;
 }
-function Y(n) {
+function re(n) {
   const e = /* @__PURE__ */ new Set();
-  return [...n].sort(Ee).filter((t) => {
-    const s = `${t.width}x${t.height}`;
-    return e.has(s) ? !1 : (e.add(s), !0);
+  return [...n].sort(Be).filter((t) => {
+    const r = `${t.width}x${t.height}`;
+    return e.has(r) ? !1 : (e.add(r), !0);
   });
 }
 const F = 32;
-function Se(n, e = {}) {
-  const t = e.pyramid ?? "auto", s = e.planeIndex, i = [];
+function Oe(n, e = {}) {
+  const t = e.pyramid ?? "auto", r = e.planeIndex, i = [];
   if (e.prefer !== void 0 && i.push(
-    "layout.prefer was removed: a pyramid and a plane stack are no longer alternatives, so every same-size plane is read as a channel and the pyramid is kept. Use layout.planeIndex to pin a single plane."
+    S(
+      "layout_prefer_removed",
+      "layout.prefer was removed: a pyramid and a plane stack are no longer alternatives, so every same-size plane is read as a channel and the pyramid is kept. Use layout.planeIndex to pin a single plane."
+    )
   ), !n.length)
     return {
       strategy: "single",
@@ -329,29 +582,38 @@ function Se(n, e = {}) {
       ifdLevels: [],
       warnings: i
     };
-  const r = /* @__PURE__ */ new Map();
-  for (const g of n) {
-    const A = U(g);
-    r.has(A) || r.set(A, []), r.get(A).push(g);
+  const s = /* @__PURE__ */ new Map();
+  for (const m of n) {
+    const T = M(m);
+    s.has(T) || s.set(T, []), s.get(T).push(m);
   }
-  const a = Y(n), o = n.filter((g) => !Ae(g)), l = Y(o);
+  const a = re(n), o = n.filter((m) => !Ce(m)), l = re(o);
   let c = a;
-  l.length !== a.length && K(l) && (c = l);
-  const h = K(c), f = c[0] ?? a[0];
-  let u = r.get(U(f)) ?? [f];
-  const p = n.some((g) => (g.subIFDs?.length ?? 0) > 0);
-  let m;
-  t === "ifd" ? m = h ? "ifd" : "single" : t === "subifd" ? (m = p ? "subifd" : "single", p || i.push("subifd requested but the file declares none")) : m = h ? "ifd" : p ? "subifd" : "single";
-  const d = s != null;
+  l.length !== a.length && ne(l) && (c = l);
+  const h = ne(c), f = c[0] ?? a[0];
+  let u = s.get(M(f)) ?? [f];
+  const d = n.some((m) => (m.subIFDs?.length ?? 0) > 0);
+  let g;
+  t === "ifd" ? g = h ? "ifd" : "single" : t === "subifd" ? (g = d ? "subifd" : "single", d || i.push(
+    S("layout_subifd_none", "subifd requested but the file declares none")
+  )) : g = h ? "ifd" : d ? "subifd" : "single";
+  const p = r != null;
   let y = 0;
-  return d ? (y = Math.min(Math.max(s, 0), u.length - 1), u.length > 1 && i.push(
-    `layout.planeIndex pinned plane ${y} of ${u.length}; the other planes are not read. Leave it unset to read them as channels.`
+  return p ? (y = Math.min(Math.max(r, 0), u.length - 1), u.length > 1 && i.push(
+    S(
+      "layout_plane_pinned",
+      `layout.planeIndex pinned plane ${y} of ${u.length}; the other planes are not read. Leave it unset to read them as channels.`,
+      "info"
+    )
   ), u = [u[y]]) : u.length > F && (i.push(
-    `the file has ${u.length} same-size directories; only the first ${F} can be read as one stack and the rest are dropped.`
+    S(
+      "layout_plane_cap",
+      `the file has ${u.length} same-size directories; only the first ${F} can be read as one stack and the rest are dropped.`
+    )
   ), u = u.slice(0, F)), {
-    strategy: m,
+    strategy: g,
     planes: u,
-    pinned: d,
+    pinned: p,
     // Which plane was pinned, kept because an IFD pyramid OF planes has a group
     // at every level and the same plane has to be chosen from each of them. 0
     // when nothing was pinned, where it is unused.
@@ -363,8 +625,8 @@ function Se(n, e = {}) {
     warnings: i
   };
 }
-function Pe(n, e) {
-  const t = [...e.warnings], s = e.planes.length > 1, i = (o, l) => ({
+function De(n, e) {
+  const t = [...e.warnings], r = e.planes.length > 1, i = (o, l) => ({
     width: o.width,
     height: o.height,
     tileWidth: o.tileWidth || 256,
@@ -379,35 +641,38 @@ function Pe(n, e) {
     scaleFactor: 1,
     directory: o
   });
-  let r;
+  let s;
   if (e.strategy === "ifd") {
     const o = /* @__PURE__ */ new Map();
     for (const l of n) {
-      const c = U(l);
+      const c = M(l);
       o.has(c) || o.set(c, []), o.get(c).push(l);
     }
-    r = e.ifdLevels.map((l) => {
-      const c = o.get(U(l)) ?? [l], h = e.pinned ? [c[Math.min(e.planeIndex, c.length - 1)]] : c.slice(0, F);
+    s = e.ifdLevels.map((l) => {
+      const c = o.get(M(l)) ?? [l], h = e.pinned ? [c[Math.min(e.planeIndex, c.length - 1)]] : c.slice(0, F);
       return i(h[0], h.map((f) => ({ dir: f.index, subifd: -1 })));
     });
   } else if (e.strategy === "subifd") {
     const o = e.chosenPlane, l = o.subIFDLevels ?? [];
     l.length || t.push(
-      "the file declares SubIFDs but none could be read; using the full-size directory only"
+      S(
+        "subifd_levels_unreadable",
+        "the file declares SubIFDs but none could be read; using the full-size directory only"
+      )
     );
     const c = (f) => e.planes.map((u) => {
-      const p = (u.subIFDLevels ?? [])[f];
-      return !p || p.width !== l[f].width ? null : { dir: u.index, subifd: f };
+      const d = (u.subIFDLevels ?? [])[f];
+      return !d || d.width !== l[f].width ? null : { dir: u.index, subifd: f };
     });
-    r = [i(o, e.planes.map((f) => ({ dir: f.index, subifd: -1 })))];
+    s = [i(o, e.planes.map((f) => ({ dir: f.index, subifd: -1 })))];
     let h = 0;
     l.forEach((f, u) => {
-      const p = c(u);
-      if (p.some((m) => m === null)) {
+      const d = c(u);
+      if (d.some((g) => g === null)) {
         h++;
         return;
       }
-      r.push(
+      s.push(
         i(
           {
             ...f,
@@ -415,51 +680,62 @@ function Pe(n, e) {
             imageDescription: o.imageDescription,
             subIFDs: []
           },
-          p
+          d
         )
       );
     }), h > 0 && t.push(
-      `${h} SubIFD level(s) were dropped: not every one of the ${e.planes.length} planes has a matching level there.`
+      S(
+        "subifd_levels_dropped",
+        `${h} SubIFD level(s) were dropped: not every one of the ${e.planes.length} planes has a matching level there.`
+      )
     );
   } else
-    r = [
+    s = [
       i(e.chosenPlane, e.planes.map((o) => ({ dir: o.index, subifd: -1 })))
     ];
-  if (s) {
+  if (r) {
     const o = e.planes.reduce(
       (l, c) => l + (c.samplesPerPixel || 1),
       0
     );
     t.push(
-      `${e.planes.length} same-size directories are read as a stack of ${o} channel(s). Set layout.planeIndex to read one plane instead.`
+      S(
+        "layout_stack",
+        `${e.planes.length} same-size directories are read as a stack of ${o} channel(s). Set layout.planeIndex to read one plane instead.`,
+        "info"
+      )
     );
   }
-  r.sort((o, l) => o.width - l.width);
-  const a = r.reduce((o, l) => o.width >= l.width ? o : l).directory;
-  return { levels: r, full: a, warnings: t };
+  s.sort((o, l) => o.width - l.width);
+  const a = s.reduce((o, l) => o.width >= l.width ? o : l).directory;
+  return { levels: s, full: a, warnings: t };
 }
-const X = {
-  gpuTextureSet: se,
-  tiffRaster: ie,
-  rgba8: C,
-  imageBitmap: C
-}, Z = { auto: 0, image: 1, data: 2 }, J = { auto: 0, nearest: 1, bilinear: 2, box: 3 }, Ie = 1, ke = 2, Re = 4;
-function Q(n = {}) {
+const se = {
+  gpuTextureSet: we,
+  tiffRaster: ye,
+  rgba8: B,
+  imageBitmap: B
+}, ie = { auto: 0, image: 1, data: 2 }, oe = { auto: 0, nearest: 1, bilinear: 2, box: 3 }, ze = 1, He = 2, je = 4;
+function ae(n = {}) {
   const e = n.gpu ?? {};
   let t = 0;
-  return e.preferRGBA8 !== !1 && (t |= Ie), e.forceRGBA16F && (t |= ke), n.image?.strictGray && (t |= Re), t;
+  return e.preferRGBA8 !== !1 && (t |= ze), e.forceRGBA16F && (t |= He), n.image?.strictGray && (t |= je), t;
 }
-class Fe {
+class Ge {
   #e;
   #t;
   #r;
   #s;
   #i;
   #n;
-  constructor({ decoder: e, id: t, meta: s, options: i }) {
-    this.#e = e, this.#t = t, this.#r = s, this.#n = i;
-    const r = Se(s.directories, i.layout), a = Pe(s.directories, r);
-    this.#s = a.levels, this.#i = a.warnings, this.layout = r.strategy;
+  #o;
+  #a = /* @__PURE__ */ new Set();
+  constructor({ decoder: e, id: t, meta: r, options: i, diagnostics: s = [] }) {
+    this.#e = e, this.#t = t, this.#r = r, this.#n = i, this.#o = { file: t, label: i.label ?? null };
+    const a = Oe(r.directories, i.layout), o = De(r.directories, a);
+    this.#s = o.levels, this.#i = [...s, ...o.warnings].map(
+      (l) => new P({ ...l, file: t, label: i.label ?? null })
+    ), this.layout = a.strategy;
   }
   get meta() {
     return this.#r;
@@ -471,6 +747,20 @@ class Fe {
   get levels() {
     return this.#s;
   }
+  /**
+   * What the layout resolver decided, as {@link Diagnostic}s.
+   *
+   * A snapshot taken when the file opened, not a log that grows: everything here
+   * is a property of the directory structure, which does not change. Runtime
+   * diagnostics arrive through `onWarning`.
+   *
+   * Each stringifies to its message, so joining or interpolating these reads the
+   * same as it did when they were plain strings. Check `severity` before showing
+   * them as problems -- a plane stack read as channels is reported here and is
+   * the correct outcome.
+   *
+   * @returns {import("./diagnostics.js").Diagnostic[]}
+   */
   get warnings() {
     return this.#i;
   }
@@ -484,9 +774,9 @@ class Fe {
    * configuration -- comes from plane 0 and describes plane 0 only.
    */
   get descriptor() {
-    const e = this.#s[this.#s.length - 1], t = e.directory, s = e.planes.map((l) => this.#r.directories[l.dir]), i = s.length > 1, r = i ? s.flatMap((l) => l.encoding.channels) : t.encoding.channels, a = i ? r.length : t.samplesPerPixel, o = be(
+    const e = this.#s[this.#s.length - 1], t = e.directory, r = e.planes.map((l) => this.#r.directories[l.dir]), i = r.length > 1, s = i ? r.flatMap((l) => l.encoding.channels) : t.encoding.channels, a = i ? s.length : t.samplesPerPixel, o = ve(
       this.#r.directories[0]?.imageDescription,
-      s
+      r
     );
     return {
       width: t.width,
@@ -521,7 +811,7 @@ class Fe {
       // second one differ from the first for no reason a caller could see.
       encoding: {
         ...i ? { version: t.encoding.version } : t.encoding,
-        channels: r.map(
+        channels: s.map(
           (l, c) => o?.[c] ? { ...l, name: o[c].name, color: o[c].color } : { ...l }
         )
       }
@@ -537,7 +827,7 @@ class Fe {
   precision() {
     const e = this.descriptor;
     return e.interpretationResolved === "image" || e.encoding.channels.every(
-      (s) => s.bits === 8 && s.sampleFormat === 1 && s.scale === 255 && s.offset === 0
+      (r) => r.bits === 8 && r.sampleFormat === 1 && r.scale === 255 && r.offset === 0
     ) ? "unorm8" : "float16";
   }
   /**
@@ -548,28 +838,30 @@ class Fe {
    * directory that is not its own size. Edge tiles deliberately ask for a window
    * past the image; the decoder zero-fills the overhang.
    */
-  async readTile(e, t, s, i = {}) {
-    const r = this.#s[e];
-    if (!r) throw new RangeError(`no level ${e} (have ${this.#s.length})`);
-    const a = r.scaleFactor, o = {
-      dir: r.dir,
-      subifd: r.subifd,
+  async readTile(e, t, r, i = {}) {
+    const s = this.#s[e];
+    if (!s) throw new RangeError(`no level ${e} (have ${this.#s.length})`);
+    const a = s.scaleFactor, o = {
+      dir: s.dir,
+      subifd: s.subifd,
       // Every directory carrying a channel of this level. One request, not one per
       // plane: the tile data live at N offsets either way, so the bytes cost the
       // same, but a single call avoids N decoder round trips and an N-way merge
       // here.
-      planes: r.planes,
-      sx0: Math.round(t * r.tileWidth * a),
-      sy0: Math.round(s * r.tileHeight * a),
-      sx1: Math.round((t + 1) * r.tileWidth * a),
-      sy1: Math.round((s + 1) * r.tileHeight * a),
-      outWidth: r.tileWidth,
-      outHeight: r.tileHeight,
-      resample: J[i.resample ?? this.#n.resample ?? "auto"] ?? 0,
-      output: X[i.output ?? "rgba8"] ?? C,
-      channels: i.channels ?? this.#n.format?.channels ?? void 0,
-      interpretation: Z[i.interpretation ?? this.#n.format?.interpretation ?? "auto"] ?? 0,
-      packFlags: Q(this.#n.format),
+      planes: s.planes,
+      sx0: Math.round(t * s.tileWidth * a),
+      sy0: Math.round(r * s.tileHeight * a),
+      sx1: Math.round((t + 1) * s.tileWidth * a),
+      sy1: Math.round((r + 1) * s.tileHeight * a),
+      outWidth: s.tileWidth,
+      outHeight: s.tileHeight,
+      resample: oe[i.resample ?? this.#n.resample ?? "auto"] ?? 0,
+      output: se[i.output ?? "rgba8"] ?? B,
+      // A per-read override never passed through mergeFormat, so it is validated
+      // here; the file-level default already was.
+      channels: i.channels !== void 0 ? O(i.channels, this.#o) : this.#n.format?.channels ?? void 0,
+      interpretation: ie[i.interpretation ?? this.#n.format?.interpretation ?? "auto"] ?? 0,
+      packFlags: ae(this.#n.format),
       padAlpha: this.#n.format?.gpu?.padAlpha ?? 1
     };
     return this.#e.read(this.#t, o, { signal: i.signal });
@@ -583,9 +875,9 @@ class Fe {
   async readRegion({
     dir: e = 0,
     subifd: t = -1,
-    planes: s,
+    planes: r,
     x0: i,
-    y0: r,
+    y0: s,
     x1: a,
     y1: o,
     outWidth: l,
@@ -593,36 +885,65 @@ class Fe {
     output: h = "tiffRaster",
     signal: f,
     channels: u,
-    resample: p,
-    interpretation: m
+    resample: d,
+    interpretation: g
   }) {
     return this.#e.read(
       this.#t,
       {
         dir: e,
         subifd: t,
-        planes: s,
+        planes: r,
         sx0: i,
-        sy0: r,
+        sy0: s,
         sx1: a,
         sy1: o,
         outWidth: l ?? a - i,
-        outHeight: c ?? o - r,
-        output: X[h] ?? ie,
-        channels: u,
-        resample: p ?? J[this.#n.resample ?? "auto"] ?? 0,
-        interpretation: Z[m ?? "auto"] ?? 0,
-        packFlags: Q(this.#n.format),
+        outHeight: c ?? o - s,
+        output: se[h] ?? ye,
+        channels: O(u, this.#o),
+        resample: d ?? oe[this.#n.resample ?? "auto"] ?? 0,
+        interpretation: ie[g ?? "auto"] ?? 0,
+        packFlags: ae(this.#n.format),
         padAlpha: this.#n.format?.gpu?.padAlpha ?? 1
       },
       { signal: f }
     );
   }
+  /**
+   * Subscribe to the diagnostics this file produces while it is open.
+   *
+   * Filtered to this file, so a host with several slides open gets each one's
+   * own. Returns an unsubscribe function; `close()` calls every outstanding one,
+   * because a callback that outlives its file would fire against an id that has
+   * been handed to something else.
+   *
+   * The open-time layout diagnostics are on `warnings` rather than here: they
+   * were produced before a caller could have subscribed.
+   *
+   * @param {(d: import("./diagnostics.js").Diagnostic) => void} fn
+   * @returns {() => void}
+   */
+  onWarning(e) {
+    const t = [Ie(e, this.#o)];
+    typeof this.#e.onWarning == "function" && t.push(
+      this.#e.onWarning((i) => {
+        i.file === this.#t && e(i);
+      })
+    );
+    const r = () => {
+      for (const i of t) i();
+    };
+    return this.#a.add(r), () => {
+      this.#a.delete(r), r();
+    };
+  }
   close() {
-    this.#e.close(this.#t);
+    for (const e of this.#a) e();
+    this.#a.clear(), ke(this.#o), this.#e.close(this.#t);
   }
 }
-class Ue {
+class Ve {
   #e;
   constructor(e) {
     this.#e = e instanceof Uint8Array ? e : new Uint8Array(e);
@@ -631,11 +952,11 @@ class Ue {
     return this.#e.length;
   }
   async read(e, t) {
-    const s = Math.min(e, this.#e.length), i = Math.min(e + t, this.#e.length);
-    return this.#e.subarray(s, i);
+    const r = Math.min(e, this.#e.length), i = Math.min(e + t, this.#e.length);
+    return this.#e.subarray(r, i);
   }
 }
-class ve {
+class Ke {
   #e;
   constructor(e) {
     this.#e = e;
@@ -643,118 +964,107 @@ class ve {
   async getSize() {
     return this.#e.size;
   }
-  async read(e, t, s) {
-    if (s?.aborted) throw new DOMException("aborted", "AbortError");
+  async read(e, t, r) {
+    if (r?.aborted) throw new DOMException("aborted", "AbortError");
     const i = Math.min(e + t, this.#e.size);
     if (i <= e) return new Uint8Array(0);
-    const r = await this.#e.slice(e, i).arrayBuffer();
-    return new Uint8Array(r);
+    const s = await this.#e.slice(e, i).arrayBuffer();
+    return new Uint8Array(s);
   }
 }
-async function xe(n, e = {}) {
+async function Xe(n, e = {}) {
   if (n == null) throw new TypeError("openTiff needs a source");
   if (typeof n == "string" || n instanceof URL) {
-    const { HttpSource: t } = await Promise.resolve().then(() => Xe);
+    const { HttpSource: t } = await Promise.resolve().then(() => ht);
     return new t(n, e);
   }
-  if (typeof Blob < "u" && n instanceof Blob) return new ve(n);
+  if (typeof Blob < "u" && n instanceof Blob) return new Ke(n);
   if (n instanceof Uint8Array || n instanceof ArrayBuffer)
-    return new Ue(n);
+    return new Ve(n);
   if (typeof n.getSize == "function" && typeof n.read == "function")
     return n;
   throw new TypeError(
     "openTiff needs a url, a Blob, a File, bytes, or an object with getSize() and read()"
   );
 }
-const I = {
-  interpretation: "auto",
-  channels: null,
-  gpu: {
-    preferRGBA8: !0,
-    forceRGBA16F: !1,
-    packMode: "packsOf4",
-    padAlpha: 1
-  },
-  image: {
-    rgbaChannels: null
-  },
-  hints: {
-    layout: {
-      pyramid: "auto",
-      // Deliberately absent rather than 0: unset reads every plane as a channel,
-      // and 0 would pin plane 0 and hide the rest.
-      planeIndex: void 0
-    }
-  }
-}, Me = le(
+const Ye = Ae(
   new URL(
     "./",
     import.meta.url
   ).href
 );
-function le(n) {
+function Ae(n) {
   return n.endsWith("/") ? n : `${n}/`;
 }
-function ce(n, e) {
-  const t = e ? le(String(e)) : Me;
+function Te(n, e) {
+  const t = e ? Ae(String(e)) : Ye;
   return new URL(`webtiff-${n}.mjs`, t).href;
 }
-function Ne() {
+function Ze() {
   return typeof SharedArrayBuffer == "function" && globalThis.crossOriginIsolated === !0 && typeof Atomics?.waitAsync == "function";
 }
-function he(n = {}) {
-  return n.threads === !0 && Ne() ? "mt" : "st";
+function Ee(n = {}) {
+  return n.threads === !0 && Ze() ? "mt" : "st";
 }
-let N = null, k = null;
-async function Be(n) {
-  if (N && !n.wasmBaseUrl) return N;
-  const e = he(n), t = ce(e, n.wasmBaseUrl), { default: s } = await import(
+let x = null, $ = null;
+async function Je(n) {
+  if (x && !n.wasmBaseUrl) return x;
+  const e = Ee(n), t = Te(e, n.wasmBaseUrl), { default: r } = await import(
     /* @vite-ignore */
     t
-  ), i = await s(), r = new ge(i);
-  return n.wasmBaseUrl || (N = r), r;
+  ), i = await r(), s = new Fe(i);
+  return n.wasmBaseUrl || (x = s), s;
 }
-function Ce(n, e) {
+function Qe(n, e) {
   return e.fetch ? !1 : typeof n == "string" || n instanceof URL || typeof Blob < "u" && n instanceof Blob || n instanceof Uint8Array || n instanceof ArrayBuffer;
 }
-async function We(n, e) {
+async function qe(n, e) {
   if (e.decoder) return { decoder: e.decoder, viaWorker: !1 };
   if (e.pool) return { decoder: e.pool, viaWorker: !0 };
-  if (e.workers !== !1 && Ce(n, e) && typeof Worker < "u") {
-    if (!k) {
-      const { createDecoderPool: t } = await Promise.resolve().then(() => rt);
-      k = await t(e);
+  if (e.workers !== !1 && Qe(n, e) && typeof Worker < "u") {
+    if (!$) {
+      const { createDecoderPool: t } = await Promise.resolve().then(() => bt);
+      $ = await t(e);
     }
-    if (k) return { decoder: k, viaWorker: !0 };
+    if ($) return { decoder: $, viaWorker: !0 };
   }
-  return { decoder: await Be(e), viaWorker: !1 };
+  return { decoder: await Je(e), viaWorker: !1 };
 }
-function Le(n) {
+function et(n, e) {
   return n ? {
-    ...I,
+    ...R,
     ...n,
-    gpu: { ...I.gpu, ...n.gpu },
-    image: { ...I.image, ...n.image }
-  } : I;
+    channels: O(n.channels, e),
+    gpu: { ...R.gpu, ...n.gpu },
+    image: { ...R.image, ...n.image }
+  } : R;
 }
-async function $e(n, e = {}) {
-  const { decoder: t, viaWorker: s } = await We(n, e), i = s ? n : await xe(n, e), { id: r, meta: a } = await t.open(i, {
+async function tt(n, e = {}) {
+  const t = e.label ?? nt(n), r = [], i = { file: null, label: t, report: (u) => r.push(u) }, s = et(e.format, i), { decoder: a, viaWorker: o } = await qe(n, e), l = o ? n : await Xe(n, e), { id: c, meta: h } = await a.open(l, {
     blockSize: e.blockSize,
     cacheBytes: e.cacheBytes,
-    signal: e.signal
+    signal: e.signal,
+    label: t
+  }), f = new Ge({
+    decoder: a,
+    id: c,
+    meta: h,
+    options: { ...e, label: t, format: s },
+    diagnostics: r
   });
-  return new Fe({
-    decoder: t,
-    id: r,
-    meta: a,
-    options: { ...e, format: Le(e.format) }
-  });
+  return e.onWarning && (f.onWarning(e.onWarning), a.flushWarnings?.()), f;
 }
-const q = {};
-function Oe(n, e, t = "warn") {
-  q[n] || (q[n] = !0, console[t](e));
+function nt(n) {
+  if (typeof n == "string" || n instanceof URL)
+    try {
+      const e = new URL(String(n), "http://localhost/").pathname;
+      return decodeURIComponent(e.split("/").filter(Boolean).pop() ?? "") || String(n);
+    } catch {
+      return String(n);
+    }
+  return typeof n?.name == "string" && n.name ? n.name : null;
 }
-const De = 1, T = {
+const rt = 1, E = {
   WhiteIsZero: 0,
   BlackIsZero: 1,
   RGB: 2,
@@ -763,7 +1073,7 @@ const De = 1, T = {
   CMYK: 5,
   YCbCr: 6,
   CIELab: 8
-}, b = {
+}, _ = {
   UINT: 1,
   INT: 2,
   FLOAT: 3,
@@ -771,52 +1081,52 @@ const De = 1, T = {
   COMPLEX_INT: 5,
   COMPLEX_FLOAT: 6
 };
-function v(n, e, t) {
+function N(n, e, t) {
   if (n == null) return t;
   if (Array.isArray(n) || ArrayBuffer.isView(n)) {
     if (n.length === 0) return t;
-    const s = e < n.length ? n[e] : n[0];
-    return s ?? t;
+    const r = e < n.length ? n[e] : n[0];
+    return r ?? t;
   }
   return n;
 }
-function it(n) {
-  const e = n || {}, t = (s) => s == null ? null : Array.isArray(s) ? s.length ? s : null : ArrayBuffer.isView(s) ? s.length ? Array.from(s) : null : [s];
+function At(n) {
+  const e = n || {}, t = (r) => r == null ? null : Array.isArray(r) ? r.length ? r : null : ArrayBuffer.isView(r) ? r.length ? Array.from(r) : null : [r];
   return {
     sMinSampleValue: t(e.SMinSampleValue),
     sMaxSampleValue: t(e.SMaxSampleValue)
   };
 }
-function B(n, e, t, s) {
-  const i = v(n.sMinSampleValue, e, null), r = v(n.sMaxSampleValue, e, null);
-  if (i === null || r === null) return null;
-  const a = Number(i), o = Number(r);
-  return !Number.isFinite(a) || !Number.isFinite(o) || o <= a || t !== null && (a < t || o > s) ? null : { min: a, max: o };
+function C(n, e, t, r) {
+  const i = N(n.sMinSampleValue, e, null), s = N(n.sMaxSampleValue, e, null);
+  if (i === null || s === null) return null;
+  const a = Number(i), o = Number(s);
+  return !Number.isFinite(a) || !Number.isFinite(o) || o <= a || t !== null && (a < t || o > r) ? null : { min: a, max: o };
 }
-function ee(n, e) {
+function le(n, e) {
   return e ? [-Math.pow(2, n - 1), Math.pow(2, n - 1) - 1] : [0, Math.pow(2, n) - 1];
 }
-function ot(n) {
-  const e = n || {}, t = e.bitsPerSample, s = e.sampleFormat;
+function Tt(n) {
+  const e = n || {}, t = e.bitsPerSample, r = e.sampleFormat;
   let i = e.samplesPerPixel;
   i > 0 || (i = Array.isArray(t) || ArrayBuffer.isView(t) ? t.length : 1), i = Math.max(1, i | 0);
-  const r = [];
+  const s = [];
   for (let a = 0; a < i; a++) {
-    const o = v(t, a, 8) || 8, l = v(s, a, b.UINT) || b.UINT;
+    const o = N(t, a, 8) || 8, l = N(r, a, _.UINT) || _.UINT;
     let c, h = 0, f = !1;
     switch (l) {
-      case b.UINT: {
-        const u = B(e, a, ...ee(o, !1));
+      case _.UINT: {
+        const u = C(e, a, ...le(o, !1));
         u ? (c = u.max - u.min, h = u.min) : c = Math.pow(2, o) - 1;
         break;
       }
-      case b.INT: {
-        const u = B(e, a, ...ee(o, !0));
+      case _.INT: {
+        const u = C(e, a, ...le(o, !0));
         u ? (c = u.max - u.min, h = u.min) : (c = Math.pow(2, o - 1) - 1, f = !0);
         break;
       }
-      case b.FLOAT: {
-        const u = B(e, a, null, null);
+      case _.FLOAT: {
+        const u = C(e, a, null, null);
         u ? (c = u.max - u.min, h = u.min) : (c = 1, f = !0);
         break;
       }
@@ -825,51 +1135,58 @@ function ot(n) {
           `[web-tiff] Unsupported SampleFormat ${l} on channel ${a}; only 1 (unsigned int), 2 (signed int) and 3 (float) are supported.`
         );
     }
-    c > 0 || (c = 1), r.push({ scale: c, offset: h, signed: f, bits: o, sampleFormat: l });
+    c > 0 || (c = 1), s.push({ scale: c, offset: h, signed: f, bits: o, sampleFormat: l });
   }
-  return { version: De, channels: r };
+  return { version: rt, channels: s };
 }
-const He = Object.freeze({
+const ce = Object.freeze({
   scale: 1,
   offset: 0,
   signed: !1,
   bits: 8,
-  sampleFormat: b.UINT
+  sampleFormat: _.UINT
 });
-function ze(n, e) {
-  const t = n && n.channels || [], s = t[e];
-  return s ?? (Oe(
-    `tiffEncoding_channel_${e}_of_${t.length}`,
-    `[web-tiff] No sample encoding for channel ${e} (file declares ${t.length}); using an identity transform. Check format.channels against the file's SamplesPerPixel.`
-  ), He);
+function st(n, e, t) {
+  const r = n && n.channels || [], i = r[e];
+  return i ?? (r.length === 0 || ge(
+    new P({
+      code: `encoding_channel_${e}_of_${r.length}`,
+      message: `[web-tiff] Channel ${e} has no entry in this read's encoding table, which has ${r.length}; an identity transform was used. For a stacked read that count is every plane's channels combined, not one directory's SamplesPerPixel.`,
+      file: t?.file ?? null,
+      label: t?.label ?? null
+    }),
+    t
+  ), ce);
 }
-function je(n, e) {
+function it(n, e) {
   if (n == null) return 0;
   const t = Number(n);
   return Number.isNaN(t) ? 0 : (t - e.offset) / e.scale;
 }
-function at(n, e) {
-  const t = je(n, e);
+function Et(n, e) {
+  const t = it(n, e);
   return t <= 0 ? 0 : t >= 1 ? 255 : Math.round(t * 255);
 }
-function Ve(n) {
-  return n.bits === 8 && (n.sampleFormat === b.UINT || n.sampleFormat === b.INT);
+function ot(n) {
+  return n.bits === 8 && (n.sampleFormat === _.UINT || n.sampleFormat === _.INT);
 }
-function lt(n) {
-  return n.bits === 8 && n.sampleFormat === b.UINT && n.scale === 255 && n.offset === 0;
+function St(n) {
+  return n.bits === 8 && n.sampleFormat === _.UINT && n.scale === 255 && n.offset === 0;
 }
-function ct(n, e) {
-  const t = n || {}, s = t.photometricInterpretation, i = t.encoding;
-  if (s === T.Palette && t.hasColorMap) return "image";
-  const r = t.samplesPerPixel || i && i.channels.length || 1;
-  return (s === T.RGB || s === T.YCbCr || s === T.CMYK || s === T.CIELab || (s === T.BlackIsZero || s === T.WhiteIsZero) && r === 1) && (Array.isArray(e) && e.length ? e.filter((c) => c != null && c >= 0) : i.channels.map((c, h) => h)).every((c) => Ve(ze(i, c))) ? "image" : "data";
+function Pt(n, e, t) {
+  const r = n || {}, i = r.photometricInterpretation, s = r.encoding;
+  if (i === E.Palette && r.hasColorMap) return "image";
+  const a = r.samplesPerPixel || s && s.channels.length || 1;
+  return (i === E.RGB || i === E.YCbCr || i === E.CMYK || i === E.CIELab || (i === E.BlackIsZero || i === E.WhiteIsZero) && a === 1) && (Array.isArray(e) && e.length ? e.filter((h) => h != null && h >= 0) : s.channels.map((h, f) => f)).every(
+    (h) => ot(st(s, h, t))
+  ) ? "image" : "data";
 }
-const ht = "0.1.0", te = /\.(tiff?|qptiff|btf|svs|ndpi|scn)(\?|#|$)/i;
-function Ge(n, e = {}) {
+const It = "0.1.0", he = /\.(tiff?|qptiff|btf|svs|ndpi|scn)(\?|#|$)/i;
+function at(n, e = {}) {
   let t = 0;
-  class s extends n.TileSource {
-    constructor(r, a = {}) {
-      const o = typeof r == "object" && r !== null ? { ...r } : {}, l = typeof r == "string" ? r : o.url ?? r;
+  class r extends n.TileSource {
+    constructor(s, a = {}) {
+      const o = typeof s == "object" && s !== null ? { ...s } : {}, l = typeof s == "string" ? s : o.url ?? s;
       super(typeof l == "string" ? l : `webtiff://${t}`), this._instance = t++, this._options = { ...e, ...o, ...a }, this._file = null, this.ready = !1;
       let c, h;
       this.promises = {
@@ -881,14 +1198,14 @@ function Ge(n, e = {}) {
       }, this.promises.ready.resolve = c, this.promises.ready.reject = h, this.promises.ready.promise.catch(() => {
       }), this.#e(l);
     }
-    async #e(r) {
+    async #e(s) {
       try {
-        const a = await $e(r, this._options);
+        const a = await tt(s, this._options);
         this._file = a;
         const o = a.levels, l = o[o.length - 1];
         this.width = l.width, this.height = l.height, this.aspectRatio = this.width / this.height, this.dimensions = new n.Point(this.width, this.height), this.tileOverlap = 0, this.minLevel = 0, this.maxLevel = o.length - 1, this.levels = o, this.tileWidth = o[0].tileWidth, this.tileHeight = o[0].tileHeight, this.ready = !0, this._ready = !0, this.promises.ready.resolve(this), this.raiseEvent("ready", { tileSource: this });
       } catch (a) {
-        this.promises.ready.reject(a), this.raiseEvent("open-failed", { message: a.message, source: r });
+        this.promises.ready.reject(a), this.raiseEvent("open-failed", { message: a.message, source: s });
       }
     }
     /**
@@ -899,9 +1216,9 @@ function Ge(n, e = {}) {
      */
     getImageInfo() {
     }
-    supports(r, a) {
-      if (r?.type && /^(web|geo)?tiff$/i.test(r.type) || typeof r == "string" && te.test(r) || typeof a == "string" && te.test(a)) return !0;
-      const o = r instanceof ArrayBuffer ? new Uint8Array(r) : ArrayBuffer.isView(r) ? new Uint8Array(r.buffer, r.byteOffset, r.byteLength) : null;
+    supports(s, a) {
+      if (s?.type && /^(web|geo)?tiff$/i.test(s.type) || typeof s == "string" && he.test(s) || typeof a == "string" && he.test(a)) return !0;
+      const o = s instanceof ArrayBuffer ? new Uint8Array(s) : ArrayBuffer.isView(s) ? new Uint8Array(s.buffer, s.byteOffset, s.byteLength) : null;
       if (o && o.length >= 4) {
         const l = o[0] === 73 && o[1] === 73, c = o[0] === 77 && o[1] === 77;
         if (l || c) {
@@ -911,8 +1228,8 @@ function Ge(n, e = {}) {
       }
       return !1;
     }
-    configure(r, a) {
-      return typeof r == "string" ? { url: r } : { ...r, url: r.url ?? a };
+    configure(s, a) {
+      return typeof s == "string" ? { url: s } : { ...s, url: s.url ?? a };
     }
     /**
      * OpenSeadragon pyramid level -> index into `this.levels`.
@@ -927,17 +1244,17 @@ function Ge(n, e = {}) {
      * just a level too coarse, which reads as a resampling choice rather than a
      * bug. Every site below goes through here for that reason.
      */
-    _decoderLevel(r) {
-      return this.levels.length - 1 - (this.maxLevel - r);
+    _decoderLevel(s) {
+      return this.levels.length - 1 - (this.maxLevel - s);
     }
-    getTileWidth(r) {
-      return this.levels?.[this._decoderLevel(r)]?.tileWidth;
+    getTileWidth(s) {
+      return this.levels?.[this._decoderLevel(s)]?.tileWidth;
     }
-    getTileHeight(r) {
-      return this.levels?.[this._decoderLevel(r)]?.tileHeight;
+    getTileHeight(s) {
+      return this.levels?.[this._decoderLevel(s)]?.tileHeight;
     }
-    getLevelScale(r) {
-      const a = this.levels, o = this._decoderLevel(r);
+    getLevelScale(s) {
+      const a = this.levels, o = this._decoderLevel(s);
       return a?.[o] ? a[o].width / a[a.length - 1].width : NaN;
     }
     /**
@@ -947,17 +1264,17 @@ function Ge(n, e = {}) {
      * level and the level it displaced are different pictures and must not share
      * a cache entry.
      */
-    getTileHashKey(r, a, o) {
-      return `webtiff${this._instance}_${r}_${a}_${o}`;
+    getTileHashKey(s, a, o) {
+      return `webtiff${this._instance}_${s}_${a}_${o}`;
     }
     /** Never fetched; it is only the identity string for the download request. */
-    getTileUrl(r, a, o) {
-      return `${r}/${a}_${o}`;
+    getTileUrl(s, a, o) {
+      return `${s}/${a}_${o}`;
     }
-    downloadTileStart(r) {
+    downloadTileStart(s) {
       const a = new AbortController();
-      r.userData.abortController = a;
-      const o = r.tile;
+      s.userData.abortController = a;
+      const o = s.tile;
       this._file.readTile(this._decoderLevel(o.level), o.x, o.y, {
         output: "rgba8",
         signal: a.signal
@@ -967,21 +1284,21 @@ function Ge(n, e = {}) {
           l.width,
           l.height
         ), f = await createImageBitmap(h);
-        r.finish(f, `${r.src}`, "imageBitmap");
+        s.finish(f, `${s.src}`, "imageBitmap");
       }).catch((l) => {
-        l?.name !== "AbortError" && r.fail(l.message, l);
+        l?.name !== "AbortError" && s.fail(l.message, l);
       });
     }
-    downloadTileAbort(r) {
-      r.userData.abortController?.abort();
+    downloadTileAbort(s) {
+      s.userData.abortController?.abort();
     }
     destroy() {
       this._file?.close(), this._file = null;
     }
   }
-  return s;
+  return r;
 }
-function ut(n, e = {}) {
+function kt(n, e = {}) {
   if (!n?.TileSource)
     throw new TypeError("enableWebTiff needs the OpenSeadragon namespace");
   const t = n.version?.major ?? 0;
@@ -990,11 +1307,11 @@ function ut(n, e = {}) {
       `web-tiff needs OpenSeadragon 6 or newer (found ${n.version.versionStr}). Use the geotiff-tilesource package for OpenSeadragon 4 and 5.`
     );
   if (n.WebTiffTileSource) return n.WebTiffTileSource;
-  const s = Ge(n, e);
-  return n.WebTiffTileSource = s, s;
+  const r = at(n, e);
+  return n.WebTiffTileSource = r, r;
 }
-const Ke = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
-class Ye {
+const lt = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
+class ct {
   #e;
   #t;
   #r;
@@ -1006,48 +1323,48 @@ class Ye {
   #a = /* @__PURE__ */ new Map();
   constructor(e, {
     fetch: t,
-    headers: s = {},
+    headers: r = {},
     credentials: i,
-    captureErrorBody: r = !1
+    captureErrorBody: s = !1
   } = {}) {
-    this.#e = String(e), this.#t = t ?? globalThis.fetch.bind(globalThis), this.#r = s, this.#s = i, this.#i = r;
+    this.#e = String(e), this.#t = t ?? globalThis.fetch.bind(globalThis), this.#r = r, this.#s = i, this.#i = s;
   }
   get url() {
     return this.#e;
   }
   async #l(e, t) {
-    const s = { ...this.#r };
-    e && (s.Range = `bytes=${e.start}-${e.end - 1}`);
+    const r = { ...this.#r };
+    e && (r.Range = `bytes=${e.start}-${e.end - 1}`);
     let i;
     try {
       i = await this.#t(this.#e, {
-        headers: s,
+        headers: r,
         signal: t,
         credentials: this.#s
       });
-    } catch (r) {
-      throw r?.name === "AbortError" ? r : new R(`[web-tiff] cannot reach ${this.#e}: ${r.message}`, {
+    } catch (s) {
+      throw s?.name === "AbortError" ? s : new U(`[web-tiff] cannot reach ${this.#e}: ${s.message}`, {
         url: this.#e,
         range: e,
-        cause: r
+        cause: s
       });
     }
     if (!i.ok) {
-      let r = null;
+      let s = null;
       if (this.#i)
         try {
           const a = await i.clone().text();
-          r = a.replace(/\s+/g, " ").slice(0, 200), a.length > 200 && (r += "...");
+          s = a.replace(/\s+/g, " ").slice(0, 200), a.length > 200 && (s += "...");
         } catch {
         }
-      throw new R(
-        `[web-tiff] HTTP ${i.status} for ${this.#e}${r ? `: ${r}` : ""}`,
+      throw new U(
+        `[web-tiff] HTTP ${i.status} for ${this.#e}${s ? `: ${s}` : ""}`,
         {
           status: i.status,
           statusText: i.statusText,
           url: this.#e,
           range: e,
-          body: r
+          body: s
         }
       );
     }
@@ -1056,9 +1373,9 @@ class Ye {
   async #c(e, t) {
     try {
       return await this.#l(e, t);
-    } catch (s) {
-      if (s?.name === "AbortError" || !(s.status == null || Ke.has(s.status))) throw s;
-      return await new Promise((r) => setTimeout(r, 250)), this.#l(e, t);
+    } catch (r) {
+      if (r?.name === "AbortError" || !(r.status == null || lt.has(r.status))) throw r;
+      return await new Promise((s) => setTimeout(s, 250)), this.#l(e, t);
     }
   }
   /**
@@ -1072,45 +1389,45 @@ class Ye {
     if (this.#n != null) return this.#n;
     const t = await this.#c({ start: 0, end: 65536 }, e);
     if (t.status === 200) {
-      const r = new Uint8Array(await t.arrayBuffer());
-      return this.#o = r, this.#n = r.length, this.#n;
+      const s = new Uint8Array(await t.arrayBuffer());
+      return this.#o = s, this.#n = s.length, this.#n;
     }
-    const s = t.headers.get("Content-Range"), i = s ? Number(s.split("/")[1]) : NaN;
+    const r = t.headers.get("Content-Range"), i = r ? Number(r.split("/")[1]) : NaN;
     if (!Number.isFinite(i))
-      throw new R(
+      throw new U(
         `[web-tiff] ${this.#e} answered a range request without a usable Content-Range; the server must support byte ranges`,
         { status: t.status, url: this.#e }
       );
     return this.#n = i, this.#h = new Uint8Array(await t.arrayBuffer()), i;
   }
   #h = null;
-  async read(e, t, s) {
-    this.#n == null && await this.getSize(s);
-    const i = Math.min(e, this.#n), r = Math.min(e + t, this.#n);
-    if (r <= i) return new Uint8Array(0);
-    if (this.#o) return this.#o.subarray(i, r);
-    if (this.#h && r <= this.#h.length)
-      return this.#h.subarray(i, r);
-    const a = `${i}-${r}`, o = this.#a.get(a);
+  async read(e, t, r) {
+    this.#n == null && await this.getSize(r);
+    const i = Math.min(e, this.#n), s = Math.min(e + t, this.#n);
+    if (s <= i) return new Uint8Array(0);
+    if (this.#o) return this.#o.subarray(i, s);
+    if (this.#h && s <= this.#h.length)
+      return this.#h.subarray(i, s);
+    const a = `${i}-${s}`, o = this.#a.get(a);
     if (o) return o;
-    const l = this.#c({ start: i, end: r }, s).then(async (c) => new Uint8Array(await c.arrayBuffer())).finally(() => this.#a.delete(a));
+    const l = this.#c({ start: i, end: s }, r).then(async (c) => new Uint8Array(await c.arrayBuffer())).finally(() => this.#a.delete(a));
     return this.#a.set(a, l), l;
   }
 }
-const Xe = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const ht = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  HttpSource: Ye
-}, Symbol.toStringTag, { value: "Module" })), E = {
+  HttpSource: ct
+}, Symbol.toStringTag, { value: "Module" })), I = {
   INIT: "init",
   OPEN: "open",
   READ: "read",
   CLOSE: "close",
   ABORT: "abort"
-}, ne = {
+}, fe = {
   READY: "ready",
   WARN: "warn"
 };
-function Ze(n, e = {}) {
+function ft(n, e = {}) {
   if (typeof n == "string" || n instanceof URL)
     return {
       descriptor: {
@@ -1138,142 +1455,213 @@ function Ze(n, e = {}) {
     "a worker source must be a Blob, a File, or bytes; custom sources only work with an in-process decoder"
   );
 }
-const Je = "./decode.worker.mjs";
-function Qe() {
-  const n = new URL(Je, import.meta.url);
+const ut = "./decode.worker.mjs";
+function dt() {
+  const n = new URL(ut, import.meta.url);
   return new Worker(n, { type: "module" });
 }
-function qe() {
+function pt() {
   const n = globalThis.navigator?.hardwareConcurrency ?? 4;
   return Math.min(4, Math.max(1, Math.ceil(n / 2)));
 }
-function et({ name: n, message: e, status: t, url: s, code: i }) {
-  return n === "WebTiffHttpError" ? new R(e, { status: t, url: s }) : n === "WebTiffUnsupportedError" ? new re(e, { code: i }) : n === "AbortError" ? new DOMException(e, "AbortError") : new w(e, { code: i });
+const gt = 32;
+function mt({ name: n, message: e, status: t, url: r, code: i }) {
+  return n === "WebTiffHttpError" ? new U(e, { status: t, url: r }) : n === "WebTiffUnsupportedError" ? new me(e, { code: i }) : n === "AbortError" ? new DOMException(e, "AbortError") : new w(e, { code: i });
 }
-class tt {
+class wt {
   #e;
   #t = /* @__PURE__ */ new Map();
   #r = 1;
   ready;
   inFlight = 0;
-  constructor(e, t) {
-    this.#e = e, this.ready = new Promise((s) => {
-      const i = (r) => {
-        r.data?.kind === ne.READY && (e.removeEventListener("message", i), s());
+  /**
+   * Set by the pool once it owns this worker.
+   *
+   * Receives the raw WARN message, whose `file` is this worker's own file id.
+   * Only the pool can turn that into the id the caller holds, so the translation
+   * lives there rather than here.
+   *
+   * @type {((msg: object) => void) | undefined}
+   */
+  onWarning;
+  constructor(e) {
+    this.#e = e, this.ready = new Promise((t) => {
+      const r = (i) => {
+        i.data?.kind === fe.READY && (e.removeEventListener("message", r), t());
       };
-      e.addEventListener("message", i);
-    }), e.addEventListener("message", (s) => {
-      const i = s.data;
-      if (i?.kind === ne.WARN) {
-        t?.(i);
+      e.addEventListener("message", r);
+    }), e.addEventListener("message", (t) => {
+      const r = t.data;
+      if (r?.kind === fe.WARN) {
+        this.onWarning?.(r);
         return;
       }
-      if (i?.kind) return;
-      const r = this.#t.get(i.id);
-      r && (this.#t.delete(i.id), this.inFlight--, i.ok ? r.resolve(i.result) : r.reject(et(i.error)));
-    }), e.addEventListener("error", (s) => {
-      const i = new w(s.message ?? "decode worker failed");
-      for (const [, r] of this.#t) r.reject(i);
+      if (r?.kind) return;
+      const i = this.#t.get(r.id);
+      i && (this.#t.delete(r.id), this.inFlight--, r.ok ? i.resolve(r.result) : i.reject(mt(r.error)));
+    }), e.addEventListener("error", (t) => {
+      const r = new w(t.message ?? "decode worker failed");
+      for (const [, i] of this.#t) i.reject(r);
       this.#t.clear(), this.inFlight = 0;
     });
   }
   send(e, t = []) {
-    const s = this.#r++;
-    return this.inFlight++, new Promise((i, r) => {
-      this.#t.set(s, { resolve: i, reject: r }), this.#e.postMessage({ ...e, id: s }, t);
+    const r = this.#r++;
+    return this.inFlight++, new Promise((i, s) => {
+      this.#t.set(r, { resolve: i, reject: s }), this.#e.postMessage({ ...e, id: r }, t);
     });
   }
   terminate() {
     this.#e.terminate();
   }
 }
-class ue {
+class Se {
   #e = [];
   #t = /* @__PURE__ */ new Map();
-  #r = 1;
-  #s;
-  constructor(e, t) {
-    this.#e = e, this.#s = t;
+  /** `${workerIndex}:${remoteId}` -> the caller's file id. */
+  #r = /* @__PURE__ */ new Map();
+  /** Warnings that arrived before that mapping existed, by the same key. */
+  #s = /* @__PURE__ */ new Map();
+  /** Mapped, waiting for a subscriber. Released by flushWarnings. */
+  #i = [];
+  #n = 1;
+  #o = /* @__PURE__ */ new Set();
+  constructor(e) {
+    this.#e = e;
+    for (const t of e) t.onWarning = (r) => this.#a(t, r);
+  }
+  /**
+   * Subscribe to diagnostics from every file on this pool. Returns an
+   * unsubscribe function.
+   *
+   * A set rather than one callback captured at construction: the pool is shared
+   * and memoized across every `openTiff` call in the process, so a single slot
+   * would keep the first caller's callback forever and silently drop the rest.
+   *
+   * @param {(d: Diagnostic) => void} fn
+   * @returns {() => void}
+   */
+  onWarning(e) {
+    return this.#o.add(e), () => this.#o.delete(e);
+  }
+  /** Retranslate a worker-local file id into the one the caller was given. */
+  #a(e, t) {
+    const r = `${this.#e.indexOf(e)}:${t.file}`;
+    if (!this.#r.has(r)) {
+      const i = this.#s.get(r) ?? [];
+      i.length < gt && i.push(t), this.#s.set(r, i);
+      return;
+    }
+    this.#l(new P({ ...t, file: this.#r.get(r) }));
+  }
+  #l(e) {
+    for (const t of this.#o) t(e);
+  }
+  /**
+   * Deliver what was raised while opening.
+   *
+   * The mirror of Decoder.flushWarnings, and called the same way: a caller
+   * subscribes once it has the file id, and this hands over what could not be
+   * delivered before that existed.
+   */
+  flushWarnings() {
+    const e = this.#i;
+    this.#i = [];
+    for (const t of e) this.#l(t);
   }
   /** The least busy worker; ties go to the earliest, which keeps warm caches warm. */
-  #i() {
+  #c() {
     let e = this.#e[0];
     for (const t of this.#e) t.inFlight < e.inFlight && (e = t);
     return e;
   }
   async open(e, t = {}) {
-    const { descriptor: s, transfer: i } = Ze(e, t), r = this.#i(), { id: a, meta: o } = await r.send(
-      { op: E.OPEN, src: s, options: t },
+    const { descriptor: r, transfer: i } = ft(e, t), s = this.#c(), { id: a, meta: o } = await s.send(
+      { op: I.OPEN, src: r, options: t },
       i
-    ), l = this.#r++;
-    return this.#t.set(l, { worker: r, remoteId: a }), { id: l, meta: o };
+    ), l = this.#n++, c = `${this.#e.indexOf(s)}:${a}`;
+    this.#t.set(l, { worker: s, remoteId: a }), this.#r.set(c, l);
+    const h = this.#s.get(c);
+    if (h) {
+      this.#s.delete(c);
+      for (const f of h) this.#i.push(new P({ ...f, file: l }));
+    }
+    return { id: l, meta: o };
   }
-  async read(e, t, { signal: s } = {}) {
+  async read(e, t, { signal: r } = {}) {
     const i = this.#t.get(e);
     if (!i) throw new w(`unknown file ${e}`);
-    const r = i.worker.send({ op: E.READ, file: i.remoteId, req: t });
-    return s && s.addEventListener(
+    const s = i.worker.send({ op: I.READ, file: i.remoteId, req: t });
+    return r && r.addEventListener(
       "abort",
-      () => i.worker.send({ op: E.ABORT, target: e }),
+      () => i.worker.send({ op: I.ABORT, target: e }),
       { once: !0 }
-    ), r;
+    ), s;
   }
   close(e) {
     const t = this.#t.get(e);
-    t && (t.worker.send({ op: E.CLOSE, file: t.remoteId }), this.#t.delete(e));
+    if (!t) return;
+    t.worker.send({ op: I.CLOSE, file: t.remoteId }), this.#t.delete(e);
+    const r = `${this.#e.indexOf(t.worker)}:${t.remoteId}`;
+    this.#r.delete(r), this.#s.delete(r), this.#i = this.#i.filter((i) => i.file !== e);
   }
   terminate() {
     for (const e of this.#e) e.terminate();
-    this.#e = [], this.#t.clear();
+    this.#e = [], this.#t.clear(), this.#r.clear(), this.#s.clear(), this.#i = [], this.#o.clear();
   }
 }
-async function nt(n = {}) {
+async function yt(n = {}) {
   if (typeof Worker > "u") return null;
-  const e = he(n), t = ce(e, n.wasmBaseUrl), s = n.size ?? qe(), i = n.createWorker ?? (n.workerUrl ? () => new Worker(n.workerUrl, { type: "module" }) : Qe), r = [];
-  for (let a = 0; a < s; a++)
-    r.push(new tt(i(), n.onWarning));
-  return await Promise.all(r.map((a) => a.ready)), await Promise.all(r.map((a) => a.send({ op: E.INIT, wasmUrl: t }))), new ue(r, n.onWarning);
+  const e = Ee(n), t = Te(e, n.wasmBaseUrl), r = n.size ?? pt(), i = n.createWorker ?? (n.workerUrl ? () => new Worker(n.workerUrl, { type: "module" }) : dt), s = [];
+  for (let o = 0; o < r; o++) s.push(new wt(i()));
+  await Promise.all(s.map((o) => o.ready)), await Promise.all(s.map((o) => o.send({ op: I.INIT, wasmUrl: t })));
+  const a = new Se(s);
+  return n.onWarning && a.onWarning(n.onWarning), a;
 }
-const rt = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const bt = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  DecoderPool: ue,
-  createDecoderPool: nt
+  DecoderPool: Se,
+  createDecoderPool: yt
 }, Symbol.toStringTag, { value: "Module" }));
 export {
-  ve as BlobSource,
-  Ue as BytesSource,
-  ge as Decoder,
+  Ke as BlobSource,
+  Ve as BytesSource,
+  Fe as Decoder,
+  P as Diagnostic,
+  Q as MAX_CHANNELS,
   F as MAX_PLANES,
-  T as PHOTOMETRIC,
-  De as SAMPLE_ENCODING_VERSION,
-  b as SAMPLE_FORMAT,
-  Fe as TiffFile,
-  ht as VERSION,
-  fe as WebTiffAbortError,
+  E as PHOTOMETRIC,
+  rt as SAMPLE_ENCODING_VERSION,
+  _ as SAMPLE_FORMAT,
+  Ge as TiffFile,
+  It as VERSION,
+  We as WebTiffAbortError,
   w as WebTiffDecodeError,
-  x as WebTiffError,
-  R as WebTiffHttpError,
-  re as WebTiffUnsupportedError,
-  Pe as buildLevels,
-  ze as channelEncodingAt,
-  I as defaultFormat,
-  ut as enableWebTiff,
-  ct as inferInterpretation,
-  Ae as isCompanionPage,
-  Ve as isDisplayReadyChannel,
-  lt as isIdentityChannel,
-  K as looksLikeIFDPyramid,
-  Ge as makeTileSource,
-  be as omeChannelsForPlanes,
-  we as omeColorToHex,
-  $e as openTiff,
-  st as parseOmeChannels,
-  U as planeKey,
-  it as readSampleRangeTags,
-  Se as resolveLayout,
-  ot as resolveSampleEncoding,
-  at as sampleToByte,
-  je as sampleToUnit,
-  he as selectBuild,
-  xe as toSource
+  b as WebTiffError,
+  U as WebTiffHttpError,
+  me as WebTiffUnsupportedError,
+  De as buildLevels,
+  st as channelEncodingAt,
+  R as defaultFormat,
+  kt as enableWebTiff,
+  Pt as inferInterpretation,
+  Ce as isCompanionPage,
+  ot as isDisplayReadyChannel,
+  St as isIdentityChannel,
+  ne as looksLikeIFDPyramid,
+  at as makeTileSource,
+  O as normalizeChannels,
+  ve as omeChannelsForPlanes,
+  Me as omeColorToHex,
+  Ie as onDiagnostic,
+  tt as openTiff,
+  _t as parseOmeChannels,
+  M as planeKey,
+  At as readSampleRangeTags,
+  Oe as resolveLayout,
+  Tt as resolveSampleEncoding,
+  Et as sampleToByte,
+  it as sampleToUnit,
+  Ee as selectBuild,
+  Xe as toSource
 };

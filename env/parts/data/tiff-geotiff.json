@@ -2,15 +2,22 @@
   "$meta": {
     "description": "Raw TIFF from a static file server, decoded by the geotiff module",
     "dimension": "data",
-    "clientKey": "localhost",
-    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+    "clientKey": "localhost"
+    /* No TIFF_FILESERVER default — see the note in `data/tiff-webtiff.json`:
+       `$meta.defaults` values are never substituted, so the default belongs in
+       the ENV body, and it is relative so it follows the bound port. */
   },
   /**
-   * The `geotiff` half of the TIFF pair — same file server, different decoder,
-   * which is the only reason both exist. Compose one or the other against the
-   * same slides to compare them; the `data` dimension refuses both at once.
+   * The `geotiff` half of the TIFF pair — same slides, different decoder, which
+   * is the only reason both exist. Compose one or the other against the same
+   * data to compare them; the `data` dimension refuses both at once.
    *
-   * Serve the scans folder first:  node tmp/slide-fileserver.mjs
+   * Self-sufficient after `npm run fixtures:fetch`: `core.server.media` opts the
+   * fixture directory into streamed, `Range`-aware serving. That is a separate
+   * opt-in from `staticRoots` and off wherever it is not declared — see the
+   * longer note in `data/tiff-webtiff.json`. Scans outside the repository still
+   * need `npm run fixtures:serve` (`server/utils/node/slide-fileserver.mjs`),
+   * since a media root may not escape the application root.
    */
   "core": {
     "client": {
@@ -21,13 +28,29 @@
     },
     "setup": {
       "webGlPrecision": "auto"
+    },
+    "server": {
+      "media": {
+        "roots": ["test/fixtures/data"],
+        "extensions": [".tif", ".tiff", ".json", ".geojson", ".pbf", ".png", ".dzi"]
+      },
+      /* Same twelve sessions as `data/tiff-webtiff`: the index labels them by
+         data shape, not by decoder, which is the whole point of running them
+         under both. */
+      "secure": { "examples": {
+        "webtiff-sessions": {
+          "sessionIndex": "test/fixtures/sessions/index.json",
+          "deployment": "webtiff",
+          "order": 10
+        }
+      }}
     }
   },
   "modules": {
     "geotiff": {
       "enabled": true,
       "permaLoad": true,
-      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>",
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-/test/fixtures/data %>",
       "autoConfigure": true,
       "registerSlideProtocol": true
     },

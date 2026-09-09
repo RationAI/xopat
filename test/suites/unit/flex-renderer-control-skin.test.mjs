@@ -9,7 +9,7 @@
  * directly. Two things can quietly dissolve that:
  *
  *  - Tailwind tree-shakes custom `@layer components` CSS by class name, so a
- *    content-glob change (the `'!./src/libs/**'` TODO in tailwind.config.js) or
+ *    content-glob change (`'!./src/libs/**'` in tailwind.config.js) or
  *    a missing `safelist` entry purges the skin out of `tailwind.min.css`;
  *  - a library bump can rename a class, or route a control through the generic
  *    `renderInput()` helper whose class is a template literal.
@@ -80,6 +80,24 @@ test("flex-renderer still emits the class names the skin targets @unit", () => {
         missing,
         `no longer emitted by src/libs/flex-renderer - the skin is now dead CSS: ${missing.join(", ")}`
     ).toEqual([]);
+});
+
+test("the bool control's checked colours are real colours @unit", () => {
+    // DaisyUI's theme variables hold raw oklch COMPONENTS ("48.6% 0.286 281"),
+    // not colours. Writing `--chkbg: var(--p)` therefore makes both
+    // `background-color: var(--chkbg)` and the five-stop checkmark
+    // `background-image` inherited from `.checkbox:checked` invalid at
+    // computed-value time — they are dropped, and a checked box renders
+    // pixel-identical to an unchecked one. That is not a visible style bug; it
+    // reads as "the checkbox does not work".
+    const spec = read("src/assets/tailwind-spec.css");
+    const rule = spec.slice(spec.indexOf(".er-control__input--bool"));
+    const decl = rule.slice(0, rule.indexOf("}"));
+
+    expect(decl).toMatch(/--chkbg:\s*var\(--fallback-p,\s*oklch\(/);
+    expect(decl).toMatch(/--chkfg:\s*var\(--fallback-pc,\s*oklch\(/);
+    // The bare form, in either property, is the regression.
+    expect(decl).not.toMatch(/--chk(bg|fg):\s*var\(--p[c]?\)/);
 });
 
 test("template-literal control classes are pinned in the safelist @unit", () => {

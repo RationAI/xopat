@@ -1,11 +1,8 @@
 {
   "params": {
     "customBlending": true,
-    "background": "#000000ff",
+    "backgroundColor": "#000000ff",
     "activeBackgroundIndex": [
-      0
-    ],
-    "activeVisualizationIndex": [
       0
     ],
     "sessionName": "all-shaders"
@@ -97,13 +94,23 @@
           ],
           "params": {}
         },
-        "edge_isoline_layer": {
-          "name": "Edge isoline",
-          "type": "edge_isoline",
+        "gridheatmap_layer": {
+          "name": "Grid heatmap",
+          "type": "gridheatmap",
           "visible": 0,
           "fixed": false,
           "dataReferences": [
             4
+          ],
+          "params": {}
+        },
+        "patternmap_layer": {
+          "name": "PatternMap",
+          "type": "patternmap",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            5
           ],
           "params": {}
         },
@@ -155,6 +162,36 @@
         "texture_layer": {
           "name": "Texture",
           "type": "texture",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            3
+          ],
+          "params": {}
+        },
+        "stain_separation_layer": {
+          "name": "Stain separation",
+          "type": "stain-separation",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            0
+          ],
+          "params": {}
+        },
+        "fisheye_lens_layer": {
+          "name": "Fisheye lens",
+          "type": "fisheye-lens",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            0
+          ],
+          "params": {}
+        },
+        "grid_layer": {
+          "name": "Grid",
+          "type": "grid",
           "visible": 0,
           "fixed": false,
           "dataReferences": [
@@ -220,14 +257,15 @@
           "dataReferences": [
             7
           ],
-          "channelRenderer": "single_channel",
-          "channelRendererConfig": {
-            "params": {
-              "color": "#ff8c00"
-            }
-          },
-          "sourceIndex": 0,
-          "params": {}
+          "params": {
+            "channelRenderer": "single_channel",
+            "channelRendererConfig": {
+              "params": {
+                "color": "#ff8c00"
+              }
+            },
+            "sourceIndex": 0
+          }
         }
       }
     },
@@ -239,15 +277,15 @@
           "type": "time-series",
           "visible": 1,
           "fixed": false,
-          "seriesRenderer": "identity",
-          "series": [
-            3,
-            2,
-            4,
-            5,
-            6
-          ],
           "params": {
+            "seriesRenderer": "identity",
+            "series": [
+              3,
+              2,
+              4,
+              5,
+              6
+            ],
             "timeline": {
               "type": "range_input",
               "default": 0,

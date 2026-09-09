@@ -1,7 +1,7 @@
 {
   "params": {
     "customBlending": true,
-    "background": "#000000FF",
+    "backgroundColor": "#000000FF",
     "sessionName": "viz-flex-multichannel"
   },
   "data": [

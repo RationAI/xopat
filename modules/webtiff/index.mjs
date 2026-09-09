@@ -30,6 +30,8 @@ import { registerRawTiffConverters } from "./raw-tiff.mjs";
 import { describeTileSource, descriptorsDiffer } from "./tiff-metadata.mjs";
 import { buildAutoShaders, shadersAreAutoOwned, stripAutoDerived } from "./auto-config.mjs";
 import { measureChannelRanges } from "./tiff-statistics.mjs";
+import { isEvictableSource } from "./source-cache.mjs";
+import { onDiagnostic } from "./dist/web-tiff.mjs";
 
 const MODULE_ID = "webtiff";
 const meta = (key, fallback) => {
@@ -82,18 +84,51 @@ const httpFetch = adapter
  * otherwise print once per tile and bury everything else. Repeats are still
  * visible under `debugMode`.
  *
- * @param {{code?: string, message?: string}} warning
+ * Keyed by `(file, code)`: the decoder now stamps each diagnostic with the
+ * handle it came from, so one slide's benign warning no longer swallows another
+ * slide's genuine version of the same code. `label` is the human name for that
+ * handle — the data id, when the open passed one.
+ *
+ * `severity` decides the channel, not the wording. `info` marks a decision that
+ * is correct and worth naming (a plane stack read as channels is the one this
+ * deployment meets on every multichannel open); reporting those as warnings is
+ * what taught people to read past the whole class.
+ *
+ * @param {{code?: string, message?: string, severity?: string, file?: number, label?: string}} warning
  */
 const seenWarnings = new Set();
 function reportDecoderWarning(warning) {
     const code = warning?.code || warning?.message || "unknown";
-    if (seenWarnings.has(code)) {
+    const key = `${warning?.file ?? "-"}::${code}`;
+    if (seenWarnings.has(key)) {
         debug("decoder (repeat):", warning?.message || code);
         return;
     }
-    seenWarnings.add(code);
-    console.warn(`[webtiff] decoder: ${warning?.message || code}`);
+    seenWarnings.add(key);
+    const where = warning?.label ? ` [${warning.label}]` : "";
+    const text = `[webtiff] decoder${where}: ${warning?.message || code}`;
+    if (warning?.severity === "info") {
+        // Not a problem, so not a warning. Still said once, because "why is this
+        // slide five channels" is a real question with an answer here.
+        console.info(text);
+        return;
+    }
+    console.warn(text);
 }
+
+/**
+ * The decoder's JS half raises diagnostics on whichever thread calls it, and
+ * this module calls it on both: the pool's worker decodes, but channel parsing
+ * and format merging happen here when a tile source is built. With nobody
+ * subscribed the bundle writes straight to `console`, which is how the
+ * `channels: "all"` notice appeared twice — once raw from that fallback, once
+ * properly through the per-slide report.
+ *
+ * Subscribing routes it through the same reporting as everything else, so the
+ * dedup, the severity split and the slide label apply once, in one place. The
+ * worker subscribes separately for its own module instance.
+ */
+onDiagnostic?.(reportDecoderWarning);
 
 /**
  * The decode transport. Workers are created on the first slide, not at load:
@@ -303,6 +338,12 @@ let warnedViewerOrigin = false;
  */
 function warnIfViewerOrigin(dataID, url) {
     if (warnedViewerOrigin) return;
+    // A configured base IS the deployment saying where the slides live, which is
+    // exactly what this message asks for. A relative one (`/test/fixtures/data`)
+    // is the normal shape when the viewer serves them itself — it follows
+    // whatever port and origin the server bound — so warning about it would be
+    // telling the operator to do the thing they just did.
+    if (baseUrl) return;
     // An absolute URL — from an absolute data id or an absolute base — says where
     // it points, whether or not that is the viewer.
     if (/^(https?:)?\/\//i.test(url)) return;
@@ -311,6 +352,10 @@ function warnIfViewerOrigin(dataID, url) {
     // against the page before matching, so this is the accurate test.
     if (window.SLIDE_PROTOCOLS?.getActiveClientForUrl?.(url)) return;
 
+    // Latched here, after every check — latching before them meant that in a
+    // multi-viewer session the first slide to resolve consumed the one report
+    // even when it had nothing to report, and the misconfigured second slide
+    // was then silent.
     warnedViewerOrigin = true;
     let absolute = url;
     try {
@@ -342,7 +387,12 @@ function warnIfViewerOrigin(dataID, url) {
 const sources = new Map();
 const maxOpenSlides = Math.max(1, Number(meta("maxOpenSlides", 4)) || 4);
 
-/** Whether any viewer is currently rendering this source. */
+/**
+ * Whether any viewer is currently rendering this source.
+ *
+ * Also records that it *was* rendered, which is the fact eviction actually needs
+ * — see {@link isEvictableSource}.
+ */
 function sourceInUse(source) {
     const viewers = window.VIEWER_MANAGER?.viewers;
     if (!Array.isArray(viewers)) return true;   // cannot tell: assume yes, never evict blindly
@@ -350,18 +400,27 @@ function sourceInUse(source) {
         const world = viewer?.world;
         if (!world) continue;
         for (let i = 0; i < world.getItemCount(); i++) {
-            if (world.getItemAt(i)?.source === source) return true;
+            if (world.getItemAt(i)?.source === source) {
+                source.__xopatWasShown = true;
+                return true;
+            }
         }
     }
     return false;
 }
 
-/** Close the oldest idle sources until the cache is within its bound. */
+/**
+ * Close the oldest idle sources until the cache is within its bound.
+ *
+ * "Idle" is decided by `isEvictableSource` (`source-cache.mjs`), which is where
+ * the reasoning lives — the short version is that a source still opening is in
+ * no viewer's world and must not be mistaken for one nobody wants.
+ */
 function trimSources() {
     if (sources.size <= maxOpenSlides) return;
     for (const [key, source] of sources) {
         if (sources.size <= maxOpenSlides) return;
-        if (sourceInUse(source)) continue;
+        if (!isEvictableSource(source, sourceInUse(source))) continue;
         sources.delete(key);
         try {
             source.closeFile();
@@ -697,9 +756,17 @@ if (meta("autoConfigure", true) && window.VIEWER_MANAGER) {
             const known = descriptors.get(layoutKey);
             descriptors.set(layoutKey, descriptor);
 
-            const warnings = item.source.getWarnings?.();
-            if (warnings?.length) {
-                console.warn(`[webtiff] ${dataId}: ${warnings.join("; ")}`);
+            // Through the same reporter as the streamed ones, rather than a
+            // second formatting of the same records: `getWarnings()` returns
+            // Diagnostics carrying `severity`, `file` and `label`, and a
+            // diagnostic that also arrived on the live stream would otherwise be
+            // printed twice — once here at open, once as it happened. One
+            // reporter means one dedup key, one severity policy, one shape.
+            //
+            // `dataId` is the better name for the slide than the decoder's
+            // basename-derived label, so pass it when the record has none.
+            for (const diagnostic of item.source.getWarnings?.() ?? []) {
+                reportDecoderWarning(diagnostic?.label ? diagnostic : { ...diagnostic, label: dataId });
             }
 
             if (!shadersAreAutoOwned(background) || corrected.has(background)) continue;

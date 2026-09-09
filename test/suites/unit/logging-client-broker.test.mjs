@@ -259,6 +259,22 @@ test("adopting the console keeps appTrace readable — and bounded @unit", () =>
     expect(fake.appTrace.length, "bounded by the ring, not by the session length").toBe(50);
 });
 
+test("an adopted console.log still prints, verbatim, at the default level @unit", () => {
+    // The default root level is `warn`. Gating the PRINT on that made every
+    // `console.log` in the app — and every one typed into devtools — vanish.
+    // Printing is not a level decision; the level decides ring/forwarder only.
+    const seen = [];
+    const fake = { appTrace: [], log: (...a) => seen.push(a), info() {}, debug() {}, warn() {}, error() {} };
+    const { broker } = makeBroker({});          // no config at all = level "warn"
+    broker.adoptConsole(fake);
+
+    const payload = { a: 1 };
+    fake.log("HI", payload);
+    expect(seen.length, "printed once").toBe(1);
+    expect(seen[0][0], "no channel prefix, no reformatting").toBe("HI");
+    expect(seen[0][1], "objects reach devtools unstringified").toBe(payload);
+});
+
 test("adoption is idempotent — a second call does not stack wrappers @unit", () => {
     const seen = [];
     const fake = { appTrace: [], log() {}, info() {}, debug() {}, warn: (...a) => seen.push(a), error() {} };

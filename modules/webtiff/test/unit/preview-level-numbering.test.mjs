@@ -38,7 +38,11 @@ globalThis.window.APPLICATION_CONTEXT = { getOption: () => true };
 globalThis.window.UTILITIES = { imageLikeToImage: async () => null };
 
 const { installWebTiffTileSource } = await import("../../tile-source.mjs");
-await import("../../../../src/classes/preview-level.ts");
+// Installed explicitly — see the note in
+// `test/suites/unit/preview-level-eligibility.test.mjs`: the import-time patch
+// lands once per module instance, and that file sets up its own namespace.
+const { installPreviewLevel } = await import("../../../../src/classes/preview-level.ts");
+installPreviewLevel(globalThis.window.OpenSeadragon);
 
 const WebTiffTileSource = installWebTiffTileSource(globalThis.window.OpenSeadragon, {});
 const tryInject = StubTileSource.prototype.tryInjectPreviewLevel;

@@ -1,7 +1,7 @@
 {
   "params": {
     "customBlending": true,
-    "background": "#000000ff",
+    "backgroundColor": "#000000ff",
     "sessionName": "fluorescence-background"
   },
   "data": [

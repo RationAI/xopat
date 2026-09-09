@@ -87,3 +87,42 @@ interface WebTiffDescriptor {
     interpretationResolved: "image" | "data";
     encoding: TiffSampleEncoding;
 }
+
+/**
+ * One thing the decoder wants to say about a file it is reading.
+ *
+ * Not every entry is a problem: `severity` distinguishes a decision that is
+ * correct and worth naming (a plane stack read as channels — `info`) from
+ * something that went wrong (`warn`). Reporting the first class as warnings is
+ * what makes the second class unreadable, so consumers must branch on it.
+ *
+ * `file` is the decoder's own handle id, stable for the lifetime of one open
+ * file and shared with the read path; `label` is the human name for it (the last
+ * path segment, unless the open supplied one). Both exist so a message can say
+ * *which* slide it is about when several are open.
+ *
+ * Stringifies to `message`, so joining or interpolating a list of these reads
+ * exactly as it did when they were plain strings.
+ */
+interface WebTiffDiagnostic {
+    /** Stable identifier for the condition, e.g. `layout_stack`. Dedupe on this. */
+    code: string;
+    message: string;
+    severity: "info" | "warn";
+    /** Decoder handle id for the file, or `null` when it is not file-scoped. */
+    file: number | null;
+    /** Human name for that file, when one is known. */
+    label: string | null;
+    toString(): string;
+}
+
+/**
+ * Channel selection as the decoder accepts it.
+ *
+ * `null` / omitted means every channel. `"all"` is the same thing spelled the
+ * way WSI-Service spells it. The swizzle form names lanes explicitly (`"r g b a"`,
+ * with `x` for a padding lane). An array selects by index. Anything else is an
+ * error rather than a silent truncation, and a selection longer than
+ * `MAX_CHANNELS` throws — per read, so it fails on every tile rather than once.
+ */
+type WebTiffChannelSelection = number[] | "all" | string | null;

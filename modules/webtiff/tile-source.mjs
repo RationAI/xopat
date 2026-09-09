@@ -24,7 +24,7 @@
  * @module webtiff/tile-source
  */
 
-import { makeTileSource } from "./dist/web-tiff.mjs";
+import { makeTileSource, MAX_CHANNELS } from "./dist/web-tiff.mjs";
 
 /**
  * A decoded tile in the renderer's packed-texture form.
@@ -172,8 +172,16 @@ const INTERPRETATIONS = ["auto", "image", "data"];
 /** How the pyramid may be resolved. Same three values the decoder declares. */
 const PYRAMID_STRATEGIES = ["auto", "ifd", "subifd"];
 
-/** A channel list longer than this is not a selection, it is an attack. */
-const MAX_CHANNEL_SELECTION = 64;
+/**
+ * A channel list longer than this is not a selection, it is an attack.
+ *
+ * Taken from the decoder rather than restated: it enforces the same bound and,
+ * since the validating parser landed, **throws** on a longer list instead of
+ * clipping it — and it validates per read, so a too-long selection would surface
+ * as a failure on every tile rather than once at open. A local number that drifts
+ * above the decoder's turns a clean refusal into that.
+ */
+const MAX_CHANNEL_SELECTION = MAX_CHANNELS;
 
 /**
  * A channel or plane index, or `undefined` for anything that is not one.
@@ -250,6 +258,13 @@ export function decoderOptionsFrom(options) {
             .filter(c => c !== undefined)
             .slice(0, MAX_CHANNEL_SELECTION);
         if (channels.length) format.channels = channels;
+    } else if (typeof options.channels === "string" && options.channels.trim()) {
+        // Handed over verbatim: the decoder validates the string forms itself
+        // (`"all"` → every channel, plus the `"r g b a x"` swizzle), says so once
+        // when it resolves one, and raises a real error on anything malformed.
+        // Filtering to arrays here is what made `"all"` inert on this decoder
+        // while the comment above promised the opposite.
+        format.channels = options.channels.trim();
     }
 
     const result = {};
@@ -371,9 +386,25 @@ export function installWebTiffTileSource(OpenSeadragon, defaults = {}) {
             return this.getPrecision();
         }
 
-        /** @return {string[]} whatever the layout resolution complained about. */
+        /**
+         * Whatever the layout resolution and the late-option check reported.
+         *
+         * The decoder's entries are `Diagnostic`s carrying a `severity`; this
+         * module's own late-option complaints were plain strings, so callers
+         * reading `severity` saw it on some entries and not others. They are
+         * wrapped to the same shape — a real problem, hence `warn` — and every
+         * entry still stringifies to its message, so joining reads unchanged.
+         *
+         * @return {Array<{message: string, severity: string, toString(): string}>}
+         */
         getWarnings() {
-            return (this._file?.warnings || []).concat(this._optionWarnings || []);
+            const own = (this._optionWarnings || []).map(message => ({
+                code: "option_late",
+                message: String(message),
+                severity: "warn",
+                toString() { return this.message; },
+            }));
+            return (this._file?.warnings || []).concat(own);
         }
 
         /**

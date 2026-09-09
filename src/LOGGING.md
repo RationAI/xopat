@@ -33,6 +33,14 @@ broker drains it, routes `console.*` into its `console` channel, and replaces
 `console.appTrace` with a bounded view over the ring. The export page keeps
 reading `console.appTrace` unchanged.
 
+**Adoption never swallows console output.** A `console.log` is an explicit
+request to print — from app code and from a developer typing into devtools
+alike — so the original method is always called first, with the original
+arguments (objects stay expandable in devtools, no `[console]` prefix, no
+stringification). The `console` channel level decides only what reaches the ring
+and the forwarder; it defaults to `info` so `console.log` lines land in the
+crash export. Only `logging.console: false` stops the printing.
+
 ## Channels
 
 ```

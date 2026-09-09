@@ -31,22 +31,23 @@ model emitted 512 × 512 squares, and every artifact on this page respects that.
 
 :::note Running it yourself
 
-The six sessions read fixture data by local, fileserver-relative id, so the
-hosted demo cannot serve them — each section below prints these commands instead
-of an embed. Three terminals; the first two stay running.
+The six sessions read fixture data by local id, so the hosted demo cannot serve
+them — each section below prints these commands instead of an embed.
 
 ```bash
 npm run fixtures:fetch                       # once: the source slides, checksum-verified
 npm run fixtures:derive                      # once: derive the overlays from those masks
-npm run fixtures:serve                       # terminal 1 — fixture data on :9100, with ranges
-npm run up:dev -- viz-flex-demo              # terminal 2 — the viewer on :9000
-npm run fixtures:urls -- --group viz-flex    # terminal 3 — one link per session
+npm run up:dev -- viz-flex-demo              # the viewer on :9000 — it prints the six links
+npm run fixtures:urls -- --group viz-flex    # …the same links, without booting the server
 ```
 
-`fixtures:serve` matters: xOpat's own static handler answers with the whole file
-and no `206`, which is fine for a script and useless for a 2 GB pyramid that a
-client-side decoder reads by range. It is a separate process on `:9100`, and
-`TIFF_FILESERVER` in the deployment points at it.
+No separate file server. The deployment declares `core.server.media`, which opts
+`test/fixtures/data` into streamed, `Range`-aware serving — a client-side decoder
+reads a pyramid by byte range, and the ordinary asset path answers with the whole
+file and no `206`. That is a separate opt-in from `staticRoots`, off in any
+deployment that does not declare it, and a development convenience rather than a
+production one. Data stored **outside** the repository still needs
+`npm run fixtures:serve` (`:9100`), with `TIFF_FILESERVER` pointed at it.
 
 **One** decoder reads everything here. `webtiff` owns the `tiff` protocol and
 serves both the JPEG/YCbCr H&E slides and the mask pyramids; the older `geotiff`

@@ -82,6 +82,21 @@ secret-free — `npm run up:check` fails on a literal credential.
 }
 ```
 
+**`$meta.defaults` values are process-environment values, and are never
+substituted.** They are handed to the server's environment verbatim, and the
+server's `<% VAR %>` substitution is a single pass over the ENV *body*, so a
+token inside one of them is emitted as literal text — you find out when a URL in
+the browser still says `<% XOPAT_NODE_PORT:-9000 %>`. Nesting cannot rescue it
+either: the inline-default grammar cannot contain `%>`, so `<% A:-<% B %> %>`
+does not parse. The same applies to a preset's `env` block. `up:check` now
+refuses both (exit 3).
+
+Write the interpolation in the ENV body instead — `data/synthetic-dzi.json` puts
+`<% XOPAT_NODE_PORT:-9000 %>` in its `slide_protocols` template, which is
+substituted at read time — or pick a value that needs no interpolation at all:
+`data/tiff-webtiff.json` uses the relative base `/test/fixtures/data`, which
+follows whatever port and origin the server actually bound.
+
 A file may also declare `"$base": [...]` — selectors merged in before it, as
 `role: "base"` layers. That is how `test/env/saml.json` and `test/env/oidc.json`
 share one copy of their role rules instead of two copies a comment asks you to
@@ -92,11 +107,15 @@ project tests are then the same one, not two that drift.
 
 #### What `up:check` refuses in a tracked fragment
 
-Two separate gates, because they catch different mistakes:
+Three separate gates, because they catch different mistakes:
 
 - **A literal credential** — API-key, PAT, PEM and JWT shapes. Exit 4.
 - **A non-public hostname** — an RFC1918/CGNAT/link-local address, or any host
   outside the small allowlist in `env-compose.mjs`. Exit 5.
+- **An unresolvable placeholder** — a `<% VAR %>` in a `$meta.defaults` value or
+  a preset `env` value, which is injected verbatim and therefore reaches the
+  browser as text. Exit 3, same class as a missing variable: the value will not
+  be what the fragment says it is.
 
 The second exists because the ~33 whole-ENV files this library replaced leaked
 **no keys at all**. What they leaked was topology: a Tailscale-range IP, three
@@ -141,13 +160,34 @@ Declaring nothing prints nothing.
   "viz-flex-geojson": {
     "name": "viz-flex: GeoJSON vector layer",
     "sessionFile": "test/fixtures/sessions/viz-flex-geojson.json"   // …or by repo-relative path
+  },
+  "webtiff-sessions": {
+    "sessionIndex": "test/fixtures/sessions/index.json",  // …or expand a whole catalogue
+    "deployment": "webtiff",                              // filter: the index's own field
+    "order": 10
   }
 }}}}
 ```
 
-Exactly one of `session` / `sessionFile` per record. `sessionFile` keeps fragments
-readable and lets the existing `test/fixtures/sessions/*.json` fixtures be referenced
-rather than duplicated.
+Exactly one of `session` / `sessionFile` / `sessionIndex` per record. `sessionFile`
+keeps fragments readable and lets the existing `test/fixtures/sessions/*.json`
+fixtures be referenced rather than duplicated.
+
+**`sessionIndex` is the form to reach for when a fixture library already exists.**
+`test/fixtures/sessions/index.json` records each session's `title`, `group`,
+`deployment`, `requires` and `demonstrates`, and it is what `npm run fixtures:urls`,
+the docs generator and `test/MANUAL_TESTING.md` read. One record expands to one
+entry per session matching the `deployment` / `group` filter, taking the title as
+the name, `demonstrates` as the description and `requires` as a printed
+prerequisite line (`needs: npm run fixtures:fetch`). The filters match the
+*index's* values, not the preset name — which is how `data/tiff-webtiff` and
+`data/tiff-geotiff` publish the same twelve sessions.
+
+Before it existed there were two catalogues that disagreed: fragments that copied
+records by hand restated the titles and dropped the descriptions, and fragments
+that copied nothing published an empty banner while the index knew a dozen
+sessions. An unusable index (missing, outside the repo, matching nothing) prints
+a warning entry rather than silently publishing nothing.
 
 **Why `server.secure`, and why an object:**
 
@@ -300,6 +340,32 @@ different deployment is still evicted. See `src/IO_PIPELINE.md` →
 
 `client.sessionCacheKey` and `setup.sessionCacheKey` are accepted as deprecated
 aliases.
+
+### Serving slides from the viewer itself (`core.server.media`)
+
+A deployment whose data lives inside the repository can serve it without a second
+process:
+
+```jsonc
+"core": { "server": { "media": {
+  "roots": ["test/fixtures/data"],
+  "extensions": [".tif", ".tiff", ".json", ".geojson", ".pbf", ".png", ".dzi"]
+}}}
+```
+
+This is what makes `npm run up:dev -- webtiff` self-sufficient after
+`npm run fixtures:fetch`. It is a **separate opt-in from `staticRoots`** and is
+off wherever it is not declared: `staticRoots` marks client assets, answered with
+one buffered read and a `200`, while `media` streams and honours `Range`, which a
+client-side TIFF decoder requires and which is more capability than an asset
+directory has. Bounds (`maxRangeBytes`, `maxConcurrentStreams`) and the full rule
+set are in [`server/README.md`](../server/README.md) § *Serving static files*.
+
+A media root may not escape the application root, so scans stored elsewhere still
+go through `npm run fixtures:serve`
+(`server/utils/node/slide-fileserver.mjs`, `XOPAT_SLIDE_ROOT`), with
+`TIFF_FILESERVER` pointed at it. In production, front bulk media with a reverse
+proxy and leave `media` undeclared.
 
 ### Slide-protocol registry
 The `core.client.<active_client>` block declares which image servers the viewer

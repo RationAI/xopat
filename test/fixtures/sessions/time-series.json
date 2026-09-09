@@ -25,13 +25,13 @@
           "type": "time-series",
           "visible": 1,
           "fixed": false,
-          "seriesRenderer": "identity",
-          "series": [
-            1,
-            2,
-            3
-          ],
           "params": {
+            "seriesRenderer": "identity",
+            "series": [
+              1,
+              2,
+              3
+            ],
             "timeline": {
               "type": "range_input",
               "default": 0,

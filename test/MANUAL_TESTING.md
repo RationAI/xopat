@@ -91,12 +91,13 @@ Verify: each of the four links opens and renders. `?slides=` does not work here
 ```bash
 npm run fixtures:fetch     # once, checksum-verified (~3.4 GB)
 npm run fixtures:derive    # once, builds the viz-flex overlays
-npm run fixtures:serve     # leave running — :9100, with byte ranges
 ```
 
-`fixtures:serve` is a separate process because xOpat's own static handler
-answers with the whole file and no `206`, which is useless for a 2 GB pyramid a
-client-side decoder reads by range. `TIFF_FILESERVER` points at it.
+No file server: these deployments declare `core.server.media`, so the viewer
+serves `test/fixtures/data` itself with `Range` support. `npm run fixtures:serve`
+(:9100) is still there for scans stored **outside** the repository, which a media
+root may not reach — point `XOPAT_SLIDE_ROOT` at them and `TIFF_FILESERVER` at
+the server.
 
 > If `fixtures:fetch` refuses an item by name, that file has not been published
 > yet — see `test/fixtures/data/README.md`.
@@ -105,10 +106,14 @@ client-side decoder reads by range. `TIFF_FILESERVER` points at it.
 
 ```bash
 npm run up:dev -- webtiff
-npm run fixtures:urls -- --deployment webtiff     # a link per session
+npm run fixtures:urls -- --deployment webtiff     # …or just read the startup banner
 ```
 
-Verify, walking `npm run fixtures:urls` output:
+The server prints every session this deployment can open, with its prerequisites
+— published from `test/fixtures/sessions/index.json`, the same catalogue
+`fixtures:urls` reads.
+
+Verify, walking that list:
 - `basic-overlay` — H&E background with three overlays; each layer's visibility
   toggle and opacity slider affects only its own layer.
 - `two-backgrounds` — two viewers open at once, each showing a *different*
@@ -172,12 +177,9 @@ Verify:
 docker compose -f docker/wsi-service/docker-compose.yml up -d
 ```
 
-It publishes **9002:8080**, so `WSI_PORT=9002` in `env/.env`. Slides go in the
-repo-root `wsi_data/` directory (gitignored) — the fixture slides work:
-
-```bash
-mkdir -p wsi_data && cp test/fixtures/data/slides/slide.tif wsi_data/
-```
+It publishes **9002:8080**, so `WSI_PORT=9002` in `env/.env`. Slides are by default
+read from the repo-root `test/fixtures/data/slides/` directory. Opionally use `DOCKER_COMPOSE_WSI_SERVER_DATA`
+ENV variable to change the default position.
 
 ### `default` — the shipped standalone deployment
 
@@ -185,7 +187,7 @@ mkdir -p wsi_data && cp test/fixtures/data/slides/slide.tif wsi_data/
 npm run up:dev -- default
 ```
 
-Verify: the slide browser lists what is in `wsi_data/`, a slide opens, tiles
+Verify: the slide browser lists what is in `test/fixtures/data/slides/`, a slide opens, tiles
 stream, and the scale bar reports a plausible magnification.
 
 ### `roles-dev` — the role matrix, no login

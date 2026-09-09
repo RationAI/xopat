@@ -48,7 +48,7 @@
             "group": "visualization",
             "deployment": "webtiff",
             "requires": ["fixtures"],
-            "demonstrates": "the shader registry: a new layer type that fails to register shows up here first"
+            "demonstrates": "the shader registry: every registered layer type except `interaction-debug` (a debug aid, not a rendering), so a type that fails to register shows up here first"
         },
         "time-series": {
             "title": "`time-series` wrapper with `series` as data indexes",

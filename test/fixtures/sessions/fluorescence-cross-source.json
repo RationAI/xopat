@@ -2,7 +2,7 @@
   "params": {
     "sessionName": "Background shader array reading two different data entries",
     "customBlending": true,
-    "background": "#000000ff"
+    "backgroundColor": "#000000ff"
   },
   "data": [
     {

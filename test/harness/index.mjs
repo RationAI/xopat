@@ -43,5 +43,7 @@ export {
     KEYCLOAK_OIDC_ISSUER, KEYCLOAK_JWKS_URI, KEYCLOAK_OIDC_CLIENT_ID,
     KEYCLOAK_OIDC_REDIRECT_PROBE,
 } from "./requires.mjs";
-export { installBrowserGlobals, loadBrowserScript, loadOpenSeadragon } from "./shims.mjs";
+export {
+    installBrowserGlobals, loadBrowserScript, loadOpenSeadragon, freshXOpatUser,
+} from "./shims.mjs";
 export { repoRoot, fromRoot } from "./paths.mjs";

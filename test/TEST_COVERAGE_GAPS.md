@@ -89,8 +89,15 @@ project renders a generated slide, so none of them needs a WSI service.
   reading the focused viewer instead of the owning one. A grid fixture with two viewports, acting on
   the *unfocused* one, would catch the whole family. `test/e2e/event-isolation.cy.js` is the start of
   this, and is one of the Cypress specs still unported.
-- **Annotation measurements** [reported] — geometry / ratio / distance math against a
-  known-geometry fixture. Pure enough to belong in §1 if the engine can be exercised without a canvas.
+- **Annotation measurements** — geometry, statistics and connected components are now covered against
+  known-geometry fixtures with no canvas (`modules/annotation-measurements/test/unit/*-truth.test.mjs`);
+  writing them found two real defects (an Otsu threshold that counted the background class as positive,
+  and a channel that was projected as luminance but reported as Value). What remains uncovered is the
+  part that needs a GPU: `sampleRegion` (`makeStandaloneFlexDrawer` → `gl.readPixels`) and
+  `polygon-rasterizer` (needs a real 2D context). `raster-source.test.mjs` pins *what* is sampled —
+  only visible shader layers, never the annotation overlay — but not the sampling itself. End-to-end
+  raster truth is feasible in the `synthetic` project: `test/harness/slides/make-synthetic.mjs`
+  generates closed-form pixels, so mean and % positive over a known region are exactly predictable.
 - **Voice turn queueing** [reported] — `ChatVoiceController` coalesces utterances spoken during a
   reply into one message, deliberately. Nothing pins it, so the next reader will "fix" it back into
   per-utterance sends. The assertion that matters is the module's own rule: silence must never reach

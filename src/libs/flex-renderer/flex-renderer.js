@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-09-04
+//! Built on 2026-09-09
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -2055,7 +2055,20 @@
             this._programImplementations[key] = program;
             this.backend.setBackground(this._background);
 
-            program.build(this._shaders, this.getShaderLayerOrder());
+            // Building with an empty order over a non-empty shader set is always a bug, and it used
+            // to present as a white canvas with no diagnostic at all: the program links, the layer
+            // list looks right, and only a per-frame GL_INVALID_OPERATION hints at it. Say it here,
+            // where both halves of the contradiction are in scope.
+            const buildOrder = this.getShaderLayerOrder();
+            const registeredIds = Object.keys(this._shaders);
+            if (!buildOrder.length && registeredIds.length) {
+                $.console.error(`$.FlexRenderer: program '${key}' is being built with an EMPTY ` +
+                    `render order while ${registeredIds.length} shader layer(s) are registered ` +
+                    `(${registeredIds.join(", ")}). Nothing will be composed and the output will ` +
+                    `be the background colour. Check what last called setShaderLayerOrder().`);
+            }
+
+            program.build(this._shaders, buildOrder);
 
             // Check the fragment uniform budget before the driver does. Left to the driver this
             // surfaces as a bare "LINK: FRAGMENT shader uniforms count exceeds
@@ -2347,6 +2360,16 @@
                 }
             }
 
+            // Wrapper shaders (time-series, channel-series) lift legacy top-level settings into
+            // `params` in their normalizeConfig(). Until this call existed, only the standalone
+            // runtime normalised: the drawer path (overrideConfigureAll -> createShaderLayer), the
+            // configurator preview, refreshShaderLayer and group children all skipped it, and those
+            // configs worked only because readWrapperParam() silently fell back to the top level.
+            // With that fallback gone this is the single choke point that keeps them working, and it
+            // recurses into `shaders` so nested group children are covered too. Idempotent: the
+            // hoist is guarded on the top-level key still being present.
+            config = $.FlexRenderer.normalizeShaderConfig(config, { source: "create-shader-layer" }) || config;
+
             if (this._shaders[id]) {
                 this.removeShader(id);
             }
@@ -2580,7 +2603,13 @@
          * @param order
          */
         setShaderLayerOrder(order) {
-            if (!order) {
+            // An empty array is truthy, so `_shadersOrder = []` used to pin the order to "nothing"
+            // forever: getShaderLayerOrder()'s `|| Object.keys(this._shaders)` fallback never ran
+            // again, however many layers were registered afterwards, and the second pass compiled
+            // an empty stack. "No order" and "the empty order" are the same statement, so
+            // normalise here instead of teaching every reader a fallback. deleteShaders() already
+            // sets null for exactly this reason.
+            if (!order || (Array.isArray(order) && order.length === 0)) {
                 this._shadersOrder = null;
                 return;
             }
@@ -2595,6 +2624,17 @@
                 seen.add(key);
                 deduped.push(key);
             }
+
+            // The other way to a blank canvas: an order made entirely of ids that never got
+            // registered. forEachShaderLayer() skips unknown ids silently, so the stack comes out
+            // empty and nothing says why.
+            const registered = Object.keys(this._shaders);
+            if (registered.length && !deduped.some(key => this._shaders[key])) {
+                $.console.warn(`setShaderLayerOrder: none of the requested ids ` +
+                    `(${deduped.join(", ")}) match a registered shader layer ` +
+                    `(${registered.join(", ")}); the composed stack will be empty.`);
+            }
+
             this._shadersOrder = deduped;
         }
 
@@ -4961,6 +5001,71 @@
          * @returns {ShaderLayerConfig}
          */
         static normalizeConfig(config, context = {}) {
+            return config;
+        }
+
+        /**
+         * Read a wrapper shader's own setting (`channelRenderer`, `series`, ...) out of a config.
+         *
+         * `params` is the only accepted placement, matching the published JSON Schema, which
+         * compiles these into the `params` sub-schema and closes every layer object with
+         * `additionalProperties: false`. This used to fall back to a top-level `config[name]`, so a
+         * config written that way rendered correctly and failed validation -- and because no `oneOf`
+         * branch then matched, one misplaced key was reported as one error per registered shader
+         * type. Legacy top-level keys are lifted into `params` by hoistWrapperParams(), called from
+         * each wrapper's normalizeConfig(), so nothing reaches here needing a fallback.
+         *
+         * @param {ShaderLayerConfig} config
+         * @param {string} name setting name, as declared in the shader's static customParams
+         * @param {*} [fallback] returned when params does not carry the key
+         * @returns {*}
+         */
+        static readWrapperParam(config, name, fallback = undefined) {
+            const params = (config && config.params) || {};
+            return params[name] !== undefined ? params[name] : fallback;
+        }
+
+        /**
+         * Move legacy top-level wrapper settings into `params` and delete the originals.
+         *
+         * Deleting is the point, not a tidy-up: a retained top-level key is rejected by the
+         * published schema's `additionalProperties: false`, so a normalized config could not be
+         * round-tripped through it, and a hoisted-but-retained key can drift from its `params` twin
+         * with no way to tell which one the renderer used. Nothing strips these on export --
+         * jsonReplacer only drops `_`-prefixed keys.
+         *
+         * @param {ShaderLayerConfig} config mutated in place
+         * @param {string[]} names setting names to lift
+         * @returns {ShaderLayerConfig} the same config
+         */
+        static hoistWrapperParams(config, names) {
+            if (!config || typeof config !== "object") {
+                return config;
+            }
+            const params = config.params || (config.params = {});
+            const type = typeof this.type === "function" ? this.type() : "shader";
+            const id = config.id || "<unnamed>";
+
+            for (const name of names || []) {
+                if (config[name] === undefined) {
+                    continue;
+                }
+
+                if (params[name] === undefined) {
+                    params[name] = config[name];
+                    $.console.warn(`ShaderLayer '${id}' (${type}): top-level '${name}' is ` +
+                        `deprecated and has been moved to params.${name}. Wrapper settings belong ` +
+                        `under 'params' -- the published schema is params-only and rejects the ` +
+                        `top-level form.`);
+                } else {
+                    $.console.warn(`ShaderLayer '${id}' (${type}): '${name}' is given both at the ` +
+                        `top level and under params. params.${name} is used; the top-level copy is ` +
+                        `ignored and removed.`);
+                }
+
+                delete config[name];
+            }
+
             return config;
         }
 
@@ -13312,6 +13417,18 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
         this._uTiInfoSlots = this.UNIFORM_ARRAY_FLOOR;     // u_tiInfo (per tiled image)
         this._relinkScheduled = false;
 
+        // Whether this program has ever presented a frame. Used only to pick a log level: array
+        // growth before the first frame is the initial build discovering how big the world is,
+        // which is not an anomaly; growth afterwards means the scene outgrew a linked program and
+        // is worth saying out loud. Deliberately never reset -- a relink reuses this same instance
+        // (registerProgram() only swaps webGLProgram), and "ever drawn" is the question being asked.
+        //
+        // In shared-context mode one program instance can serve several renderers, so renderer A's
+        // first frame marks it drawn and renderer B's *initial* growth then logs at warn. That errs
+        // toward the noisier level and can never hide a real stale-frame warning, so it is left
+        // alone; keying per renderer is not possible while setDimensions() carries no renderer id.
+        this._hasDrawn = false;
+
         this._bgColor = 'vec4(.0)';
     }
 
@@ -13359,6 +13476,15 @@ void main() {
         // mediump sampler2DArray re-clamps to ~±16384 with a ~10-bit mantissa, so promoting only
         // the first pass would give a float target that this pass then mangles.
         const targetPrecision = this.context.colorTargetGlslPrecision;
+
+        // final_color is declared unconditionally below, so main() must assign it unconditionally
+        // too: a declared-but-unwritten `out` makes every draw a GL_INVALID_OPERATION ("Active
+        // draw buffers with missing fragment shader outputs") and the canvas stays blank, with
+        // nothing in the pipeline reporting a fault. build() can legitimately hand us an empty
+        // body (no layers in the render order), and that case is the limit of the non-empty one,
+        // which seeds composition from _bgColor -- so it clears to the same colour. Guarding here
+        // rather than in build() keeps the invariant true for every caller, present and future.
+        const mainBody = (execution && execution.trim()) ? execution : `    final_color = ${this._bgColor};`;
 
         const fragmentShaderSource = `#version 300 es
 precision mediump int;
@@ -13484,6 +13610,7 @@ in vec2 v_texture_coords;
 
 // OUTPUT VARIABLES
 
+// Declared here, therefore written unconditionally in main() -- see the mainBody guard above.
 layout(location=0) out vec4 final_color;
 
 
@@ -13703,7 +13830,7 @@ ${definition !== "" ? definition : "    // No shader layer definitions here..."}
 // MAIN FUNCTION
 
 void main() {
-${execution}
+${mainBody}
 }`;
 
         return fragmentShaderSource;
@@ -13747,8 +13874,10 @@ ${execution}
     }
 
     build(shaderMap, keyOrder) {
-        if (!keyOrder.length) {
+        if (!keyOrder || !keyOrder.length) {
             // Todo prevent unimportant first init build call
+            // The empty body is turned into a background write by _getFragmentShaderSource, so
+            // this still links a program that is legal to draw with.
             this._ensureUniformSlots([]);
             this.vertexShader = this._getVertexShaderSource();
             this.fragmentShader = this._getFragmentShaderSource("", "", "", $.FlexRenderer.ShaderLayer.__globalIncludes);
@@ -13874,9 +14003,12 @@ ${execution}
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
 
-        if (framebuffer) {
-            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
-        }
+        // Set unconditionally: a program owns the draw-buffer state of whatever it binds, and this
+        // renderer can share one GL context with other drawers (xOpat runs OSD's own single-output
+        // drawer alongside it), so nothing may be assumed about what the previous pass left behind.
+        // The two cases genuinely differ -- for the default framebuffer the only legal entries are
+        // BACK and NONE, and COLOR_ATTACHMENT0 there is an INVALID_OPERATION.
+        gl.drawBuffers(framebuffer ? [gl.COLOR_ATTACHMENT0] : [gl.BACK]);
 
         if (options && options.width && options.height) {
             gl.viewport(0, 0, options.width, options.height);
@@ -14022,6 +14154,7 @@ ${execution}
         this.atlas.bind(gl.TEXTURE2, 2, this.webGLProgram);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        this._hasDrawn = true;
 
         // Unbinding textures removes feedback loop when we write to it in the first pass
         gl.activeTexture(gl.TEXTURE0);
@@ -14081,13 +14214,23 @@ ${execution}
      * intervening frames are stale rather than broken.
      *
      * @param {string} reason human-readable cause, logged once per relink
+     * @param {"warn"|"debug"} [level="warn"] how loudly to report it. "debug" is for growth that is
+     *   part of ordinary startup rather than a symptom; see setDimensions(). Note the early return
+     *   below coalesces causes, so a "debug" cause arriving first in a microtask window suppresses
+     *   the message for a "warn" cause behind it -- the relink still happens, only the level is lost.
      */
-    _scheduleRelink(reason) {
+    _scheduleRelink(reason, level = "warn") {
         if (this._relinkScheduled) {
             return;
         }
         this._relinkScheduled = true;
-        $.console.warn(`FlexWebGL2 second pass: relinking, ${reason}.`);
+        // Keep the receiver: $.console is window.console where available, and calling through the
+        // object avoids depending on the native methods being detachable.
+        if (level === "debug") {
+            $.console.debug(`FlexWebGL2 second pass: relinking, ${reason}.`);
+        } else {
+            $.console.warn(`FlexWebGL2 second pass: relinking, ${reason}.`);
+        }
 
         const renderer = this.context && this.context.renderer;
         const key = this.context && this.context.secondPassProgramKey;
@@ -14114,10 +14257,18 @@ ${execution}
         // u_tiInfo is sized to the tiled-image count known at compile time. This is the one size
         // that can grow behind the program's back — adding a tiled image does not otherwise
         // rebuild the shader the way adding a layer does.
+        //
+        // Filling the world with tiled images is what opening a visualization *is*, so growth
+        // before this program has presented a frame is the initial build learning the world size,
+        // not a symptom -- and at warn it reached the host's user-visible log next to real problems.
+        // After the first frame the same growth means a linked program was outgrown mid-session,
+        // which is worth reporting.
         const grew = (tiledImageCount || 0) > this._uTiInfoSlots;
         this._tiledImageCount = tiledImageCount;
         if (grew) {
-            this._scheduleRelink(`u_tiInfo holds ${this._uTiInfoSlots}, world now has ${tiledImageCount} tiled images`);
+            this._scheduleRelink(
+                `u_tiInfo holds ${this._uTiInfoSlots}, world now has ${tiledImageCount} tiled images`,
+                this._hasDrawn ? "warn" : "debug");
         }
     }
 };
@@ -14166,6 +14317,8 @@ uniform int u_mode;
 uniform int u_enabled;
 
 in vec2 v_texture_coords;
+// Written unconditionally by main() below. A declared output that some branch leaves unassigned
+// makes every draw a GL_INVALID_OPERATION, so keep any future main() total in final_color.
 layout(location=0) out vec4 final_color;
 
 float inspector_mask(vec2 fragPx) {
@@ -14256,7 +14409,12 @@ void main() {
             this._resolveLocations();
         }
 
-        gl.bindFramebuffer(gl.FRAMEBUFFER, options.framebuffer === undefined ? null : options.framebuffer);
+        const framebuffer = options.framebuffer === undefined ? null : options.framebuffer;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        // Same reasoning as SecondPassProgram.use(): own the draw-buffer state of what you bind
+        // rather than inheriting whatever the previous pass left, and BACK is the only legal entry
+        // for the default framebuffer.
+        gl.drawBuffers(framebuffer ? [gl.COLOR_ATTACHMENT0] : [gl.BACK]);
         gl.bindVertexArray(this.vao);
 
         gl.activeTexture(gl.TEXTURE0);
@@ -14390,6 +14548,9 @@ uniform float u_clampColorOutput;
 
 ${this.atlas.getFragmentShaderDefinition()}
 
+// Every branch of main() below assigns both of these, including the pure-clipping path that has
+// color writes masked off. Keep it that way: a declared output left unassigned on some path makes
+// the draw a GL_INVALID_OPERATION ("Active draw buffers with missing fragment shader outputs").
 layout(location=0) out vec4 outputColor;
 layout(location=1) out vec4 outputStencil;
 
@@ -14933,6 +15094,16 @@ void main() {
         }
 
         gl.bindVertexArray(null);
+
+        // This pass draws to two attachments and used to exit leaving both selected and
+        // offScreenBuffer still bound. In a shared context the next drawer to run is then one
+        // single-output fragment shader away from "Active draw buffers with missing fragment shader
+        // outputs" through no fault of its own. Reset while offScreenBuffer is still bound --
+        // drawBuffers applies to the currently bound framebuffer -- then hand back the default one.
+        // Nothing reads the leftover binding: __firstPassResult carries textures, and every
+        // consumer (SecondPassProgram.use, _createColorTarget, _clearColorTarget) binds its own.
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
         if (!renderOutput) {
             renderOutput = {};
@@ -16772,11 +16943,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 if (!this._configuredExternally) {
                     // __shaderConfig may be missing for an item mid-teardown during a reset window
                     // (remove-item deletes it, then this rebuild fires deferred) — skip such items
-                    this.renderer.setShaderLayerOrder(
-                        this.viewer.world._items
-                            .filter(item => item.__shaderConfig)
-                            .map(item => item.__shaderConfig.id)
-                    );
+                    const derived = this.viewer.world._items
+                        .filter(item => item.__shaderConfig)
+                        .map(item => item.__shaderConfig.id);
+
+                    // With one world item that reset window is all-or-nothing: the single item
+                    // losing __shaderConfig empties the whole list, so the second pass compiled an
+                    // empty stack and the viewer went white. With two or more items a survivor kept
+                    // it non-empty, which is why the failure looked like it depended on the world
+                    // size. Keep the previous order across the window instead of erasing it.
+                    if (derived.length || !this.viewer.world.getItemCount()) {
+                        this.renderer.setShaderLayerOrder(derived);
+                    } else {
+                        $.console.warn(`[flex-renderer] rebuild kept the previous render order: ` +
+                            `${this.viewer.world.getItemCount()} world item(s) but none carry ` +
+                            `__shaderConfig yet (reset window).`);
+                    }
                 }
 
                 this._buildStamp = Date.now();
@@ -24801,17 +24983,6 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         };
     }
 
-    static _readWrapperParam(config, name, fallback = undefined) {
-        const params = (config && config.params) || {};
-        if (params[name] !== undefined) {
-            return params[name];
-        }
-        if (config && config[name] !== undefined) {
-            return config[name];
-        }
-        return fallback;
-    }
-
     static get defaultControls() {
         return {
             timeline: {
@@ -24828,13 +24999,11 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
             return config;
         }
 
-        const params = config.params || (config.params = {});
-        if (config.series !== undefined && params.series === undefined) {
-            params.series = config.series;
-        }
-        if (config.seriesRenderer !== undefined && params.seriesRenderer === undefined) {
-            params.seriesRenderer = config.seriesRenderer;
-        }
+        // Lifts legacy top-level `series` / `seriesRenderer` into params and removes the originals.
+        // The hoist used to leave them behind, which kept the normalized config failing the
+        // published (params-only, additionalProperties: false) schema it had just been made to obey.
+        this.hoistWrapperParams(config, ["series", "seriesRenderer"]);
+        const params = config.params;
 
         const series = Array.isArray(params.series) ? params.series : [];
         const defs = this.defaultControls || {};
@@ -24948,7 +25117,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         return {
             id: `${this.id}_delegate`,
             name: config.name || "Time series delegate",
-            type: this.constructor._readWrapperParam(config, "seriesRenderer", "identity"),
+            type: this.constructor.readWrapperParam(config, "seriesRenderer", "identity"),
             visible: 1,
             fixed: false,
             tiledImages: activeWorldIndex === null ? [] : [activeWorldIndex],
@@ -24960,7 +25129,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     construct() {
         const config = this.getConfig();
         const params = config.params || (config.params = {});
-        const rawSeries = this.constructor._readWrapperParam(config, "series", []);
+        const rawSeries = this.constructor.readWrapperParam(config, "series", []);
         const series = Array.isArray(rawSeries) ? rawSeries : [];
         const timeline = params.timeline || (params.timeline = {});
         const min = Number(timeline.min) || 0;
@@ -25041,7 +25210,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     }
 
     scrubTo(offset) {
-        const series = this.constructor._readWrapperParam(this.getConfig(), "series", []);
+        const series = this.constructor.readWrapperParam(this.getConfig(), "series", []);
         if (!Array.isArray(series) || series.length === 0) {
             return;
         }
@@ -25368,15 +25537,18 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                 };
             }
 
-            static _readWrapperParam(config, name, fallback = undefined) {
-                const params = (config && config.params) || {};
-                if (params[name] !== undefined) {
-                    return params[name];
+            // Parity with time-series: lift legacy top-level settings into `params` (and drop the
+            // originals) before anything reads them. This wrapper had no normalizeConfig at all and
+            // relied entirely on readWrapperParam's top-level fallback, so the two wrappers
+            // disagreed about where their own settings live.
+            static normalizeConfig(config, context = {}) {
+                if (!config || typeof config !== "object") {
+                    return config;
                 }
-                if (config && config[name] !== undefined) {
-                    return config[name];
-                }
-                return fallback;
+                config.params = config.params || {};
+                this.hoistWrapperParams(config,
+                    ["channelRenderer", "channelRendererConfig", "sourceIndex"]);
+                return config;
             }
 
             static get defaultControls() {
@@ -25397,7 +25569,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
             _readIntConfig(name, fallback, minimum = null) {
                 const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
-                const raw = this.constructor._readWrapperParam(config, name, fallback);
+                const raw = this.constructor.readWrapperParam(config, name, fallback);
                 const parsed = Number.parseInt(raw, 10);
                 let value = Number.isFinite(parsed) ? parsed : fallback;
                 if (minimum != null && value < minimum) { // eslint-disable-line eqeqeq
@@ -25408,8 +25580,8 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
             _getDelegateSettings() {
                 const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
-                const delegateConfig = $.extend(true, {}, this.constructor._readWrapperParam(config, "channelRendererConfig", {}) || {});
-                const delegateType = delegateConfig.type || this.constructor._readWrapperParam(config, "channelRenderer", "single_channel");
+                const delegateConfig = $.extend(true, {}, this.constructor.readWrapperParam(config, "channelRendererConfig", {}) || {});
+                const delegateType = delegateConfig.type || this.constructor.readWrapperParam(config, "channelRenderer", "single_channel");
 
                 if (delegateType === this.constructor.type()) {
                     throw new Error("channel-series cannot recursively render itself.");
@@ -28166,6 +28338,14 @@ function resolveTileTemplate(template, dataUrl) {
                     shaders: {
                         type: "object",
                         additionalProperties: {
+                            // Tells a validator to pick the branch by `type` instead of trying all
+                            // of them. Without it a single misplaced key fails every branch, so one
+                            // mistake is reported once per registered shader type -- 23 findings for
+                            // one layer, most of them about shader types the config never mentions.
+                            // `discriminator` is an OpenAPI keyword; 2020-12 ignores unknown
+                            // keywords, so a validator that does not implement it falls back to
+                            // plain oneOf and stays correct.
+                            discriminator: { propertyName: "type" },
                             oneOf: deepClone(shaderLayerRefs)
                         },
                         description: "Map of shader id -> shader configuration object."
@@ -28451,7 +28631,13 @@ function resolveTileTemplate(template, dataUrl) {
             return new AjvConstructor({
                 allErrors: true,
                 strict: false,
-                schemaId: "auto"
+                // Acts on the `discriminator` keyword the schema emits next to its `oneOf` branches.
+                // AJV 6 ignores the option; AJV 8 needs it, otherwise the keyword is inert and a
+                // misplaced key is reported once per registered shader type again.
+                discriminator: true
+                // `schemaId: "auto"` used to be passed here. It was removed in AJV 7, and AJV 8 does
+                // not reject it -- `schemaId` is typed "id" | "$id" there, so "auto" silently makes
+                // it look for `schema.auto` and $id/$anchor registration stops working.
             });
         },
 
@@ -29101,6 +29287,8 @@ function resolveTileTemplate(template, dataUrl) {
                 properties.shaders = {
                     type: "object",
                     additionalProperties: {
+                        // Same reasoning as the root `shaders` map; see _buildConfigSchema.
+                        discriminator: { propertyName: "type" },
                         oneOf: deepClone(shaderLayerRefs)
                     }
                 };
@@ -29565,7 +29753,10 @@ function resolveTileTemplate(template, dataUrl) {
         _buildShaderSchemaDescription(Shader, description) {
             const type = Shader && typeof Shader.type === "function" ? Shader.type() : "";
             if (type === "time-series" || type === "channel-series") {
-                return `${description} Wrapper-specific settings live under params alongside built-ins and UI controls.`;
+                return `${description} Wrapper-specific settings live under params alongside ` +
+                    `built-ins and UI controls. Placing them at the layer top level is rejected: ` +
+                    `the runtime reads them from params only, and a legacy top-level key is moved ` +
+                    `into params by the shader's normalizeConfig with a deprecation warning.`;
             }
             return description;
         },
@@ -30916,7 +31107,7 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-09-04
+//! Built on 2026-09-09
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -31572,7 +31763,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-09-04
+//! Built on 2026-09-09
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -32281,7 +32472,7 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-09-04
+//! Built on 2026-09-09
 //! Git commit: --52bc6a3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

@@ -2,14 +2,37 @@
   "$meta": {
     "description": "Raw TIFF from a static file server, decoded by the webtiff module",
     "dimension": "data",
-    "clientKey": "localhost",
-    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+    "clientKey": "localhost"
+    /* No TIFF_FILESERVER default. `$meta.defaults` values are injected into the
+       server's PROCESS ENVIRONMENT verbatim and are never substituted, so a
+       `<% VAR %>` token in one reaches the browser as literal text. The default
+       therefore lives in the ENV body below, which IS substituted. */
   },
   /**
-   * Serve the slide folder first:  npm run fixtures:serve
-   * (defaults to the repository's `test/fixtures/data`; pass a path or set
-   * XOPAT_SLIDE_ROOT to serve scans from elsewhere, and point
-   * TIFF_FILESERVER at it in `env/.env`.)
+   * Fetch the fixtures once (`npm run fixtures:fetch`) and this deployment is
+   * self-sufficient — the viewer serves the slides itself.
+   *
+   * That needs `core.server.media`, which is a SEPARATE opt-in from
+   * `staticRoots` and is off in every deployment that does not declare it.
+   * `staticRoots` marks a directory as client assets, answered with one
+   * buffered read and a `200`; a 683 MB pyramid that a client-side decoder
+   * reads by byte range needs `Range`, `206` and streaming, which is more
+   * capability (long-lived handles, concurrent partial reads) than an asset
+   * directory has. Declaring one never implies the other. Development
+   * convenience only: in production, bulk media belongs behind a reverse proxy
+   * (`server/README.md` § Serving static files).
+   *
+   * Slides living OUTSIDE the repository still need `npm run fixtures:serve`
+   * (`server/utils/node/slide-fileserver.mjs`) — a media root, like a static
+   * root, may not escape the application root. Point `XOPAT_SLIDE_ROOT` at the
+   * scans and set `TIFF_FILESERVER` to that server's URL in `env/.env`; that
+   * variable is now an OVERRIDE for exactly this case, not the normal path.
+   *
+   * The default base is RELATIVE (`/test/fixtures/data`), which is what makes it
+   * follow whatever port and origin the server actually bound — including
+   * `--port`, and the floating per-worker port the test harness assigns. An
+   * absolute default would have to interpolate `XOPAT_NODE_PORT`, and the
+   * placeholder grammar cannot nest one token inside another's default.
    *
    * There is deliberately no `slide_protocols.tiff` entry: `webtiff` registers
    * the `tiff` protocol itself (a factory — the tile source reads the file,
@@ -27,13 +50,36 @@
     },
     "setup": {
       "webGlPrecision": "auto"
+    },
+    "server": {
+      /* Matched with `path.extname`, so one trailing extension only:
+         `.ome.tiff` is covered by `.tiff`. */
+      "media": {
+        "roots": ["test/fixtures/data"],
+        "extensions": [".tif", ".tiff", ".json", ".geojson", ".pbf", ".png", ".dzi"]
+      },
+      /**
+       * The twelve fixture sessions this deployment can open, published from
+       * `test/fixtures/sessions/index.json` — the same tracked catalogue
+       * `npm run fixtures:urls` reads, so the startup banner and the CLI cannot
+       * drift. The filter is the index's own `deployment` value, not the preset
+       * name, which is why `data/tiff-geotiff` publishes the same set: the
+       * sessions are labelled by data shape, not by decoder.
+       */
+      "secure": { "examples": {
+        "webtiff-sessions": {
+          "sessionIndex": "test/fixtures/sessions/index.json",
+          "deployment": "webtiff",
+          "order": 10
+        }
+      }}
     }
   },
   "modules": {
     "webtiff": {
       "enabled": true,
       "permaLoad": true,
-      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>"
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-/test/fixtures/data %>"
     },
     "geotiff": { "permaLoad": false },
     "rationai-wsi-tile-source": { "enabled": false }

@@ -12,7 +12,25 @@
  * @module webtiff/decode.proxy.worker
  */
 
-import { Decoder, BytesSource } from "./dist/web-tiff.mjs";
+import { Decoder, BytesSource, onDiagnostic } from "./dist/web-tiff.mjs";
+
+/**
+ * Diagnostics the decoder's JS half raises, forwarded like the wasm's own.
+ *
+ * Two halves report: the wasm accumulates records that `drainWarnings()` pulls
+ * after every operation (below), and the JS half — channel-selection parsing,
+ * encoding-table lookups — raises them through this subscriber. Without one it
+ * falls back to writing straight to the console *from inside the worker*, which
+ * bypasses the module's own reporting entirely: no slide label, no severity
+ * routing, no dedup against what the main thread already said. The `"all"`
+ * notice was arriving twice for that reason, once raw and once properly.
+ *
+ * `openTiff` builds an equivalent sink for callers that use it; this pool drives
+ * `Decoder` directly, so it has to subscribe for itself.
+ */
+onDiagnostic((diagnostic) => {
+    self.postMessage({ kind: "warn", ...diagnostic });
+});
 
 /** The decoder's output enum; the request struct takes the number, not a name. */
 const OUTPUT = { gpuTextureSet: 0, tiffRaster: 1, rgba8: 2 };

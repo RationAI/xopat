@@ -44,9 +44,13 @@
        * This is the deployment behind most of `test/fixtures/sessions/`.
        *
        *     npm run fixtures:fetch     # once
-       *     npm run fixtures:serve     # terminal 1 — fixture data on :9100
-       *     npm run up:dev -- webtiff  # terminal 2
-       *     npm run fixtures:urls -- --deployment webtiff
+       *     npm run up:dev -- webtiff
+       *     npm run fixtures:urls -- --deployment webtiff   # or read the startup banner
+       *
+       * No second file server: the fragment opts `test/fixtures/data` into
+       * `core.server.media`, so the viewer serves the slides itself with
+       * `Range` support. `npm run fixtures:serve` is only for data outside the
+       * repository, which a media root may not reach.
        */
       "description": "Static-file TIFF decoded by the webtiff module — the session fixture library's deployment",
       "layers": ["base/core", "data/tiff-webtiff", "auth/none", "chat/off"]
@@ -288,7 +292,8 @@
         "base/core", "data/tiff-webtiff", "demo/visualization-flexibility",
         "auth/none", "chat/off"
       ],
-      "env": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" },
+      /* No `env` block: the TIFF_FILESERVER default now comes from the
+         fragments, and points at the viewer's own `core.server.media` route. */
       "override": {
         "core": {
           "client": {

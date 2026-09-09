@@ -236,6 +236,11 @@ export class ClientLogging {
         // the viewer even finished loading is a warning you cannot act on. An
         // explicit `channels.session` below overrides this, including to silence.
         channels.set("session", LOG_LEVELS.info);
+        // Adopted `console.*` output is recorded at `info` by default for the same
+        // reason: `console.log` is what the crash-export page and a developer both
+        // expect to find in the trace. Printing is not gated on this level at all
+        // (see `adoptConsole`) — this only decides what reaches the ring/forwarder.
+        channels.set("console", LOG_LEVELS.info);
         if (config.channels && typeof config.channels === "object") {
             for (const [key, value] of Object.entries(config.channels)) {
                 const numeric = levelNumber(value, null);
@@ -313,7 +318,7 @@ export class ClientLogging {
         return logger;
     }
 
-    private _emit(channel: string, level: LogLevelName, sensitive: boolean, args: any[]): ClientLogRecord | null {
+    private _emit(channel: string, level: LogLevelName, sensitive: boolean, args: any[], mirror = true): ClientLogRecord | null {
         const threshold = this.levelFor(channel);
         if (LOG_LEVELS[level] < threshold || threshold >= LOG_LEVELS.silent) {
             this._stats.suppressed++;
@@ -347,7 +352,7 @@ export class ClientLogging {
 
         this._stats.emitted++;
         this._ring.push(record);
-        this._writeConsole(record);
+        if (mirror) this._writeConsole(record);
         this._enqueueForward(record);
         return record;
     }
@@ -451,9 +456,21 @@ export class ClientLogging {
             this._emit("console", "info", false, [`[pre-boot] ${existing.join(" ").trim()}`]);
         }
 
+        // A `console.log` is an explicit request to PRINT — from app code and from
+        // a developer typing into devtools alike. So the original method is always
+        // called, with the original arguments (objects stay expandable, no
+        // `[console]` prefix, no stringification), and the record it also produces
+        // is written with `mirror: false` so this does not double-print. The
+        // channel level therefore governs the ring and the forwarder only; it must
+        // never be able to swallow console output, which is what made
+        // `console.log("HI")` print nothing at the default root level of `warn`.
         for (const level of ["debug", "info", "log", "warn", "error"] as const) {
             const mapped: LogLevelName = level === "log" ? "info" : (level as LogLevelName);
-            target[level] = (...args: any[]) => { this._emit("console", mapped, false, args); };
+            const original = this._originalConsole[level];
+            target[level] = (...args: any[]) => {
+                if (this._config.console) original(...args);
+                this._emit("console", mapped, false, args, false);
+            };
         }
 
         // Tells the pre-boot hook in `server/templates/index.html` to stop

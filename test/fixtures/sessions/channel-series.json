@@ -1,7 +1,7 @@
 {
   "params": {
     "customBlending": true,
-    "background": "#000000ff",
+    "backgroundColor": "#000000ff",
     "sessionName": "channel-series"
   },
   "data": [
@@ -32,14 +32,15 @@
           "dataReferences": [
             0
           ],
-          "channelRenderer": "single_channel",
-          "channelRendererConfig": {
-            "params": {
-              "color": "#00fff0"
-            }
-          },
-          "sourceIndex": 0,
-          "params": {}
+          "params": {
+            "channelRenderer": "single_channel",
+            "channelRendererConfig": {
+              "params": {
+                "color": "#00fff0"
+              }
+            },
+            "sourceIndex": 0
+          }
         }
       }
     }

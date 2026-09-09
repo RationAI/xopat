@@ -8,16 +8,23 @@
        Layer it over `data/tiff-webtiff`, which is what decodes the slides and
        what sets `webGlPrecision`; the `viz-flex-demo` preset does exactly that.
        (`$meta.requires` is not the place to say so — it lists required
-       environment VARIABLES, not layers.) */
-    "defaults": { "TIFF_FILESERVER": "http://127.0.0.1:9100/files" }
+       environment VARIABLES, not layers.)
+
+       No TIFF_FILESERVER default — see the note in `data/tiff-webtiff.json`:
+       `$meta.defaults` values are never substituted, so the default belongs in
+       the ENV body, and it is relative so it follows the bound port. */
   },
   /**
    * Run order:
    *
-   *   npm run fixtures:derive      derive the vector/grid/mask artifacts from the
+   *   npm run fixtures:derive  derive the vector/grid/mask artifacts from the
    *                          real prediction masks in test/fixtures/data/slides/
-   *   npm run fixtures:serve   serve test/fixtures/data over HTTP with range support
    *   npm run up -- viz-flex-demo
+   *
+   * No separate file server: `data/tiff-webtiff` (which this layers over) opts
+   * the fixture directory into `core.server.media`, so the viewer serves the
+   * derived artifacts itself with `Range` support. Data outside the repository
+   * still needs `npm run fixtures:serve` — see that fragment's note.
    *
    * `webGlPrecision: "auto"` is NOT restated here — `data/tiff-webtiff` already
    * sets it and `requires` states the dependency. Neither is
@@ -39,49 +46,26 @@
            * non-square slide. That is what `modules/demo-vector-layers`
            * registers the `demo-mvt` factory protocol for.
            */
-          "demo-static": "`<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>/${data}`"
+          "demo-static": "`<% TIFF_FILESERVER:-/test/fixtures/data %>/${data}`"
         }
       }
     },
     /**
      * The six showcase sessions, printed as open-me URLs by the server at
-     * startup. Referenced by path rather than inlined so `test/fixtures/sessions/`
-     * stays the single copy — `npm run fixtures:urls` prints the same set and is
-     * still the way to get them without booting the server.
+     * startup — published *from* `test/fixtures/sessions/index.json` rather than
+     * relisted here. The index already records each session's title, group,
+     * prerequisites and what it demonstrates, and it is what
+     * `npm run fixtures:urls`, the docs generator and `test/MANUAL_TESTING.md`
+     * read; six hand-copied records restated the titles, dropped the
+     * descriptions, and were one more place to forget when a session is added.
      *
-     * All six need `npm run fixtures:derive` + `npm run fixtures:serve`; without the
-     * fileserver the links open a viewer that cannot fetch its slides.
+     * All six need `npm run fixtures:derive`; the banner prints that per entry.
      */
     "server": { "secure": { "examples": {
-      "viz-flex-multichannel": {
-        "name": "viz-flex: multichannel",
-        "sessionFile": "test/fixtures/sessions/viz-flex-multichannel.json",
+      "viz-flex-sessions": {
+        "sessionIndex": "test/fixtures/sessions/index.json",
+        "group": "viz-flex",
         "order": 20
-      },
-      "viz-flex-geojson": {
-        "name": "viz-flex: GeoJSON vector layer",
-        "sessionFile": "test/fixtures/sessions/viz-flex-geojson.json",
-        "order": 21
-      },
-      "viz-flex-mvt": {
-        "name": "viz-flex: MVT vector tiles",
-        "sessionFile": "test/fixtures/sessions/viz-flex-mvt.json",
-        "order": 22
-      },
-      "viz-flex-grid": {
-        "name": "viz-flex: single-level grid mask",
-        "sessionFile": "test/fixtures/sessions/viz-flex-grid.json",
-        "order": 23
-      },
-      "viz-flex-mask-coarse": {
-        "name": "viz-flex: coarse derived mask",
-        "sessionFile": "test/fixtures/sessions/viz-flex-mask-coarse.json",
-        "order": 24
-      },
-      "viz-flex-mask-preview": {
-        "name": "viz-flex: mask with synthetic preview level",
-        "sessionFile": "test/fixtures/sessions/viz-flex-mask-preview.json",
-        "order": 25
       }
     }}}
   },
@@ -89,7 +73,7 @@
     "demo-vector-layers": {
       "enabled": true,
       "permaLoad": true,
-      "protocolBaseUrl": "<% TIFF_FILESERVER:-http://127.0.0.1:9100/files %>"
+      "protocolBaseUrl": "<% TIFF_FILESERVER:-/test/fixtures/data %>"
     }
   }
 }

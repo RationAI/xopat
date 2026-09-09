@@ -325,6 +325,19 @@ plausible-looking wrong demo. See `test/fixtures/data/README.md` for the
 publishing procedure, and `test/fixtures/sessions/README.md` for the session
 conventions.
 
+`sessions/index.json` is the one catalogue. `npm run fixtures:urls` reads it, the
+docs generator reads it, `test/MANUAL_TESTING.md` is checked against it — and a
+deployment publishes from it too, with one `sessionIndex` record in
+`core.server.secure.examples` (see `env/README.md`), so the server's startup
+banner and the CLI cannot disagree. A session with no record in the index is
+invisible to all of them.
+
+The TIFF deployments serve `data/` through the viewer itself
+(`core.server.media`, `env/parts/data/tiff-webtiff.json`), so running them needs
+no second process. `npm run fixtures:serve` remains for data outside the
+repository — a media root, like a static root, may not escape the application
+root.
+
 Tests that genuinely need a live slide service call `requireSlides()`, which
 **skips with a reason** unless `XOPAT_TEST_WSI` and `XOPAT_TEST_SLIDES` are set
 — rather than failing with a timeout whose cause has to be explained in prose.

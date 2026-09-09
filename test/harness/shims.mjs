@@ -168,3 +168,109 @@ export function loadOpenSeadragon(scriptPath = fromRoot("src/libs/openseadragon.
     sandboxedScripts.set(scriptPath, result);
     return result;
 }
+
+/**
+ * The slice of `OpenSeadragon.EventSource` that `XOpatUser` actually uses.
+ *
+ * One definition, because four auth suites had four copies with two different
+ * private field names — and `XOpatUser extends window.OpenSeadragon.EventSource`
+ * binds to whichever copy existed at the FIRST import in the worker, so the other
+ * three were dead code that only looked authoritative.
+ */
+class TestEventSource {
+    constructor() { this.__handlers = new Map(); }
+    addHandler(event, cb) {
+        if (!this.__handlers.has(event)) this.__handlers.set(event, []);
+        this.__handlers.get(event).push(cb);
+    }
+    removeHandler(event, cb) {
+        const list = this.__handlers.get(event) || [];
+        const i = list.indexOf(cb);
+        if (i >= 0) list.splice(i, 1);
+    }
+    numberOfHandlers(event) { return (this.__handlers.get(event) || []).length; }
+    raiseEvent(event, payload) {
+        for (const cb of [...(this.__handlers.get(event) || [])]) cb(payload || {});
+    }
+    async raiseEventAwaiting(event, payload) {
+        for (const cb of [...(this.__handlers.get(event) || [])]) await cb(payload || {});
+    }
+}
+
+/**
+ * The pristine values of the tunable statics, captured on the first import —
+ * i.e. before any suite has had a chance to write them. Restored on every call so
+ * a suite that overrides them cannot decide the next suite's breaker thresholds.
+ */
+let pristineStatics = null;
+
+/**
+ * A fresh `XOpatUser` for a unit suite, with the browser surface it needs.
+ *
+ * `import(".../user.ts?t=<random>")` does NOT produce a fresh module: Playwright
+ * transpiles and caches TypeScript by resolved path, so the query is discarded and
+ * every suite in the worker shares ONE `XOpatUser` — one base class, one set of
+ * statics, one singleton claim. Four suites each carried a partial workaround for
+ * that, and the parts they missed leaked into each other:
+ *
+ *  - `secret-refresh-budget` writes `REFRESH_COOLDOWN_MS` / `MAX_REFRESH_FAILURES`
+ *    and left `MAX_REFRESH_FAILURES = 1` behind; `secret-refresh-loop` relies on the
+ *    default of 2, so its breaker tripped a round early and the suite failed
+ *    whenever the two shared a worker.
+ *  - Two suites *replaced* `window.OpenSeadragon` instead of merging into it,
+ *    discarding the `TileSource` the OSD suites install.
+ *  - Each installed only the globals its own vectors happened to reach, so a suite
+ *    passed on the strength of what a neighbour left behind.
+ *
+ * Everything a suite can vary is a parameter; everything else is reset here.
+ *
+ * @param {object} [options]
+ * @param {number} [options.cooldownMs] `XOpatUser.REFRESH_COOLDOWN_MS` for this test
+ * @param {number} [options.maxFailures] `XOpatUser.MAX_REFRESH_FAILURES` for this test
+ * @param {(ctx: string, opts: object) => void} [options.markNeedsInteraction]
+ *        stands in for `APPLICATION_CONTEXT.auth.markNeedsInteraction`
+ * @returns {Promise<{user: object, XOpatUser: Function, module: object}>}
+ */
+export async function freshXOpatUser(options = {}) {
+    const { cooldownMs, maxFailures, markNeedsInteraction } = options;
+
+    globalThis.window = globalThis.window ?? globalThis;
+    // Merged, never replaced: a neighbour's `TileSource` must survive this call.
+    globalThis.window.OpenSeadragon = {
+        ...(globalThis.window.OpenSeadragon || {}),
+        EventSource: TestEventSource,
+    };
+
+    // `user.ts` reads `HttpClient` bare (`setSecret`) and `window.APPLICATION_CONTEXT`
+    // qualified — different lookups whenever `window` is not the global alias.
+    const httpClient = { knowsSecretType: () => true };
+    globalThis.window.HttpClient = httpClient;
+    globalThis.HttpClient = httpClient;
+    globalThis.$ = globalThis.$ ?? { t: (k) => k };
+    // Probe for the method, not for *a* document: suites share a worker and a
+    // neighbour's stand-in (a cookie jar, say) is truthy without being usable.
+    if (typeof globalThis.document?.getElementById !== "function") {
+        globalThis.document = { getElementById: () => null };
+    }
+    globalThis.USER_INTERFACE = { AppBar: { rightMenu: { getTab: () => ({ setTitle() {} }) } } };
+    globalThis.Dialogs = { show() {}, MSG_ERR: "err" };
+    globalThis.window.APPLICATION_CONTEXT = {
+        auth: { markNeedsInteraction: (ctx, opts) => markNeedsInteraction?.(ctx, opts) },
+    };
+
+    const module = await import("../../src/classes/user.ts");
+    const { XOpatUser } = module;
+
+    if (!pristineStatics) {
+        pristineStatics = {
+            cooldownMs: XOpatUser.REFRESH_COOLDOWN_MS,
+            maxFailures: XOpatUser.MAX_REFRESH_FAILURES,
+        };
+    }
+    XOpatUser.REFRESH_COOLDOWN_MS = cooldownMs ?? pristineStatics.cooldownMs;
+    XOpatUser.MAX_REFRESH_FAILURES = maxFailures ?? pristineStatics.maxFailures;
+
+    // Release the singleton claim; `__self` is private to TypeScript only.
+    XOpatUser.__self = undefined;
+    return { user: XOpatUser.instance(), XOpatUser, module };
+}
