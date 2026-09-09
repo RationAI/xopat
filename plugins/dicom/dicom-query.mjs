@@ -31,6 +31,18 @@ const META_CACHE_MAX = 256;
 const QIDO_CACHE_MAX = 128;
 
 /**
+ * Placeholders standing in for a ContainerIdentifier / OpticalPathIdentifier the
+ * store did not give us.
+ *
+ * They exist so the WSI grouping key is total — every instance lands in some
+ * group even when the archive omits both attributes. They are NOT names: a label
+ * built from one reads as a diagnostic leaking into the UI, so
+ * `_makeSeriesLabel` treats them as absent.
+ */
+const CONTAINER_UNKNOWN = "UNKNOWN_CONTAINER";
+const OPTICAL_PATH_DEFAULT = "DEFAULT_PATH";
+
+/**
  * How long a QIDO answer may be reused.
  *
  * Unlike instance metadata, a query result is NOT immutable — a store can gain
@@ -67,11 +79,68 @@ export default class DicomTools {
         const x = this.tag(ds, tag);
         return Array.isArray(x) ? x[0] : (x ?? null);
     };
+
+    /**
+     * Normalize a free-text DICOM value for DISPLAY.
+     *
+     * Descriptive attributes reach us with empty components: an anonymiser that
+     * blanks parts of a multi-part `SeriesDescription` leaves `",,Axial,5.0,,,"`
+     * behind, and a VM>1 attribute arrives as an array whose empty members would
+     * stringify into the same thing. Neither is a name a reader should see, and
+     * neither is fixable at the call site without every formatter re-implementing
+     * this.
+     *
+     * Joins the surviving components with ", ", collapses runs of DICOM's own
+     * separators, and answers `null` when nothing informative is left — so the
+     * caller's `desc || fallback` chain does the right thing instead of showing
+     * punctuation.
+     *
+     * Only `,` and `\` are treated as separators. `\` is DICOM's value delimiter
+     * and `,` is what a store produces when it has already joined one; `/` and
+     * `;` are left alone because they occur inside real protocol names
+     * ("T2 TSE/FS") where splitting would change what the label says.
+     *
+     * @param {string|string[]|null|undefined} value
+     * @returns {string|null}
+     */
+    static cleanText(value) {
+        if (value == null) return null;
+        const parts = (Array.isArray(value) ? value : [value])
+            .map(x => (x == null ? "" : String(x)))
+            // Split as well as join, so a string and an array of the same
+            // components clean identically.
+            .flatMap(x => x.split(/[,\\]/))
+            .map(x => x.trim())
+            .filter(Boolean);
+        return parts.length ? parts.join(", ") : null;
+    };
+
+    /**
+     * The display-side peer of `v()`: the whole tag value, cleaned. `v()` keeps
+     * its raw first-component semantics, which is what UIDs and code values need.
+     */
+    static text(ds, tag) {
+        return this.cleanText(this.tag(ds, tag));
+    };
+
+    /**
+     * An integer tag value, or `undefined` when the store did not give us one we
+     * can compute with.
+     *
+     * Every caller uses the result as a count or a dimension — a frame total, a
+     * tile grid edge, a segment count — and multiplies them together. So a value
+     * that is negative, fractional or beyond `Number.MAX_SAFE_INTEGER` is not a
+     * number to be coerced but an answer to be refused: `parseInt` alone let a
+     * string tag through unbounded, and `x|0` silently truncated a large number
+     * to int32. `undefined` is what the guards downstream already test for.
+     */
     static iv(ds, tag) {
         const v = this.tag(ds, tag);
         if (v == null) return undefined;
         const x = Array.isArray(v) ? v[0] : v;
-        return typeof x === "string" ? parseInt(x, 10) : (x|0);
+        const n = typeof x === "string" ? parseInt(x, 10) : Number(x);
+        if (!Number.isSafeInteger(n) || n < 0) return undefined;
+        return n;
     };
     static fv(ds, tag) {
         const v = this.tag(ds, tag);
@@ -79,6 +148,35 @@ export default class DicomTools {
         const x = Array.isArray(v) ? v[0] : v;
         return typeof x === "string" ? parseFloat(x) : +x;
     };
+
+    /**
+     * Ceiling on the cells one pyramid level may declare.
+     *
+     * A 1000×1000 grid is a 256 000 × 256 000 px slide at 256 px tiles — an
+     * order of magnitude past the largest real WSI, so no genuine slide is
+     * refused. The bound exists because the frame maps below allocate one entry
+     * per cell, on the main thread, inside the awaited open: the grid comes
+     * straight from the archive's metadata, and an instance declaring a
+     * 100 000 × 100 000 grid of 1 px tiles is self-consistent — it passes the
+     * frame-count checks and then asks for 10^10 allocations.
+     */
+    static MAX_TILES_PER_LEVEL = 1_000_000;
+
+    /**
+     * Whether a declared grid is one we are willing to materialize.
+     *
+     * Rejects rather than clamps, and the caller must drop the whole level: the
+     * tile source reads `level.tilesX/tilesY` back for `getNumTiles`, so a
+     * clamped grid would render a pyramid that disagrees with the frame map —
+     * wrong tiles served confidently, instead of a slide that visibly fails.
+     */
+    static gridWithinBounds(tilesX, tilesY, depth, what) {
+        const cells = tilesX * tilesY * depth;
+        if (Number.isSafeInteger(cells) && cells > 0 && cells <= this.MAX_TILES_PER_LEVEL) return true;
+        console.error(`[DICOM] ${what}: declared grid ${tilesX}×${tilesY}×${depth} exceeds the ` +
+            `${this.MAX_TILES_PER_LEVEL}-cell bound; level refused.`);
+        return false;
+    }
 
 
     /* BASE QUERIES */
@@ -917,6 +1015,10 @@ export default class DicomTools {
             tilesY = 1;
         }
 
+        // Bound before the level exists: the per-segment frame map below writes
+        // `segCount × tilesY × tilesX` entries.
+        if (!this.gridWithinBounds(tilesX, tilesY, segCount, `derived instance ${instanceUID}`)) return;
+
         const level = this._injectLevelByDims(item, totalWidth, totalHeight, tileWidth, tileHeight);
         level.instanceUID = instanceUID;
         level.frames = level.frames || Object.create(null);
@@ -1080,7 +1182,7 @@ export default class DicomTools {
         // forwarded via options.seriesMeta so groupSeriesInstances can build a
         // human-readable label instead of a bare UID tail.
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
-        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
+        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject, { t: options.t });
 
         // The tile source keeps ONE group (the deepest pyramid, then the widest)
         // and discards the rest — but the metadata for every group was fetched
@@ -1260,7 +1362,7 @@ export default class DicomTools {
             // needs it foreground passes `priority: "normal"`.
         ].join(','), { priority: options.priority ?? "background" });
         const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
-        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
+        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject, { t: options.t });
         for (const wsi of wsiInstances) {
             wsi.seriesUID = seriesUID;
             wsi.studyUID = studyUID;
@@ -1519,9 +1621,9 @@ export default class DicomTools {
             const row = rows[0];
             if (!row) return null;
             return {
-                description: this.v(row, "0008103E") ?? null,
+                description: this.text(row, "0008103E"),
                 seriesNumber: this.iv(row, "00200011"),
-                bodyPart: this.v(row, "00180015") ?? null,
+                bodyPart: this.text(row, "00180015"),
                 modality: this.v(row, "00080060") ?? null,
             };
         } catch (e) {
@@ -1888,12 +1990,28 @@ export default class DicomTools {
     }
     /* PRIVATE */
 
-    static async groupSeriesInstances(instancesObject, seriesObject) {
+    static async groupSeriesInstances(instancesObject, seriesObject, options = {}) {
+        // The `dicom` locale bundle is fetched asynchronously by the plugin, and
+        // this is a static path with no instance to await it on. A caller that
+        // holds the plugin passes `this.t` — already namespaced and already
+        // gated on `_localeReady`, so the label cannot freeze a raw key. The
+        // global fallback is only correct once the bundle has landed.
+        const t = typeof options.t === "function"
+            ? options.t
+            // `globalThis.$`, not `$`: this module is exercised by unit tests
+            // that run it outside the app, where no i18n namespace exists at all.
+            : (key, opts) => (globalThis.$?.t ? globalThis.$.t(key, { ns: 'dicom', ...opts }) : key);
+
         const _best = (v) => (typeof v === "string" && v.trim()) ? v.trim() : null;
         const _tail = (uid, n = 6) => (uid ? uid.slice(-n) : null);
-        const _makeSeriesLabel = (group, seriesObject) => {
-            const container = _best(group.containerIdentifier);
-            const pathId    = _best(group.opticalPathId);
+        const _makeSeriesLabel = (group, seriesObject, showOpticalPath) => {
+            // The sentinels mean "the store did not say", not "the specimen is
+            // called UNKNOWN_CONTAINER" — reading them as names put a diagnostic
+            // in the slide chip.
+            const rawContainer = _best(group.containerIdentifier);
+            const container = rawContainer === CONTAINER_UNKNOWN ? null : rawContainer;
+            const rawPathId = _best(group.opticalPathId);
+            const pathId    = rawPathId === OPTICAL_PATH_DEFAULT ? null : rawPathId;
             const dims      = _best(group.totalPixelMatrix);
             const sDesc     = _best(seriesObject?.description);
             const sTail     = _tail(seriesObject?.seriesUID);
@@ -1911,13 +2029,15 @@ export default class DicomTools {
                 base = `${container} · ${sDesc}`;
             } else {
                 base = container || sDesc || (sNum != null
-                    ? $.t('series.fallbackNumbered', { ns: 'dicom', number: sNum, tail: sTail ?? "" })
-                    : $.t('series.fallbackTail', { ns: 'dicom', tail: sTail ?? "" }));
+                    ? t('series.fallbackNumbered', { number: sNum, tail: sTail ?? "" })
+                    : t('series.fallbackTail', { tail: sTail ?? "" }));
             }
 
             const parts = [base];
 
-            if (pathId && pathId !== "DEFAULT_PATH") parts.push(`[${pathId}]`);
+            // Only when it tells the rows apart. A single-optical-path series
+            // gained nothing from `[Image #1]` except the brackets.
+            if (pathId && showOpticalPath) parts.push(`[${pathId}]`);
             if (dims) parts.push(`• ${dims}`);
 
             // Modality + body-part are tiny but identify the slide type at a
@@ -1940,8 +2060,12 @@ export default class DicomTools {
             const rows      = Number(this.v(ds, "00280010")) || 0;
             const cols      = Number(this.v(ds, "00280011")) || 0;
 
-            const container = this.v(ds, "00400512") || "UNKNOWN_CONTAINER"; // ContainerIdentifier
-            const pathId    = this.v(ds, "00480106") || "DEFAULT_PATH";      // OpticalPathIdentifier
+            // Trimmed, NOT `text()`: these are identifiers, and a slash or a
+            // comma inside one is part of the id rather than a separator. The
+            // sentinels stay — they are what makes `key` total — and
+            // `_makeSeriesLabel` knows to read them as "absent".
+            const container = String(this.v(ds, "00400512") ?? "").trim() || CONTAINER_UNKNOWN; // ContainerIdentifier
+            const pathId    = String(this.v(ds, "00480106") ?? "").trim() || OPTICAL_PATH_DEFAULT; // OpticalPathIdentifier
             const tpmC      = this.v(ds, "00480006"); // TotalPixelMatrixColumns
             const tpmR      = this.v(ds, "00480007"); // TotalPixelMatrixRows
             // todo better logics
@@ -1970,7 +2094,9 @@ export default class DicomTools {
                     previewInstanceUID: null,
                     macroInstanceUID: null,
                 };
-                g.label = _makeSeriesLabel(g, seriesObject);
+                // `label` is filled in after the loop: whether the optical-path
+                // chip carries information is a property of the group SET, not
+                // of any single group, and it is unknown until grouping ends.
                 groups.set(key, g);
             } else {
                 g = groups.get(key);
@@ -2010,6 +2136,13 @@ export default class DicomTools {
 
             if (isOriginal && !isDerived) g._pyrOriginal.push(ds);
             else g._pyrDerived.push(ds);
+        }
+
+        // The optical-path chip earns its place only when the series actually
+        // holds more than one group to tell apart.
+        const showOpticalPath = groups.size > 1;
+        for (const g of groups.values()) {
+            g.label = _makeSeriesLabel(g, seriesObject, showOpticalPath);
         }
 
         for (const g of groups.values()) {
@@ -2384,6 +2517,11 @@ export default class DicomTools {
         const tilesX = Math.ceil(totalWidth / tileWidth);
         const tilesY = Math.ceil(totalHeight / tileHeight);
         const expected = tilesX * tilesY;
+
+        // The frame-count checks downstream compare `expected` against a count
+        // from this same response, so they establish consistency, never
+        // magnitude: 100 000 × 100 000 tiles of 1 px is perfectly consistent.
+        if (!this.gridWithinBounds(tilesX, tilesY, 1, `WSI instance ${instanceUID}`)) return;
 
         const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
         level.parts = level.parts || [];

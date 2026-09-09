@@ -93,18 +93,29 @@ addPlugin('dicom', class extends XOpatPlugin {
         // Query-result cache, NOT UI state. Selection (which patient/study the
         // user is looking at) belongs to whatever is driving the plugin — the
         // `dicom-browser` plugin keeps its own. What lives here is metadata the
-        // protocol itself needs: `activePatientDetails` is handed to every
-        // TileSource it constructs, because that is what backs
-        // `getSensitiveMetadata()` and the slide-info "Clinical information"
-        // card.
+        // protocol itself needs: the patient record is handed to every TileSource
+        // it constructs, because that is what backs `getSensitiveMetadata()` and
+        // the slide-info "Clinical information" card.
+        //
+        // Every slot is keyed by studyUID, and that is load-bearing rather than
+        // tidy. `before-open` fires once per viewer (`viewer-open-pipeline.ts`,
+        // `applyBeforeOpenMutations`) and this plugin answers it without
+        // awaiting, so a multi-viewport open of two studies puts two QIDO
+        // round-trips in flight against this cache at once. A single slot would
+        // be won by whichever resolved last, and since the TileSource accessors
+        // read lazily at call time, the OTHER viewer's source would then report
+        // that patient — into `getSensitiveMetadata()`, into the slide-info card,
+        // and into the `PatientID`/`PatientName` of any SR it STOWs back to the
+        // archive. studyUID is the natural key here because the data comes from a
+        // study-level QIDO: two viewers on one study share an entry, which is
+        // correct, and two viewers on two studies cannot collide.
         this.state = {
             // studyUID -> [{ seriesUID, modality, bodyPart, number, desc, instanceCount }],
             // or the in-flight promise for it — read it through
             // `seriesConfigForStudy()`, never directly.
             seriesByStudy: new Map(),
-            activeStudy: null,           // study whose details are currently cached
-            activePatientDetails: null,  // normalized patient metadata
-            activeStudyDetails: null     // normalized study metadata
+            patientByStudy: new Map(),      // studyUID -> normalized patient metadata
+            studyDetailsByUID: new Map()    // studyUID -> normalized study metadata
         };
 
         // Register the DICOM SR annotations sink up-front, before
@@ -313,20 +324,47 @@ addPlugin('dicom', class extends XOpatPlugin {
      * Idempotent and best-effort — a missing detail costs a card, not a slide.
      */
     async ensureStudyContext(studyUID) {
-        if (!studyUID || this.state.activeStudy === studyUID) return;
+        if (!studyUID || this.state.studyDetailsByUID.has(studyUID)) return;
         try {
             await this.populateStudyDetails(studyUID);
-            this.state.activeStudy = studyUID;
         } catch (e) {
             console.debug("[dicom] study context unavailable:", e?.message ?? e);
         }
     }
 
-    /** Normalized patient metadata for the study most recently in context. */
-    getPatientDetails() { return this.state.activePatientDetails; }
+    /**
+     * Normalized patient metadata for `studyUID`.
+     *
+     * Takes the study rather than reading an "active" one: the caller is a
+     * TileSource that belongs to exactly one study, and in a multi-viewport grid
+     * there is no single active study to read. See the note on `this.state`.
+     */
+    getPatientDetails(studyUID) { return this.state.patientByStudy.get(studyUID) ?? null; }
 
-    /** Normalized study metadata for the study most recently in context. */
-    getStudyDetails() { return this.state.activeStudyDetails; }
+    /** Normalized study metadata for `studyUID`. */
+    getStudyDetails(studyUID) { return this.state.studyDetailsByUID.get(studyUID) ?? null; }
+
+    /**
+     * A live accessor a TileSource can carry for its OWN patient record.
+     *
+     * Live rather than a snapshot because `ensureStudyContext` is not awaited in
+     * `before-open`, so the details are often still in flight when the source is
+     * constructed and `getSensitiveMetadata()` reads at call time. Bound to one
+     * studyUID so "still in flight" resolves to `null` rather than to whichever
+     * study happened to answer first.
+     */
+    patientAccessorFor(studyUID) {
+        if (!studyUID) {
+            // Reaching here means a source was built without a study, so it can
+            // never resolve a patient. Loud, because the failure it replaces was
+            // silent: the accessor used to fall back to plugin-wide state and
+            // hand back some other viewer's patient.
+            APPLICATION_CONTEXT.log("plugin.dicom")
+                .error("tile source constructed without a studyUID; patient metadata unavailable");
+            return () => null;
+        }
+        return () => this.state.patientByStudy.get(studyUID) ?? null;
+    }
 
     /**
      * Resolve a background's DICOM identity (`{studyUID, seriesUID, role}`),
@@ -698,6 +736,12 @@ addPlugin('dicom', class extends XOpatPlugin {
         await Promise.all(jobs);
         if (!placeholders.size) return;
 
+        // `friendlySeriesName` translates, and the name it returns is frozen into
+        // `background.name` — from there it is copied into the shader-layer name
+        // and the navigator title and never recomputed. Losing the race with the
+        // locale fetch therefore shows a raw `series.*` key for the whole session.
+        await this._localeReady;
+
         for (const background of (Array.isArray(event?.background) ? event.background : [])) {
             const chosen = placeholders.get(this._dicomIdentityOf(background));
             if (chosen) {
@@ -980,11 +1024,37 @@ addPlugin('dicom', class extends XOpatPlugin {
      */
     async attachDerivedOverlays(event, id, requested) {
         if (!requested || !id?.seriesUID || !id?.studyUID) return;
-        if (id.role && id.role !== "wsi" && id.role !== "radiology") return;
 
         const config = APPLICATION_CONTEXT.config;
         const visualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
         const marker = this.constructor.OVERLAY_MARKER;
+
+        // The opening background arrives carrying whatever `visualizationIndex`
+        // its entry last held, which after a slide change is the PREVIOUS
+        // slide's. If that is one of our generated overlay visualizations and it
+        // belongs to a different series, it is not ours to keep: its shaders
+        // reference the other slide's `config.data` entries, so the old overlays
+        // would survive the change while the new background loses its own layer
+        // — a blank slide under someone else's masks.
+        //
+        // Clearing needs an explicit `null`: the pipeline reads `undefined` as
+        // "no opinion" and keeps the seeded value, and only `null` as "no
+        // visualization for this slide" (`viewer-open-pipeline.ts`, the
+        // `event.visualizationIndex === null` branch). An author-written
+        // visualization carries no marker and is left alone.
+        const dropInheritedOverlay = () => {
+            const seeded = event.visualizationIndex;
+            if (!Number.isInteger(seeded)) return;
+            const seededViz = visualizations[seeded];
+            if (seededViz && seededViz[marker] !== undefined && seededViz[marker] !== id.seriesUID) {
+                event.visualizationIndex = null;
+            }
+        };
+
+        if (id.role && id.role !== "wsi" && id.role !== "radiology") {
+            dropInheritedOverlay();
+            return;
+        }
 
         // Already attached for this slide (re-open, or a restored session that
         // carries the generated entry) — reuse it rather than append a copy.
@@ -995,12 +1065,16 @@ addPlugin('dicom', class extends XOpatPlugin {
         }
 
         // No renderer, no overlays — but the slide must still open.
-        if (!registerDicomShaderLayers()) return;
+        if (!registerDicomShaderLayers()) {
+            dropInheritedOverlay();
+            return;
+        }
 
         const built = await this._buildOverlayVisualization(
             id.studyUID, id.seriesUID, event.background?.name || "",
             Array.isArray(requested) ? requested : null);
         if (!built) {
+            dropInheritedOverlay();
             console.info(`[dicom] no derived objects attributable to series ${id.seriesUID}`);
             return;
         }
@@ -1030,7 +1104,12 @@ addPlugin('dicom', class extends XOpatPlugin {
      * @returns {Promise<{data: object[], background: object[]}>}
      */
     async buildCaseSession(studyUID, opts = {}) {
-        const series = await this.seriesConfigForStudy(studyUID);
+        // See `_completeSessionDataIds`: the name built below is frozen into the
+        // session, so it must not lose the race with the locale fetch.
+        const [series] = await Promise.all([
+            this.seriesConfigForStudy(studyUID),
+            this._localeReady,
+        ]);
         const background = [];
         const data = [];
 
@@ -1064,16 +1143,37 @@ addPlugin('dicom', class extends XOpatPlugin {
      * chips and slide-info show something nicer than a 64-char UID. When a
      * series metadata blob is available (description / number / body part),
      * uses it; otherwise falls back to a short UID tail.
+     *
+     * Translated — `await this.whenLocaleReady()` before calling, or the name it
+     * returns can be a raw `series.*` key, and that key is frozen into
+     * `background[].name` for the rest of the session.
      */
+    /**
+     * Await before formatting anything with {@link friendlySeriesName}.
+     *
+     * Public because the label is DICOM's, not the caller's: `dicom-browser`
+     * awaiting its OWN `_localeReady` does not help — the keys live in this
+     * plugin's namespace. And the result is frozen into `background[].name`,
+     * from which it is copied into the shader-layer name and the navigator title
+     * and never recomputed, so losing the race shows a raw `series.*` key for
+     * the rest of the session rather than only until the bundle lands.
+     */
+    whenLocaleReady() {
+        return this._localeReady;
+    }
+
     friendlySeriesName(seriesUID, meta = null) {
         const tail = seriesUID ? String(seriesUID).slice(-6) : "";
         const fallback = tail
             ? this.t('series.fallbackTail', { tail })
             : this.t('series.fallbackGeneric');
         if (!meta) return fallback;
-        const desc = typeof meta.description === "string" ? meta.description.trim() : "";
+        // Cleaned here as well as at the parse sites: a caller may hand us a
+        // series object assembled somewhere else entirely, and "," is not a name.
+        const desc = DicomTools.cleanText(meta.description);
         if (desc) {
-            const suffix = meta.bodyPart ? ` (${meta.bodyPart})` : "";
+            const bodyPart = DicomTools.cleanText(meta.bodyPart);
+            const suffix = bodyPart ? ` (${bodyPart})` : "";
             return `${desc}${suffix}`;
         }
         if (meta.seriesNumber != null) return this.t('series.fallbackNumbered', { number: meta.seriesNumber, tail });
@@ -1161,7 +1261,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                         studyUID: id.studyUID,
                         seriesUID: id.seriesUID,
                         subVolume: id.subVolume || null,
-                        patientDetails: () => plugin.state.activePatientDetails,
+                        patientDetails: plugin.patientAccessorFor(id.studyUID),
                     });
                 }
                 return new DICOMWebTileSource({
@@ -1173,11 +1273,12 @@ addPlugin('dicom', class extends XOpatPlugin {
                     preferBaselineJpeg: plugin.preferBaselineJpeg,
                     ignoreSlideOrientation: plugin.ignoreSlideOrientation,
                     reportOrientation: r => plugin.noteSlideOrientation(r),
-                    // A live accessor, not a snapshot: `ensureStudyContext` is
-                    // no longer awaited in `before-open`, so the details may
-                    // still be in flight when the source is constructed.
-                    // `getSensitiveMetadata()` reads it at call time.
-                    patientDetails: () => plugin.state.activePatientDetails,
+                    // Bound to this source's own study — see `patientAccessorFor`.
+                    patientDetails: plugin.patientAccessorFor(id.studyUID),
+                    // Namespaced translator for the grouped WSI label; without it
+                    // the static query path falls back to the global `$.t` and can
+                    // freeze a raw `series.*` key when the bundle has not landed.
+                    t: (key, options) => plugin.t(key, options),
                     ...plugin.frameOrder,
                 });
             },
@@ -1223,7 +1324,12 @@ addPlugin('dicom', class extends XOpatPlugin {
         }
         const meta = tiledImage?.source?.getMetadata?.()?.imageInfo;
         if (!meta?.frameOfReferenceUID) return null;
-        return { viewer, meta: { ...meta, patient: this.state.activePatientDetails } };
+        // This viewer's OWN study, not whichever was cached last. The patient
+        // here is not merely displayed: it becomes the `PatientID`/`PatientName`
+        // of any SR stowed back to the archive (see `annotation-convertor.mjs`),
+        // so a cross-viewer mix-up writes one patient's identifiers against
+        // another patient's study.
+        return { viewer, meta: { ...meta, patient: this.getPatientDetails(meta.studyUID) } };
     }
 
     /**
@@ -1533,6 +1639,10 @@ addPlugin('dicom', class extends XOpatPlugin {
         let cached = this._imagesCache.get(key);
         if (cached) return cached;
         const promise = (async () => {
+            // The grouped labels below are translated. Without this the listing
+            // races the locale fetch and freezes raw `series.*` keys into
+            // `wsi.label`, which is then copied into `background[].name`.
+            await this._localeReady;
             const all = [];
             const serverPage = 100;
             for (let off = 0; off < 5000; off += serverPage) {
@@ -1553,6 +1663,9 @@ addPlugin('dicom', class extends XOpatPlugin {
                         bodyPart: s.bodyPart,
                         seriesNumber: s.number,
                     },
+                    // Namespaced translator instead of the static path's global
+                    // `$.t(..., {ns:'dicom'})` — and gated on `_localeReady` above.
+                    t: (key, options) => this.t(key, options),
                 }).catch(err => {
                     console.warn("[dicom] shallow WSI listing failed for series", s.seriesUID, err);
                     return [];
@@ -1576,7 +1689,7 @@ addPlugin('dicom', class extends XOpatPlugin {
         const studyUID   = DicomTools.v(ds, '0020000D');   // StudyInstanceUID
         const studyDate  = DicomTools.v(ds, '00080020');   // StudyDate (YYYYMMDD)
         const studyTime  = DicomTools.v(ds, '00080030');   // StudyTime (HHMMSS.frac)
-        const desc       = DicomTools.v(ds, '00081030');   // StudyDescription
+        const desc       = DicomTools.text(ds, '00081030');   // StudyDescription
         const patientID  = DicomTools.v(ds, '00100020');   // PatientID
         const studyID    = DicomTools.v(ds, '00200010');   // StudyID
         const accession  = DicomTools.v(ds, '00080050');   // AccessionNumber
@@ -1587,8 +1700,8 @@ addPlugin('dicom', class extends XOpatPlugin {
         const station    = DicomTools.v(ds, '00081010');   // StationName
         const referring  = DicomTools.v(ds, '00080090');   // ReferringPhysicianName
         const performing = DicomTools.v(ds, '00081050');   // PerformingPhysicianName
-        const bodyPart   = DicomTools.v(ds, '00180015');   // BodyPartExamined
-        const reqProc    = DicomTools.v(ds, '00321060');   // RequestedProcedureDescription
+        const bodyPart   = DicomTools.text(ds, '00180015');   // BodyPartExamined
+        const reqProc    = DicomTools.text(ds, '00321060');   // RequestedProcedureDescription
         const reasonPerf = DicomTools.v(ds, '00401012');   // ReasonForPerformedProcedure
         const comments   = DicomTools.v(ds, '00324000');   // StudyComments
 
@@ -1638,9 +1751,9 @@ addPlugin('dicom', class extends XOpatPlugin {
         const studyUID   = DicomTools.v(ds, '0020000D');
         const seriesUID  = DicomTools.v(ds, '0020000E');
         const number     = DicomTools.v(ds, '00200011'); // SeriesNumber
-        const desc       = DicomTools.v(ds, '0008103E'); // SeriesDescription
+        const desc       = DicomTools.text(ds, '0008103E'); // SeriesDescription
         const modality   = DicomTools.v(ds, '00080060'); // Modality
-        const bodyPart   = DicomTools.v(ds, '00180015'); // BodyPartExamined
+        const bodyPart   = DicomTools.text(ds, '00180015'); // BodyPartExamined
         const instanceCt = DicomTools.v(ds, '00201209'); // NumberOfSeriesRelatedInstances (may be absent)
         return { studyUID, seriesUID, number, description: desc, modality, bodyPart, instanceCount: instanceCt };
     }
@@ -1694,9 +1807,12 @@ addPlugin('dicom', class extends XOpatPlugin {
             .map(ds => ({
                 studyUID: DicomTools.v(ds, '0020000D') || studyUID,
                 seriesUID: DicomTools.v(ds, '0020000E'),
-                description: DicomTools.v(ds, '0008103E'),
+                // `text`, not `v`: an anonymiser that blanks components of a
+                // multi-part SeriesDescription leaves ",,Axial,5.0,,," behind,
+                // and that string is what becomes the slide's display name.
+                description: DicomTools.text(ds, '0008103E'),
                 modality: DicomTools.v(ds, '00080060'),
-                bodyPart: DicomTools.v(ds, '00180015'),
+                bodyPart: DicomTools.text(ds, '00180015'),
                 seriesNumber: DicomTools.v(ds, '00200011'),
             }))
             .filter(x => x.seriesUID);
@@ -1716,8 +1832,11 @@ addPlugin('dicom', class extends XOpatPlugin {
 
     async populateStudyDetails(studyUID) {
         // Idempotent — the boot path and UI hooks may both request the same
-        // study; skip the round-trip when details are already loaded.
-        if (this.state.activeStudyDetails?.studyUID === studyUID) return;
+        // study; skip the round-trip when THAT study's details are already
+        // loaded. Keyed, not "is this the last study we saw": two viewers
+        // opening two studies both used to pass a single-slot test and then
+        // overwrite each other.
+        if (this.state.studyDetailsByUID.has(studyUID)) return;
 
         // QIDO, not WADO-RS `/studies/{uid}/metadata`. That endpoint is
         // *Retrieve Study Metadata*: the full dataset of every instance in the
@@ -1739,24 +1858,31 @@ addPlugin('dicom', class extends XOpatPlugin {
         );
         const row = rows?.[0];
         if (row) {
-            this.state.activeStudyDetails = this.parseStudy(row);
+            this.state.studyDetailsByUID.set(studyUID, this.parseStudy(row));
             const p = this.parsePatient(row);
-            if (p.patientID) this.state.activePatientDetails = p;
+            if (p.patientID) this.state.patientByStudy.set(studyUID, p);
         }
     }
 
+    /**
+     * Patient details for a PATIENT id, for the browser's patient list.
+     *
+     * Returns rather than caches: this is keyed by patient, so it has no study
+     * to file itself under, and writing it into the study-keyed cache is exactly
+     * the cross-study clobber that cache exists to prevent.
+     */
     async populatePatientDetails(patientID) {
         // GCP Healthcare API does not expose /patients; derive from first study
         const path = `/studies?PatientID=${encodeURIComponent(patientID)}`;
         const rows = await DicomTools.qidoSafe(this._client, path, '00100020,00100010,00100030,00100040', BROWSER_LANE);
         const row = rows?.[0];
-        if (row) this.state.activePatientDetails = this.parsePatient(row);
+        return row ? this.parsePatient(row) : null;
     }
 
-    /** Patient details for a study, if we do not already have them. */
+    /** Patient details for a study, if we do not already have them for THAT study. */
     async ensurePatientForStudy(studyUID) {
         if (!studyUID) return;
-        if (this.state.activePatientDetails?.patientID) return;
+        if (this.state.patientByStudy.get(studyUID)?.patientID) return;
         await this.populateStudyDetails(studyUID);
     }
 
@@ -1768,8 +1894,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // Try enrich from patient endpoint
                 let details = null;
                 try {
-                    await this.populatePatientDetails(st.patientID);
-                    details = this.state.activePatientDetails;
+                    details = await this.populatePatientDetails(st.patientID);
                 } catch {}
                 byID.set(st.patientID, details || { patientID: st.patientID });
             }

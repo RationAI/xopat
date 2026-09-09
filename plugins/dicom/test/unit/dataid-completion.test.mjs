@@ -24,7 +24,12 @@ globalThis.window.SLIDE_PROTOCOLS = globalThis.window.SLIDE_PROTOCOLS || { regis
 let Captured = null;
 globalThis.addPlugin = (id, cls) => { if (id === "dicom") Captured = cls; };
 
-await import("../../index.workspace.mjs");
+// A distinct specifier, so this file gets its own module instance: the plugin
+// registers itself through `addPlugin` as an import side effect, which fires
+// once per instance. Suites share a worker, so on the plain path whichever
+// dicom suite loaded first consumed the registration and the rest captured
+// `null` — a failure that moved around with the worker packing.
+await import("../../index.workspace.mjs?dataid-completion");
 const DicomTools = (await import("../../dicom-query.mjs")).default;
 
 /* ------------------------------------------------------------------ */

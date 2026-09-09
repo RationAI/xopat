@@ -138,8 +138,9 @@ addPlugin('dicom-browser', class extends XOpatPlugin {
         const api = this.dicom;
         if (!api) return;
 
-        // `friendlySeriesName` resolves locale keys.
-        await this._localeReady;
+        // `friendlySeriesName` resolves locale keys — and they are in the DICOM
+        // plugin's namespace, not ours, so both bundles have to be there.
+        await Promise.all([this._localeReady, api.whenLocaleReady?.()]);
 
         let studyUID = this.defaultStudy;
         const seriesUID = this.defaultSeries;
@@ -219,9 +220,15 @@ addPlugin('dicom-browser', class extends XOpatPlugin {
                 this.state.studiesByPatient.set(patientID, studies);
                 if (studies.length) {
                     this.state.activeStudy = studies[0].studyUID;
+                    // Caches the patient record under THAT study, which is what
+                    // the study's tile sources read. A second by-patient lookup
+                    // used to run here purely for its side effect on plugin-wide
+                    // state — it filed one patient under no study at all, so a
+                    // viewer showing a different study picked it up. The browser
+                    // list it was really for comes from
+                    // `materializePatientsFromStudies` above.
                     await api.ensureStudyContext(studies[0].studyUID).catch(() => {});
                 }
-                await api.populatePatientDetails(patientID);
             } catch (e) {
                 console.warn("[dicom-browser] patient prefetch failed:", e?.message ?? e);
             }
@@ -282,7 +289,9 @@ addPlugin('dicom-browser', class extends XOpatPlugin {
         // default flat catalog flashes while the hierarchy is being built.
         info.setWillInitCustomBrowser();
 
-        await this._localeReady;
+        // Both bundles: the rows below mix our own `browser.*` strings with the
+        // DICOM plugin's `series.*` label fallbacks.
+        await Promise.all([this._localeReady, api.whenLocaleReady?.()]);
         const patientsSupported = await api.supportsPatients();
 
         const studiesLevel = {

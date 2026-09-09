@@ -136,6 +136,10 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.frameOrder = options.frameOrder || null;
         this.frameOrderBySeries = options.frameOrderBySeries || null;
         this.frameOrderByInstance = options.frameOrderByInstance || null;
+        // Namespaced translator for the grouped WSI label. Optional: a
+        // standalone construction outside SLIDE_PROTOCOLS falls back to the
+        // global `$.t(..., {ns:'dicom'})` inside `groupSeriesInstances`.
+        this.t = typeof options.t === "function" ? options.t : null;
         this._hasWarnedFrameMismatch = false;
 
         // Cornerstone is NOT initialized here. It is loaded and configured by
@@ -308,6 +312,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 // several WSI items walked every item's pyramid — serially —
                 // before the slide could open, and then threw all but one away.
                 only: "best",
+                t: this.t || undefined,
             }
         );
 
@@ -538,13 +543,16 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     /**
      * Identifying / patient-sensitive metadata, kept strictly separate from
      * getMetadata() (which stays technical). Reachable only through the isolated
-     * `patient` scripting namespace. `patientDetails` is the plugin's live
-     * activePatientDetails ({ patientID, name, sex, birthDate }), supplied on
-     * the source options either as a plain object or — the normal case — as a
-     * zero-arg accessor. The accessor form exists because the study-details
-     * query is no longer awaited before the source is constructed, so a
-     * snapshot taken at construction would be null; resolving at call time
-     * picks the details up whenever they land. The protocol UIDs are opaque PHI
+     * `patient` scripting namespace. `patientDetails` is the patient record
+     * ({ patientID, name, sex, birthDate }), supplied on the source options
+     * either as a plain object or — the normal case — as a zero-arg accessor.
+     * The accessor form exists because the study-details query is no longer
+     * awaited before the source is constructed, so a snapshot taken at
+     * construction would be null; resolving at call time picks the details up
+     * whenever they land. That accessor MUST be bound to this source's own study
+     * (`plugin.patientAccessorFor(studyUID)`): an accessor reading plugin-wide
+     * state resolves to whichever study answered last, which in a multi-viewport
+     * grid is another viewer's patient. The protocol UIDs are opaque PHI
      * identifiers surfaced here for the sensitive-classification boundary (they
      * also remain in getMetadata for the internal DICOM/SR pipeline).
      */
