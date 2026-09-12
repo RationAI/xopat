@@ -722,7 +722,7 @@ class Menu extends BaseComponent {
     /**
      * Initial open state of a tab. Defaults to the user's persisted toggle;
      * owners that pass `options.initialOpenResolver` decide it themselves
-     * (see `resolveSideMenuTabOpen` in rightSideViewerMenu.mjs).
+     * (see `resolveSideMenuTabOpen` in mixins/utils.mjs).
      * @param {string} id tab id
      * @return {boolean}
      */

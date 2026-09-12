@@ -4,11 +4,7 @@ import {ShaderSideMenu} from "./shaderSideMenu.mjs";
 import {MultiPanelMenu} from "./multiPanelMenu.mjs";
 import {Menu} from "./menu.mjs";
 import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
-import {resolveSideMenuCompact, resolveSideMenuTabOpen} from "./sideMenuPreferences.mjs";
-
-// Re-exported: `ui/services/fullscreenMenus.mjs` (Settings) has always imported
-// the compact resolver from here, and both resolvers describe this menu.
-export {resolveSideMenuCompact, resolveSideMenuTabOpen};
+import {resolveSideMenuCompact, resolveSideMenuTabOpen} from "../mixins/utils.mjs";
 
 const {div} = van.tags
 

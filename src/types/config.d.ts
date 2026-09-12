@@ -143,7 +143,7 @@ type XOpatUiSetup = {
      * Unset (`null`) means every panel opens.
      *
      * Not read via `getUiOption` (boolean-only). Resolution lives in
-     * `resolveSideMenuTabOpen` (`ui/classes/components/sideMenuPreferences.mjs`)
+     * `resolveSideMenuTabOpen` (`ui/classes/mixins/utils.mjs`)
      * and applies to panels appended later by plugins too — the side menu
      * hands it to `Menu` as `options.initialOpenResolver`.
      *

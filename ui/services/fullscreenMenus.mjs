@@ -8,7 +8,7 @@ import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.m
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
-import { resolveSideMenuCompact } from "../classes/components/rightSideViewerMenu.mjs";
+import { resolveSideMenuCompact } from "../classes/mixins/utils.mjs";
 import { PhIcon, componentIconNode } from "../classes/elements/ph-icon.mjs";
 import { ImageIcon } from "../classes/elements/image-icon.mjs";
 import { PLACEHOLDER_ICON } from "./appBarActions.mjs";
