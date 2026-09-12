@@ -191,6 +191,9 @@ export class Autocomplete extends BaseComponent {
         this._fmToken = UI.Services.FloatingManager.register({
             el: panel,
             owner: this,
+            // The panel is portaled to <body>; the control may sit inside a modal
+            // (z 999) that the manager's band (100–899) would otherwise paint over.
+            anchor: this.root,
             onEscape: "close",
             // The control lives outside the portaled panel: a click on it must reach
             // its own handler (toggle) instead of being eaten as an outside click.

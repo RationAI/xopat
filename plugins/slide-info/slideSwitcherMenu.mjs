@@ -288,17 +288,58 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     /**
      * Identity of a ROW, as opposed to the identity of the background it shows.
      *
-     * The flat catalog keys rows by their position (`bg-<i>`, `_flatCatalogItems`)
-     * and a custom browser by its own item id; both are unique within one listing,
-     * which `bg.id` is not — see the note in `_renderSlideCard`. Sanitized because
-     * the value ends up in DOM ids that `_applyToDOM` also resolves via
-     * `querySelector('#...')`, where a raw DICOM UID's dots would parse as a class
-     * selector.
+     * The flat catalog keys rows by their position (`bg-<i>`, `_flatCatalogItems`),
+     * which is unique within one listing — `bg.id` is not, see the note in
+     * `_renderSlideCard`. Sanitized because the value ends up in DOM ids that
+     * `_applyToDOM` also resolves via `querySelector('#...')`, where a raw DICOM
+     * UID's dots would parse as a class selector.
+     *
+     * A custom browser is NOT required to put an `id` on its items — the Explorer
+     * contract asks for identity through the level's `keyOf` instead, and
+     * `_keyOf` falls back to the row index. So `keyOf` is consulted here rather
+     * than inventing a second convention: a browser answering only `keyOf` (the
+     * rationai WSI file browser does) used to collapse every row onto one key,
+     * which collides the cards' DOM ids and makes `_applyToDOM` render every
+     * slide's thumbnail into the FIRST card — last render wins.
      * @private
      */
     _rowKey(item) {
-        const raw = item?.id ?? item?.__bgIndex;
-        return UTILITIES.sanitizeID(String(raw ?? "row"));
+        let raw = item?.id ?? item?.__bgIndex ?? this._customBrowserRowKey(item) ?? item?.path;
+        if (raw == null || raw === "") {
+            // Correctness before caching. A shared constant silently shows the
+            // wrong slide; a per-render unique key merely forfeits the preview
+            // cache for a browser that declares no identity at all.
+            if (!this._warnedMissingRowKey) {
+                this._warnedMissingRowKey = true;
+                console.warn("[SlideSwitcherMenu] browsed items declare no identity (no `id` and no level"
+                    + " `keyOf`); slide thumbnails cannot be cached. Give items an `id` or the level a `keyOf`.");
+            }
+            this._rowKeySeq = (this._rowKeySeq || 0) + 1;
+            raw = `row-${this._rowKeySeq}`;
+        }
+        return UTILITIES.sanitizeID(String(raw));
+    }
+
+    /**
+     * Row identity as the custom browser already declared it, through its
+     * Explorer level's `keyOf`. Cards are leaves, so a multi-level config is
+     * searched from the deepest level up.
+     * @private
+     */
+    _customBrowserRowKey(item) {
+        const levels = this.orgConfig?.levels;
+        if (!levels) return null;
+        const candidates = Array.isArray(levels) ? levels.slice().reverse() : [levels];
+        for (const level of candidates) {
+            if (typeof level?.keyOf !== "function") continue;
+            try {
+                const key = level.keyOf(item, 0, null);
+                if (key != null && key !== "") return key;
+            } catch (e) {
+                console.debug("[SlideSwitcherMenu] custom browser keyOf failed", e);
+            }
+        }
+        return null;
     }
 
     /**

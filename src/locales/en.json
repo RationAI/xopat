@@ -975,6 +975,7 @@
       "preparingWorkspace": "Preparing the workspace…",
       "stoppingTakingLonger": "Stopping — finishing the current step…",
       "emptyTranscriptHint": "No messages yet. Ask about the slide, or describe what you want to see.",
+      "emptyTranscriptDictation": "A dictation is using this session. What is said is recorded for it, not shown here.",
       "creatingNewSession": "Creating new chat session…",
       "newChatReady": "New chat ready.",
       "newSessionCreated": "New chat session created.",

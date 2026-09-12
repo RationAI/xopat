@@ -392,6 +392,11 @@ const { storage: SERVER_STORAGE, cache: SERVER_CACHE } = getServerStorage({ cach
 const language = constants.SERVER.LANGUAGE;
 const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
+// Same reasoning as the client init (src/app.ts): these strings are DATA — plugin
+// records, error texts — not markup. The one sink that renders them as HTML escapes
+// at the sink (`escapeHtml` in loader.ts), so escaping here only means a dependency
+// id with a quote arrives pre-mangled and then double-escaped.
+languageServerConf.interpolation = { ...(languageServerConf.interpolation || {}), escapeValue: false };
 i18n.init(languageServerConf);
 
 // Browser sessions. These are not just CSRF holders any more: an unauthenticated

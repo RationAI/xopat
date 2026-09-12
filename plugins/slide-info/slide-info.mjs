@@ -743,6 +743,9 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * Set custom browser hierarchy for the slide item browser.
      * Note that you should do this before the viewer is opened. If you cannot do it, you can use setWillInitCustomBrowser instead,
      * and initialize the UI later on.
+     * Leaf items must be identifiable: give them an `id`, or give the level a `keyOf`.
+     * Slide cards derive their DOM ids and their thumbnail cache slot from that identity,
+     * so items that share one (or expose none) render every thumbnail into the first card.
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
      * @param {customItemToBackground} config.customItemToBackground a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.

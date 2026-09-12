@@ -135,6 +135,15 @@ So a raw `namespace.key` on screen is not "i18n is not up yet" — it is the opp
 - `$.t('x') ?? 'English'`, `$.t('x') || 'English'`, and `typeof $.t === 'function' ? $.t('x') : 'English'` are **dead code** — the English literal never shows. Don't write them. The real fix for a missing string is always *define the key in `en.json`*.
 - For statics evaluated at module-load time (e.g. a class `static DEFAULT_*` array), don't call `$.t` in the static — it may run before init and capture the wrong value. Store a `titleKey` and resolve it with `$.t(titleKey)` at consumption time (see `Menu.DEFAULT_NAMESPACES` + its constructor loop).
 
+**Interpolated values are NOT HTML-escaped.** `i18next` escapes them by default; xOpat
+turns that off at init (`src/app.ts`, and the server's own instance in
+`server/node/index.js`) because translations here are rendered as **text** — van.js
+children, `textContent`, `title`/`aria-*`. With escaping on, a date came out as
+`9&#x2F;12&#x2F;2026` and a quoted word as `&quot;knows&quot;`, and three call sites had
+grown their own `interpolation: {escapeValue:false}` workaround. The corollary is the rule
+that already applied: **a sink that builds HTML escapes at the sink** (`escapeHtml` in
+`loader.ts`) or sanitizes (Dialogs/Toast) — never assume the translator did it for you.
+
 **Before you finish:** run `npm run i18n-audit` (or `grunt i18n-audit`). It fails the build on any `$.t('key')` whose key is missing from `en.json`, and prints advisory warnings for likely hardcoded UI strings (`--strict` makes those fatal). Fix every reported missing key.
 
 ## 4. HTTP and RPC (`HttpClient`)
@@ -265,7 +274,7 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
    - Menus / tabs: `Menu`, `MenuTab`, `MenuTabBanner`, `MultiPanelMenu`, `MultiPanelMenuTab`, `TabsMenu`, `Explorer`
    - Fullscreen: `FullscreenMenu`, `FullscreenMenuModal`, `FullscreenMenuPanel`, `FullscreenMenuNavTab`
    - Toolbar family: `Toolbar`, `ToolbarGroup`, `ToolbarItem`, `ToolbarChoiceGroup`, `ToolbarPanelButton`, `ToolbarSeparator`
-   - Inputs / pickers: `Autocomplete` (searchable single-value combobox, static or async options, `fromSelect()` for a plain `<select>`), `TagSelect` (multi-select), `ContextMenu`, `SuggestionEditor`; atoms in `ui/classes/elements/` (`Checkbox`, `Select`, `Input`, `Slider`, …) (inline accept/decline diff editor over `original` vs `suggested` text; `getValue()` resolves decisions + free edits)
+   - Inputs / pickers: `Autocomplete` (searchable single-value combobox, static or async options, `fromSelect()` for a plain `<select>`), `TagSelect` (multi-select), `ContextMenu`, `SuggestionEditor`; atoms in `ui/classes/elements/` (`Checkbox`, `Select`, `Input`, `Slider`, …) (inline accept/decline diff editor over `original` vs `suggested` text; `getValue()` resolves decisions + free edits, `getDecisions()` reports them, `applyReplacement(from, to)` adds a change the editor was never given as an accepted chip)
    - Roles: `UserRolesPanel`
 2. **Reuse a UI service singleton** in `ui/services/`. **Never spawn duplicates.**
    - `AppBar` — mount plugin menus via `AppBar.Edit`, `AppBar.Plugins`, etc.

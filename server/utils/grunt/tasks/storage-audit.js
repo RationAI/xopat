@@ -73,8 +73,6 @@ module.exports = function (grunt) {
                     + "above, same reason; probe-gated" },
             { file: "src/classes/scripting-manager.ts",
                 why: "worker sandbox deny-list — string literals that BLOCK these APIs" },
-            { file: "modules/speech-to-text/audioCapture.ts",
-                why: "opt-in debug flag, already wrapped in try/catch" },
         ];
         const allowed = new Set(allowlist.map((a) => a.file));
 

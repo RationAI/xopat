@@ -111,6 +111,18 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         bindTranslations();
     } else {
         I18NCONFIG.fallbackLng = 'en';
+        // i18next escapes interpolated values for HTML by default, and xOpat renders
+        // translations as TEXT — van.js children, `textContent`, `title`/`aria-*`
+        // attributes. Escaping there is not safety, it is corruption: a date came out
+        // as `9&#x2F;12&#x2F;2026`, a quoted word as `&quot;knows&quot;`, and every
+        // file name with an ampersand the same way. The few places that do build HTML
+        // escape their own interpolations at the sink (`escapeHtml` in loader.ts) or
+        // sanitize (Dialogs/Toast) — which is where that decision belongs, since only
+        // the sink knows it is a sink.
+        (I18NCONFIG as any).interpolation = {
+            ...((I18NCONFIG as any).interpolation || {}),
+            escapeValue: false,
+        };
         i18next.init(I18NCONFIG, (err: any, t: any) => {
             if (err) throw err;
             bindTranslations();

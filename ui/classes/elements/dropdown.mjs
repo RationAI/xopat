@@ -274,6 +274,9 @@ class Dropdown extends BaseSelectableComponent {
             this._fmToken = UI.Services.FloatingManager.register({
                 el: this._contentEl,
                 owner: this,
+                // Portaled to <body>: keep it above the trigger's own stacking
+                // context (a dropdown inside a modal was painted under the modal).
+                anchor: trigger || this.root,
                 onEscape: "close",
                 // Custom outside-click handler: a mousedown on this
                 // dropdown's own trigger must not auto-close, otherwise
@@ -709,6 +712,7 @@ class Dropdown extends BaseSelectableComponent {
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,
             owner: this,
+            anchor: anchorEl,
             onEscape: () => this._closeSubmenusFrom(level)
         });
 
