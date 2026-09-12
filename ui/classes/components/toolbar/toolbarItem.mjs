@@ -32,10 +32,13 @@ class ToolbarItem extends BaseSelectableComponent {
 
         this._button = new Button({
             id: this.id,
+            // `base` is read off the top-level options by Button's constructor
+            // (`classMap.base = options.base || "btn"`), so passing it inside
+            // `extraClasses` silently loses `join-item` and breaks the group pill.
+            base: "btn join-item",
             onClick: this.options.onClick,
             size: Button.SIZE.SMALL,
             extraClasses: {
-                base: "btn join-item",
                 ...(this.options.extraClasses || {})
             },
             extraProperties: {
@@ -45,11 +48,15 @@ class ToolbarItem extends BaseSelectableComponent {
         }, iconComp);
 
         const el = this._button.create();
-        // Vertical toolbar: stretch to the column width so single-icon items
-        // line up with the wider choice-group headers; horizontal keeps the
-        // intrinsic square size.
+        // Vertical toolbar: every control collapses to the same 32px square, so
+        // the column is one icon wide. (Stretching items to `w-full` instead
+        // only lines them up with whatever the widest member happens to be —
+        // which used to be a 58px choice-group header.) Horizontal keeps the
+        // intrinsic, roomier button.
         bindToolbarOrientation(el, (dir) => {
-            el.classList.toggle("w-full", dir === "vertical");
+            const vertical = dir === "vertical";
+            el.classList.toggle("toolbar-btn-vertical", vertical);
+            el.classList.remove("w-full");
         });
         return el;
     }

@@ -207,10 +207,11 @@ module.exports = function(grunt) {
         });done();
         } catch (e) {grunt.fail.warn(e.message);}
     });
-    // The clean full build, and the only way to get a correct stylesheet after
-    // editing `tailwind-spec.css` or `tailwind.config.js`: the `twinc` watcher
-    // merges per-file deltas onto a cached baseline it never invalidates, so an
-    // input change leaves a stale copy of `@layer components` in the output.
+    // The clean full build, and what a release should be cut from. The `twinc`
+    // watcher now produces an equivalent cascade (it splices per-file chunks
+    // onto the baseline layer by layer, and rebaselines when `tailwind-spec.css`
+    // or `tailwind.config.js` change), but it is still a merge of a superset:
+    // classes that fell out of use survive until the next baseline.
     // `--minify` is not cosmetic — the shipped artifact is minified, and without
     // it the source comments in the spec end up served to every client.
     grunt.registerTask('css', async function() {

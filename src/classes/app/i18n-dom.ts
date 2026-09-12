@@ -13,6 +13,10 @@
 export interface I18nNamespace {
     t(key: string, options?: Record<string, any>): string;
     i18n?: any;
+    /** @see whenI18nReady */
+    __ready?: Promise<void>;
+    /** Resolver for `__ready`; called once, by `installI18nNamespace`. */
+    __settleReady?: () => void;
 }
 
 /**
@@ -20,6 +24,11 @@ export interface I18nNamespace {
  * last dot-segment, never an English literal. Installed idempotently so
  * whichever core script runs first wins and later ones do not clobber a real
  * translator — see `AGENTS.md` §3 "the dummy-`$.t` gotcha".
+ *
+ * The readiness promise is parked on the namespace object rather than in module
+ * scope on purpose: core ships several bundles (`app`, `loader`, `store`) that
+ * each carry their own copy of this module, so module-level state would give the
+ * waiter a different promise from the one the installer resolves.
  */
 export function ensureI18nNamespace(): I18nNamespace {
     const g = globalThis as any;
@@ -28,7 +37,34 @@ export function ensureI18nNamespace(): I18nNamespace {
     } else if (typeof g.$.t !== "function") {
         g.$.t = (key: any) => String(key).split(".").findLast(Boolean);
     }
+    if (!g.$.__ready) {
+        g.$.__ready = new Promise<void>(resolve => { g.$.__settleReady = resolve; });
+    }
     return g.$;
+}
+
+/**
+ * Resolves once the real i18next translator is installed.
+ *
+ * Needed because *registering* a locale bundle — unlike reading one — cannot
+ * degrade. Elements load their bundle from module scope (`loadElementLocale`,
+ * `XOpatElement.loadLocale`), which routinely runs before i18next finishes
+ * initialising; a registration dropped there is dropped for the whole session,
+ * and every lookup in that namespace then renders as the raw dotted key
+ * (`<id>.<key>`), with nothing left to retry it. Await this first instead.
+ *
+ * Bounded so a deployment whose i18next never initialises fails visibly rather
+ * than leaving element init hanging — callers must re-check `$.i18n` afterwards.
+ */
+export function whenI18nReady(timeoutMs = 20000): Promise<void> {
+    const ns = ensureI18nNamespace();
+    if (ns.i18n) return Promise.resolve();
+    const ready = ns.__ready!;
+    if (!(timeoutMs > 0)) return ready;
+    return Promise.race([
+        ready,
+        new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+    ]);
 }
 
 /** Swap the placeholder for the real i18next-backed translator. */
@@ -36,6 +72,7 @@ export function installI18nNamespace(i18next: any): void {
     const ns = ensureI18nNamespace();
     ns.t = i18next.t.bind(i18next);
     ns.i18n = i18next;
+    ns.__settleReady?.();
 }
 
 /**

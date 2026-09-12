@@ -2056,7 +2056,17 @@ const server = http.createServer(async (req, res) => {
         // Treat suffix paths as attempt to access existing files. Resolution is
         // confined to the allowed roots (see DEFAULT_STATIC_ROOTS) — a path that
         // exists but sits outside them is a 404, not a download.
-        if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
+        //
+        // The suffix length is bounded only to keep this from claiming ordinary
+        // routes; it is not a list of known types, and it used to stop at five
+        // characters. `.geojson` is seven, so a request for one fell past the
+        // static handler entirely and was answered with the application page —
+        // HTTP 200, `text/html`, and a consumer that reports
+        // `Unexpected token '<'` from whatever tried to parse it. That failure
+        // names neither the file nor the server, which is what makes an arbitrary
+        // bound expensive: `.webmanifest` and `.geojson` are ordinary web assets,
+        // and the next one costs the same afternoon.
+        if (urlObj.pathname.match(/\.[A-Za-z0-9]{2,12}$/)) {
             const target = await resolveStaticTarget(urlObj.pathname);
             if (target) {
                 return await responseStaticFile(req, res, target, urlObj);

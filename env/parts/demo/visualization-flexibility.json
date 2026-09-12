@@ -46,7 +46,22 @@
            * non-square slide. That is what `modules/demo-vector-layers`
            * registers the `demo-mvt` factory protocol for.
            */
-          "demo-static": "`<% TIFF_FILESERVER:-/test/fixtures/data %>/${data}`"
+          /* ABSOLUTE, unlike the decoders' `protocolBaseUrl`, and it has to be.
+             These descriptors name their payload with a URL relative to
+             themselves (`"url": "masks.geojson"`, `"{z}/{x}/{y}.pbf"`), which
+             the tile source resolves as `new URL(inner, descriptorUrl)` — and
+             that constructor throws on ANY relative base, whatever the inner
+             value looks like. A root-relative base therefore fails every vector
+             session with `invalid url`.
+
+             Built from `XOPAT_NODE_PORT` in the ENV body, where substitution
+             runs, exactly as `data/synthetic-dzi` does it — and deliberately NOT
+             through a `<% TIFF_FILESERVER:-… %>` default, because an inline
+             default cannot itself contain a token: the grammar stops at the
+             first `%>`. These are the repo's own derived artifacts served by the
+             viewer, so there is no external-server case to keep an override for;
+             point `--set` at the protocol if you need one. */
+          "demo-static": "`http://localhost:<% XOPAT_NODE_PORT:-9000 %>/test/fixtures/data/${data}`"
         }
       }
     },
@@ -73,7 +88,10 @@
     "demo-vector-layers": {
       "enabled": true,
       "permaLoad": true,
-      "protocolBaseUrl": "<% TIFF_FILESERVER:-/test/fixtures/data %>"
+      /* Absolute for the same reason as `demo-static` above: this module builds
+         descriptor URLs, and the descriptors resolve their payload against
+         themselves. A relative base makes `new URL` throw. */
+      "protocolBaseUrl": "http://localhost:<% XOPAT_NODE_PORT:-9000 %>/test/fixtures/data"
     }
   }
 }

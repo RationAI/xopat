@@ -18,7 +18,7 @@ import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
-import { ensureI18nNamespace } from "./classes/app/i18n-dom";
+import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
     registerCoreCapabilities, allowCoreAction,
     CAP_EXPORT_FILE, CAP_EXPORT_URL,
@@ -888,6 +888,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const isPlugin = kind === "plugins";
         const record = isPlugin ? PLUGINS[id] : MODULES[id];
         if (!record?.directory) return;
+        // Callers reach this from module scope (`modules/webtiff/index.mjs`), so the
+        // language is not knowable yet — the file name below is built from it.
+        if (!$.i18n) await whenI18nReady();
         try {
             await _getLocale(id, isPlugin ? PLUGINS_FOLDER : MODULES_FOLDER, record.directory,
                 `locales/${locale || $.i18n?.language}.json`, locale);
@@ -1260,6 +1263,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     }
 
     async function _getLocale(id: string, path: string, directory: string | undefined, data: any, locale: string | undefined) {
+        // Elements register their bundle from module scope, which routinely runs
+        // before i18next has initialised. Returning here — as this used to — drops
+        // the registration for the whole session with nothing to retry it, and the
+        // element's every string then renders as its raw `<id>.<key>` (that is what
+        // put `webtiff.dimensions` in the slide-info panel). Wait instead.
+        if (!$.i18n) await whenI18nReady();
         if (!$.i18n) return;
         if (!locale) locale = $.i18n.language;
 
@@ -2170,8 +2179,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @return {Promise}
          */
         async loadLocale(locale = undefined, data = undefined) {
+            // `$.i18n.language` names the file: a module constructed before
+            // i18next init would throw here, and the bundle would never register.
+            if (!data && !locale && !$.i18n) await whenI18nReady();
             return await _getLocale(this.id, MODULES_FOLDER, MODULES[this.id]?.directory,
-                data || this.getLocaleFile(locale || $.i18n.language), locale);
+                data || this.getLocaleFile(locale || $.i18n?.language), locale);
         }
 
         /**
@@ -2650,8 +2662,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param data possibly custom locale data if not fetched from a file
          */
         async loadLocale(locale = undefined, data = undefined) {
+            // See the module counterpart: the language names the file, so it must
+            // be known before the path is built.
+            if (!data && !locale && !$.i18n) await whenI18nReady();
             return await _getLocale(this.id, PLUGINS_FOLDER, PLUGINS[this.id]?.directory,
-                data || this.getLocaleFile(locale || $.i18n.language), locale)
+                data || this.getLocaleFile(locale || $.i18n?.language), locale)
         }
 
         /**
@@ -2852,9 +2867,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         nameFromBGOrIndex: function (indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix = true): string {
             // todo some error if not a string, that name must be provided etc...
             const isIndex = typeof indexOrItem === 'number';
+            // An explicit name is the author's answer and needs no data entry to
+            // resolve — checking it after the `!item` guard renamed every named
+            // background to "unknown" the moment its data reference stopped
+            // resolving (cleared `config.data`, faulty source).
+            if (!isIndex && indexOrItem.name) return indexOrItem.name;
             const item = BackgroundConfig.dataFromDataId(isIndex ? indexOrItem : indexOrItem.dataReference) as DataID;
             if (!item) return "unknown";
-            if (!isIndex && indexOrItem.name) return indexOrItem.name;
 
             if (typeof item === "string") {
                 return this.fileNameFromPath(item, stripSuffix);
@@ -4708,8 +4727,14 @@ form.submit();
         }
 
         _syncActiveViewState() {
+            // "Which viewport is active" is only information when there is more
+            // than one. With a single viewport the highlight marks the only
+            // thing on screen, and readers take it for a statement about the
+            // *slide* ("this one is open") and look for the list it refers to.
+            // Same for `aria-current`: current among one is not a distinction.
+            const distinguishable = this.viewers.length > 1;
             this.viewers.forEach((vw: OpenSeadragon.Viewer, index: number) => {
-                const isActive = vw === this.active;
+                const isActive = vw === this.active && distinguishable;
                 vw.container.classList.add("xo-viewer-host");
                 vw.container.classList.toggle("active", isActive);
                 vw.container.classList.toggle("xo-active-viewer", isActive);

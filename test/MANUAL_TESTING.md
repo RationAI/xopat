@@ -131,14 +131,29 @@ Verify, walking that list:
 - `empty-session` — data declared, nothing opened. `activeBackgroundIndex: []`
   means *nothing* open, not everything.
 
-### `geotiff` — the other decoder, same data
+### `geotiff` — the other decoder, the plain-TIFF subset
 
 ```bash
 npm run up:dev -- geotiff
 ```
 
-Verify: the same sessions render. When a TIFF looks wrong under one decoder,
-whether `geotiff` agrees is the first bisection.
+Deprecated, and deliberately narrower: its banner lists **eight** sessions, not
+the twelve `webtiff` publishes. The four multichannel ones are excluded because
+this decoder reads a single plane of a multi-plane TIFF and refuses the OME
+file's companion pages outright — see `modules/geotiff/README.md` § *Limits*.
+A `Tile … Unsupported data format/bitsPerSample` here has two causes, and only
+one is a defect. **Check the banner first:** if the failing session is not on it,
+you opened a URL this deployment never advertised — a stale tab, or a link from
+`npm run fixtures:urls`, which correctly names `webtiff` as the deployment for
+those sessions. That is expected; the exclusion stops a session being
+*advertised*, not *opened*, and nothing should refuse a session merely because
+the running decoder is weaker than the one it was written for. If the session
+*is* on the banner, the capability exclusion failed and that is worth
+investigating.
+
+Verify: those eight render. The row exists for bisection — when a **plain** TIFF
+looks wrong under `webtiff`, whether `geotiff` agrees separates a decoder fault
+from a file fault. For anything multichannel there is nothing to compare against.
 
 ### `viz-flex-demo` — the visualization-flexibility showcase
 

@@ -230,6 +230,89 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     padding-right: 0.25rem;
     font-size: 0.6875rem;
 }
+/* Compact dropdown header (Dropdown.setCompactHeader): a split square button
+   for narrow chrome such as a vertical toolbar column. The selection icon takes
+   the left half, the caret the right half — same glyph size, so each is a real
+   click target (the caret opens the menu, the icon re-triggers the selection).
+   The 58px reserved for the roomy padded header is dropped by the caller; what
+   makes this fit is losing the padding, not stacking. Real CSS rather than
+   Tailwind: the shipped build is purged, and this needs to beat .btn's own
+   padding/align-items. */
+.dropdown-header-compact {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    padding: 0 !important;
+    gap: 0 !important;
+}
+/* Vertical toolbar column: one width for every control so the column has a
+   straight edge, wide enough that a split icon+caret header stays legible.
+   btn-square (width == height) is too tight for the pair. */
+.toolbar-btn-vertical {
+    width: 2.75rem;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* Opaque "unavailable" button. DaisyUI's disabled style is `--tw-bg-opacity:
+   0.2`, which over the viewer's glass chrome renders a see-through ghost rather
+   than an inert control. Same muted reading, but composited against a solid
+   surface. Pair with the `disabled` property (which still supplies
+   `pointer-events: none`) — NOT with the `btn-disabled` class, whose DaisyUI
+   rule is `!important` and cannot be overridden. */
+.btn.xo-btn-inert:disabled,
+.btn.xo-btn-inert[disabled],
+.btn.xo-btn-inert:disabled:hover,
+.btn.xo-btn-inert[disabled]:hover {
+    --tw-bg-opacity: 1;
+    --tw-text-opacity: 1;
+    background-color: var(--fallback-b3, oklch(var(--b3) / 1));
+    color: var(--fallback-bc, oklch(var(--bc) / 0.6));
+    border-color: transparent;
+    /* DaisyUI's disabled style also sets `pointer-events: none`, which kills
+       hover — and with it the `title` tooltip that is the whole point of
+       greying the control out instead of hiding it. Restore hover: a `disabled`
+       <button> does not dispatch click regardless, so this re-enables the
+       explanation without re-enabling the action. */
+    pointer-events: auto;
+    cursor: not-allowed;
+}
+
+/* Floating toolbar drag handle — the grip needs to be grabbable, not padded. */
+.toolbar-handle-slim {
+    padding: 0 0.125rem;
+    margin: 0.125rem 0;
+}
+
+.dropdown-header-compact > i {
+    flex: 1 1 50%;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 0.875rem;
+    line-height: 1;
+}
+/* Each half stays a full-height click target, but the glyphs pack against the
+   shared centre line instead of being centred inside their own cell — two
+   centred cells read as one wide gap between the icon and its caret. */
+.dropdown-header-compact > i:first-child {
+    justify-content: flex-end;
+}
+.dropdown-header-compact > i[data-dropdown-arrow] {
+    justify-content: flex-start;
+}
+
+/* Docked toolbar seat: a faint well inside the 35px app bar so an embedded
+   toolbar reads as "seated here" instead of dissolving into the bar's own
+   controls. Tailwind's bg-base-300/40 is purged out of the shipped build. */
+.xopat-toolbar-dock-well {
+    background-color: var(--fallback-b3, oklch(var(--b3) / 0.45));
+    border-radius: 0.375rem;
+}
+
 /* sideways strip headers size along the writing axis instead */
 .btn-xxs.b-vertical-right,
 .btn-xxs.b-vertical-left {

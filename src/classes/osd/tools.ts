@@ -326,9 +326,27 @@ OpenSeadragon.Tools = class {
      * @return {Promise<CanvasRenderingContext2D>}
      */
     async navigatorThumbnail(config, size = {}, timeout=30000) {
-        return this.constructor.navigatorThumbnail(this.viewer, config, size);
+        return this.constructor.navigatorThumbnail(this.viewer, config, size, timeout);
     }
+    /**
+     * `viewer.__ofscreenRender` is ONE standalone drawer shared by every preview
+     * of this viewer, and producing a thumbnail is a multi-step sequence on it
+     * (add the tiled images, wait for them to load, `drawWithConfiguration`).
+     * Two callers interleaving on that drawer hand at least one of them an empty
+     * canvas — which is what a slide list does the moment several cards become
+     * visible together. So renders queue instead of racing.
+     */
     static async navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
+        const previous = viewer.__ofscreenRenderQueue || Promise.resolve();
+        // A failed render must not poison the queue for the next caller.
+        const next = previous.then(
+            () => this._renderNavigatorThumbnail(viewer, bgConfig, size, timeout),
+            () => this._renderNavigatorThumbnail(viewer, bgConfig, size, timeout));
+        viewer.__ofscreenRenderQueue = next.catch(() => undefined);
+        return next;
+    }
+
+    static async _renderNavigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
         if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
         // todo works for background right now only -> check how we can extend for also viz layers
         if (!bgConfig.id) {

@@ -18,9 +18,18 @@ import { test, expect } from "@xopat/test-harness";
 // The module registers a slide protocol on load, guarded on `window.SLIDE_PROTOCOLS`
 // and `window.OpenSeadragon`; a bare object leaves both undefined so the import is
 // side-effect free here.
+//
+// It is restored immediately afterwards because suites share a worker process: a bare
+// `{}` left on the shared global is NOT the `globalThis` alias every other file assumes,
+// so the next file to publish itself as `window.<X>` throws at import — which aborts the
+// whole `unit` project, not just that file.
+const windowBefore = Object.getOwnPropertyDescriptor(globalThis, "window");
 globalThis.window = globalThis.window || {};
 
 const { decodeTileIndex, tileIndexHas } = await import("../../index.mjs");
+
+if (windowBefore) Object.defineProperty(globalThis, "window", windowBefore);
+else delete globalThis.window;
 
 /** Build an index the way `make-visualization-demo.mjs` does. */
 function encode(levels) {

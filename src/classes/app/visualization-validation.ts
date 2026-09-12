@@ -355,7 +355,29 @@ export function filterOneOfErrorsByDiscriminator(errors: any[] | undefined, viz:
         seen.add(key);
         out.push(e);
     }
-    return out.length ? out : errors;
+    if (out.length) return out;
+
+    // Nothing survived: every error belonged to a branch other than the layer's own type, so
+    // the layer matched no branch cleanly. Echoing all of them reports one mistake once per
+    // registered shader type and buries that verdict — the exact noise this filter exists to
+    // remove. State it once per layer instead; the raw set stays in the report's `ajvErrors`.
+    const summarized: any[] = [];
+    const summarizedLayers = new Set<string>();
+    for (const e of errors) {
+        const ip: string = typeof e?.instancePath === "string" ? e.instancePath : "";
+        const shaderId = ip.match(shaderIdRegex)?.[1];
+        if (!shaderId || summarizedLayers.has(shaderId)) continue;
+        summarizedLayers.add(shaderId);
+
+        const layer = (viz.shaders as any)[shaderId];
+        const inputType = isPlainObject(layer) && typeof layer.type === "string" ? layer.type : "(missing)";
+        summarized.push({
+            instancePath: `/shaders/${shaderId}`,
+            message: `layer type '${inputType}' matched no schema branch cleanly; `
+                + `${errors.length} branch error(s) suppressed (raw set in ajvErrors)`,
+        });
+    }
+    return summarized.length ? summarized : errors;
 }
 
 /**

@@ -731,7 +731,7 @@ class Menu extends BaseComponent {
         return APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true);
     }
 
-    append(title, titleItem, item, id, pluginId, bg=undefined) {
+    append(title, titleItem, item, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
                 div(
@@ -743,7 +743,7 @@ class Menu extends BaseComponent {
                 )
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo implement focus manager, similar to visibility manager
         if (this._initialTabOpen(id)){
@@ -753,7 +753,7 @@ class Menu extends BaseComponent {
         }
     }
 
-    appendExtended(title, titleItem, item, hiddenItem, id, pluginId, bg=undefined) {
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
@@ -773,7 +773,7 @@ class Menu extends BaseComponent {
                 ),
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo move to focus manager like visibility manager
         if (this._initialTabOpen(id)){

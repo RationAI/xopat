@@ -708,6 +708,10 @@ export class FullscreenMenus {
                     for (let viewer of VIEWER_MANAGER.viewers) {
                         viewer.scalebar.setActive(this.checked);
                     }
+                    // The same scalebar is a checkable row under View →
+                    // Appearance; flipping it from outside the registry leaves
+                    // that checkmark stale until the dropdown is told.
+                    USER_INTERFACE?.AppBar?.View?.refresh?.();
                 },
                 APPLICATION_CONTEXT.getUiOption('scaleBar')
             ),

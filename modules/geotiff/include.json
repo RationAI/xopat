@@ -10,7 +10,7 @@
   // enable one decoder, not both. Declared rather than left to be inferred from
   // a README sentence: this is what badges the module in the Modules menu and the
   // docs catalogue, and without it the deprecated decoder reads as the stable one.
-  // "stability": "deprecated",
+  "stability": "deprecated",
   "includes": [
     "index.mjs"
   ],

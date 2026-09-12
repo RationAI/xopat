@@ -1,6 +1,6 @@
-//! flex-renderer 0.0.2
-//! Built on 2026-09-09
-//! Git commit: --52bc6a3-dirty
+//! flex-renderer 0.1.0
+//! Built on 2026-09-10
+//! Git commit: --0db5c95-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -15966,8 +15966,18 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 // the target to RGBA16F, which doubles the offscreen color array, so turning the
                 // negotiation on is a deployment decision.
                 precision: "unorm8",
-                // hex bg color, by default transparent
-                backgroundColor: undefined
+                // hex bg color, by default transparent. This is the SOURCE colour: it is baked
+                // into the second-pass fragment shader as the seed of the layer composition, so
+                // it decides what the stack starts from (and therefore the alpha it emits).
+                backgroundColor: undefined,
+                // [r,g,b,a] in 0..1, default undefined -> the renderer's [1,1,1,1] opaque white.
+                // This is the DESTINATION colour: a gl.clear of the output surface before the
+                // second pass blends onto it. Distinct from backgroundColor and not derivable
+                // from it - the second pass composites premultiplied (ONE/ONE_MINUS_SRC_ALPHA),
+                // so a pass that draws nothing reads as this, whatever the shader seed was.
+                // Construction-time only; the renderer exposes a getter but no setter. Pass
+                // [0,0,0,0] for output with a real alpha channel. See OFFSCREEN.md.
+                presentationClearColor: undefined
             };
         }
 
@@ -20194,7 +20204,39 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         viewport.applyConstraints(true);
     }
 
-    $.makeStandaloneFlexDrawer = function(viewer) {
+    /**
+     * Build an off-screen FlexDrawer that shares the viewer's world and tile caches but
+     * renders into a surface of its own.
+     *
+     * The drawer starts from a deep copy of `viewer.drawerOptions['flex-renderer']`, so by
+     * default it is configured exactly like the live drawer. `optionOverrides` is merged over
+     * that copy - the live viewer's options object is never read back out of, never mutated,
+     * and never aliased into the new drawer.
+     *
+     * Overriding is the ONLY supported way to reach a construction-time renderer option. Most
+     * of them have no setter: `presentationClearColor` is validated once in the FlexRenderer
+     * constructor and is read-only thereafter, and `sharedContextKey` decides which WebGL
+     * context the drawer joins before any of its state exists.
+     *
+     * Six keys are pinned and an override of them is ignored - see the block below for why:
+     * `debug`, `htmlReset`, `htmlHandler`, `interactive`, `handleNavigator`, `offScreen`.
+     *
+     * To get a raster with a real alpha channel instead of one flattened onto the default
+     * opaque-white backdrop:
+     *
+     * ````js
+     * const drawer = OpenSeadragon.makeStandaloneFlexDrawer(viewer, {
+     *     presentationClearColor: [0, 0, 0, 0],
+     *     sharedContextKey: null
+     * });
+     * ````
+     *
+     * @param {OpenSeadragon.Viewer} viewer the live viewer to borrow world and caches from
+     * @param {object} [optionOverrides] drawer/renderer options merged over the viewer's own,
+     *      e.g. `presentationClearColor`, `backgroundColor`, `sharedContextKey`, `precision`
+     * @returns {OpenSeadragon.FlexDrawer} the drawer, with the standalone facade installed
+     */
+    $.makeStandaloneFlexDrawer = function(viewer, optionOverrides = undefined) {
         const Drawer = OpenSeadragon.FlexDrawer;
         const viewportHost = createStandaloneViewportHost(viewer);
         const standaloneViewport = new $.Viewport({
@@ -20221,18 +20263,28 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         viewportHost.viewport = standaloneViewport;
         syncStandaloneViewportState(standaloneViewport, viewer);
 
-        const options = $.extend(true, {}, viewer.drawerOptions[Drawer.prototype.getType()]);
+        // Deep, so an array-valued option -- presentationClearColor above all -- is copied
+        // rather than aliased: the renderer keeps the array it is handed, and a shallow copy
+        // would let this drawer's backdrop and the live viewer's be the same object.
+        const options = $.extend(true, {},
+            viewer.drawerOptions[Drawer.prototype.getType()],
+            optionOverrides || {});
+
+        // Pinned AFTER the merge: an override of these is ignored on purpose.
         options.debug = false;
         options.htmlReset = undefined;
         options.htmlHandler = undefined;
         // No htmlHandler and no DOM of its own, so this drawer must not bind controls
         // to `document.getElementById(shaderId + "_" + control)`. A host passing
-        // `interactive: true` in its drawer options would otherwise have those ids
-        // resolve to ANOTHER renderer's live controls -- the standalone drawer would
-        // rewrite their values and leak a change listener into a throwaway shader.
+        // `interactive: true` in its drawer options -- or in optionOverrides -- would
+        // otherwise have those ids resolve to ANOTHER renderer's live controls: the
+        // standalone drawer would rewrite their values and leak a change listener into
+        // a throwaway shader.
         options.interactive = false;
         // avoid modification on navigator
         options.handleNavigator = false;
+        // The drawer is handed the LIVE viewer's container element below, so this is what
+        // keeps its destroy() from removing the on-screen canvas with it.
         options.offScreen = true;
 
         const drawer = new Drawer({
@@ -31106,9 +31158,9 @@ function resolveTileTemplate(template, dataUrl) {
 
 })(OpenSeadragon);
 
-//! flex-renderer 0.0.2
-//! Built on 2026-09-09
-//! Git commit: --52bc6a3-dirty
+//! flex-renderer 0.1.0
+//! Built on 2026-09-10
+//! Git commit: --0db5c95-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -31762,9 +31814,9 @@ function strokePoly(points, width, join, cap, miterLimit){
 
 `;
 })(typeof self !== 'undefined' ? self : window);
-//! flex-renderer 0.0.2
-//! Built on 2026-09-09
-//! Git commit: --52bc6a3-dirty
+//! flex-renderer 0.1.0
+//! Built on 2026-09-10
+//! Git commit: --0db5c95-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -32471,9 +32523,9 @@ function computeAABB(f) {
 
 `;
 })(typeof self !== 'undefined' ? self : window);
-//! flex-renderer 0.0.2
-//! Built on 2026-09-09
-//! Git commit: --52bc6a3-dirty
+//! flex-renderer 0.1.0
+//! Built on 2026-09-10
+//! Git commit: --0db5c95-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

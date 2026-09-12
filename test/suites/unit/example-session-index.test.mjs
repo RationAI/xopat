@@ -23,6 +23,10 @@ import { fileURLToPath } from "node:url";
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const require_ = createRequire(import.meta.url);
 const { buildExampleEntries } = require_(path.join(REPO, "server/node/examples.js"));
+// The ENV fragments are JSONC; reuse the composer's reader rather than a second
+// parser that would disagree with it about comments.
+const { readJsonc } = await import(
+    path.resolve(REPO, "server/utils/node/env-compose.mjs").replace(/\\/g, "/"));
 
 const INDEX_REL = "test/fixtures/sessions/index.json";
 const index = JSON.parse(fs.readFileSync(path.join(REPO, INDEX_REL), "utf8"));
@@ -76,6 +80,56 @@ test("declared order survives expansion, and ties break by index position", { ta
     const firstViz = entries.findIndex(e => index.sessions[e.id]?.group === "viz-flex");
     const firstDicom = entries.findIndex(e => index.sessions[e.id]?.deployment === "googledicom");
     expect(firstDicom, "the lower-ordered record's sessions come first").toBeLessThan(firstViz);
+});
+
+/* ------------------------------------------------ decoder capability scope */
+
+test("excludeCapabilities drops exactly the tagged sessions @unit", () => {
+    const all = build({ x: { sessionIndex: INDEX_REL, deployment: "webtiff" } }).map(e => e.id);
+    const narrowed = build({
+        x: { sessionIndex: INDEX_REL, deployment: "webtiff", excludeCapabilities: ["multichannel"] },
+    }).map(e => e.id);
+
+    const dropped = all.filter(id => !narrowed.includes(id));
+    expect(dropped.length, "something was dropped").toBeGreaterThan(0);
+    // Every drop is justified by the session's own declaration, and nothing else
+    // moved: a filter that quietly removed an untagged session would be worse
+    // than not filtering at all.
+    for (const id of dropped) {
+        expect(index.sessions[id].capabilities, `${id} declares it`).toContain("multichannel");
+    }
+    for (const id of narrowed) {
+        expect(index.sessions[id].capabilities ?? [], `${id} kept`).not.toContain("multichannel");
+    }
+});
+
+test("the geotiff deployment publishes a strict subset of webtiff's @unit", () => {
+    // Read from the fragments rather than restated here — the point is that the
+    // deployment's banner and this expectation cannot disagree.
+    const recordsOf = (file) => readJsonc(file).core.server.secure.examples;
+    const webtiff = build(recordsOf("env/parts/data/tiff-webtiff.json")).map(e => e.id);
+    const geotiff = build(recordsOf("env/parts/data/tiff-geotiff.json")).map(e => e.id);
+
+    expect(geotiff.length).toBeLessThan(webtiff.length);
+    expect(geotiff.every(id => webtiff.includes(id)), "subset").toBe(true);
+    expect(geotiff.filter(id => index.sessions[id].capabilities?.includes("multichannel")))
+        .toEqual([]);
+});
+
+test("a session opening the multichannel fixture declares that capability @unit", () => {
+    // Derived from the session files, so the tagging cannot fall behind the
+    // fixtures it describes — which is the whole failure mode this prevents: an
+    // untagged multichannel session would be published to a deployment that
+    // cannot open it, and fail with a decoder error that looks like a new bug.
+    const dir = path.join(REPO, "test/fixtures/sessions");
+    const untagged = [];
+    for (const [id, row] of Object.entries(index.sessions)) {
+        const file = path.join(dir, `${id}.json`);
+        if (!fs.existsSync(file)) continue;
+        if (!fs.readFileSync(file, "utf8").includes("LuCa-7color")) continue;
+        if (!(row.capabilities ?? []).includes("multichannel")) untagged.push(id);
+    }
+    expect(untagged).toEqual([]);
 });
 
 test("an unusable index warns instead of publishing silence", { tag: ["@unit"] }, () => {

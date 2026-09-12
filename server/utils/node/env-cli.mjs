@@ -28,7 +28,7 @@ import {
 } from "./env-compose.mjs";
 
 const require = createRequire(import.meta.url);
-const { readDotEnv, layerEnv } = require("./dotenv.js");
+const { readDotEnv, layerEnv, findSuspectValues } = require("./dotenv.js");
 
 const EXIT = { OK: 0, USAGE: 1, CONFLICT: 2, MISSING_VAR: 3, SECRET: 4, PRIVATE_HOST: 5 };
 const COMPOSE_DIR = "env/.compose";
@@ -197,7 +197,7 @@ function printList() {
  * Everything that can be wrong with a composition, in one pass.
  * Returns the highest exit code implied by the findings.
  */
-function report(result, childEnv, { force, json, provenance }) {
+function report(result, childEnv, { force, json, provenance, suspect = [] }) {
     const { conflicts, warnings, env, layers } = result;
     const placeholders = collectPlaceholders(env);
     // A placeholder written into a value that BECOMES a process env var can
@@ -205,6 +205,9 @@ function report(result, childEnv, { force, json, provenance }) {
     // only the ENV body, once. Collected during expansion, because `$meta` is
     // stripped before the body is ever walked.
     const unresolvable = result.unresolvableVars ?? [];
+    // `suspect` — values that parsed but cannot have been meant — is collected
+    // by `buildChildEnv`, the only place that knows which file each secret came
+    // from, and threaded in through the options.
     const missing = [...placeholders.values()].filter(
         (p) => !p.hasDefault && (childEnv[p.name] === undefined || childEnv[p.name] === ""));
     const required = new Set();
@@ -235,6 +238,7 @@ function report(result, childEnv, { force, json, provenance }) {
             missingVariables: missing.map((m) => m.name),
             missingRequired: [...required],
             unresolvableVariables: unresolvable,
+            unusableSecretValues: suspect,
             literalSecrets: trackedSecrets,
             privateHosts: trackedHosts,
             provenance: result.provenance,
@@ -251,6 +255,11 @@ function report(result, childEnv, { force, json, provenance }) {
             console.error(c.yellow(`warning: <% ${m.name} %> is unset and has no default (${m.paths[0]})`));
         }
         for (const r of required) console.error(c.red(`missing required variable: ${r}`));
+        for (const s of suspect) {
+            console.error((force ? c.yellow : c.red)(
+                `unusable value in ${s.file}: ${s.key}=${JSON.stringify(s.value)} — ${s.reason}.`));
+            if (force) console.error(c.yellow("--force: continuing with it as written"));
+        }
         for (const u of unresolvable) {
             console.error(c.red(
                 `unresolvable placeholder: ${u.source} → ${u.variable} contains ${u.tokens.join(", ")}. ` +
@@ -275,7 +284,13 @@ function report(result, childEnv, { force, json, provenance }) {
     // Same class as a missing variable: the value will not be what the fragment
     // says it is. Ranked above conflicts because it is unconditionally broken,
     // not merely ambiguous.
-    if (unresolvable.length || required.size) return EXIT.MISSING_VAR;
+    // A corrupt `.env` value belongs here too: the variable resolves, but not to
+    // anything the deployment can use, which is the same failure with a longer
+    // fuse — it surfaces wherever the value is finally consumed. `--force`
+    // downgrades it, as it does a conflict: the judgement is a heuristic about
+    // someone else's secrets file, and refusing to run with no way past would be
+    // worse than the bug it prevents.
+    if (unresolvable.length || required.size || (suspect.length && !force)) return EXIT.MISSING_VAR;
     if (conflicts.length && !force) return EXIT.CONFLICT;
     return EXIT.OK;
 }
@@ -285,12 +300,19 @@ function report(result, childEnv, { force, json, provenance }) {
 function buildChildEnv(result, opts) {
     const files = opts.noEnvFile ? [] : (opts.envFiles.length ? opts.envFiles : [DEFAULT_ENV_FILE]);
     const secrets = {};
-    for (const file of files) Object.assign(secrets, readDotEnv(fromRoot(file)));
+    // Per file, so a finding can name the file it came from.
+    const suspect = [];
+    for (const file of files) {
+        const parsed = readDotEnv(fromRoot(file));
+        for (const hit of findSuspectValues(parsed)) suspect.push({ ...hit, file });
+        Object.assign(secrets, parsed);
+    }
     // Highest precedence first: a shell export must beat the secrets file,
     // which must beat a preset's env block, which must beat fragment defaults.
     return {
         env: layerEnv({ ...process.env }, secrets, result.presetEnv, result.defaults),
         files: files.filter((f) => existsSync(fromRoot(f))),
+        suspect,
     };
 }
 
@@ -341,8 +363,8 @@ async function main() {
         fail(e.message, EXIT.USAGE);
     }
 
-    const { env: childEnv, files } = buildChildEnv(result, opts);
-    const code = report(result, childEnv, opts);
+    const { env: childEnv, files, suspect } = buildChildEnv(result, opts);
+    const code = report(result, childEnv, { ...opts, suspect });
     if (code !== EXIT.OK) return code;
 
     const target = writeComposition(result.env, opts);

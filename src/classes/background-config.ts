@@ -63,6 +63,23 @@ export class BackgroundConfig implements BackgroundItem {
         });
     }
 
+    /**
+     * Wrap a raw background entry.
+     *
+     * `reuseExisting` resolves the entry through {@link _CONF_REGISTRY} by `id`,
+     * and **ids are deliberately not unique**: an entry with no explicit `id`
+     * derives one from its data locator ({@link processId}), so two entries
+     * naming the same slide legitimately share an id — that is what makes them
+     * one viewer identity / one IO scope. An author who needs the two hydrated
+     * separately sets an explicit `id`.
+     *
+     * Reuse is therefore only valid for RAW items whose id genuinely names the
+     * thing being wrapped (a custom slide browser's series/case records). Never
+     * pass an entry that is already a `BackgroundConfig` in `config.background`
+     * with `reuseExisting` on — it would come back as a *different* entry that
+     * happens to share the id, with that entry's `name`, `visualizationIndex`
+     * and shaders. `APPLICATION_CONTEXT.registerConfig` guards this.
+     */
     static from(config: BackgroundItem, registerAsSource = true, reuseExisting = true): BackgroundConfig {
         if (!config) throw new Error('config must be defined');
 

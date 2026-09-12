@@ -34,13 +34,22 @@
         "roots": ["test/fixtures/data"],
         "extensions": [".tif", ".tiff", ".json", ".geojson", ".pbf", ".png", ".dzi"]
       },
-      /* Same twelve sessions as `data/tiff-webtiff`: the index labels them by
+      /* The same session set as `data/tiff-webtiff` — the index labels them by
          data shape, not by decoder, which is the whole point of running them
-         under both. */
+         under both — MINUS the ones this decoder cannot open.
+         `geotiff.js` reads one plane of a multi-plane TIFF and refuses the
+         OME file's companion RGB pages outright (`Unsupported data
+         format/bitsPerSample`, from a `SampleFormat` array shorter than
+         `SamplesPerPixel`); those pages become its coarse pyramid levels, so
+         the failure is total rather than cosmetic. See `modules/geotiff/README.md`
+         § Limits. Excluding by the capability the sessions declare, rather than
+         by an id list, keeps a newly added multichannel session off this banner
+         automatically. */
       "secure": { "examples": {
         "webtiff-sessions": {
           "sessionIndex": "test/fixtures/sessions/index.json",
           "deployment": "webtiff",
+          "excludeCapabilities": ["multichannel"],
           "order": 10
         }
       }}

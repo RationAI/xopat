@@ -47,6 +47,7 @@ class Dropdown extends BaseSelectableComponent {
 
         this._headerIconComp = null;
         this._headerLabelSpan = null;
+        this._compactHeader = false;
 
         this.headerButton = this.createButton(options);
         this._contentEl = null;
@@ -105,9 +106,36 @@ class Dropdown extends BaseSelectableComponent {
     iconOnly() {
         this.headerButton.iconOnly();
         if (this._useActiveSelection) {
-            this.headerButton.setExtraProperty("style", "min-width:58px;")
+            this.headerButton.setExtraProperty("style", this._compactHeader ? "" : "min-width:58px;")
         }
         this._iconOnly = true;
+    }
+
+    /**
+     * Collapse an `activeSelection` header down to a split square button.
+     *
+     * The default header lays the selection icon and the caret out side by side
+     * and reserves 58px for the pair. That is right in a roomy horizontal bar
+     * and far too wide for a narrow vertical column, where it drags every
+     * neighbouring button out to the same width. Compact mode stacks the two
+     * instead: icon on the top half, caret on the bottom half, same glyph size,
+     * so both stay real click targets while the button is only as wide as one
+     * icon. Layout lives in `.dropdown-header-compact` (custom.css) — it has to
+     * beat `.btn`'s own padding and `align-items`.
+     *
+     * The padding/min-width numbers are this element's own layout details, which
+     * is why the switch lives here rather than being poked at from the outside.
+     *
+     * @param {boolean} compact
+     */
+    setCompactHeader(compact) {
+        compact = !!compact;
+        if (this._compactHeader === compact) return;
+        this._compactHeader = compact;
+        if (!this._useActiveSelection) return;
+
+        this.headerButton.setExtraProperty("style", compact ? "" : "min-width:58px;");
+        this.headerButton.toggleClass("compact", "dropdown-header-compact", compact);
     }
     titleIcon()  { this.headerButton.titleIcon();  }
     titleOnly()  { this.headerButton.titleOnly();  }

@@ -63,12 +63,38 @@ class ToolbarGroup extends BaseComponent {
             });
         }
 
-        this._joinComp = new Join({
-            id: this.id,
-            style: Join.STYLE.HORIZONTAL
-        }, ...this.children);
+        // A group nested inside another group is a *sub-range* of the parent's
+        // pill, not a pill of its own: DaisyUI would otherwise round its own
+        // first/last member (`.join.join-horizontal .join-item:first-child`)
+        // and leave a rounded seam in the middle of the parent. `join-unrounded`
+        // zeroes `--rounded-btn` for that subtree, so the inherit chain resolves
+        // to 0 and the members stay flush.
+        this._children.forEach(child => {
+            if (child instanceof ToolbarGroup && child !== this) child.options.nested = true;
+        });
 
-        const el = this._joinComp.create();
+        // `join: false` renders a plain row instead of a DaisyUI `.join`.
+        // Nesting a join inside a join makes DaisyUI's first/last-child radius
+        // rules reach through the wrapper and flatten every descendant into one
+        // pill, so the Toolbar's *root* group (which only exists to hold the
+        // real groups + separators) must not be one.
+        const joined = this.options.join !== false;
+        let el;
+        if (joined) {
+            this._joinComp = new Join({
+                id: this.id,
+                style: Join.STYLE.HORIZONTAL,
+                rounded: this.options.nested ? Join.ROUNDED.DISABLE : Join.ROUNDED.ENABLE,
+                extraClasses: { ...(this.options.extraClasses || {}) }
+            }, ...this.children);
+            el = this._joinComp.create();
+        } else {
+            this.setClass("base", "flex flex-row items-center");
+            el = van.tags.div({
+                ...this.commonProperties,
+                ...this.extraProperties
+            }, ...this.children);
+        }
         this._rootEl = el;
 
         // Reactively update visual state when selection changes
@@ -86,12 +112,40 @@ class ToolbarGroup extends BaseComponent {
             });
         }
 
-        // Follow toolbar orientation via toolbar:measure: flip the join axis and,
-        // in vertical mode, stretch the group to the column width so nested
-        // groups (history / modes / tools) all line up at the widest member.
+        // Follow toolbar orientation via toolbar:measure.
+        //
+        // Horizontal groups are DaisyUI joins — one seamless pill per group.
+        // Vertical groups are NOT: `join-vertical`'s radius rules are resolved
+        // per direct child through `border-radius: inherit`, and this toolbar's
+        // children are a mix of bare buttons, `.dropdown` wrappers and nested
+        // groups, so the corners come out inconsistent (a mid-column button
+        // ending up fully rounded, a group edge staying square). A vertical
+        // column has room to breathe, so it drops the join and renders plain
+        // rounded buttons with a small gap instead.
         bindToolbarOrientation(el, (dir) => {
-            this._joinComp.set(dir === "vertical" ? Join.STYLE.VERTICAL : Join.STYLE.HORIZONTAL);
-            el.classList.toggle("w-full", dir === "vertical");
+            const vertical = dir === "vertical";
+            if (this._joinComp) {
+                // A nested group is a tight sub-pair (brush add/remove) and joins
+                // cleanly in either orientation — its children are plain buttons,
+                // not the wrapper zoo that breaks `join-vertical` at top level.
+                const keepJoin = !vertical || this.options.nested;
+                this._joinComp.setClass("base",
+                    keepJoin ? "join bg-join" : "flex flex-col items-center");
+                this._joinComp.setClass("direction",
+                    !keepJoin ? "" : (vertical ? "join-vertical" : "join-horizontal"));
+                // join-unrounded zeroes --rounded-btn for the subtree so a nested
+                // pill stays flush inside its parent's. Only meaningful while the
+                // parent is itself a join — vertically the parent is a plain
+                // column, so the pair rounds normally as its own little pill.
+                this._joinComp.setClass("rounded",
+                    !vertical && this.options.nested ? "join-unrounded" : "");
+            } else {
+                el.classList.toggle("flex-col", vertical);
+                el.classList.toggle("flex-row", !vertical);
+                el.classList.toggle("items-stretch", vertical);
+                el.classList.toggle("items-center", !vertical);
+            }
+            el.classList.toggle("w-full", vertical);
         });
 
         return el;

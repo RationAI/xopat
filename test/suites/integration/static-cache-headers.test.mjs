@@ -49,6 +49,31 @@ test("an unversioned asset is never cached", { tag: ["@integration"] }, async ({
     expect(res.headers.get("cache-control")).toMatch(/no-store|no-cache/);
 });
 
+test("a long file extension still reaches the static handler", {
+    tag: ["@integration"],
+}, async ({ xopatServer }) => {
+    // The static route is gated on "this path looks like a file", and that gate
+    // used to stop at a five-character suffix. `.geojson` is seven, so the
+    // request fell through to the page renderer and was answered `200
+    // text/html` — the application's own HTML, for a URL asking for map data.
+    //
+    // Asserting the status is not enough to catch it, and that is the point of
+    // this test: the failure *is* a 200. What it broke was three demo sessions
+    // reporting `Unexpected token '<'` from a JSON parser, which names neither
+    // the file nor the server.
+    const res = await fetch(`${xopatServer.baseURL}/src/config.json`);
+    expect(res.status).toBe(200);
+
+    for (const suffix of ["geojson", "webmanifest"]) {
+        const missing = await fetch(`${xopatServer.baseURL}/src/no-such-asset.${suffix}`);
+        // 404 means the static handler judged it and found nothing. An HTML body
+        // means the router never handed it over at all.
+        expect(missing.status, `.${suffix} is routed to the static handler`).toBe(404);
+        expect(missing.headers.get("content-type") ?? "", `.${suffix} is not the app page`)
+            .not.toMatch(/text\/html/);
+    }
+});
+
 /** The server publishes its own dev flag into the page it renders. */
 async function isDevMode(xopatServer) {
     const page = await (await fetch(`${xopatServer.baseURL}/`)).text();

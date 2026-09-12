@@ -23,7 +23,7 @@
             "demonstrates": "the ordinary case: an H&E background with prediction, annotation and explainability layers stacked over it"
         },
         "two-backgrounds": {
-            "title": "Two backgrounds, each bound to a different visualization",
+            "title": "Three backgrounds, two open, each bound to a different visualization",
             "group": "visualization",
             "deployment": "webtiff",
             "requires": ["fixtures"],
@@ -48,6 +48,7 @@
             "group": "visualization",
             "deployment": "webtiff",
             "requires": ["fixtures"],
+            "capabilities": ["multichannel"],
             "demonstrates": "the shader registry: every registered layer type except `interaction-debug` (a debug aid, not a rendering), so a type that fails to register shows up here first"
         },
         "time-series": {
@@ -63,6 +64,7 @@
             "group": "multichannel",
             "deployment": "webtiff",
             "requires": ["fixtures"],
+            "capabilities": ["multichannel"],
             "demonstrates": "shaders declared on a background rather than in a visualization, one per channel"
         },
         "fluorescence-cross-source": {
@@ -70,6 +72,7 @@
             "group": "multichannel",
             "deployment": "webtiff",
             "requires": ["fixtures"],
+            "capabilities": ["multichannel"],
             "demonstrates": "per-shader `dataReferences` retargeting inside a background array, plus `use_gamma`"
         },
         "channel-series": {
@@ -77,6 +80,7 @@
             "group": "multichannel",
             "deployment": "webtiff",
             "requires": ["fixtures"],
+            "capabilities": ["multichannel"],
             "demonstrates": "the channel-series wrapper: one data entry, channels browsed as a series"
         },
 
@@ -85,6 +89,7 @@
             "group": "viz-flex",
             "deployment": "viz-flex-demo",
             "requires": ["fixtures"],
+            "capabilities": ["multichannel"],
             "demonstrates": "channel fan-out, plus one layer retargeted at a different `data` entry"
         },
         "viz-flex-geojson": {

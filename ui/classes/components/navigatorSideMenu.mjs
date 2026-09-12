@@ -2,7 +2,6 @@ import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import {Button} from "../elements/buttons.mjs";
 import {Checkbox} from "../elements/checkbox.mjs";
-import {Join} from "../elements/join.mjs";
 import {PhIcon} from "../elements/ph-icon.mjs";
 import {Div} from "../elements/div.mjs";
 
@@ -98,17 +97,23 @@ export class NavigatorSideMenu extends BaseComponent {
         }, new PhIcon({ name: "ph-copy" }));
 
 
-        const header = new Join({
-            style: Join.STYLE.HORIZONTAL,
-            extraClasses: {
-                width: "w-full",
-                padding: "px-2 py-0",
-                bg: "bg-base-200/90",
-                border: "border-b border-base-300",
-                items: "items-center",
-                gap: "gap-2"
-            }
-        }, this.visibility, this.title, this.copy);
+        // A plain flex row, not a `Join`: this is three controls in a line, not a
+        // segmented control, and `Join`'s own base class carries `bg-join`
+        // (ui/classes/elements/join.mjs) — a single-class rule that loads after
+        // Tailwind and therefore beat the `bg-base-200/90` asked for here, so the
+        // title bar painted the `--ctp-text` tint instead of the panel surface.
+        //
+        // No horizontal padding: the navigator canvas below is flush with the
+        // panel edge (its width is written in px by setSize), so an inset header
+        // would put these controls out of line with everything under them.
+        const header = div(
+            {
+                class: "w-full px-0 py-0 bg-base-200/90 border-b border-base-300 flex flex-row items-center gap-2"
+            },
+            this.toNode(this.visibility),
+            this.toNode(this.title),
+            this.toNode(this.copy)
+        );
 
         // No fixed width here: the panel is sized by `setSize()` against the
         // owning viewer cell, so a small screen / dense grid gets a small
@@ -121,7 +126,7 @@ export class NavigatorSideMenu extends BaseComponent {
         );
         this._root = div(
             { class: "flex flex-col" },
-            header.create(),
+            header,
             this._body
         );
         this.setSize(this._lastCellWidth, this._lastCellHeight);
@@ -203,7 +208,8 @@ export class NavigatorSideMenu extends BaseComponent {
 
         const row = div(
             {
-                class: "display-none flex flex-col gap-1 px-2 py-1 border-t border-base-300 bg-base-200/60",
+                // px-0: same reason as the header — line up with the canvas edge.
+                class: "display-none flex flex-col gap-1 px-0 py-1 border-t border-base-300 bg-base-200/60",
                 title: $.t("main.navigator.focalPlaneHint"),
             },
             // Row 1: label + count + numeric input, all on one compact line.

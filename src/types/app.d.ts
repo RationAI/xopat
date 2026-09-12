@@ -1119,6 +1119,18 @@ interface XOpatUtilities {
         bgSpec?: number | Array<number | undefined> | null
     ): boolean;
 
+    /**
+     * Number of leading shader-layer-order entries belonging to the viewer's
+     * active background(s) — i.e. the background/visualization boundary, since
+     * `assembleRenderOutput` emits backgrounds first. Use
+     * `renderer.getShaderLayerOrder().slice(splitIndex)` to get the overlays.
+     *
+     * This is the supported way to tell the two apart: renderer ids are
+     * namespaced per viewer (`v<viewer.id>_`) and sanitized, so matching them
+     * against config background ids silently matches nothing.
+     */
+    getBackgroundShaderSplitIndex(viewer: OpenSeadragon.Viewer): number;
+
     toggleVisualizationInspector(enabled?: boolean): boolean;
 
     toggleValueInspector(enabled?: boolean): boolean;

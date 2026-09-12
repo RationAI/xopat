@@ -27,7 +27,7 @@
     "test-env": "bash test/run-env.sh",
     "test-matrix": "npm run test:cypress && bash test/run-env.sh test/env/viewer.env.test-custom.json",
     "test-env-injection": "bash test/run-env.sh test/env/runtime.json 9002 --spec test/e2e/env-injection.cy.js",
-    "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
+    "build-css": "npx tailwindcss -c ./tailwind.config.js -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --minify",
     "build-docs-api": "grunt jsdoc",
     "storage-audit": "grunt storage-audit",
     "s-static": "grunt html",

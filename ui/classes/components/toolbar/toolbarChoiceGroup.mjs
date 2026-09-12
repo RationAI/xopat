@@ -109,8 +109,11 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
 
         const headerId = this._dropdown.headerButton.id;
 
-        // adapt width to toolbar orientation:
-        // horizontal -> square; vertical -> full width
+        // adapt the header to toolbar orientation. Horizontal keeps the roomy
+        // icon + caret pair (58px, set by Dropdown.iconOnly). Vertical collapses
+        // it to a plain square icon button with the caret as a corner marker —
+        // otherwise this one control drags the whole column out to 58px, since
+        // every sibling item stretches to `w-full`.
         queueMicrotask(() => {
             const root = el.closest("[data-toolbar-root]");
             if (!root) return;
@@ -119,13 +122,13 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
                 const btnEl = document.getElementById(headerId);
                 if (!btnEl) return;
 
-                if (dir === "vertical") {
-                    btnEl.classList.add("w-full");
-                    btnEl.classList.remove("btn-square");
-                } else {
-                    btnEl.classList.remove("w-full");
-                    btnEl.classList.add("btn-square");
-                }
+                const vertical = dir === "vertical";
+                btnEl.classList.remove("w-full");
+                // vertical: one fixed column width shared with every other
+                // control; horizontal: the intrinsic square + the 58px header
+                btnEl.classList.toggle("toolbar-btn-vertical", vertical);
+                btnEl.classList.toggle("btn-square", !vertical);
+                this._dropdown.setCompactHeader(vertical);
             };
 
             const handler = (e) => apply(e.detail.dir);

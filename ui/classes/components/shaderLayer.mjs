@@ -75,8 +75,12 @@ export class ShaderLayer extends BaseComponent {
         this.compactIndent = Math.min(this.depth, 4) * 8;
 
         // card styling
+        // Card density (margin / padding / control heights) lives in the
+        // `.shader-part` rules in src/assets/style.css, not in utility classes:
+        // the shipped tailwind.min.css is purged, so fractional-scale utilities
+        // are not guaranteed to exist in it.
         this.classMap.base =
-            "relative shader-part card bg-base-200/90 shadow-sm mb-2 pt-1 border border-base-300";
+            "relative shader-part card bg-base-200/90 shadow-sm border border-base-300";
         this.classMap.resizable = "resizable";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[6px]" : "";
         this.classMap.clipActive = this.mode === "clip"
@@ -124,9 +128,20 @@ export class ShaderLayer extends BaseComponent {
             this._eyeIcon.create()
         );
 
+        // Disclosure caret. The reorder rail beside it also draws carets, so the
+        // affordance for "this expands" has to be its own glyph sitting directly
+        // against the title — a caret that only ever points right/down.
+        this._collapseIcon = new PhIcon({
+            name: this._isCollapsed() ? "ph-caret-right" : "ph-caret-down"
+        });
+        const collapseCaret = span(
+            { class: "shader-collapse-caret opacity-70 shrink-0" },
+            this._collapseIcon.create()
+        );
+
         this._titleSpan = span(
             {
-                class: "text-sm truncate align-bottom one-liner" + (this.visible ? "" : " opacity-60"),
+                class: "text-sm font-semibold truncate align-bottom one-liner" + (this.visible ? "" : " opacity-60"),
                 title: this.title + "\n" + $.t("main.shaders.collapseHint"),
             },
             this.shortTitle
@@ -136,19 +151,55 @@ export class ShaderLayer extends BaseComponent {
             { class: "flex items-center gap-1 flex-1 min-w-0" },
             eyeBtn,
             this._buildReorderRail(),
+            collapseCaret,
             this._titleSpan
         );
     }
 
     _setVisible(visible) {
+        const wasVisible = this.visible;
         this.visible = !!visible;
         this._eyeIcon?.changeIcon(this.visible ? "ph-eye" : "ph-eye-slash");
         this._titleSpan?.classList.toggle("opacity-60", !this.visible);
-        this._applyCollapsed();
+        // Hiding a layer folds its controls away — they describe something that
+        // is not on screen. It no longer *locks* them away: the header still
+        // expands (see _isCollapsed). Only the visible→hidden *transition* does
+        // this, so an update() on an already-hidden layer cannot keep undoing an
+        // expand the user just performed.
+        if (wasVisible && !this.visible) {
+            this._setCollapsed(true);
+        } else {
+            this._applyCollapsed();
+        }
+    }
+
+    /** Display name of the layer's own type, whether or not the menu offers it. */
+    _shaderTypeName() {
+        const offered = this.availableShaders.find(s => s.type === this.type);
+        if (offered) return offered.name;
+        try {
+            const ShaderClass = OpenSeadragon.FlexRenderer.ShaderLayerRegistry.get(this.type);
+            if (typeof ShaderClass?.name === "function") return ShaderClass.name();
+        } catch (e) {
+            // registry unavailable — the raw type is still more truthful than nothing
+        }
+        return this.type || "";
     }
 
     _buildRenderTypeSelector() {
         if (this.fixed || this.isGroup) return null;  // group type is structural, not user-switchable
+
+        // A type the menu does not offer (structural wrappers, debug shaders) has no matching
+        // option. A select built anyway shows an unrelated shader as if it were this layer's,
+        // and a single change event then rewrites the layer to that shader — destroying params
+        // no other type declares. Show what the layer is instead.
+        if (!this.availableShaders.some(s => s.type === this.type)) {
+            return div(
+                { class: "flex items-center gap-1 text-xs text-base-content/70 mb-1" },
+                span($.t("main.shaders.shader")),
+                span({ class: "font-medium" }, this._shaderTypeName())
+            );
+        }
 
         this.renderTypeSelect = new Select({
             id: this.id + "-change-render-type",
@@ -187,10 +238,9 @@ export class ShaderLayer extends BaseComponent {
             {
                 id: this.id + "-mode-pill",
                 class:
-                    "badge badge-xs transition-colors " +
+                    "badge badge-xs shader-mode-pill transition-colors " +
                     (this.mode === "clip" ? "badge-accent" : "badge-warning") +
                     (this._isModeShow() ? " hidden" : ""),
-                style: "height: 18px;",
                 title: this._pillTitle(),
             },
             this.blendMode.toString().replace(/_/g, " ")
@@ -227,17 +277,29 @@ export class ShaderLayer extends BaseComponent {
         pill.classList.toggle("hidden", this._isModeShow());
     }
 
+    /**
+     * Collapse state is the user's alone. It deliberately does NOT fold in
+     * `!this.visible`: doing so made a hidden layer's entire body — blend panel,
+     * shader-type selector, every control — permanently unreachable, because the
+     * only way to expand it was a click handler that was itself gated on
+     * visibility. Hiding still auto-collapses (see {@link _setVisible}); the
+     * difference is that the user can open it again.
+     */
     _isCollapsed() {
-        return !this.visible || this.collapsed;
+        return this.collapsed;
     }
 
-    _toggleCollapsed() {
-        this.collapsed = !this.collapsed;
+    _setCollapsed(collapsed) {
+        this.collapsed = !!collapsed;
         this.cfg._uiCollapsed = this.collapsed;   // persist
         if (this.hasChildren) {
             this.cfg._uiGroupOpen = !this.collapsed;  // keep legacy flag in sync
         }
         this._applyCollapsed();
+    }
+
+    _toggleCollapsed() {
+        this._setCollapsed(!this.collapsed);
     }
 
     _applyCollapsed() {
@@ -247,13 +309,17 @@ export class ShaderLayer extends BaseComponent {
         if (wrapper) {
             wrapper.classList.toggle("hidden", collapsed);
         }
+        this._collapseIcon?.changeIcon(collapsed ? "ph-caret-right" : "ph-caret-down");
+        if (this._headerRow) {
+            this._headerRow.setAttribute("aria-expanded", String(!collapsed));
+        }
     }
 
     _buildReorderRail() {
         const arrow = (dir, icon, titleKey) => button(
             {
                 type: "button",
-                class: "btn-ghost min-h-0 leading-[0] px-0.5",
+                class: "btn-ghost shader-reorder-btn min-h-0 leading-[0]",
                 title: $.t(titleKey),
                 onclick: (e) => {
                     e.stopPropagation();
@@ -263,8 +329,12 @@ export class ShaderLayer extends BaseComponent {
             new PhIcon({ name: icon }).create()
         );
 
+        // Revealed on card hover / keyboard focus (see `.shader-reorder` in
+        // src/assets/style.css). At rest the header is eye + caret + title +
+        // gear, which is what keeps its height down and stops the two reorder
+        // carets from reading as a disclosure control.
         return div(
-            { class: "non-draggable flex flex-col items-center shrink-0" },
+            { class: "shader-reorder non-draggable flex flex-col items-center shrink-0" },
             arrow("up", "ph-caret-up", "main.shaders.moveUp"),
             arrow("down", "ph-caret-down", "main.shaders.moveDown")
         );
@@ -275,26 +345,36 @@ export class ShaderLayer extends BaseComponent {
             ? span(
                 {
                     class:
-                        "text-[0.65rem] text-accent/90 italic ml-7 -mt-1 mb-1"
+                        "text-xs text-accent/90 italic ml-7 -mt-1 mb-1"
                 },
                 $.t("main.shaders.clipHint") ||
                 "Layer is used as a clip mask over layers below."
             )
             : null;
 
+        // Enter/Space are contextual keys inside this widget, so they stay local
+        // and are deliberately NOT registered with APPLICATION_CONTEXT.shortcuts.
+        this._headerRow = div(
+            {
+                class: "flex items-center gap-2 cursor-pointer",
+                title: $.t("main.shaders.collapseHint"),
+                role: "button",
+                tabindex: "0",
+                "aria-expanded": String(!this._isCollapsed()),
+                onclick: () => this._toggleCollapsed(),
+                onkeydown: (e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    this._toggleCollapsed();
+                }
+            },
+            this._buildHeaderLeft(),
+            this._buildHeaderBadges(),
+        );
+
         return div(
-            { class: "px-2 pb-1 flex flex-col gap-0.5 truncate max-w-full select-none" },
-            div(
-                {
-                    class: "flex items-center gap-2 cursor-pointer",
-                    title: $.t("main.shaders.collapseHint"),
-                    onclick: () => {
-                        if (this.visible) this._toggleCollapsed();
-                    }
-                },
-                this._buildHeaderLeft(),
-                this._buildHeaderBadges(),
-            ),
+            { class: "shader-part__header flex flex-col truncate max-w-full select-none" },
+            this._headerRow,
             clipHint
         );
     }
@@ -302,6 +382,14 @@ export class ShaderLayer extends BaseComponent {
     _toggleBlendPopup() {
         this.blendOpen = !this.blendOpen;
         this.cfg._uiBlendOpen = this.blendOpen;   // persist
+
+        // The blend panel lives *inside* the collapse wrapper, so opening it on a
+        // collapsed card would toggle a node nobody can see. Expand first — and
+        // the gear stops the click from reaching the header handler, so nothing
+        // else would do it for us.
+        if (this.blendOpen && this._isCollapsed()) {
+            this._setCollapsed(false);
+        }
 
         const el = document.getElementById(this.id + "-blend-controls");
         if (el) {
@@ -402,7 +490,7 @@ export class ShaderLayer extends BaseComponent {
             div(
                 {
                     class:
-                        "flex flex-row items-center justify-between text-[0.7rem] text-base-content/70 mb-1"
+                        "flex flex-row items-center justify-between text-xs text-base-content/70 mb-1"
                 },
                 div(
                     { class: "flex items-center gap-1" },
@@ -714,7 +802,9 @@ export class ShaderLayer extends BaseComponent {
         this.cacheApplied = shaderConfig?._cacheApplied;
         this.collapsed = shaderConfig?._uiCollapsed ?? this.collapsed;
 
-        if (this.renderTypeSelect) {
+        // Only when an option actually carries this type — otherwise the select would land on
+        // an unrelated shader (see _buildRenderTypeSelector).
+        if (this.renderTypeSelect && this.availableShaders.some(s => s.type === this.type)) {
             this.renderTypeSelect.setExtraProperty("value", this.type);
         }
         this._syncBlendSelect();

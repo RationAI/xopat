@@ -89,10 +89,10 @@ export class RightSideViewerMenu extends BaseComponent {
         this.menu.addTab(
             // hugContent: the navigator scales with the viewer cell, so the panel
             // must follow its content width instead of stretching the column.
-            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass", hugContent: true}
+            {id: "navigator", icon: "ph-map-trifold", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), hugContent: true}
         );
         this.menu.addTab(
-            {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
+            {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu()}
         );
 
         this._compact = resolveSideMenuCompact();
@@ -124,10 +124,6 @@ export class RightSideViewerMenu extends BaseComponent {
                 },
             ],
         });
-        // todo override background with this color (does not work)
-        // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
-        // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
-
         const nav = this.menu.tabs["navigator"];
         const oldFocus = nav._setFocus;
         const resolveViewer = this._menuOptions.viewerResolver

@@ -645,6 +645,16 @@ export class AppBar {
             this._subs = new Set();
 
             this.structure = {
+                // Visual state of the viewer itself (overlays, chrome drawn over
+                // the slide) as opposed to the window/menu groups below. Listed
+                // first because it is about what the user is looking AT, not
+                // about which panels frame it.
+                'appearance': {
+                    id: 'view-appearance',
+                    label: $.t('main.bar.appearance'),
+                    icon: 'ph-eye',
+                    section: 'global-windows',
+                },
                 'sideViewerMenu': {
                     id: 'viewer-sidebars',
                     label: $.t('main.bar.viewerSidebars'),
@@ -753,6 +763,17 @@ export class AppBar {
             for (const cb of [...(this._subs || [])]) {
                 try { cb(); } catch (e) { console.warn("AppBar.View: onChange handler failed", e); }
             }
+        },
+
+        /**
+         * Mark the dropdown stale and notify subscribers. For owners that flip a
+         * registered component from OUTSIDE this registry (the Settings panel
+         * toggles the scalebar per viewer) — `_notify` alone is not enough,
+         * `_refreshVisualDropdown` early-returns unless the flag is set.
+         */
+        refresh() {
+            this._visualMenuNeedsRefresh = true;
+            this._notify();
         },
 
         /** Flip every VisibilityManager of one enumerated row together. */

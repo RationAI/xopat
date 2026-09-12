@@ -56,6 +56,60 @@ function parseDotEnv(text) {
     return out;
 }
 
+/**
+ * Values that parsed, but cannot have been meant.
+ *
+ * One shape, because one shape actually happens: appending `KEY=value` to a file
+ * whose last line has no trailing newline concatenates the two, producing
+ * `WSI_PORT=9002"WSI_PORT=9002"`. That parses fine — the key is valid and the
+ * value is a non-empty string — and then travels through `<% WSI_PORT %>` into
+ * whatever consumed it. In the case that prompted this, it surfaced as
+ * `TypeError: Failed to construct 'URL': Invalid URL` from inside a plugin,
+ * three debugging rounds away from the file that caused it.
+ *
+ * Deliberately narrow, and **data-driven rather than shape-guessing**: the
+ * embedded assignment counts only when its name is a key *this same file
+ * declares*, which is what an append collision always produces. A generic
+ * `\w+=` pattern is not usable here — it fires on base64 padding
+ * (`…d29ybGQ=`) and on any URL carrying an uppercase query parameter, and a
+ * lint with false positives gets switched off.
+ *
+ * @param {Record<string, string>} parsed output of {@link parseDotEnv}
+ * @returns {Array<{key: string, value: string, reason: string}>}
+ */
+function findSuspectValues(parsed) {
+    const entries = Object.entries(parsed ?? {});
+    const known = entries.map(([key]) => key).filter(k => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+    const out = [];
+    for (const [key, value] of entries) {
+        if (typeof value !== "string" || !value) continue;
+
+        // Anywhere in the value, with no word-boundary requirement: an append
+        // concatenates directly onto the previous line, so the collision usually
+        // has an identifier character in front of it
+        // (`MEDGEMMA_MODEL=medgemma-4b-itWSI_PORT=9002`). Requiring a boundary
+        // would miss the common case and keep only the one that happens to be
+        // preceded by a quote. Precision comes from `name` being a key this file
+        // declares, not from the surrounding characters.
+        const collided = known.find(name => value.includes(`${name}=`));
+        if (collided) {
+            out.push({
+                key, value,
+                reason: `contains a second assignment to ${collided} — usually a line appended `
+                    + "to a file with no trailing newline",
+            });
+            continue;
+        }
+        // Surviving quotes mean the value was not quoted as a whole (the parser
+        // strips those), so they are inside it — the other half of the same
+        // append artifact.
+        if (value.includes('"') || value.includes("'")) {
+            out.push({ key, value, reason: "contains a quote character inside the value" });
+        }
+    }
+    return out;
+}
+
 /** Read and parse a `.env` file. Missing file → `{}`. */
 function readDotEnv(file) {
     try {
@@ -84,4 +138,4 @@ function layerEnv(target, ...sources) {
     return target;
 }
 
-module.exports = { parseDotEnv, readDotEnv, layerEnv };
+module.exports = { parseDotEnv, readDotEnv, layerEnv, findSuspectValues };

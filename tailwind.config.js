@@ -13,11 +13,20 @@ module.exports = {
         './modules/**/*.{html,js,mjs,ts}',
         './plugins/**/*.{html,js,mjs,ts}',
         './src/**/*.{html,js,mjs,ts}',
+        // Per-element packages vendor their own dependencies (today:
+        // modules/markdown/node_modules). Nothing in there carries a utility
+        // class, and scanning it is what trips Tailwind's
+        // `broad-content-glob-pattern` warn on every full build.
+        '!**/node_modules/**',
+        // Generated bundles: esbuild output of the very *.ts/*.mjs sources the
+        // globs above already scan, so they were a third of the scanned bytes
+        // for zero extra candidates. Kept in sync with `twinc.ignore` in
+        // Gruntfile.js, which has excluded them from the delta path all along.
+        '!**/*.workspace.{js,mjs}',
+        '!**/dist/**',
         '!**/*.min.js',
-        // TODO how to ignore
-        // '!./ui/index.js',
-        // '!./src/libs/**',
-        // '!(.dev-cache)/**'
+        '!./ui/index.js',
+        '!./src/libs/**',
     ],
     // The `.er-control*` skin at the end of src/assets/tailwind-spec.css targets
     // markup emitted by src/libs/flex-renderer/flex-renderer.js, which puts no
@@ -33,6 +42,10 @@ module.exports = {
     safelist: [
         'er-control__title',
         'er-control__body',
+        // `er-control--<type>` is template-built the same way (renderControl
+        // ~:6175), so the scanner never sees it either. Only the variants the
+        // skin actually targets need pinning.
+        'er-control--bool',
         'er-control__body--colormap',
         'er-control__input',
         'er-control__input--select',

@@ -128,15 +128,20 @@ export class MainLayout extends BaseComponent {
         this._toolbarCollapseBtn = null;
         this._toolbarFloatBtn = null;
 
-        // App-bar embedding needs a wide enough window — the bar shares the row
-        // with the menus, badges and user controls, so below this the toolbar
-        // stays floating even when pinned (re-docks automatically when widened).
-        this._minAppBarEmbedWidthPx = 1400;
-        // Hysteresis on the slot width so a badge toggle near the edge can't
-        // make the embedded toolbar flip-flop between docked and floating.
+        // App-bar embedding is decided by measurement, not by a window-width
+        // guess: the slot is `flex-1`, so its clientWidth *is* the room left over
+        // after the menus, badges and user controls, and the toolbar's own
+        // content width is measurable. A fixed `window.innerWidth` threshold
+        // refused to dock toolbars that plainly fit.
+        // Fallback need for a toolbar that has never rendered horizontally
+        // (docked straight out of a vertical edge position) — nothing to measure.
         this._minEmbedWidthPx = 240;
-        this._minEmbedLeaveWidthPx = 200;
+        // Entering the bar asks for a little slack, staying does not, so a badge
+        // appearing beside the slot can't start a dock/undock oscillation.
+        this._embedEnterSlackPx = 24;
         this._appBarHadRoom = false;
+        // id -> last measured horizontal content width
+        this._toolbarWidthCache = new Map();
         this._toolbarSlotRoomUnsub = null;
 
         this._syncingDockRequestedState = false;
@@ -1465,7 +1470,7 @@ export class MainLayout extends BaseComponent {
             // toolbar can't actually dock right now — tell the user why and that
             // it will dock automatically once there's room.
             const mobile = window.innerWidth < this.collapseBreakpointPx;
-            if (!mobile && !this._appBarHasRoom()) {
+            if (!mobile && !this._appBarHasRoom(tb)) {
                 window.Dialogs?.show?.(
                     $.t("toolbar.embedNoRoom"),
                     6000,
@@ -1482,20 +1487,38 @@ export class MainLayout extends BaseComponent {
         return this._getRegisteredToolbars().filter(tb => this.getToolbarEmbedPreference(tb.id));
     }
 
-    /** Is there enough horizontal room in the app-bar slot to host a toolbar? */
-    _appBarHasRoom() {
-        // Hard window-width gate first: below this the bar is too cramped to
-        // share with a toolbar regardless of the momentary slot measurement.
-        if (window.innerWidth < this._minAppBarEmbedWidthPx) {
-            this._appBarHadRoom = false;
-            return false;
+    /**
+     * How wide this toolbar would be once docked (docking always forces
+     * horizontal). A toolbar currently sitting vertically at a screen edge
+     * measures as a narrow column, which says nothing about its docked
+     * footprint — so the last horizontal measurement is cached and reused.
+     */
+    _measureToolbarWidth(toolbar) {
+        if (!toolbar) return 0;
+        const measured = toolbar.getHorizontalContentWidth?.() ?? 0;
+        if (measured > 0) {
+            this._toolbarWidthCache.set(toolbar.id, measured);
+            return measured;
         }
+        return this._toolbarWidthCache.get(toolbar.id) || this._minEmbedWidthPx;
+    }
+
+    /** Fixed chrome the host bar places beside the toolbar (switcher + un-dock). */
+    _toolbarHostChromeWidth() {
+        const switcher = this._toolbarSwitcherWrap?.offsetWidth || 0;
+        const float = this._toolbarFloatBtn?.offsetWidth || 0;
+        // gaps + host padding; the constant covers a not-yet-mounted host
+        return (switcher + float || 56) + 16;
+    }
+
+    /** Is there enough horizontal room in the app-bar slot to host this toolbar? */
+    _appBarHasRoom(toolbar) {
         const slot = globalThis.USER_INTERFACE?.AppBar?.ToolbarSlot;
         if (!slot?.getNode?.()) return false;
-        const w = slot.getAvailableWidth?.() ?? 0;
-        this._appBarHadRoom = this._appBarHadRoom
-            ? w >= this._minEmbedLeaveWidthPx
-            : w >= this._minEmbedWidthPx;
+        const available = slot.getAvailableWidth?.() ?? 0;
+        const needed = this._measureToolbarWidth(toolbar) + this._toolbarHostChromeWidth();
+        const threshold = needed + (this._appBarHadRoom ? 0 : this._embedEnterSlackPx);
+        this._appBarHadRoom = available >= threshold;
         return this._appBarHadRoom;
     }
 
@@ -1539,6 +1562,12 @@ export class MainLayout extends BaseComponent {
         // room is guaranteed by the window-width + slot-width gates.
         this._toolbarHostBarEl.className = "items-center gap-1 px-1 w-full min-w-0";
         this._toolbarContentEl.classList.remove("xopat-mobile-toolbar-scroll");
+        // A faint well behind the toolbar *only* (the host bar is w-full and
+        // would tint the whole remaining strip). Without it a docked toolbar is
+        // indistinguishable from the app bar's own controls. The switcher and
+        // the un-dock button are host siblings and stay outside the well, which
+        // is what makes it read as "the toolbar is seated here".
+        this._toolbarContentEl.classList.add("xopat-toolbar-dock-well", "px-1");
         this._toolbarContentEl.style.overflowX = "visible";
         // Collapse-to-peek is a phone affordance only; on the app bar the user
         // un-docks instead, so hide the collapse arrow here. The un-dock button
@@ -1557,6 +1586,8 @@ export class MainLayout extends BaseComponent {
         // The marker class turns the native scrollbar into a clean, arrow-less,
         // touch-swipe scroll (see .xopat-mobile-toolbar-scroll in custom.css).
         this._toolbarHostBarEl.className = "items-center gap-1 w-full px-1 py-1 min-w-0";
+        // the well is an app-bar affordance; the bottom bar is already its own row
+        this._toolbarContentEl.classList.remove("xopat-toolbar-dock-well", "px-1");
         this._toolbarContentEl.classList.add("xopat-mobile-toolbar-scroll");
         this._toolbarContentEl.style.overflowX = "auto";
         this._toolbarContentEl.style.flexWrap = "nowrap";
@@ -1569,6 +1600,7 @@ export class MainLayout extends BaseComponent {
 
     _detachToolbarHost() {
         const el = this._toolbarHostBarEl;
+        this._toolbarContentEl?.classList.remove("xopat-toolbar-dock-well", "px-1");
         if (el?.parentNode) el.parentNode.removeChild(el);
         globalThis.USER_INTERFACE?.MobileBottomBar?.unmountToolbarHost?.(el);
     }
@@ -1754,7 +1786,7 @@ export class MainLayout extends BaseComponent {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-active-toolbar`, activeId);
         }
 
-        const appBarRoom = mobile ? true : this._appBarHasRoom();
+        const appBarRoom = mobile ? true : this._appBarHasRoom(this._toolbars.get(activeId));
         const ctx = { mobile, appBarRoom, activeId };
 
         // Route every toolbar to its effective slot. On mobile the floating
@@ -1874,15 +1906,18 @@ export class MainLayout extends BaseComponent {
 
         // Detach (un-dock) the active embedded toolbar back to floating. This is
         // the embedded-mode counterpart of each toolbar's floating "dock" button.
+        // ph-push-pin-slash, not a generic "pop out" glyph: it mirrors the
+        // ph-push-pin the user pressed to dock (toolbar.mjs) and the pin/pin-slash
+        // pair already used by the side-menu tabs, so the round trip reads.
         this._toolbarFloatBtn = new Button({
-            base: "btn btn-ghost btn-xs",
+            base: "btn btn-ghost btn-xxs",
             extraProperties: { type: "button", title: $.t("toolbar.float") },
             onClick: event => {
                 event.preventDefault();
                 event.stopPropagation();
                 if (this._activeToolbarId) this.setToolbarEmbedded(this._activeToolbarId, false);
             }
-        }, iconComponentFor("ph-arrow-square-out")).create();
+        }, iconComponentFor("ph-push-pin-slash")).create();
 
         this._toolbarCollapseBtn = new Button({
             base: "btn btn-ghost btn-xs",

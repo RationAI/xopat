@@ -1,6 +1,6 @@
-//! openseadragon 6.1.0
-//! Built on 2026-09-04
-//! Git commit: v3.0.0-1518-724afe7f-dirty
+//! openseadragon 6.1.1
+//! Built on 2026-09-12
+//! Git commit: v3.0.0-1564-cf75ca42-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -90,7 +90,7 @@
 
 /**
  * @namespace OpenSeadragon
- * @version openseadragon 6.1.0
+ * @version openseadragon 6.1.1
  * @classdesc The root namespace for OpenSeadragon.  All utility methods
  * and classes are defined on or below this namespace.
  *
@@ -325,10 +325,37 @@
   *     The number of degrees to rotate right or left when the rotate buttons or keyboard shortcuts are activated.
   *
   * @property {Number} [maxTilesPerFrame=1]
-  *     The number of tiles loaded per frame. As the frame rate of the client's machine is usually high (e.g., 50 fps),
-  *     one tile per frame should be a good choice. However, for large screens or lower frame rates, the number of
-  *     loaded tiles per frame can be adjusted here. Reasonable values might be 2 or 3 tiles per frame.
-  *     (Note that the actual frame rate is given by the client's browser and machine).
+  *     Deprecated. Use {@link OpenSeadragon.Options.serverProtocol} and
+  *     {@link OpenSeadragon.Options.networkShare} instead, which describe the deployment rather than the
+  *     pacing mechanism.
+  *     The maximum number of tiles whose download is started per frame, initially boosted at load time:
+  *     right after a viewport change the value is temporarily boosted to ten times this number and then
+  *     decays back down over the following frames.
+  *     Note that the actual frame rate is given by the client's browser and machine, so this value alone bounds
+  *     throughput at `maxTilesPerFrame * fps` tiles per second per tiled image - a rate that has nothing to
+  *     do with what the network can deliver. Setting {@link OpenSeadragon.Options.serverProtocol} replaces
+  *     this pacing with one driven by request completion; a value set here explicitly is still honoured as
+  *     an additional per-frame ceiling in that mode.
+  *
+  * @property {Boolean|String} [serverProtocol=false]
+  *     What the tile server speaks: `'http/1.1'`, `'h2'` or `'h3'` (`'http/2'` and `'http/3'` are accepted
+  *     too), or `'auto'` to detect it. Any of these switches tile downloads to a page-wide scheduler that
+  *     keeps as many requests in flight as the origin can usefully carry, instead of starting at most
+  *     {@link OpenSeadragon.Options.maxTilesPerFrame} of them per rendered frame - so download speed stops
+  *     depending on how fast the client can draw. Leave at `false` for the frame-paced behaviour.
+  *     An HTTP/1.1 origin is limited to about six connections by the browser itself, so more than that only
+  *     queues inside the browser where OpenSeadragon can no longer reprioritize; HTTP/2 and HTTP/3
+  *     multiplex and take considerably more.
+  *     `'auto'` reads the protocol from the Performance API, which reports it only for responses carrying a
+  *     `Timing-Allow-Origin` header. Most tile servers do not send one, in which case detection yields
+  *     nothing and the conservative HTTP/1.1 limit is used - state the protocol outright to avoid that.
+  *     The budget is counted per origin, so several viewers sharing a tile server share one budget.
+  *
+  * @property {Number} [networkShare=1]
+  *     How much of the page's download capacity OpenSeadragon should claim, from 0 to 1. Lower it when the
+  *     page is loading other heavy assets and tiles should give way to them. Only has an effect when
+  *     {@link OpenSeadragon.Options.serverProtocol} is set. Where several viewers share an origin, the
+  *     smallest share any of them asks for applies to all of them.
   *
   * @property {Number} [pixelsPerWheelLine=40]
   *     For pixel-resolution scrolling devices, the number of pixels equal to one scroll line.
@@ -375,8 +402,11 @@
   *     which occur when the image is dragged, zoomed or rotated.
   *
   * @property {Boolean} [loadDestinationTilesOnAnimation=true]
-  *    If true, tiles are loaded only at the destination of an animation.
-  *    If false, tiles are loaded along the animation path during the animation.
+  *    If true, tiles at the destination of an animation are loaded first: tiles that only lie along the
+  *    animation path are still eligible, but rank below every tile at the destination, so they are only
+  *    requested when there is spare capacity. Since a tile on the path is usually irrelevant by the time
+  *    the user arrives, this keeps the download pipeline pointed at where the user is going.
+  *    If false, the current view and the destination are treated alike.
   * @property {Boolean} [cooperativeGestures=false]
   *     When true, prevents the viewer from trapping scroll/gesture on an embedded page
   *     (modelled on the cooperative gesture handling in Google Maps / Leaflet / MapTiler).
@@ -952,10 +982,10 @@ function OpenSeadragon( options ){
      * @since 1.0.0
      */
     $.version = {
-        versionStr: '6.1.0',
+        versionStr: '6.1.1',
         major: parseInt('6', 10),
         minor: parseInt('1', 10),
-        revision: parseInt('0', 10)
+        revision: parseInt('1', 10)
     };
 
 
@@ -1441,6 +1471,8 @@ function OpenSeadragon( options ){
             minScrollDeltaTime:     50,
             rotationIncrement:      90,
             maxTilesPerFrame:       1,
+            serverProtocol:         false,
+            networkShare:           1,
 
             //DEFAULT CONTROL SETTINGS
             showSequenceControl:     true,  //SEQUENCE
@@ -1608,81 +1640,6 @@ function OpenSeadragon( options ){
                 }
                 return method.apply( object, args );
             };
-        },
-
-        /**
-         * Shared implementation of Viewer#whenFullyLoaded and TiledImage#whenFullyLoaded.
-         * Resolves only on the loaded edge: 'fully-loaded-change' is a *change* event and is
-         * raised for the true -> false transition too (a zoom starting to load a new pyramid
-         * level), so the handler must re-check the flag rather than fire on any change.
-         * @private
-         * @function
-         * @param {OpenSeadragon.EventSource} source - object exposing getFullyLoaded() and
-         *      raising 'fully-loaded-change'.
-         * @param {function(Boolean)} callback - called with true when fully loaded, or false
-         *      if the optional timeout expired first. Never called after the returned
-         *      canceller has run.
-         * @param {Object} [options]
-         * @param {Number} [options.timeout=0] - give up after this many milliseconds and call
-         *      back with false. 0 or absent waits indefinitely.
-         * @returns {function()} canceller - removes the handler, clears the timer and
-         *      guarantees the callback is not invoked afterwards. Idempotent.
-         */
-        _whenFullyLoaded: function( source, callback, options ) {
-            options = $.extend({ timeout: 0 }, options);
-
-            let settled = false,
-                timer = null,
-                handler = null;
-
-            const cancel = function() {
-                if (settled) {
-                    return;
-                }
-                settled = true;
-                if (timer !== null) {
-                    window.clearTimeout(timer);
-                    timer = null;
-                }
-                if (handler) {
-                    source.removeHandler('fully-loaded-change', handler );
-                }
-            };
-
-            const finish = function(fullyLoaded) {
-                if (settled) {
-                    return;
-                }
-                cancel();
-                callback( fullyLoaded );
-            };
-
-            handler = function(event) {
-                if (event.fullyLoaded) {
-                    finish( true );
-                }
-                // false transition: a new level started loading. Keep waiting.
-            };
-
-            if ( source.getFullyLoaded() ) {
-                // Preserve the contract that the callback is always asynchronous.
-                timer = window.setTimeout( function() {
-                    timer = null;
-                    finish( true );
-                }, 1 );
-                return cancel;
-            }
-
-            source.addHandler('fully-loaded-change', handler );
-
-            if (options.timeout > 0) {
-                timer = window.setTimeout(function() {
-                    timer = null;
-                    finish(false);
-                }, options.timeout);
-            }
-
-            return cancel;
         },
 
 
@@ -8039,8 +7996,8 @@ $.Control.prototype = {
      */
     destroy: function() {
         this.wrapper.removeChild( this.element );
-        if (this.anchor !== $.ControlAnchor.NONE) {
-            this.container.removeChild(this.wrapper);
+        if (this.wrapper.parentNode) {
+            this.wrapper.parentNode.removeChild(this.wrapper);
         }
     },
 
@@ -8977,6 +8934,11 @@ $.Viewer = function( options ) {
         maxImageCacheCount: this.maxImageCacheCount
     });
 
+    // maxTilesPerFrame is deprecated, but an application that set it deliberately still gets the pacing it
+    // asked for, even under the scheduler. Left alone, the default would be a cap of one tile per frame,
+    // which is precisely the frame-rate coupling the scheduler exists to remove.
+    this._maxTilesPerFrameSet = options.maxTilesPerFrame !== undefined;
+
     //Create the drawer based on selected options
     if (Object.prototype.hasOwnProperty.call(this.drawerOptions, 'useCanvas') ){
         $.console.error('useCanvas is deprecated, use the "drawer" option to indicate preferred drawer(s)');
@@ -9161,20 +9123,20 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
     },
 
     /**
-     * Executes the provided callback once all TiledImages in the world are fully loaded. If
-     * already loaded, schedules the callback asynchronously. Resolves only on the loaded edge:
-     * a 'fully-loaded-change' event reporting fullyLoaded=false (a zoom that started loading a
-     * new pyramid level) does not resolve the wait.
-     * @param {function(Boolean)} callback - Called with true when fully loaded, or false if
-     *      options.timeout expired first. Callers that must not hang should pass a timeout:
-     *      reporting "gave up" is information the caller needs, not an error.
-     * @param {Object} [options]
-     * @param {Number} [options.timeout=0] - Milliseconds before giving up. 0 waits forever.
-     * @returns {function()} canceller - call to unsubscribe; the callback will not fire.
+     * Executes the provided callback when the TiledImage is fully loaded. If already loaded,
+     * schedules the callback asynchronously. Otherwise, attaches a one-time event listener
+     * for the 'fully-loaded-change' event.
+     * @param {Function} callback - Function to execute when loading completes
      * @memberof OpenSeadragon.Viewer.prototype
      */
-    whenFullyLoaded: function(callback, options) {
-        return $._whenFullyLoaded(this, callback, options);
+    whenFullyLoaded: function(callback) {
+        if (this.getFullyLoaded()) {
+            setTimeout(callback, 1); // Asynchronous execution
+        } else {
+            this.addOnceHandler('fully-loaded-change', function() {
+                callback(); // Maintain context
+            });
+        }
     },
 
     // deprecated
@@ -10476,6 +10438,9 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                 wrapHorizontal: this.wrapHorizontal,
                 wrapVertical: this.wrapVertical,
                 maxTilesPerFrame: this.maxTilesPerFrame,
+                frameDispatchCap: this._maxTilesPerFrameSet ? this.maxTilesPerFrame : 0,
+                serverProtocol: this.serverProtocol,
+                networkShare: this.networkShare,
                 loadDestinationTilesOnAnimation: this.loadDestinationTilesOnAnimation,
                 immediateRender: this.immediateRender,
                 blendTime: this.blendTime,
@@ -12874,6 +12839,11 @@ function updateOnce( viewer ) {
     const viewportChange = viewer.viewport.update() || viewerWasResized;
     let animated = viewer.world.update(viewportChange) || viewportChange;
 
+    // world.update() is what rebuilds each tiled image's wish list, so this is the first point at which the
+    // scheduler has this frame's selection to work from. It must not move into the drawWorld() branch below,
+    // which is skipped whenever the world is quiescent - loading would then stall while still incomplete.
+    $.tileLoadScheduler.pump();
+
     if (viewportChange) {
         /**
          * Raised when any spring animation update occurs (zoom, pan, etc.),
@@ -12960,8 +12930,15 @@ function updateOnce( viewer ) {
     //viewer.profiler.endUpdate();
 }
 
-function drawWorld( viewer, viewportChanged ) {
-    if (viewportChanged) {
+function drawWorld( viewer, tileSelectionChanged ) {
+    // Queued jobs are tiles that were selected for the view as it was when they were queued, so they only go
+    // stale when that view changes - either the viewport moved or an item's own transform did. Clearing
+    // unconditionally aborts jobs that are still wanted, and they can then only be re-selected at the
+    // per-frame rate, which starves the loader whenever imageLoaderLimit is set.
+    // Under the scheduler this is not needed at all: wish lists are rebuilt from scratch every frame, so a
+    // tile that stopped being wanted is simply never offered again, and clearing would abort tiles that
+    // are still wanted at the destination.
+    if ( tileSelectionChanged && !$.tileLoadScheduler.isEnabled() ) {
         viewer.imageLoader.clear();
     }
     viewer.world.draw();
@@ -15837,7 +15814,7 @@ $.IIIFTileSource = function( options ){
     }
 
     // Create an array with precise resolution sizes if these have been supplied through the 'sizes' object
-    if( this.sizes ) {
+    if( this.sizes && this.sizes.length > 0 ) {
         let sizeLength = this.sizes.length;
 
         // Create a copy of the sizes list and sort in ascending order
@@ -16799,8 +16776,8 @@ $.extend( $.IIIFTileSource.prototype, $.TileSource.prototype, /** @lends OpenSea
      * @param {Object} data - The raw metadata object to check
      * @returns {Boolean} - True if supported, false otherwise
      */
-    supports: function(data) {
-      return (data && data.type === "iris" && data.serverUrl && data.slideId);
+    supports: function (data) {
+      return !!(data && data.type === "iris" && data.serverUrl && data.slideId);
     },
 
     /**
@@ -18499,11 +18476,93 @@ class WeightedGraph {
 }
 
 let _imageConversionWorker;
+// 'untried' | 'ready' | 'unavailable' - once 'unavailable' we never try again, since the usual causes
+// (no Worker support, a Content-Security-Policy that forbids blob: workers) do not change mid-session.
+let _workerState = 'untried';
 let _conversionId = 0;
+// How many worker operations timed out in a row. A single timeout is treated as a slow request (the tile
+// retries like any other), but a worker that stops answering altogether must not swallow every tile.
+let _consecutiveWorkerTimeouts = 0;
+const MAX_CONSECUTIVE_WORKER_TIMEOUTS = 3;
 // id -> { resolve, reject, timer? }
 const _pendingConversions = new Map();
 let __warnedNoSAB = false;
 const __hasSAB = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated === true;
+
+/**
+ * Whether image decoding can be offloaded to a worker. Decides once, lazily, and degrades permanently and
+ * silently to main-thread decoding if the worker cannot be created or later dies.
+ * @private
+ * @returns {Boolean}
+ */
+function canUseWorker() {
+    if (_workerState === 'ready') {
+        return true;
+    }
+    if (_workerState === 'unavailable') {
+        return false;
+    }
+
+    if (!$.supportsAsync ||
+        typeof Worker === 'undefined' ||
+        typeof createImageBitmap !== 'function' ||
+        typeof URL === 'undefined' ||
+        typeof URL.createObjectURL !== 'function') {
+        _workerState = 'unavailable';
+        return false;
+    }
+
+    try {
+        getIBWorker();
+        _workerState = 'ready';
+        return true;
+    } catch (e) {
+        // Most commonly a CSP that blocks blob:/worker-src. Not an error worth alarming the user about -
+        // decoding simply stays on the main thread.
+        $.console.log('[DataTypeConverter] Image decoding worker unavailable, decoding on the main thread.', e);
+        _imageConversionWorker = undefined;
+        _workerState = 'unavailable';
+        return false;
+    }
+}
+
+/**
+ * Builds an error that marks the worker itself as the failure, as opposed to the operation it was asked to
+ * perform. Only these are worth retrying on the main thread: a 404 or a corrupt image fails there just as
+ * well, and retrying it would double the failed network traffic.
+ * @private
+ * @param {String} reason
+ * @returns {Error}
+ */
+function workerFatalError(reason) {
+    const error = new Error(reason);
+    error.__osdWorkerFatal = true;
+    return error;
+}
+
+/**
+ * Marks the worker as permanently unusable and fails over every conversion still waiting on it.
+ * Terminating also cancels whatever the worker still had in flight, so the main-thread retries the callers
+ * do in response cannot duplicate live requests.
+ * @private
+ * @param {String} reason
+ */
+function disableWorker(reason) {
+    _workerState = 'unavailable';
+    const worker = _imageConversionWorker;
+    _imageConversionWorker = undefined;
+    if (worker) {
+        worker.terminate();
+    }
+    for (const [, entry] of _pendingConversions) {
+        if (entry.timer) {
+            clearTimeout(entry.timer);
+            entry.timer = null;
+        }
+        entry.reject(workerFatalError(reason));
+    }
+    _pendingConversions.clear();
+}
 
 function getIBWorker() {
     if (_imageConversionWorker) {
@@ -18545,11 +18604,17 @@ self.onmessage = async (e) => {
     // eslint-disable-next-line compat/compat
     const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
     _imageConversionWorker = new Worker(url);
+    // eslint-disable-next-line compat/compat
+    URL.revokeObjectURL(url);
 
     _imageConversionWorker.onmessage = (e) => {
         const { id, ok, bmp, err } = e.data || {};
+        _consecutiveWorkerTimeouts = 0;
         const entry = _pendingConversions.get(id);
         if (!entry) {
+            if (bmp && typeof bmp.close === 'function') {
+                bmp.close();
+            }
             return;
         }
         _pendingConversions.delete(id);
@@ -18564,24 +18629,27 @@ self.onmessage = async (e) => {
         }
     };
 
-    _imageConversionWorker.onerror = (e) => {
-        for (const [, entry] of _pendingConversions) {
-            if (entry.timer) {
-                clearTimeout(entry.timer);
-                entry.timer = null;
-            }
-            entry.reject(new Error('Worker error'));
-        }
-        _pendingConversions.clear();
+    _imageConversionWorker.onerror = () => {
+        // A worker that failed once (script blocked, out of memory, ...) will keep failing. Retire it rather
+        // than routing every subsequent tile into the same failure.
+        disableWorker('Worker error');
     };
     return _imageConversionWorker;
 }
 
 function postWorker(op, payload, { timeoutMs = 15000 } = {}) {
-    const worker = getIBWorker();
     const id = ++_conversionId;
 
     return new $.Promise((resolve, reject) => {
+        let worker;
+        try {
+            worker = getIBWorker();
+        } catch (e) {
+            disableWorker('Worker unavailable');
+            reject(workerFatalError(e && e.message ? e.message : 'Worker unavailable'));
+            return;
+        }
+
         // possibly test $.supportsPromise here as well...
         payload.id = id;
         payload.op = op;
@@ -18591,6 +18659,12 @@ function postWorker(op, payload, { timeoutMs = 15000 } = {}) {
             entry.timer = setTimeout(() => {
                 entry.timer = null;
                 _pendingConversions.delete(id);
+                _consecutiveWorkerTimeouts++;
+                if (_consecutiveWorkerTimeouts >= MAX_CONSECUTIVE_WORKER_TIMEOUTS) {
+                    disableWorker(`Worker timeout (${op})`);
+                    reject(workerFatalError(`Worker timeout (${op})`));
+                    return;
+                }
                 reject(new Error(`Worker timeout (${op})`));
             }, timeoutMs);
         }
@@ -18758,11 +18832,19 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
             if (!$.supportsAsync) {
                 return reject("Not supported in sync mode!");
             }
-            if (_imageConversionWorker) {
-                postWorker('decodeFromBlob', { blob }).then(resolve).catch(reject);
+            const decodeOnMainThread = () => createImageBitmap(blob, { colorSpaceConversion: 'none' });
+            if (canUseWorker()) {
+                // The worker may die between the check above and the reply; fall back rather than lose the
+                // tile. Failures the worker itself reports (undecodable data) would fail here too, so they
+                // are propagated instead of being decoded a second time.
+                postWorker('decodeFromBlob', { blob }).catch(e => {
+                    if (e && e.__osdWorkerFatal) {
+                        return decodeOnMainThread();
+                    }
+                    throw e;
+                }).then(resolve, reject);
             } else {
-                // Fallback main thread
-                createImageBitmap(blob, { colorSpaceConversion: 'none' }).then(resolve).catch(reject);
+                decodeOnMainThread().then(resolve, reject);
             }
             return undefined;
         }), 1, 1);
@@ -18893,12 +18975,11 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
         if (from === to) {
             this.copyings[to] = callback;
         } else {
-            //we won't know if somebody added multiple edges, though it will choose some edge anyway
             costPower++;
-            costMultiplier = Math.min(Math.max(costMultiplier, 1), 10 ^ 5);
+            costMultiplier = Math.min(Math.max(costMultiplier, 1), 1e5);
             this.graph.addVertex(from);
             this.graph.addVertex(to);
-            this.graph.addEdge(from, to, costPower * 10 ^ 5 + costMultiplier, callback);
+            this.graph.addEdge(from, to, costPower * 1e5 + costMultiplier, callback);
             this._known = {}; //invalidate precomputed paths :/
         }
     }
@@ -19123,18 +19204,28 @@ $.converter.learn("__private__imageUrl", "imageBitmap", (tile, url) => new $.Pro
             $.console.error(`Unsupported crossOriginPolicy ${policy}. Ignoring the property.`);
         }
     }
-    if (_imageConversionWorker) {
-        return postWorker('fetchDecode', { url, setup }).then(resolve).catch(reject);
+    const fetchDecodeOnMainThread = () =>
+        // eslint-disable-next-line compat/compat
+        fetch(url, setup).then(res => {
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status} loading ${url}`);
+            }
+            return res.blob();
+        }).then(blob => createImageBitmap(blob, { colorSpaceConversion: 'none' }));
+
+    if (canUseWorker()) {
+        url = new URL(url, location.href).href;
+        // The worker may die between the check above and the reply; fall back rather than lose the tile.
+        // HTTP and decode errors the worker reports are relayed as-is: re-fetching them on the main thread
+        // would just double the failed traffic, and tile retries already handle transient ones.
+        return postWorker('fetchDecode', { url, setup }).catch(e => {
+            if (e && e.__osdWorkerFatal) {
+                return fetchDecodeOnMainThread();
+            }
+            throw e;
+        }).then(resolve, reject);
     }
-    // Fallback to the main thread
-    // eslint-disable-next-line compat/compat
-    return fetch(url, setup).then(res => {
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status} loading ${url}`);
-        }
-        return res.blob();
-    }).then(blob => createImageBitmap(blob, { colorSpaceConversion: 'none' })
-    ).then(resolve).catch(reject);
+    return fetchDecodeOnMainThread().then(resolve, reject);
 }), 1, 1);
 $.converter.learn("__private__imageUrl", "__private__imageUrl", (tile, url) => url, 0, 1); //strings are immutable, no need to copy
 }(OpenSeadragon));
@@ -21349,6 +21440,396 @@ function transform( stiffness, x ) {
 }( OpenSeadragon ));
 
 /*
+ * OpenSeadragon - TileLoadScheduler
+ *
+ * Copyright (C) 2009 CodePlex Foundation
+ * Copyright (C) 2010-2025 OpenSeadragon contributors
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ * - Redistributions of source code must retain the above copyright notice,
+ *   this list of conditions and the following disclaimer.
+ *
+ * - Redistributions in binary form must reproduce the above copyright
+ *   notice, this list of conditions and the following disclaimer in the
+ *   documentation and/or other materials provided with the distribution.
+ *
+ * - Neither the name of CodePlex Foundation nor the names of its
+ *   contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+(function( $ ){
+
+// Requests are bounded per origin, because that is what the browser and the server both bound: an HTTP/1.1
+// origin gets about six connections, an HTTP/2 origin multiplexes over one and tolerates far more.
+const BASE_LIMITS = {
+    'http/1.1': 6,
+    'http/1.0': 6,
+    h2: 24,
+    h2c: 24,
+    h3: 24
+};
+// Conservative: over-requesting on HTTP/1.1 costs real head-of-line blocking, while under-requesting on
+// HTTP/2 only costs a little latency.
+const UNKNOWN_LIMIT = 6;
+const MIN_LIMIT = 2;
+// Tiles that never yield an origin (data: URLs, blobs, custom loaders) all share one budget.
+const FALLBACK_ORIGIN = '*';
+// A navigator draws a thumbnail of an image the main viewer is already fetching; it should never compete
+// with it for the origin's budget on equal terms.
+const NAVIGATOR_LIMIT = 1;
+
+const PROTOCOL_ALIASES = {
+    'http/2': 'h2',
+    http2: 'h2',
+    'http/3': 'h3',
+    http3: 'h3',
+    'http1.1': 'http/1.1',
+    'http/1': 'http/1.1'
+};
+
+/**
+ * @class TileLoadScheduler
+ * @memberof OpenSeadragon
+ * @classdesc Decides how many tile downloads may be in flight, and which tiles they should be.
+ *
+ * There is one instance for the whole page ({@link OpenSeadragon.tileLoadScheduler}), because the limit that
+ * matters is per origin and several viewers on a page routinely share one tile server. Dispatch is driven by
+ * request completion rather than by the frame loop, so download throughput follows network latency instead
+ * of the client's frame rate.
+ *
+ * Each participating {@link OpenSeadragon.TiledImage} publishes a ranked wish list once per frame; the
+ * scheduler round-robins over the images and takes the head of each list while the origin has capacity.
+ * Because a wish list is rebuilt from scratch every frame, a tile that is no longer wanted simply stops
+ * being offered - no queue has to be cleared to abandon it.
+ */
+$.TileLoadScheduler = function() {
+    // origin -> { inFlight: Number, protocol: String|null }
+    this._origins = new Map();
+    this._images = [];
+    this._cursor = 0;
+    this._observer = null;
+    this._observing = false;
+};
+
+/** @lends OpenSeadragon.TileLoadScheduler.prototype */
+$.TileLoadScheduler.prototype = {
+
+    /**
+     * Normalize a protocol identifier. Accepts the ALPN ids reported by the Performance API as well as the
+     * friendlier spellings a developer is likely to write.
+     * @param {String|Boolean} protocol
+     * @returns {String|null} a key of BASE_LIMITS, or null if unrecognized
+     */
+    normalizeProtocol: function(protocol) {
+        if (!protocol || protocol === true || protocol === 'auto') {
+            return null;
+        }
+        const key = String(protocol).toLowerCase();
+        const aliased = PROTOCOL_ALIASES[key] || key;
+        return BASE_LIMITS[aliased] ? aliased : null;
+    },
+
+    /**
+     * The origin a URL belongs to, for budgeting purposes.
+     * @param {String} url
+     * @returns {String}
+     */
+    originOf: function(url) {
+        if (!url || typeof url !== 'string') {
+            return FALLBACK_ORIGIN;
+        }
+        try {
+            // Falls through to the shared bucket below wherever URL or its origin is unavailable.
+            // eslint-disable-next-line compat/compat
+            const origin = new URL(url, window.location.href).origin;
+            // Opaque origins (data:, blob: in some browsers) stringify to "null"; they are not a real
+            // connection pool, so they go in the shared bucket.
+            return (!origin || origin === 'null') ? FALLBACK_ORIGIN : origin;
+        } catch (e) {
+            return FALLBACK_ORIGIN;
+        }
+    },
+
+    /**
+     * Register a tiled image that wants scheduled loading.
+     * @param {OpenSeadragon.TiledImage} tiledImage
+     */
+    register: function(tiledImage) {
+        if (this._images.indexOf(tiledImage) === -1) {
+            this._images.push(tiledImage);
+        }
+        if (tiledImage.serverProtocol === 'auto') {
+            this._startObserving();
+        }
+    },
+
+    /**
+     * Stop scheduling for a tiled image. Must be called when the image is destroyed, or the scheduler keeps
+     * it - and everything it references - alive for the lifetime of the page.
+     * @param {OpenSeadragon.TiledImage} tiledImage
+     */
+    unregister: function(tiledImage) {
+        const index = this._images.indexOf(tiledImage);
+        if (index > -1) {
+            this._images.splice(index, 1);
+            if (this._cursor > index) {
+                this._cursor--;
+            }
+        }
+    },
+
+    /**
+     * @returns {Boolean} whether any image is currently using the scheduler
+     */
+    isEnabled: function() {
+        return this._images.length > 0;
+    },
+
+    /**
+     * Book a slot on an origin. Called when a request is dispatched, not when it reaches the wire: a job
+     * waiting behind imageLoaderLimit, or staged for batching, is still work we have committed to.
+     * @param {String} [origin] falsey means the shared budget
+     */
+    noteStart: function(origin) {
+        const record = this._recordFor(origin);
+        record.inFlight++;
+    },
+
+    /**
+     * Release a slot on an origin.
+     * @param {String} [origin] falsey means the shared budget
+     */
+    noteFinish: function(origin) {
+        const record = this._recordFor(origin);
+        record.inFlight = Math.max(0, record.inFlight - 1);
+    },
+
+    /**
+     * Record the wire protocol observed for an origin.
+     * @param {String} origin
+     * @param {String} protocol
+     */
+    noteProtocol: function(origin, protocol) {
+        const normalized = this.normalizeProtocol(protocol);
+        if (normalized) {
+            this._recordFor(origin).protocol = normalized;
+        }
+    },
+
+    /**
+     * How many concurrent requests this origin should carry right now. A pure function of current state -
+     * callers that need it more than once per frame cache the result themselves.
+     * @param {String} [origin] falsey means the shared budget
+     * @returns {Number}
+     */
+    limitFor: function(origin) {
+        origin = origin || FALLBACK_ORIGIN;
+
+        let base = Infinity;
+        let share = 1;
+        let hardLimit = 0;
+        let found = false;
+
+        for (const image of this._images) {
+            // Before its first tile is dispatched an image has no known origin and draws on the shared
+            // budget, so it has to be matched there too or its networkShare would be ignored until then.
+            if ((image._schedulerOrigin || FALLBACK_ORIGIN) !== origin) {
+                continue;
+            }
+            found = true;
+
+            // An explicit protocol beats a detected one, and where several images disagree about an origin
+            // the most conservative answer wins.
+            const declared = this.normalizeProtocol(image.serverProtocol);
+            const detected = this._origins.has(origin) ? this._origins.get(origin).protocol : null;
+            const protocol = declared || detected;
+            base = Math.min(base, protocol ? BASE_LIMITS[protocol] : UNKNOWN_LIMIT);
+
+            // "Use less of this page's bandwidth" is a request that has to be honoured, so the smallest
+            // share asked for by any image on the origin applies to all of them.
+            const imageShare = typeof image.networkShare === 'number' ? image.networkShare : 1;
+            share = Math.min(share, Math.max(0, imageShare));
+
+            // A navigator is a thumbnail of what the main viewer is already loading; it gets a token slot.
+            if (this._isNavigatorImage(image)) {
+                hardLimit = hardLimit ? Math.min(hardLimit, NAVIGATOR_LIMIT) : NAVIGATOR_LIMIT;
+            }
+
+            const jobLimit = image._imageLoader && image._imageLoader.jobLimit;
+            if (jobLimit) {
+                hardLimit = hardLimit ? Math.min(hardLimit, jobLimit) : jobLimit;
+            }
+        }
+
+        if (!found) {
+            base = UNKNOWN_LIMIT;
+        }
+
+
+        let limit = Math.max(MIN_LIMIT, Math.round(base * share));
+        if (hardLimit) {
+            limit = Math.min(limit, hardLimit);
+        }
+        return limit;
+    },
+
+    /**
+     * @param {String} [origin] falsey means the shared budget
+     * @returns {Number} requests currently booked against the origin
+     */
+    inFlightFor: function(origin) {
+        return this._recordFor(origin).inFlight;
+    },
+
+    /**
+     * Dispatch as many wanted tiles as the origins have room for, taking one tile from each image in turn so
+     * that a busy image cannot starve a quiet one. Visibility scores are computed against each image's own
+     * pyramid, so they are not comparable across images and cannot be used to order them.
+     */
+    pump: function() {
+        const images = this._images;
+        if (!images.length) {
+            return;
+        }
+
+        let dispatched;
+        // Each sweep hands out at most one tile per image. Repeat while anything is still moving, so a
+        // completion that frees several slots refills all of them without waiting for the next frame.
+        do {
+            dispatched = false;
+            for (let i = 0; i < images.length; i++) {
+                const image = images[(this._cursor + i) % images.length];
+                if (this._dispatchOne(image)) {
+                    dispatched = true;
+                }
+            }
+            this._cursor = (this._cursor + 1) % images.length;
+        } while (dispatched);
+    },
+
+    // private
+    _dispatchOne: function(image) {
+        const wishList = image._wishList;
+        if (!wishList || !wishList.length) {
+            return false;
+        }
+
+        // Only set when the deprecated maxTilesPerFrame option was given explicitly, so that an application
+        // relying on it keeps the pacing it asked for.
+        if (image.frameDispatchCap && image._dispatchedThisFrame >= image.frameDispatchCap) {
+            return false;
+        }
+
+        // _schedulerLimit is refreshed once per frame, by the same pass that fills the wish list - so a
+        // non-empty wish list always comes with a current limit, and limitFor() (which scans every
+        // registered image) does not have to run again on each turn of the dispatch loop.
+        if (this.inFlightFor(image._schedulerOrigin) >= image._schedulerLimit) {
+            return false;
+        }
+
+        while (wishList.length) {
+            const tile = wishList.shift();
+            // The list was built before the most recent completions landed, so a tile in it may already
+            // have been satisfied elsewhere.
+            if (tile && !tile.loaded && !tile.loading) {
+                image._dispatchedThisFrame++;
+                image._loadTile(tile, image._wishListTime);
+                return true;
+            }
+        }
+        return false;
+    },
+
+    // private
+    // The single funnel for every per-origin read and write, and therefore the one place that has to know
+    // what an absent origin means: an image whose first tile has not been dispatched yet, or a tile with no
+    // real origin at all, draws on the shared budget.
+    _recordFor: function(origin) {
+        origin = origin || FALLBACK_ORIGIN;
+        let record = this._origins.get(origin);
+        if (!record) {
+            record = { inFlight: 0, protocol: null };
+            this._origins.set(origin, record);
+        }
+        return record;
+    },
+
+    // private
+    _isNavigatorImage: function(image) {
+        // A navigator is itself a Viewer, and its own viewer property points at the one it belongs to.
+        return !!(image.viewer && image.viewer.viewer);
+    },
+
+    // private
+    _startObserving: function() {
+        if (this._observing || typeof PerformanceObserver === 'undefined') {
+            return;
+        }
+        this._observing = true;
+
+        const _this = this;
+        try {
+            // eslint-disable-next-line compat/compat
+            this._observer = new PerformanceObserver(function(list) {
+                for (const entry of list.getEntries()) {
+                    // nextHopProtocol is the empty string for a cross-origin response without a
+                    // Timing-Allow-Origin header, which is the default for most tile servers. That is why
+                    // serverProtocol can also be stated outright.
+                    if (entry.nextHopProtocol) {
+                        _this.noteProtocol(_this.originOf(entry.name), entry.nextHopProtocol);
+                    }
+                }
+            });
+            // buffered picks up responses that arrived before the first scheduled image was registered.
+            this._observer.observe({ type: 'resource', buffered: true });
+        } catch (e) {
+            $.console.warn('Could not observe resource timing, tile loading concurrency will use the ' +
+                'conservative default. Set the serverProtocol option to state it outright.', e);
+            this._observer = null;
+        }
+    },
+
+    /**
+     * Drop all state. Intended for tests.
+     */
+    reset: function() {
+        this._origins.clear();
+        this._images.length = 0;
+        this._cursor = 0;
+        if (this._observer) {
+            this._observer.disconnect();
+            this._observer = null;
+        }
+        this._observing = false;
+    }
+};
+
+/**
+ * The page-wide tile load scheduler.
+ * @member {OpenSeadragon.TileLoadScheduler} tileLoadScheduler
+ * @memberof OpenSeadragon
+ */
+$.tileLoadScheduler = new $.TileLoadScheduler();
+
+}( OpenSeadragon ));
+
+/*
  * OpenSeadragon - ImageLoader
  *
  * Copyright (C) 2009 CodePlex Foundation
@@ -21523,6 +22004,9 @@ $.ImageJob.prototype = {
         const selfAbort = this.abort;
 
         this.jobId = window.setTimeout(function () {
+            // Tear the request down as well, otherwise it keeps occupying a browser connection (or an HTTP/2
+            // stream) until the server gives up, long after we stopped caring about the result.
+            self.source.downloadTileAbort(self);
             self.fail("Image load exceeded timeout (" + self.timeout + " ms)", null);
         }, this.timeout);
 
@@ -21635,35 +22119,11 @@ $.BatchImageJob = function(options) {
 
 $.BatchImageJob.prototype = {
     /**
-     * Release every child job. Defined on the prototype so that a batch which was queued
-     * rather than started still has a release path: ImageLoader#clear() drops queued jobs,
-     * and a child's abort is the caller-supplied release (TiledImage#_loadTile sets
-     * tile.loading = false). Dropping the refs without calling it strands the tile as
-     * permanently loading, so it is never re-selected for download.
-     *
-     * Does not invoke this.callback: a queued batch never incremented jobsInProgress, so
-     * completing it here would corrupt the counter.
-     */
-    abort: function() {
-        const started = !!this.jobId;
-        for (let j of this.jobs) {
-            // A batch that never started has children with jobId === null - prepareForBatch()
-            // only runs inside start(). Release all of them. For a started batch, abort only
-            // running jobs by checking jobId. In theory, all should finish at once, but we
-            // cannot enforce the logic executed by each batch job.
-            if ((!started || j.jobId) && typeof j.abort === "function") {
-                j.abort();
-            }
-        }
-    },
-
-    /**
      * Starts the batch job.
      */
     start: function() {
         this._finishedJobs = 0;
         const self = this;
-        const releaseChildren = $.BatchImageJob.prototype.abort;
 
         // Set timeout for the whole batch
         this.jobId = window.setTimeout(function () {
@@ -21673,7 +22133,13 @@ $.BatchImageJob.prototype = {
         this.abort = function() {
             // we don't call job.start() for each job, so abort is callable here
             self.source.downloadTileBatchAbort(self);
-            releaseChildren.call(self);
+            for (let j of this.jobs) {
+                // Abort only running jobs by checking jobId. In theory, all should finish at once,
+                // but we cannot enforce the logic executed by each batch job.
+                if (j.jobId && j.abort) {
+                    j.abort();
+                }
+            }
         };
 
         const wrap = (fn, job) => {
@@ -21695,12 +22161,35 @@ $.BatchImageJob.prototype = {
 
         for (let j of this.jobs) {
             // Handle timeout securely
-            j.finish = wrap(j.finish, j);
-            j.fail = wrap(j.fail, j);
+            const originalFinish = j.finish,
+                originalFail = j.fail;
+            j.finish = wrap(originalFinish, j);
+            j.fail = wrap(originalFail, j);
+            j.unbatch = function() {
+                this.finish = originalFinish;
+                this.fail = originalFail;
+                delete this.unbatch;
+            };
             j.prepareForBatch();
         }
 
         this.source.downloadTileBatchStart(this);
+    },
+
+    /**
+     * Aborts a batch job that has not been started yet. Once start() runs it installs its own abort
+     * that also tears down the request; this one only exists for jobs still sitting in the queue.
+     * Their child jobs still carry the caller-supplied release callback (it resets tile.loading), so
+     * dropping the references without calling it strands the tiles as permanently "loading".
+     */
+    abort: function() {
+        for (let i = 0; i < this.jobs.length; i++) {
+            const job = this.jobs[i];
+            if (typeof job.abort === "function") {
+                job.abort();
+            }
+        }
+        this.jobs.length = 0;
     },
 
     /**
@@ -21729,17 +22218,10 @@ $.BatchImageJob.prototype = {
             }
         }
 
-        // The wrapped child fail nulls jobId and fires the callback once the last child
-        // settles. If that already happened - or if this batch was never started, or has
-        // already failed - the batch is settled and must not call back a second time:
-        // completeBatchJob would decrement jobsInProgress again and drive it negative,
-        // which permanently disables imageLoaderLimit.
-        if (!this.jobId) {
-            return;
+        if (this.jobId) {
+            window.clearTimeout(this.jobId);
+            this.jobId = null;
         }
-
-        window.clearTimeout(this.jobId);
-        this.jobId = null;
 
         if (this.callback) {
             this.callback(this);
@@ -21813,6 +22295,8 @@ $.ImageLoader.prototype = {
             },
             newJob = new $.ImageJob(jobOptions);
 
+        _bookOrigin(newJob);
+
         const sourceWantsBatching = options.source && options.source.batchEnabled();
         if (sourceWantsBatching) {
             // Mark job as batched so completeJob knows not to decrement global counters
@@ -21821,9 +22305,8 @@ $.ImageLoader.prototype = {
             return false;
         }
 
-        if ( !this.jobLimit || this.jobsInProgress < this.jobLimit ) {
-            newJob.start();
-            this.jobsInProgress++;
+        if ( this.canAcceptNewJob() ) {
+            _startJob(this, newJob);
             return true;
         }
         this.jobQueue.push( newJob );
@@ -21897,9 +22380,8 @@ $.ImageLoader.prototype = {
             // no abort here
         });
 
-        if ( !this.jobLimit || this.jobsInProgress < this.jobLimit ) {
-            batchJob.start();
-            this.jobsInProgress++;
+        if ( this.canAcceptNewJob() ) {
+            _startJob(this, batchJob);
         } else {
             this.jobQueue.push(batchJob);
         }
@@ -21919,8 +22401,11 @@ $.ImageLoader.prototype = {
     clear: function() {
         for( let i = 0; i < this.jobQueue.length; i++ ) {
             const job = this.jobQueue[i];
-            // The guard remains for plain ImageJobs, which carry an abort only if
-            // the caller supplied one.
+            // Aborting never reaches completeJob, so the origin has to be released here or its budget leaks.
+            _releaseOrigin(job);
+            if (job.jobs) {
+                job.jobs.forEach(_releaseOrigin);
+            }
             if ( typeof job.abort === "function" ) {
                 job.abort();
             }
@@ -21932,13 +22417,13 @@ $.ImageLoader.prototype = {
                 const bucket = this._batchBuckets[i];
                 clearTimeout(bucket.timer);
                 bucket.timer = null;
-                // Staged jobs never started, but they carry the caller-supplied release
-                // (TiledImage#_loadTile sets tile.loading = false). Dropping the refs without
-                // calling it strands the tile as permanently loading, so it is never
-                // re-selected for download.
+                // Staged jobs never started, so their abort is still the caller-supplied release callback (it
+                // resets tile.loading). Dropping the refs without calling it strands the tile as permanently
+                // "loading", so it is never re-selected for download.
                 for (let j = 0; j < bucket.jobs.length; j++) {
                     const job = bucket.jobs[j];
-                    if (typeof job.abort === "function") {
+                    _releaseOrigin(job);
+                    if ( typeof job.abort === "function" ) {
                         job.abort();
                     }
                 }
@@ -21959,75 +22444,36 @@ $.ImageLoader.prototype = {
  * @param callback - Called once cleanup is finished.
  */
 function completeJob(loader, job, callback) {
-    // Read before the retry branch clears it: a retried child would otherwise release a slot
-    // it never held (the parent batch holds it), on top of completeBatchJob's own release.
+    // Must be sampled before the retry branch below clears the flag: the counter was incremented for the parent
+    // BatchImageJob, never for its children, so deciding on the post-retry value would decrement it twice.
     const wasBatched = job.isBatched;
 
+    // Unlike jobsInProgress, this is booked per job rather than per batch, so a batch child releases here too.
+    _releaseOrigin(job);
+
     if (job.errorMsg && job.data === null && job.tries < 1 + loader.tileRetryMax) {
-        // Retries are ran separately, outside of any batch.
+        // Retries are ran separately.
         job.isBatched = false;
+        if (typeof job.unbatch === "function") {
+            job.unbatch();
+        }
         loader.failedTiles.push(job);
     }
 
     // CRITICAL: Child batch job items are marked as batched - do NOT decrement.
-    // Deliberately not clamped at zero, unlike completeBatchJob: the single-job path can
-    // complete more than once per start (ImageJob#fail has no once-guard) and the accounting
-    // relies on the counter being allowed to go negative to absorb it - see the
-    // jobsInProgress < 1 wait in test/helpers/test.js. Clamping here without first fixing
-    // that root cause inflates the counter and permanently saturates the loader.
     if (!wasBatched) {
         loader.jobsInProgress--;
     }
 
-    pumpQueue(loader);
+    _pumpQueue(loader);
 
     if (callback) {
         callback(job.data, job.errorMsg, job.request, job.dataType, job.tries);
     }
-}
 
-/**
- * A completed batch frees exactly one slot. Clamped at zero: a double completion must not make
- * canAcceptNewJob() permanently true, which would disable imageLoaderLimit entirely. Safe for
- * the batch path because BatchImageJob#fail now calls back exactly once, so this is a backstop
- * rather than a correction. See completeJob for why the single-job path is not clamped.
- * @method
- * @private
- * @param loader - ImageLoader the job belonged to.
- */
-function releaseSlot(loader) {
-    if (loader.jobsInProgress > 0) {
-        loader.jobsInProgress--;
-    } else {
-        $.console.warn('ImageLoader: job completed while no job was in progress. ' +
-            'Ignoring to keep imageLoaderLimit effective.');
-    }
-}
-
-/**
- * Start the next queued job, then the next retry. Shared by single and batch completions:
- * a batch frees a slot too, and previously only single-job completions drained the queue,
- * so a loader whose outstanding work was all batches could leave jobQueue stalled.
- * @method
- * @private
- * @param loader - ImageLoader to pump.
- */
-function pumpQueue(loader) {
-    if (loader.canAcceptNewJob() && loader.jobQueue.length > 0) {
-        let nextJob = loader.jobQueue.shift();
-        nextJob.start();
-        loader.jobsInProgress++;
-    }
-
-    if (loader.tileRetryMax > 0 && loader.jobQueue.length === 0) {
-        if (loader.canAcceptNewJob() && loader.failedTiles.length > 0) {
-            let nextJob = loader.failedTiles.shift();
-            setTimeout(function () {
-                nextJob.start();
-            }, loader.tileRetryDelay);
-            loader.jobsInProgress++;
-        }
-    }
+    // After the callback, not before: _onTileLoad has to have marked the tile loaded, or the scheduler can
+    // pick the very tile that just finished straight back out of a wish list built before it landed.
+    $.tileLoadScheduler.pump();
 }
 
 /**
@@ -22039,9 +22485,111 @@ function pumpQueue(loader) {
  * @param {BatchImageJob} job - The ImageJob that has completed.
  */
 function completeBatchJob(loader, job) {
-    releaseSlot(loader);
+    loader.jobsInProgress--;
     job.jobs.length = 0; // make sure items are detached
-    pumpQueue(loader);
+    _pumpQueue(loader);
+    $.tileLoadScheduler.pump();
+}
+
+/**
+ * Starts a job and books the slot it occupies. Every place that puts work on the wire goes through here,
+ * so the in-flight count has exactly one definition.
+ * @method
+ * @private
+ * @param {OpenSeadragon.ImageLoader} loader
+ * @param {OpenSeadragon.ImageJob|BatchImageJob} job
+ * @param {Number} [delay] milliseconds to wait before starting; the slot is booked immediately either way
+ */
+function _startJob(loader, job, delay) {
+    // A retry was released when its previous attempt completed, so it has to be booked again.
+    _bookOrigin(job);
+    // Counted before start(), not after: start() arms its timeout before handing control to the tile
+    // source, so even a downloadTileStart() that throws still ends in fail() -> completeJob() and releases
+    // the slot. Counting afterwards would skip the increment and let that release run the counter negative.
+    loader.jobsInProgress++;
+    if (delay) {
+        setTimeout(function () {
+            job.start();
+        }, delay);
+    } else {
+        job.start();
+    }
+}
+
+/**
+ * The tiled image a job's tile belongs to. A job always carries its tile, and a tile always knows its image,
+ * which is where the scheduler's origin was resolved - so nothing about the origin has to be carried on the
+ * job itself. A parent BatchImageJob holds children rather than a tile of its own and so resolves to null,
+ * which is correct: its children are booked individually.
+ * @method
+ * @private
+ * @param {OpenSeadragon.ImageJob|BatchImageJob} job
+ * @returns {OpenSeadragon.TiledImage|null}
+ */
+function _jobImage(job) {
+    return (job && job.tile && job.tile.tiledImage) || null;
+}
+
+/**
+ * Books a slot on the job's origin with the page-wide scheduler. Idempotent, because a job is booked when it
+ * is dispatched and again when a retry restarts it, and released exactly once in between.
+ *
+ * Called when the job is created rather than when its request reaches the wire: a job waiting behind
+ * jobLimit, or staged for batching, is work already committed to, and a scheduler that could not see it
+ * would keep handing out more.
+ * @method
+ * @private
+ * @param {OpenSeadragon.ImageJob|BatchImageJob} job
+ */
+function _bookOrigin(job) {
+    const image = _jobImage(job);
+    if (!image || !image.serverProtocol || !image._schedulerOrigin || job._originBooked) {
+        return;
+    }
+    job._originBooked = true;
+    $.tileLoadScheduler.noteStart(image._schedulerOrigin);
+}
+
+/**
+ * Releases the slot booked by _bookOrigin. Must be reached on every way a job can end - completion,
+ * failure, timeout and abort - or the origin's budget leaks.
+ *
+ * Keyed off _originBooked and _schedulerOrigin, never off serverProtocol: that option can be turned off at
+ * runtime, and a release that stopped matching its booking would strand the slot for the life of the page.
+ * _schedulerOrigin is written once, before the image's first job exists, so the two always agree.
+ * @method
+ * @private
+ * @param {OpenSeadragon.ImageJob|BatchImageJob} job
+ */
+function _releaseOrigin(job) {
+    if (!job || !job._originBooked) {
+        return;
+    }
+    job._originBooked = false;
+    $.tileLoadScheduler.noteFinish(_jobImage(job)._schedulerOrigin);
+}
+
+/**
+ * Starts the next waiting job now that a slot has been freed: queued jobs first, then delayed retries of
+ * failed ones. Both completion paths must call this - completing a batch frees a slot just like any other job.
+ * @method
+ * @private
+ * @param {OpenSeadragon.ImageLoader} loader
+ */
+function _pumpQueue(loader) {
+    // Refill every slot that is free, not just one: a batch completing releases as many slots as it held,
+    // and raising jobLimit at runtime frees several at once. Bounded by jobLimit, and when jobLimit is 0
+    // nothing is ever queued in the first place.
+    while (loader.canAcceptNewJob() && loader.jobQueue.length > 0) {
+        _startJob(loader, loader.jobQueue.shift());
+    }
+
+    // Retries are paced by tileRetryDelay rather than by free slots, so only one is released per completion.
+    if (loader.tileRetryMax > 0 && loader.jobQueue.length === 0) {
+        if (loader.canAcceptNewJob() && loader.failedTiles.length > 0) {
+            _startJob(loader, loader.failedTiles.shift(), loader.tileRetryDelay);
+        }
+    }
 }
 
 // Consistent data validity checker
@@ -22256,6 +22804,16 @@ $.Tile = function(level, x, y, bounds, exists, url, context2D, loadWithAjax, aja
      * @memberof OpenSeadragon.Tile#
      */
     this.visibility = null;
+    /**
+     * Whether this tile lies in the area the viewport is animating towards, as opposed to only in the
+     * area it currently covers. Tiles along the animation path are usually irrelevant by the time the
+     * user arrives, so they are ranked below tiles at the destination.
+     * Use for comparing tiles.
+     * @member {Boolean} inLoadArea
+     * @memberof OpenSeadragon.Tile#
+     * @private
+     */
+    this.inLoadArea = true;
 
     /**
      * The transparency indicator of this tile.
@@ -23414,7 +23972,9 @@ $.Tile.prototype = {
  * @property {boolean} [preloadCache=true] When internalCacheCreate is used, it can be applied offline
  *   (asynchronously) during data processing = preloading, or just in time before rendering (if necessary).
  *   Preloading supports async handlers, and can use promises. If preloadCache=false, no async (e.g. cache conversion)
- *   logics can be used!
+ *   logics can be used! Note that even with preloadCache=true, internalCacheCreate() can still be invoked from the
+ *   drawing loop if the preloaded cache is missing or was invalidated by setInternalCacheNeedsRefresh(); a drawer
+ *   whose creation is cheap and synchronous is drawn in that same frame, an async one in a later frame.
  *
  * @property {boolean} [offScreen=false] When true, the drawer is not attached to DOM. This must be false
  *   for all drawers created and used for rendering, particularly the main viewer drawer. However,
@@ -25292,6 +25852,11 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
 
     const OpenSeadragon = $; // alias for JSDoc
 
+    // Placeholder transform for batch slots that have no drawable tile: collapses the quad to a
+    // point so nothing is rasterized. Needed because the batch arrays are reused across frames and
+    // would otherwise hand a stale (or undefined) matrix to the shader.
+    const ZERO_MATRIX = new Float32Array(9);
+
     /**
      * @class WebglContextManager
      * @classdesc Handles the webgl context, isolating it from the rest of the DrawerBase API.
@@ -25336,6 +25901,8 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             }
 
             if (this._gl) {
+                // MAX_TEXTURE_IMAGE_UNITS cached
+                this._glNumTextures = this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS) || 0;
                 this._gl.pixelStorei(this._gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, this._unpackWithPremultipliedAlpha);
             }
         }
@@ -25364,7 +25931,7 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             if (!this._gl) {
                 return 0;
             }
-            return this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS);
+            return this._glNumTextures;
         }
 
         /**
@@ -25657,7 +26224,7 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
          * @private
          */
         _makeFirstPassShaderProgram() {
-            const numTextures = this._glNumTextures = this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS);
+            const numTextures = this._glNumTextures;
             const makeMatrixUniforms = () => {
                 return [...Array(numTextures).keys()].map(index => `uniform mat3 u_matrix_${index};`).join('\n');
             };
@@ -25828,7 +26395,7 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             if (gl) {
                 try {
                     // adapted from https://stackoverflow.com/a/23606581/1214731
-                    const numTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+                    const numTextureUnits = this._glNumTextures;
                     if (numTextureUnits && numTextureUnits > 0) {
                         for (let unit = 0; unit < numTextureUnits; ++unit) {
                             gl.activeTexture(gl.TEXTURE0 + unit);
@@ -25861,6 +26428,7 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
 
             // Clean up references
             this._gl = null;
+            this._glNumTextures = 0;
             this._firstPass = null;
             this._secondPass = null;
             this._glFrameBuffer = null;
@@ -25938,6 +26506,14 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             this._clippingContext = null;
             this._renderingCanvas = null;
             this._backupCanvasDrawer = null;
+
+            // Per-batch scratch buffers, allocated once per context in _allocateBatchBuffers()
+            // and reused for every tiled image of every frame.
+            this._batchTexturePosition = null;
+            this._batchTextures = null;
+            this._batchMatrices = null;
+            this._batchOpacities = null;
+
             this._canvasFallbackAllowed = this.viewer.drawerCandidates && this.viewer.drawerCandidates.includes('canvas');
 
             this._imageSmoothingEnabled = true; // will be updated by setImageSmoothingEnabled
@@ -25953,7 +26529,11 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             this._setupCanvases();
             this._setupRenderer();
 
-            this._supportedFormats = ["context2d", "image"];
+            // ImageBitmap is texImage2D-uploadable directly and is the only format that can be decoded off the
+            // main thread, so prefer it where the browser has it.
+            this._supportedFormats = typeof createImageBitmap === 'function' ?
+                ["context2d", "image", "imageBitmap"] :
+                ["context2d", "image"];
             this.context = this._outputContext; // API required by tests
         }
 
@@ -25961,7 +26541,12 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             return {
                 // use detached cache: our type conversion will not collide (and does not have to preserve CPU data ref)
                 usePrivateCache: true,
-                preloadCache: false,
+                // Upload textures during the tile invalidation routine instead of the drawing loop.
+                // texImage2D of an <img>/ImageBitmap is a main-thread operation (it can force the deferred
+                // image decode); doing it just in time stalled exactly the frames on which new tiles arrive.
+                // If preloading has not caught up, getDataForRendering() still falls back to a synchronous
+                // build, so no frame is ever dropped waiting for a texture.
+                preloadCache: true,
                 unpackWithPremultipliedAlpha: false,
             };
         }
@@ -26004,6 +26589,8 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             this._renderingCanvas = null;
             this._clippingCanvas = this._clippingContext = null;
             this._outputCanvas = this._outputContext = null;
+            this._batchTexturePosition = this._batchTextures = null;
+            this._batchMatrices = this._batchOpacities = null;
 
             if(this._backupCanvasDrawer){
                 this._backupCanvasDrawer.destroy();
@@ -26232,6 +26819,17 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             const secondPass = this._glContext.getSecondPass();
             const glFrameBuffer = this._glContext.getFrameBuffer();
             const renderToTexture = this._glContext.getRenderToTexture();
+            // Check MAX_TEXTURE_IMAGE_UNITS - throw error if invalid (will be caught by the caller's try-catch).
+            const maxTextures = this._glContext.getMaxTextures();
+            if(maxTextures <= 0 || maxTextures === null || maxTextures === undefined){
+                // For example, when viewers were created and not destroyed in the test suite, this error
+                // occurred in the TravisCI tests, though it did not happen when testing locally either in
+                // a browser or on the command line via grunt test.
+                throw new Error(`WebGL error: bad value for gl parameter MAX_TEXTURE_IMAGE_UNITS (${maxTextures}). This could happen
+                if too many contexts have been created and not released, or there is another problem with the graphics card.`);
+            }
+            this._allocateBatchBuffers();
+
             const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
             const view = {
                 bounds: bounds,
@@ -26337,23 +26935,11 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                     overallMatrix = viewMatrix.multiply(localMatrix);
                 }
 
-                // Check MAX_TEXTURE_IMAGE_UNITS - throw error if invalid (will be caught by outer try-catch)
-                const maxTextures = this._glContext.getMaxTextures();
-                if(maxTextures <= 0 || maxTextures === null || maxTextures === undefined){
-                    // This can apparently happen on some systems if too many WebGL contexts have been created
-                    // in which case maxTextures can be null, leading to out of bounds errors with the array.
-                    // For example, when viewers were created and not destroyed in the test suite, this error
-                    // occurred in the TravisCI tests, though it did not happen when testing locally either in
-                    // a browser or on the command line via grunt test.
-
-                    throw new Error(`WebGL error: bad value for gl parameter MAX_TEXTURE_IMAGE_UNITS (${maxTextures}). This could happen
-                    if too many contexts have been created and not released, or there is another problem with the graphics card.`);
-                }
-
-                const texturePositionArray = new Float32Array(maxTextures * 12); // 6 vertices (2 triangles) x 2 coordinates per vertex
-                const textureDataArray = new Array(maxTextures);
-                const matrixArray = new Array(maxTextures);
-                const opacityArray = new Array(maxTextures);
+                // reused across frames and tiled images, see _allocateBatchBuffers()
+                const texturePositionArray = this._batchTexturePosition;
+                const textureDataArray = this._batchTextures;
+                const matrixArray = this._batchMatrices;
+                const opacityArray = this._batchOpacities;
 
                 // iterate over tiles and add data for each one to the buffers
                 for(let tileIndex = 0; tileIndex < tilesToDraw.length; tileIndex++){
@@ -26364,12 +26950,15 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
 
                     if (textureInfo && textureInfo.texture) {
                         this._getTileData(tile, tiledImage, textureInfo, overallMatrix, indexInDrawArray, texturePositionArray, textureDataArray, matrixArray, opacityArray);
+                    } else {
+                        // The texture info is not available, so we cannot draw this tile. This is either because
+                        // the tile data is still being processed, or the data was not correct - in that case,
+                        // internalCacheCreate(..) already logged an error. The slot still takes part in the
+                        // draw call, so blank it out: the buffers are reused and would hold the previous frame.
+                        textureDataArray[indexInDrawArray] = null;
+                        matrixArray[indexInDrawArray] = ZERO_MATRIX;
+                        opacityArray[indexInDrawArray] = 0;
                     }
-                    // else {
-                    //   If the texture info is not available, we cannot draw this tile. This is either because
-                    //   the tile data is still being processed, or the data was not correct - in that case,
-                    //   internalCacheCreate(..) already logged an error.
-                    // }
 
                     if( (numTilesToDraw === maxTextures) || (tileIndex === tilesToDraw.length - 1)){
                         // We've filled up the buffers: time to draw this set of tiles
@@ -26385,11 +26974,12 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                         gl.bufferData(gl.ARRAY_BUFFER, texturePositionArray, gl.DYNAMIC_DRAW);
 
                         // set the transform matrix uniform for each tile
-                        matrixArray.forEach( (matrix, index) => {
-                            gl.uniformMatrix3fv(firstPass.uTransformMatrices[index], false, matrix);
-                        });
-                        // set the opacity uniform for each tile
-                        gl.uniform1fv(firstPass.uOpacities, new Float32Array(opacityArray));
+                        for (let i = 0; i < numTilesToDraw; i++) {
+                            gl.uniformMatrix3fv(firstPass.uTransformMatrices[i], false, matrixArray[i]);
+                        }
+                        // set the opacity uniform for each tile; slots beyond numTilesToDraw are never
+                        // sampled, since only 6 * numTilesToDraw vertices are drawn
+                        gl.uniform1fv(firstPass.uOpacities, opacityArray);
 
                         // bind vertex buffers and (re)set attributes before calling gl.drawArrays()
                         gl.bindBuffer(gl.ARRAY_BUFFER, firstPass.bufferOutputPosition);
@@ -26671,6 +27261,23 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                 return;
             }
             this._glContext.setupRenderer(this._renderingCanvas.width, this._renderingCanvas.height);
+            this._allocateBatchBuffers();
+        }
+
+        /**
+         * (Re)allocate the scratch buffers used to stage one batch of tiles. Sized by the context's
+         * texture unit count, which only changes when the context is recreated.
+         * @private
+         */
+        _allocateBatchBuffers(){
+            const maxTextures = this._glContext ? this._glContext.getMaxTextures() : 0;
+            if (maxTextures <= 0 || (this._batchTextures && this._batchTextures.length === maxTextures)) {
+                return;
+            }
+            this._batchTexturePosition = new Float32Array(maxTextures * 12); // 6 vertices (2 triangles) x 2 coordinates per vertex
+            this._batchTextures = new Array(maxTextures).fill(null);
+            this._batchMatrices = new Array(maxTextures).fill(ZERO_MATRIX);
+            this._batchOpacities = new Float32Array(maxTextures);
         }
 
 
@@ -26779,6 +27386,10 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                     this._glContext.destroy();
                     this._glContext = null;
                 }
+
+                // Drop the batch scratch buffers: they may still hold texture references belonging
+                // to the destroyed context. _setupRenderer() below allocates fresh ones.
+                this._batchTextures = null;
 
                 // Note: destroyInternalCache() above already properly cleaned up all texture
                 // and glContext references via internalCacheFree() callbacks
@@ -26902,7 +27513,9 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             const gl = this._glContext ? this._glContext.getContext() : null;
             if (!gl) {
                 $.console.error('WebGL context not available in internalCacheCreate');
-                return {};
+                // Returning null means nothing is stored, so the texture is retried once a context
+                // exists again, instead of caching an empty record the tile can never recover from.
+                return null;
             }
             let texture;
             let position;
@@ -26972,7 +27585,8 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                     }
                 }
             }
-            if (data instanceof Image) {
+            if (data instanceof Image ||
+                (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap)) {
                 const canvas = document.createElement( 'canvas' );
                 canvas.width = data.width;
                 canvas.height = data.height;
@@ -29401,9 +30015,30 @@ $.TiledImage = function( options ) {
         compositeOperation:                $.DEFAULT_SETTINGS.compositeOperation,
         subPixelRoundingForTransparency:   $.DEFAULT_SETTINGS.subPixelRoundingForTransparency,
         maxTilesPerFrame:                  $.DEFAULT_SETTINGS.maxTilesPerFrame,
+        // Per-frame dispatch ceiling honoured under the scheduler, set only when the deprecated
+        // maxTilesPerFrame option was given explicitly. 0 means no per-frame ceiling.
+        frameDispatchCap:                  0,
+        _dispatchedThisFrame:              0,
+        serverProtocol:                    $.DEFAULT_SETTINGS.serverProtocol,
+        networkShare:                      $.DEFAULT_SETTINGS.networkShare,
         originalDataType:                  undefined,
-        _currentMaxTilesPerFrame:          (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10
+        _currentMaxTilesPerFrame:          (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10,
+        // How many load candidates are worth ranking this frame; recomputed by _updateLevelsForViewport().
+        _loadCandidateLimit:               (options.maxTilesPerFrame || $.DEFAULT_SETTINGS.maxTilesPerFrame) * 10,
+        // Ranked tiles this image wants downloaded, handed to the scheduler once per frame. Empty unless
+        // serverProtocol opted this image into scheduled loading.
+        _wishList:                         [],
+        _wishListTime:                     0,
+        // The origin this image's tiles come from; discovered from the first tile actually dispatched.
+        _schedulerOrigin:                  null,
+        // How many requests that origin may carry, refreshed once per frame by _updateLevelsForViewport().
+        // 0 until the first frame has run, which is also the first moment there is anything to dispatch.
+        _schedulerLimit:                   0
     }, options );
+
+    if (this.serverProtocol) {
+        $.tileLoadScheduler.register(this);
+    }
 
     this._preload = this.preload;
     delete this.preload;
@@ -29476,19 +30111,19 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
     },
 
     /**
-     * Executes the provided callback once this TiledImage is fully loaded. If already loaded,
-     * schedules the callback asynchronously. Resolves only on the loaded edge: a
-     * 'fully-loaded-change' event reporting fullyLoaded=false (a zoom that started loading a
-     * new pyramid level) does not resolve the wait.
-     * @param {function(Boolean)} callback - Called with true when fully loaded, or false if
-     *      options.timeout expired first. Callers that must not hang should pass a timeout:
-     *      reporting "gave up" is information the caller needs, not an error.
-     * @param {Object} [options]
-     * @param {Number} [options.timeout=0] - Milliseconds before giving up. 0 waits forever.
-     * @returns {function()} canceller - call to unsubscribe; the callback will not fire.
+     * Executes the provided callback when the TiledImage is fully loaded. If already loaded,
+     * schedules the callback asynchronously. Otherwise, attaches a one-time event listener
+     * for the 'fully-loaded-change' event.
+     * @param {Function} callback - Function to execute when loading completes
      */
-    whenFullyLoaded: function(callback, options) {
-        return $._whenFullyLoaded(this, callback, options);
+    whenFullyLoaded: function(callback) {
+        if (this.getFullyLoaded()) {
+            setTimeout(callback, 1); // Asynchronous execution
+        } else {
+            this.addOnceHandler('fully-loaded-change', function() {
+                callback(); // Maintain context
+            });
+        }
     },
 
     // private
@@ -29498,6 +30133,13 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
 
         this._fullyLoaded = flag;
+
+        if (!flag) {
+            // We have just discovered that tiles are missing for the current view - typically right after a
+            // pan or zoom. Boost the per-frame download allowance so the first frames dispatch a burst instead
+            // of trickling one batch per frame; _updateLevelsForViewport decays it back down.
+            this._boostTileLoadingRate();
+        }
 
         /**
          * Fired when the TiledImage's "fully loaded" flag (whether all tiles necessary for this TiledImage
@@ -29536,10 +30178,22 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      */
     reset: function() {
         this._tileCache.clearTilesFor(this);
-        this._currentMaxTilesPerFrame = this.maxTilesPerFrame * 10;
+        // The wish list refers to tiles that have just been dropped; the next frame rebuilds it.
+        this._wishList.length = 0;
+        this._boostTileLoadingRate();
         this.lastResetTime = $.now();
         this._needsDraw = true;
         this._fullyLoaded = false;
+    },
+
+    /**
+     * Temporarily raise the number of tile downloads started per frame, so that a view which just became
+     * incomplete refills quickly instead of at the steady-state rate. Decays back to maxTilesPerFrame in
+     * _updateLevelsForViewport(), one halving per frame.
+     * @private
+     */
+    _boostTileLoadingRate: function() {
+        this._currentMaxTilesPerFrame = this.maxTilesPerFrame * 10;
     },
 
     /**
@@ -29585,10 +30239,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         return this._needsDraw;
     },
 
+    /**
+     * @private
+     */
     get crossOriginPolicy(){
         return this._crossOriginPolicy;
     },
 
+    /**
+     * @private
+     */
     set crossOriginPolicy(crossOriginPolicy) {
         if (typeof crossOriginPolicy === 'string') {
             this._crossOriginPolicy = crossOriginPolicy.toLowerCase();
@@ -29633,6 +30293,10 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      * Destroy the TiledImage (unload current loaded tiles).
      */
     destroy: function() {
+        // The scheduler lives for the page, so an image left registered keeps itself - and its viewer,
+        // caches and canvases - alive forever.
+        $.tileLoadScheduler.unregister(this);
+        this._wishList.length = 0;
         this.reset();
         this.source.destroy(this.viewer);
     },
@@ -30204,9 +30868,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         this.flipped = flip;
     },
 
+    /**
+     * @private
+     */
     get flipped() {
         return this._flipped;
     },
+
+    /**
+     * @private
+     */
     set flipped(flipped) {
         const changed = this._flipped !== !!flipped;
         this._flipped = !!flipped;
@@ -30217,9 +30888,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
     },
 
+    /**
+     * @private
+     */
     get wrapHorizontal(){
         return this._wrapHorizontal;
     },
+
+    /**
+     * @private
+     */
     set wrapHorizontal(wrap){
         const changed = this._wrapHorizontal !== !!wrap;
         this._wrapHorizontal = !!wrap;
@@ -30230,9 +30908,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
     },
 
+    /**
+     * @private
+     */
     get wrapVertical(){
         return this._wrapVertical;
     },
+
+    /**
+     * @private
+     */
     set wrapVertical(wrap){
         const changed = this._wrapVertical !== !!wrap;
         this._wrapVertical = !!wrap;
@@ -30243,9 +30928,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
     },
 
+    /**
+     * @private
+     */
     get debugMode(){
         return this._debugMode;
     },
+
+    /**
+     * @private
+     */
     set debugMode(debug){
         this._debugMode = !!debug;
         this._needsDraw = true;
@@ -30266,10 +30958,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         this.opacity = opacity;
     },
 
+    /**
+     * @private
+     */
     get opacity() {
         return this._opacity;
     },
 
+    /**
+     * @private
+     */
     set opacity(opacity) {
         if (opacity === this.opacity) {
             return;
@@ -30437,10 +31135,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         return this.getBoundsNoRotate(current).getCenter();
     },
 
+    /**
+     * @private
+     */
     get compositeOperation(){
         return this._compositeOperation;
     },
 
+    /**
+     * @private
+     */
     set compositeOperation(compositeOperation){
 
         if (compositeOperation === this._compositeOperation) {
@@ -30556,10 +31260,22 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 }
             }
 
-            for (let i = 0; i < this._imageLoader.jobQueue.length; i++) {
-                const job = this._imageLoader.jobQueue[i];
+            // A queued BatchImageJob carries its children instead of a tile of its own, so the update has
+            // to reach through it. Reading job.tile blindly threw for any batching tile source.
+            const updateQueuedJob = function(job) {
+                if (!job.tile) {
+                    return;
+                }
                 job.loadWithAjax = job.tile.loadWithAjax;
                 job.ajaxHeaders = job.tile.loadWithAjax ? job.tile.ajaxHeaders : null;
+            };
+            for (let i = 0; i < this._imageLoader.jobQueue.length; i++) {
+                const job = this._imageLoader.jobQueue[i];
+                if (job.jobs) {
+                    job.jobs.forEach(updateQueuedJob);
+                } else {
+                    updateQueuedJob(job);
+                }
             }
         }
     },
@@ -30654,8 +31370,22 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         this._tilesLoading = 0;
         this.loadingCoverage = {};
 
+        // How long a candidate list is worth building. Frame-paced loading never starts more than
+        // _currentMaxTilesPerFrame downloads, so ranking beyond that is wasted; the scheduler drains the
+        // list as slots free, so it wants enough to keep the origin busy - but the ranking insert is a
+        // linear scan, so this stays bounded rather than covering the whole load area.
+        this._loadCandidateLimit = this._currentMaxTilesPerFrame;
+        if (this.serverProtocol) {
+            // Resolved here and cached on the image: limitFor() scans every registered image, the
+            // scheduler's dispatch loop runs many times per pump, and the answer cannot change within a
+            // frame. This is the only place it is computed.
+            this._schedulerLimit = $.tileLoadScheduler.limitFor(this._schedulerOrigin);
+            this._loadCandidateLimit = Math.max(this._loadCandidateLimit, 2 * this._schedulerLimit);
+        }
+
         if (!drawArea){
             this._needsDraw = false;
+            this._wishList.length = 0;
             return this._fullyLoaded;
         }
 
@@ -30774,20 +31504,43 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
 
 
+        // _currentMaxTilesPerFrame is temporarily boosted whenever new tiles become needed; bring it down once
+        // per frame if necessary. This must not live in _updateLevel(), which runs once per pyramid level and
+        // would collapse the whole boost within a single frame.
+        if (this._currentMaxTilesPerFrame > this.maxTilesPerFrame) {
+            this._currentMaxTilesPerFrame = Math.max(Math.ceil(this._currentMaxTilesPerFrame / 2), this.maxTilesPerFrame);
+        }
+
         // Load the new 'best' n tiles
         if (bestLoadTileCandidates && bestLoadTileCandidates.length > 0) {
-            // We need to set loading state immediatelly, if we need setTimeout() here,
-            // we should immediatelly set loading=true to all tiles
-            for (const tile of bestLoadTileCandidates) {
-                if (tile) {
-                    this._loadTile(tile, currentTime);
+            if (this.serverProtocol) {
+                // Hand the ranked list to the scheduler rather than dispatching it here. It starts as many
+                // as the origin can carry, whenever a slot frees, instead of a fixed number per frame - and
+                // because the list is rebuilt from scratch next frame, tiles that stop being wanted are
+                // dropped without anything having to be aborted.
+                this._wishList.length = 0;
+                for (const tile of bestLoadTileCandidates) {
+                    if (tile) {
+                        this._wishList.push(tile);
+                    }
+                }
+                this._wishListTime = currentTime;
+                this._dispatchedThisFrame = 0;
+            } else {
+                // We need to set loading state immediatelly, if we need setTimeout() here,
+                // we should immediatelly set loading=true to all tiles
+                for (const tile of bestLoadTileCandidates) {
+                    if (tile) {
+                        this._loadTile(tile, currentTime);
+                    }
                 }
             }
             this._needsDraw = true;
             return false;
-        } else {
-            return this._tilesLoading === 0;
         }
+
+        this._wishList.length = 0;
+        return this._tilesLoading === 0;
     },
 
     /**
@@ -30907,6 +31660,35 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
     },
 
     /**
+     * Announce that a tile is about to be considered for this frame. Raised once per tile per level,
+     * whether the tile is being drawn, loaded, or both.
+     * @private
+     * @param {OpenSeadragon.Tile} tile
+     */
+    _raiseUpdateTile: function(tile) {
+        if (!this.viewer) {
+            return;
+        }
+        /**
+         * This event is called before tile is being updated: its position, coverage and other properties.
+         * Note that this does not mean the tile will be loaded, it might be just updated greedily to avoid
+         * visible load animation (happens if position is updated lazily when tile.loaded / loading is true).
+         *
+         * @event update-tile
+         * @memberof OpenSeadragon.Viewer
+         * @type {object}
+         * @property {OpenSeadragon.Viewer} eventSource - A reference to the Viewer which raised the event.
+         * @property {OpenSeadragon.TiledImage} tiledImage - Which TiledImage is being drawn.
+         * @property {OpenSeadragon.Tile} tile
+         * @property {?Object} userData - Arbitrary subscriber-defined object.
+         */
+        this.viewer.raiseEvent( 'update-tile', {
+            tiledImage: this,
+            tile: tile
+        });
+    },
+
+    /**
      * Updates all tiles at a given resolution level.
      * @private
      * @param {Number} level
@@ -30966,11 +31748,47 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         this._resetCoverage(this.coverage, level);
         this._resetCoverage(this.loadingCoverage, level);
 
+        // drawArea is where the viewport is now, loadArea where it is heading. They differ only while an
+        // animation is in flight; at rest the springs sit exactly on their targets, so the two rects are
+        // identical and the common case runs a single pass exactly as before.
+        const hasSeparateLoadArea = !!loadArea && loadArea !== drawArea && !loadArea.equals(drawArea);
+
         let tilesToDraw = null;
         let tileIndex = 0;
 
-        // Iterate over tiles and decide, which will be loaded and drawn
-        this._visitTiles(level, drawArea, (x, y, total) => {
+        /////////////////////////////////////////////////////
+        // Decide if tile will be loaded                   //
+        /////////////////////////////////////////////////////
+        const considerForLoad = (tile, x, y) => {
+            if (!loadArea || tile.loaded) {
+                return;
+            }
+
+            let loadingCoverage = tile.loading || this._isCovered(this.loadingCoverage, level, x, y);
+            this._setCoverage(this.loadingCoverage, level, x, y, loadingCoverage);
+
+            if ( !tile.exists ) {
+                return;
+            }
+
+            // Try-find will populate tile with data if equal tile exists in system
+            if (!tile.loading && this._tryFindTileCacheRecord(tile)) {
+                loadingCoverage = true;
+            }
+
+            if (tile.loading) {
+                // the tile is already in the download queue or being processed
+                this._tilesLoading++;
+            } else if (!loadingCoverage) {
+                // add tile to best tiles to load only when not loaded already
+                bestLoadTileCandidates = this._compareTiles( bestLoadTileCandidates, tile, this._loadCandidateLimit);
+            }
+        };
+
+        /////////////////////////////////////////////////////
+        // Announce, position and rank one tile            //
+        /////////////////////////////////////////////////////
+        const visitTile = (x, y, inLoadArea) => {
             const tile = this._getTile(
                 x, y,
                 level,
@@ -30978,92 +31796,64 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 numberOfTiles
             );
 
-            if (!tilesToDraw) {
-                tilesToDraw = this._getCachedArray(level, total);
-            }
-
-            /////////////////////////////////////////////////////
-            // First Part: Decide if tile will be used to draw //
-            /////////////////////////////////////////////////////
-
-            if( this.viewer ){
-                /**
-                 * This event is called before tile is being updated: its position, coverage and other properties.
-                 * Note that this does not mean the tile will be loaded, it might be just updated greedily to avoid
-                 * visible load animation (happens if position is updated lazily when tile.loaded / loading is true).
-                 *
-                 * @event update-tile
-                 * @memberof OpenSeadragon.Viewer
-                 * @type {object}
-                 * @property {OpenSeadragon.Viewer} eventSource - A reference to the Viewer which raised the event.
-                 * @property {OpenSeadragon.TiledImage} tiledImage - Which TiledImage is being drawn.
-                 * @property {OpenSeadragon.Tile} tile
-                 * @property {?Object} userData - Arbitrary subscriber-defined object.
-                 */
-                this.viewer.raiseEvent( 'update-tile', {
-                    tiledImage: this,
-                    tile: tile
-                });
-            }
-
-            this._setCoverage( this.coverage, level, x, y, false );
+            this._raiseUpdateTile(tile);
 
             if (tile.exists) {
-                if (tile.loaded) {
-                    if (tile.opacity === 1) {
-                        this._setCoverage( this.coverage, level, x, y, true );
-                    }
-
-                    // Tiles are carried in info objects
-                    tilesToDraw[tileIndex++] = {
-                        tile: tile,
-                        level: level,
-                        levelOpacity: levelOpacity,
-                        currentTime: currentTime
-                    };
-                    this._setCoverage(this.loadingCoverage, level, x, y, true);
-                }
-
+                // Positioning is what sets the visibility and distance the candidates are ranked by,
+                // so it is required even for a tile that is only being loaded, never drawn.
                 this._positionTile(
                     tile,
                     this.source.tileOverlap,
                     this.viewport,
                     viewportCenter,
-                    levelVisibility
+                    levelVisibility,
+                    inLoadArea
                 );
             }
 
-            /////////////////////////////////////////////////////
-            // Second Part: Decide if tile will be loaded      //
-            /////////////////////////////////////////////////////
+            considerForLoad(tile, x, y);
+            return tile;
+        };
 
-            if (loadArea && !tile.loaded) {
-                let loadingCoverage = tile.loading || this._isCovered(this.loadingCoverage, level, x, y);
-                this._setCoverage(this.loadingCoverage, level, x, y, loadingCoverage);
+        // The destination is visited first, so its tiles are ranked ahead of the ones that are merely on
+        // the way there - those are picked up by the draw pass below. Note this is two viewport-sized
+        // passes and not one pass over the union of the two areas: the union spans everything between
+        // them, which for a long pan at a deep level is the entire level.
+        if (hasSeparateLoadArea) {
+            this._visitTiles(level, loadArea, (x, y) => visitTile(x, y, true));
+        }
 
-                if ( !tile.exists ) {
-                    return;
+        // Iterate over tiles and decide, which will be drawn
+        this._visitTiles(level, drawArea, (x, y, total) => {
+            // A tile shared with the destination was already announced, positioned and considered above.
+            const handledByLoadPass = hasSeparateLoadArea &&
+                loadArea.intersection(this.getTileBounds(level, x, y)) !== null;
+
+            const tile = handledByLoadPass ?
+                this._getTile(x, y, level, currentTime, numberOfTiles) :
+                visitTile(x, y, !hasSeparateLoadArea);
+
+            if (!tilesToDraw) {
+                tilesToDraw = this._getCachedArray(level, total);
+            }
+
+            this._setCoverage( this.coverage, level, x, y, false );
+
+            if (tile.exists && tile.loaded) {
+                if (tile.opacity === 1) {
+                    this._setCoverage( this.coverage, level, x, y, true );
                 }
 
-                // Try-find will populate tile with data if equal tile exists in system
-                if (!tile.loading && this._tryFindTileCacheRecord(tile)) {
-                    loadingCoverage = true;
-                }
-
-                if (tile.loading) {
-                    // the tile is already in the download queue or being processed
-                    this._tilesLoading++;
-                } else if (!loadingCoverage) {
-                    // add tile to best tiles to load only when not loaded already
-                    bestLoadTileCandidates = this._compareTiles( bestLoadTileCandidates, tile, this._currentMaxTilesPerFrame);
-                }
+                // Tiles are carried in info objects
+                tilesToDraw[tileIndex++] = {
+                    tile: tile,
+                    level: level,
+                    levelOpacity: levelOpacity,
+                    currentTime: currentTime
+                };
+                this._setCoverage(this.loadingCoverage, level, x, y, true);
             }
         });
-
-        // _currentMaxTilesPerFrame can be temporarily boosted, bring it down after each usage if necessary
-        if (this._currentMaxTilesPerFrame > this.maxTilesPerFrame) {
-            this._currentMaxTilesPerFrame = Math.max(Math.ceil(this._currentMaxTilesPerFrame / 2), this.maxTilesPerFrame);
-        }
 
         if (tilesToDraw) {
             tilesToDraw.length = tileIndex;
@@ -31139,8 +31929,9 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      * @param {OpenSeadragon.Viewport} viewport
      * @param {OpenSeadragon.Point} viewportCenter
      * @param {Number} levelVisibility
+     * @param {Boolean} inLoadArea whether the tile lies in the area the viewport is animating towards
      */
-    _positionTile: function( tile, overlap, viewport, viewportCenter, levelVisibility ){
+    _positionTile: function( tile, overlap, viewport, viewportCenter, levelVisibility, inLoadArea ){
         const boundsTL = tile.bounds.getTopLeft();
 
         boundsTL.x *= this._scaleSpring.current.value;
@@ -31183,6 +31974,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         tile.size       = sizeC;
         tile.squaredDistance   = tileSquaredDistance;
         tile.visibility = levelVisibility;
+        tile.inLoadArea = inLoadArea;
     },
 
     // private
@@ -31351,8 +32143,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         const _this = this;
         tile.loading = true;
         tile.tiledImage = this;
+
+        // getUrl() may call into user code, so it is read once and the origin taken from the result rather
+        // than asked for again. The first tile is what tells us which budget this image draws on.
+        const src = tile.getUrl();
+        if (this.serverProtocol && this._schedulerOrigin === null) {
+            this._schedulerOrigin = $.tileLoadScheduler.originOf(src);
+        }
+
         if (!this._imageLoader.addJob({
-            src: tile.getUrl(),
+            src: src,
             tile: tile,
             source: this.source,
             postData: tile.postData,
@@ -31644,7 +32444,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
     },
 
     /**
-     * Comparator for tile sorting according to visibility and distance.
+     * Comparator for tile sorting, by destination membership first, then visibility and distance.
      * @private
      *
      * @param {OpenSeadragon.Tile} a The tile a.
@@ -31656,6 +32456,11 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         }
         if (b === null) {
             return -1;
+        }
+        if (a.inLoadArea !== b.inLoadArea) {
+            // A tile that is only on the animation path is stale by the time the user arrives, so it
+            // ranks below every tile at the destination - but stays eligible if there is spare capacity.
+            return a.inLoadArea ? -1 : 1;
         }
         if (a.visibility === b.visibility) {
             // sort by smallest squared distance
@@ -32054,11 +32859,18 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 }
                 // or check internal cache state before returning
                 const internalCache = this._getInternalCacheRef(drawer);
-                if (!internalCache || !internalCache.loaded) {
-                    $.console.error(`Attempt to draw tile cache ${this} with internal cache non-ready state!`);
-                    return undefined;
+                if (!internalCache || !this._checkInternalCacheUpToDate(internalCache, drawer)) {
+                    // Preloading has not caught up: either this cache was never prepared for the drawer,
+                    // or the drawer invalidated its internal caches outside of the invalidation routine
+                    // (setInternalCacheNeedsRefresh, e.g. on context recreation or a smoothing change).
+                    // Build it now rather than dropping the tile for an unbounded number of frames.
+                    // Synchronous creators (e.g. a GL texture upload) are drawable immediately; async
+                    // creators return a promise and simply become drawable in a later frame.
+                    const fresh = this.prepareInternalCacheSync(drawer);
+                    return fresh && fresh.loaded ? fresh : undefined;
                 }
-                return internalCache;
+                // up to date, but an async build may still be in flight
+                return internalCache.loaded ? internalCache : undefined;
             }
 
             // else just return self reference

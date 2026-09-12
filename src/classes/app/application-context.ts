@@ -561,7 +561,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
     };
 
     // todo maybe dont support this, just call directly the static method
-    (ac as any).registerConfig = function registerConfig(bg: BackgroundItem) {
+    (ac as any).registerConfig = function registerConfig(bg: BackgroundItem | BackgroundConfig) {
+        // Wrapping is for RAW entries (a custom slide browser's `{id, name,
+        // dataReference}`). An object that is already a BackgroundConfig is an
+        // entry of `config.background` — handing it to `from()` would resolve it
+        // through the id registry, and background ids are deliberately NOT unique
+        // (two entries may name the same slide on purpose), so that trades the
+        // caller's entry for whichever same-id entry was registered first.
+        if (bg instanceof BackgroundConfig) return bg;
         return BackgroundConfig.from(bg);
     };
 

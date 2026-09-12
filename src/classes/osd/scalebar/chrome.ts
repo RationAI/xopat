@@ -6,6 +6,26 @@
 
 import { QUICK_ZOOM_MIN_MAGNIFICATION, COLLAPSED_CACHE_KEY } from "./constants";
 
+/**
+ * Reactive "how many viewports are open", shared by every viewer's chrome.
+ *
+ * One subscription for the whole app, not one per button: the chrome is rebuilt
+ * per scalebar and per-button handlers on the manager would accumulate.
+ */
+let _viewerCountState = null;
+function openViewerCount() {
+    if (!_viewerCountState) {
+        const read = () => VIEWER_MANAGER?.viewers?.length || 0;
+        _viewerCountState = van.state(read());
+        const refresh = () => { _viewerCountState.val = read(); };
+        VIEWER_MANAGER?.addHandler?.("viewer-create", refresh);
+        // `viewer-destroy` fires while the viewer is still in `viewers`
+        // (see ViewerManager.delete) — read the count after the splice.
+        VIEWER_MANAGER?.addHandler?.("viewer-destroy", () => queueMicrotask(refresh));
+    }
+    return _viewerCountState;
+}
+
 function SyncToggleButton(viewer, tool) {
     const enabled = van.state(!!tool?.isEnabled?.());
 
@@ -27,7 +47,14 @@ function SyncToggleButton(viewer, tool) {
     // Expose hooks so tool can update the button
     tool.__ui = { setProgress, setBusy };
 
-    const onClick = async (ev) => {
+    const count = openViewerCount();
+    const canSync = () => count.val > 1;
+
+    /**
+     * @param {"auto"|"manual"|null} mode  explicit link mode; `null` toggles
+     *        (enabled → disable, otherwise link automatically).
+     */
+    const run = async (mode) => {
         if (!tool) return;
 
         if (busy.val) {
@@ -37,28 +64,30 @@ function SyncToggleButton(viewer, tool) {
             tool.cancelCalibration?.();
             return;
         }
-        setBusy(true);
 
-        if (VIEWER_MANAGER.viewers.length < 2) {
+        if (!canSync()) {
+            // The button is `disabled`, but the menu and the keyboard can
+            // still reach this — say why rather than doing nothing.
             Dialogs?.show?.(window.$.t('sync.needsTwoSlides'));
-            setBusy(false);
             return;
         }
+        setBusy(true);
 
         try {
-            if (enabled.val) {
+            if (!mode && enabled.val) {
                 tool.disable();
                 enabled.val = false;
                 setProgress("");
                 Dialogs?.show?.(window.$.t('sync.disabled'), 1200, Dialogs.MSG_INFO);
             } else {
-                // Default is automatic registration; Alt/Shift forces the
-                // three-point picker for slides the estimator cannot match.
-                // `enable()` may upgrade auto to manual on its own (a viewer
-                // the user just cleared), so it owns the progress label.
-                const manual = !!(ev?.shiftKey || ev?.altKey);
+                // Default is automatic registration; the caret menu (and the
+                // legacy Alt/Shift-click) force the three-point picker for
+                // slides the estimator cannot match. `enable()` may upgrade
+                // auto to manual on its own (a viewer the user just cleared),
+                // so it owns the progress label.
                 setProgress("");
-                const res = await tool.enable({ mode: manual ? "manual" : "auto" });
+                if (mode === "manual") tool.resetViewer?.();
+                const res = await tool.enable({ mode: mode === "manual" ? "manual" : "auto" });
                 enabled.val = true;
                 setProgress("");
                 if (res?.approximate) {
@@ -82,18 +111,37 @@ function SyncToggleButton(viewer, tool) {
         }
     };
 
+    // Alt/Shift-click stays as an expert shortcut for the manual picker; the
+    // caret menu next to the button is the discoverable route to the same thing.
+    const onClick = (ev) => run((ev?.shiftKey || ev?.altKey) ? "manual" : null);
+
     viewer.__syncToolChanged = updateFromTool;
+    // The caret menu beside this button drives the same logic with an explicit
+    // mode. Exposed on the viewer alongside `__syncToolChanged`, which is how
+    // the rest of this chrome already reaches back into the button's closure.
+    viewer.__syncRun = run;
 
     return van.tags.button(
         {
+            // `join-item` belongs in the reactive literal: this binding re-runs
+            // on every state change and rewrites `class` wholesale, so a class
+            // added imperatively afterwards survives only until the first
+            // link/unlink — which is what left the button rounded on one side
+            // and square on the other.
             class: () => [
-                "btn btn-xs border-none px-1",
-                enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : ""
+                "btn btn-xs join-item border-none px-1 xo-btn-inert",
+                !canSync() ? "" :
+                    (enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "")
             ].join(" "),
+            // Presented as inert rather than hidden: a control that disappears
+            // is worse than one that explains itself (see UPSTREAM_UI.md §0.8).
+            disabled: () => !canSync(),
             onclick: onClick,
-            title: () => (busy.val
-                ? window.$.t('sync.cancelCalibration')
-                : (enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle')))
+            title: () => (!canSync()
+                ? window.$.t('sync.needsTwoSlides')
+                : (busy.val
+                    ? window.$.t('sync.cancelCalibration')
+                    : (enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle'))))
         },
         // A text abbreviation rather than an icon: three states have to be told
         // apart at a glance. Resolved through `$.t` at render time, not as
@@ -171,7 +219,7 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
     const makeButton = (label, title, onClick, isDigital) => {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "btn btn-xs join-item border-none px-1.5"
+        button.className = "btn btn-xs join-item border-none px-1"
             + (isDigital ? " text-error" : "");
         button.title = title;
         button.textContent = label;
@@ -182,7 +230,7 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
 
     const home = document.createElement("button");
     home.type = "button";
-    home.className = "btn btn-xs join-item border-none px-1.5";
+    home.className = "btn btn-xs join-item border-none px-1";
     home.title = window.$.t('main.scalebar.home');
     home.innerHTML = '<i class="ph-light ph-house" style="font-size:12px;line-height:1"></i>';
     home.addEventListener("click", () => viewport.goHome());
@@ -340,7 +388,7 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
 }
 
 /**
- * Mount the SYNC button, reset button, collapse toggle and slide-label
+ * Mount the SYNC button, its mode menu, collapse toggle and slide-label
  * onto the magnification panel. The caller is responsible for pushing
  * the actual collapsible columns (`rotCol`, `magCol`) onto
  * `scalebar._ui.collapsibles` after they are constructed.
@@ -368,8 +416,8 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     // every pixel it gives back is one the quick-zoom row can use before the
     // metric bar has to wrap onto a second line.
     toggle.className = "btn btn-xxs border-none";
-    toggle.style.paddingLeft = "0.125rem";
-    toggle.style.paddingRight = "0.125rem";
+    toggle.style.paddingLeft = "0.25rem";
+    toggle.style.paddingRight = "0.25rem";
     toggle.style.minWidth = "0";
     toggle.title = window.$.t('main.scalebar.minimize');
     toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
@@ -381,29 +429,16 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     syncGroup.className = "join";
     header.appendChild(syncGroup);
 
+    // `join-item` is part of the button's own reactive class list — adding it
+    // here would be wiped by the next state change.
     const sync = SyncToggleButton(viewer, tool);
-    sync.classList.add("join-item");
     syncGroup.appendChild(sync);
 
-    // 3) Clear this viewport's alignment. Hidden unless it has one.
-    const reset = document.createElement("button");
-    reset.type = "button";
-    reset.className = "btn btn-xs join-item text-error border-none px-1";
-    reset.title = window.$.t('sync.resetTitle');
-    reset.innerHTML = '<i class="ph-light ph-eraser" style="font-size:12px;line-height:1"></i>';
-    reset.style.display = "none";
+    // Does this viewer hold a calibration? Read the session directly:
+    // `_getViewerTransform` would lazily create one just to render chrome.
+    const hasAlignment = () => !!tool?.constructor?._session?.transforms?.[viewer.uniqueId];
 
-    // Only meaningful for a viewer that actually holds a calibration —
-    // elsewhere the button would be a no-op.
-    const updateResetVisibility = () => {
-        // Read the session directly: `_getViewerTransform` would lazily
-        // create one just to render chrome.
-        const S = tool?.constructor?._session;
-        const shouldShow = !!S?.transforms?.[viewer.uniqueId] && !scalebar._ui.collapsed;
-        reset.style.display = shouldShow ? "" : "none";
-    };
-
-    reset.addEventListener("click", async () => {
+    const clearAlignment = () => {
         if (!tool) return;
         try {
             // Clears THIS viewer only: drops its transform, unlinks it, and
@@ -415,19 +450,62 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         } catch (err) {
             console.error(err);
             Dialogs?.show?.(window.$.t('sync.resetFailed'), 1400, Dialogs.MSG_WARN);
-        } finally {
-            updateResetVisibility();
         }
+    };
+
+    // 3) Mode menu. The link mode used to be reachable only by Alt/Shift-
+    // clicking SYNC — an invisible affordance nobody finds. The caret makes it
+    // a control, and absorbs the clear-alignment eraser that previously
+    // appeared and vanished beside the button depending on session state.
+    const syncMenu = document.createElement("button");
+    syncMenu.type = "button";
+    syncMenu.className = "btn btn-xs join-item border-none";
+    syncMenu.style.paddingLeft = "0.125rem";
+    syncMenu.style.paddingRight = "0.125rem";
+    syncMenu.style.minWidth = "0";
+    syncMenu.title = window.$.t('sync.menuTitle');
+    syncMenu.innerHTML = '<i class="ph-light ph-caret-down" style="font-size:10px;line-height:1"></i>';
+
+    syncMenu.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const linkable = (VIEWER_MANAGER?.viewers?.length || 0) > 1;
+        UI?.ContextMenu?.open?.(ev, [
+            {
+                title: window.$.t('sync.menuAuto'),
+                icon: "ph-magic-wand",
+                disabled: !linkable,
+                action: () => viewer.__syncRun?.("auto"),
+            },
+            {
+                title: window.$.t('sync.menuManual'),
+                icon: "ph-cursor-click",
+                disabled: !linkable,
+                action: () => viewer.__syncRun?.("manual"),
+            },
+            { title: "" },
+            {
+                title: window.$.t('sync.menuClear'),
+                icon: "ph-eraser",
+                disabled: !hasAlignment(),
+                action: clearAlignment,
+            },
+        ]);
     });
-    syncGroup.appendChild(reset);
+    syncGroup.appendChild(syncMenu);
+
+    // The caret is only meaningful while the panel is open.
+    const updateSyncMenuVisibility = () => {
+        syncMenu.style.display = scalebar._ui.collapsed ? "none" : "";
+    };
 
     // Chain into the existing __syncToolChanged hook set by SyncToggleButton.
     const prev = viewer.__syncToolChanged;
     viewer.__syncToolChanged = () => {
         prev?.();
-        updateResetVisibility();
+        updateSyncMenuVisibility();
     };
-    updateResetVisibility();
+    updateSyncMenuVisibility();
 
     // 4) Label thumbnail — pushed to the right with margin-left:auto.
     const LABEL_BOX = { width: "56px", height: "26px" };
@@ -526,7 +604,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         labelEl.style.zIndex = "";
         // Collapsed mode hides everything except the chevron + SYNC.
         labelEl.style.display = c ? "none" : "";
-        updateResetVisibility();
+        updateSyncMenuVisibility();
         if (c) {
             // The header flows as a normal child of the container so the
             // container collapses to the header's natural height. The

@@ -287,7 +287,9 @@ OSD.Scalebar.prototype = {
     formatMagnification: function (mag) {
         const value = mag === undefined ? this.getMagnification() : mag;
         if (!Number.isFinite(value) || value <= 0) return undefined;
-        return (value < 1 ? value.toFixed(1) : Math.round(value)) + "x";
+        // U+00D7 MULTIPLICATION SIGN, not the letter x — this is a magnification
+        // factor. Purely a display string: nothing parses it back.
+        return (value < 1 ? value.toFixed(1) : Math.round(value)) + "×";
     },
 
     /**
@@ -535,6 +537,7 @@ OSD.Scalebar.prototype = {
             this._applyDockLayout();
             this.viewer.container.appendChild(this.dock);
             this._registerChrome();
+            this._registerViewToggle();
 
             if (!this.scalebarContainer) {
                 this.scalebarContainer = document.createElement("div");
@@ -1344,7 +1347,7 @@ OSD.Scalebar.prototype = {
             // registry holds the vm (and through it this scalebar) until told
             // otherwise, so a viewer opened and closed repeatedly would leave
             // one dead entry per cycle for `hide()` to walk.
-            this._unregisterChrome();
+            this._unregisterMenus();
 
             if (this._ui?.labelObjectUrl) {
                 try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
@@ -1563,9 +1566,50 @@ OSD.Scalebar.prototype = {
         });
     },
 
-    /** Drop the registry entry, so a destroyed scalebar is not kept alive by it. */
-    _unregisterChrome: function () {
+    /**
+     * Offer the scalebar as a checkable row under View → Appearance, so it can be
+     * flipped without opening Settings (and pinned as a quick action).
+     *
+     * The spec id is the stable KIND, not `this.id` (`<viewerId>-scale-bar`):
+     * `AppBar.View._enumerate` groups specs by id, collapsing every viewport's
+     * scalebar into one row that fans a click out to all of them. A per-viewer id
+     * would put one row per viewport in the menu.
+     *
+     * One spec object per scalebar, kept on the instance — `registerViewComponent`
+     * dedupes by object identity, and `_registerChrome` runs on every re-attach.
+     */
+    _registerViewToggle: function () {
+        const view = window.USER_INTERFACE?.AppBar?.View;
+        if (!view?.registerViewComponent) return;
+        if (!this._viewSpec) {
+            this._viewSpec = {
+                id: "scaleBar",
+                icon: "ph-ruler",
+                title: window.$.t('main.bar.scaleBar'),
+                visibilityManager: {
+                    is: () => !!this._active,
+                    // Hide-UI channel: must not overwrite the user's preference.
+                    on: () => this.setActive(true),
+                    off: () => this.setActive(false),
+                    // Deliberate user choice — persists, exactly like the
+                    // Settings checkbox this row duplicates.
+                    set: (value) => {
+                        window.APPLICATION_CONTEXT?.setUiOption?.("scaleBar", !!value);
+                        this.setActive(!!value);
+                    },
+                },
+            };
+        }
+        view.registerViewComponent("appearance", this._viewSpec);
+    },
+
+    /** Drop both registry entries, so a destroyed scalebar is not kept alive by them. */
+    _unregisterMenus: function () {
         window.USER_INTERFACE?.AppBar?.Chrome?.unregister?.(this.id + "-dock");
+        if (this._viewSpec) {
+            window.USER_INTERFACE?.AppBar?.View?.unregisterViewComponent?.("appearance", this._viewSpec);
+            this._viewSpec = null;
+        }
     },
 
     /**

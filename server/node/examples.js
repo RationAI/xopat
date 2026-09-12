@@ -102,6 +102,14 @@ function requirementNote(requires) {
  * the preset doing the publishing, because two decoders (`webtiff`, `geotiff`)
  * legitimately publish the same set.
  *
+ * `excludeCapabilities` is the third filter and works the other way round: a
+ * session declares what a decoder must be able to do (`capabilities`), and a
+ * deployment declares what its decoder cannot. `geotiff` reads one plane of a
+ * multi-plane TIFF, so it drops the sessions tagged `multichannel` rather than
+ * advertising four it fails to open. Stating the *reason* rather than an id list
+ * is what keeps a thirteenth session from silently appearing on a banner that
+ * cannot render it.
+ *
  * Ordering: the declaring record's `order` applies to the whole expansion, with
  * index position breaking ties, so a block stays stable as sessions are added.
  *
@@ -123,6 +131,9 @@ function expandSessionIndex(absPath, id, record) {
     const dir = path.posix.dirname(relative.replace(/\\/g, "/"));
     const wantDeployment = typeof record.deployment === "string" ? record.deployment.trim() : null;
     const wantGroup = typeof record.group === "string" ? record.group.trim() : null;
+    const without = Array.isArray(record.excludeCapabilities)
+        ? record.excludeCapabilities.filter(c => typeof c === "string" && c.trim()).map(c => c.trim())
+        : [];
     const baseOrder = Number.isFinite(Number(record.order)) ? Number(record.order) : DEFAULT_ORDER;
 
     const out = [];
@@ -132,6 +143,8 @@ function expandSessionIndex(absPath, id, record) {
         if (!row || typeof row !== "object" || Array.isArray(row)) continue;
         if (wantDeployment && row.deployment !== wantDeployment) continue;
         if (wantGroup && row.group !== wantGroup) continue;
+        if (without.length && Array.isArray(row.capabilities)
+            && row.capabilities.some(c => without.includes(c))) continue;
         out.push({
             id: key,
             record: {

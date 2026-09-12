@@ -92,14 +92,20 @@ const MAX_THUMBNAIL_PIXELS = 32 * 1024 * 1024;
 const PREVIEW_MIN_COARSEST_PX = 2048;
 
 /**
- * Where the generated data will be SERVED from.
+ * Where the generated data will be SERVED from, as the browser will address it.
  *
- * Only one artifact needs it — the grid mask's descriptor, whose level url
- * cannot be relative (see `writeGridMask`). Everything else is resolved either
- * against the descriptor's own url by the tile source, or by the slide protocol
- * at open time, and stays host-independent.
+ * Only one artifact embeds it — the grid mask's descriptor, whose level url is
+ * never resolved against the descriptor (see `writeGridMask`). Everything else
+ * is resolved either against the descriptor's own url by the tile source, or by
+ * the slide protocol at open time, and stays host-independent.
+ *
+ * Root-relative by default, because the viewer serves these artifacts itself
+ * now: a hostname and port baked into a derived file goes stale the moment the
+ * deployment moves, and this file is checksum-stamped, so it would keep the
+ * stale value until someone forced a re-derive. `--base-url` (or
+ * `TIFF_FILESERVER`) still takes an absolute one for a separate file server.
  */
-const DEFAULT_BASE_URL = process.env.TIFF_FILESERVER || "http://127.0.0.1:9100/files";
+const DEFAULT_BASE_URL = process.env.TIFF_FILESERVER || "/test/fixtures/data";
 let BASE_URL = DEFAULT_BASE_URL;
 
 function parseArgs(argv) {
@@ -376,12 +382,18 @@ async function writeGridMask(grids, cellsX, cellsY, slideW, slideH) {
         // OSD's `LegacyTileSource` shape: a list of levels, here exactly one.
         // More faithful than a one-level DZI, which would still imply a pyramid.
         type: "legacy-image-pyramid",
-        // ABSOLUTE, and it has to be. `LegacyTileSource`'s `configureFromObject`
-        // is `return configuration.levels;` — it never resolves a level url
-        // against the descriptor's own url, unlike the GeoJSON source next door.
-        // A relative "mask-grid.png" is therefore handed to the browser as-is and
-        // resolves against the VIEWER's origin, 404ing on a host that never had
-        // it. Hence `--base-url`.
+        // ROOT-RELATIVE, and that is now the right answer. `LegacyTileSource`'s
+        // `configureFromObject` is `return configuration.levels;` — it never
+        // resolves a level url against the descriptor's own url, unlike the
+        // GeoJSON source next door, so whatever is written here is handed to the
+        // browser as-is and resolves against the VIEWER's origin.
+        //
+        // That used to be the wrong origin, because the fixtures lived on a
+        // separate file server — hence the absolute URL this used to bake, and
+        // `--base-url`. The viewer now serves them itself (`core.server.media`),
+        // so the viewer's origin IS where the data is, and a root-relative URL is
+        // both correct and free of a hostname and port that would otherwise be
+        // frozen into a tracked-by-checksum artifact at derive time.
         levels: [{ url: `${BASE_URL}/generated/grid/mask-grid.png`, width: cellsX, height: cellsY }],
         // Not read by OSD — recorded so the `pixelScale` in the session can be
         // traced back to the generator rather than looking like a magic number.

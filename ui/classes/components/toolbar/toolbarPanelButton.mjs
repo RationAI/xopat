@@ -141,10 +141,11 @@ class ToolbarPanelButton extends BaseSelectableComponent {
 
         this._button = new Button({
             id: this.id,
+            // see ToolbarItem: `base` must be top-level or `join-item` is dropped
+            base: "btn join-item",
             onClick: () => this.toggle(),
             size: Button.SIZE.SMALL,
             extraClasses: {
-                base: "btn join-item",
                 ...(this.options.extraClasses || {})
             },
             // make disabled state reflect initial enabled flag
@@ -186,15 +187,17 @@ class ToolbarPanelButton extends BaseSelectableComponent {
 
         this._rootEl = root;
 
-        // Vertical toolbar: stretch the (inline-flex) root and its button to the
-        // column width so the panel button lines up with the other controls;
-        // horizontal keeps the intrinsic size.
+        // Vertical toolbar: collapse the face button to the same 32px square as
+        // every other control so the column stays one icon wide (see
+        // ToolbarItem); horizontal keeps the intrinsic size.
         bindToolbarOrientation(root, (dir) => {
             const vertical = dir === "vertical";
-            root.classList.toggle("w-full", vertical);
+            root.classList.remove("w-full");
             // The root div and its face button share this.id, so query the
             // button directly (getElementById would return the root).
-            root.querySelector("button")?.classList.toggle("w-full", vertical);
+            const btn = root.querySelector("button");
+            btn?.classList.toggle("toolbar-btn-vertical", vertical);
+            btn?.classList.remove("w-full");
         });
 
         queueMicrotask(() => {
