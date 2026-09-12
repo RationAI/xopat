@@ -9,8 +9,12 @@
      * from pixel sampling that has (or has not yet) been run, and what the full
      * panel adds. So the rows are grouped, every metric carries a one-line tooltip,
      * the sampling group shows the settings its numbers were taken with, a failed
-     * sample says why instead of leaving dashes, and the two buttons explain
+     * sample says why instead of leaving dashes, and the buttons explain
      * themselves on hover.
+     *
+     * The two computations (`measure`, `deriveTissue`) are public: the canvas menu
+     * opens the popover and calls them, so progress, result and failure reason are
+     * shown in one place whichever way the user started.
      *
      * It shares `ui/format.js` with the workspace, so the two surfaces cannot drift
      * apart, and hands off to the panel for anything comparative.
@@ -40,7 +44,8 @@
                 this.windowId = 'annotation-measurements-popover';
                 this._window = null;
                 this._object = null;
-                this._measuring = false;
+                /** @type {null|'measure'|'derive'} which action is running */
+                this._busy = null;
                 this._reason = null;
             }
 
@@ -80,8 +85,14 @@
                     type: 'button',
                     class: 'btn btn-xs btn-primary',
                     title: this.t('measureHint'),
-                    onclick: () => this._measure(),
+                    onclick: () => this.measure(),
                 }, this.t('measure'));
+                this.tissueBtn = button({
+                    type: 'button',
+                    class: 'btn btn-xs btn-ghost px-1.5',
+                    title: this.t('tissueRatioHint'),
+                    onclick: () => this.deriveTissue(),
+                }, span({ class: 'ph-light ph-circles-three' }), this.tissueLabel = span({ class: 'hidden' }, ''));
                 this.panelBtn = button({
                     type: 'button',
                     class: 'btn btn-xs btn-ghost',
@@ -106,7 +117,8 @@
                     this._section(this.t('sectionPixels'), this.t('pixelsHint'), this.pixelStatus),
                     this.pixelRows,
                     this.reasonLine,
-                    div({ class: 'flex items-center gap-1 pt-1 min-w-0' }, this.measureBtn, this.panelBtn, this.footer),
+                    div({ class: 'flex items-center gap-1 pt-1 min-w-0' },
+                        this.measureBtn, this.tissueBtn, this.panelBtn, this.footer),
                 );
                 this._window = new UI.FloatingWindow({
                     id: this.windowId,
@@ -114,7 +126,7 @@
                     // Sized to the full content with a perimeter row; the body scrolls
                     // if a user has shrunk it. Both are remembered per user by the window.
                     width: 310,
-                    height: 330,
+                    height: 350,
                     closable: true,
                     onClose: () => { this._window = null; this._object = null; },
                 }, body);
@@ -157,14 +169,21 @@
 
                 const sampled = fmt.samplingSummary(this.engine, object, cfg, this.t);
                 this.pixelStatus.textContent = sampled || this.t('notSampled');
-                this.pixelStatus.classList.toggle('text-warning', !sampled && !this._measuring);
+                this.pixelStatus.classList.toggle('text-warning', !sampled && !this._busy);
 
                 const reason = this._reason ? fmt.reasonText(this.t, this._reason, 1) : '';
                 this.reasonLine.textContent = reason;
                 this.reasonLine.classList.toggle('hidden', !reason);
 
-                this.measureBtn.disabled = this._measuring;
-                this.measureBtn.textContent = this._measuring ? this.t('measuring') : this.t('measure');
+                const busy = !!this._busy;
+                this.measureBtn.disabled = busy;
+                this.measureBtn.textContent = this._busy === 'measure' ? this.t('measuring') : this.t('measure');
+                // Shown only when tissue derivation can actually run.
+                this.tissueBtn.classList.toggle('hidden', !this.module.pathology());
+                this.tissueBtn.disabled = busy;
+                this.tissueBtn.classList.toggle('btn-active', this._busy === 'derive');
+                this.tissueLabel.textContent = this._busy === 'derive' ? this.t('deriving') : '';
+                this.tissueLabel.classList.toggle('hidden', this._busy !== 'derive');
 
                 const mpp = NS.sampler?.imageMppPerPx?.(viewer);
                 this.footer.textContent = Number.isFinite(mpp)
@@ -172,10 +191,13 @@
                     : this.t('noCalibration');
             }
 
-            async _measure() {
+            // ── actions ─────────────────────────────────────────────────────
+
+            /** Sample the pixels of the shown annotation (intensity, % positive, objects). */
+            async measure() {
                 const object = this._object;
-                if (!object || this._measuring) return;
-                this._measuring = true;
+                if (!object || this._busy) return;
+                this._busy = 'measure';
                 this._reason = null;
                 this._populate();
                 try {
@@ -187,7 +209,23 @@
                     this._reason = err?.message || String(err);
                     APPLICATION_CONTEXT.log(`module.${this.module.id}`).warn('popover compute failed', err);
                 } finally {
-                    this._measuring = false;
+                    this._busy = null;
+                }
+                this._populate();
+            }
+
+            /** Derive the tissue mask around the shown annotation and cache its tissue ratio. */
+            async deriveTissue() {
+                const object = this._object;
+                if (!object || this._busy) return;
+                this._busy = 'derive';
+                this._reason = null;
+                this._populate();
+                try {
+                    const res = await this.module.deriveTissueMask(fmt.viewerOf(this.annotations, object), { subject: object });
+                    this._reason = res?.reason || null;
+                } finally {
+                    this._busy = null;
                 }
                 this._populate();
             }

@@ -124,6 +124,7 @@ test("rowsToCsv quotes every cell so commas and quotes in labels survive", () =>
     const rows = [{
         label: 'Tumor, grade "3" #4',
         area: "1.42 mm²",
+        tissueRatio: EMPTY,
         mean: EMPTY,
         percentPositive: "42.4%",
         components: "88",
@@ -132,11 +133,11 @@ test("rowsToCsv quotes every cell so commas and quotes in labels survive", () =>
     const csv = fmt.rowsToCsv(rows, t);
     const [header, line] = csv.split("\n");
 
-    expect(header).toBe('"col.label","col.area","col.mean","col.percentPositive","col.components","col.density"');
+    expect(header).toBe('"col.label","col.area","col.tissueRatio","col.mean","col.percentPositive","col.components","col.density"');
     // The embedded quote is doubled and the comma stays inside the field, so the
-    // row still parses as exactly six columns.
+    // row still parses as exactly seven columns.
     expect(line.startsWith('"Tumor, grade ""3"" #4",')).toBe(true);
-    expect(line.split('","').length).toBe(6);
+    expect(line.split('","').length).toBe(7);
 });
 
 test("rowsToCsv writes a header even with no rows", () => {
@@ -148,7 +149,7 @@ test("statRows groups rows and carries a help line per metric, so a surface can 
     const engine = makeEngine({ geometric: { 1: { areaLabel: "1 px²", lengthLabel: "4 px" } } });
     const rows = fmt.statRows(engine, null, object, {}, t);
     const groups = Object.fromEntries(rows.map((r) => [r.key, r.group]));
-    expect(groups).toEqual({ area: "geometry", length: "geometry", mean: "pixels", percentPositive: "pixels", components: "pixels", density: "pixels" });
+    expect(groups).toEqual({ area: "geometry", length: "geometry", tissueRatio: "geometry", mean: "pixels", percentPositive: "pixels", components: "pixels", density: "pixels" });
     for (const r of rows) expect(r.help).toBe(`metricHelp.${r.key === "length" ? "perimeter" : r.key}`);
 });
 
@@ -171,4 +172,26 @@ test("reasonText maps kebab-case engine reasons to locale keys and falls back to
     expect(fmt.reasonText(tt, "not-fully-loaded", 2)).toBe("reason.notFullyLoaded(2,not-fully-loaded)");
     expect(fmt.reasonText(tt, "something-odd", 1)).toBe("reason.generic(1,something-odd)");
     expect(fmt.reasonText(tt, null)).toBe("");
+});
+
+test("the tissue ratio is a geometry row and a table column, empty until derived", () => {
+    const object = { incrementId: 1 };
+    const bare = makeEngine({ geometric: { 1: { areaLabel: "1 px²" } } });
+    let rows = fmt.statRows(bare, null, object, {}, t);
+    let row = rows.find((r) => r.key === "tissueRatio");
+    expect(row.group).toBe("geometry");
+    expect(row.value).toBe(EMPTY);
+    expect(row.computed).toBe(false);
+
+    const derived = makeEngine({ geometric: { 1: { areaLabel: "1 px²" } } });
+    derived.getTissueRatio = () => ({ ratio: 0.1234 });
+    rows = fmt.statRows(derived, null, object, {}, t);
+    row = rows.find((r) => r.key === "tissueRatio");
+    expect(row.value).toBe("12.3%");
+    expect(row.computed).toBe(true);
+
+    expect(fmt.TABLE_COLUMNS).toContain("tissueRatio");
+    const tr = fmt.tableRow(derived, null, object, {}, { presets: { get: () => null } }, t);
+    expect(tr.tissueRatio).toBe("12.3%");
+    expect(fmt.rowsToCsv([tr], t).split("\n")[0]).toContain('"col.tissueRatio"');
 });

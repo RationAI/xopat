@@ -650,13 +650,7 @@
             }
 
             _pathology() {
-                // Optional dependency: never hard-require it, singletonModule throws
-                // when the module is not loaded.
-                try {
-                    return (typeof singletonModule === 'function') ? singletonModule('pathology-foundation') : null;
-                } catch (e) {
-                    return null;
-                }
+                return this.module.pathology();
             }
 
             /**
@@ -751,121 +745,47 @@
                     button({ type: 'button', class: 'btn btn-sm btn-primary', onclick: onConfirm }, this.t('tissueDeriveConfirm')));
             }
 
-            /** Width of the current viewport in image px — the unit proximity is quoted in. */
-            _viewportWidthImagePx(viewer) {
-                const image = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
-                const bounds = viewer?.viewport?.getBounds?.();
-                if (!image || !bounds) return NaN;
-                const tl = image.viewportToImageCoordinates(bounds.x, bounds.y);
-                const br = image.viewportToImageCoordinates(bounds.x + bounds.width, bounds.y + bounds.height);
-                return Math.abs(br.x - tl.x);
-            }
-
-            /**
-             * Decide which islands of a fresh derivation belong to the subject.
-             *
-             * Islands are ranked by proximity to the subject — the island it sits ON
-             * first (distance 0), then by boundary distance. The nearest one is ALWAYS
-             * kept: a mask derived for a region must contain that region's tissue,
-             * whatever the reach says. The others survive only within `reach`, a
-             * fraction of the CURRENT viewport width, so the rule moves with the zoom:
-             * framed on one gland it keeps that gland's tissue, zoomed out to the whole
-             * section it keeps the section. Rejected polygons are deleted — this action
-             * created them a moment ago, and pruning them is the point rather than a
-             * side effect.
-             *
-             * With no subject there is nothing to be near, so everything stays.
-             *
-             * @return {fabric.Object[]} kept islands, nearest first
-             */
-            _keepIslands(viewer, subject, created, factor) {
-                if (!subject) return created;
-                const ranked = NS.geometry.rankByProximity(this.annotations, subject, created);
-                // Nothing measurable: keep the derivation rather than silently delete it.
-                if (!ranked.length) return created;
-
-                const reach = factor > 0 ? factor * this._viewportWidthImagePx(viewer) : 0;
-                const limit = Number.isFinite(reach) ? reach : Infinity;
-                const kept = ranked
-                    .filter((r, i) => i === 0 || r.distancePx <= limit)
-                    .map((r) => r.object);
-
-                const fabric = this.annotations.getFabric(viewer);
-                const keep = new Set(kept);
-                for (const island of created) {
-                    if (!keep.has(island)) fabric.deleteAnnotation(island);
-                }
-                return kept;
-            }
-
             /**
              * Derive a tissue mask and hand it to a slot as the concrete set of
              * islands kept for the subject, nearest first.
              *
+             * The derivation itself (island ranking, pruning, z-order, selection
+             * restore, ratio cache) is the module's `deriveTissueMask` — shared with
+             * the popover, the canvas menu and scripting. This method only owns what
+             * is the panel's: the subject is frozen for the duration, because the
+             * annotations module selects every polygon it adds and the panel follows
+             * the selection, and the result lands in a compare slot.
+             *
              * `presetID` undefined means "leave them in whatever class the derivation
              * used", which is the active one — the no-dialog path.
-             *
-             * Two things about the annotations module shape this method. Every
-             * annotation it adds becomes the canvas selection (`fromCanvas: true`), so
-             * subject sync is suspended for the duration and the pre-derivation
-             * selection is put back afterwards — otherwise the subject silently became
-             * the last island, the reach was measured from it, and the wrong island
-             * survived. And a freshly added polygon is topmost and, while selected,
-             * wins every hit-test inside it, so the mask would swallow clicks meant
-             * for the annotation drawn on it: kept islands are sent to the back.
              */
             async _deriveTissue({ slot = 'B', presetID = undefined, factor = this.tissueFactor } = {}) {
-                const pathology = this._pathology();
                 const viewer = this.viewer();
-                if (!pathology || !viewer || this._deriving) return;
-                const fabric = this.annotations.getFabric(viewer);
-                if (!fabric) return;
+                if (!viewer || this._deriving) return;
                 this._deriving = true;
                 this._suspendSubjectSync = true;
                 this.compareResult.textContent = this.t('tissueDeriving');
 
-                const subject = this.subjects[0] || null;
-                const previousSelection = (fabric.getSelectedAnnotations?.() || []).filter(Boolean);
-
+                let res;
                 try {
-                    const before = new Set(fmt.annotationsIn(this.annotations, viewer).map((o) => o.incrementId));
-                    await pathology.annotateTissue(viewer, {});
-                    const created = fmt.annotationsIn(this.annotations, viewer)
-                        .filter((o) => !before.has(o.incrementId));
-                    if (!created.length) {
-                        this.compareResult.textContent = this.t('tissueEmpty');
-                        return;
-                    }
-
-                    const kept = this._keepIslands(viewer, subject, created, factor);
-
-                    // Fabric draws (and hit-tests) the active object on top regardless of
-                    // stacking order, so drop the selection before reordering — the same
-                    // dance the annotations plugin's "Send to back" does.
-                    fabric.canvas.discardActiveObject?.();
-                    for (const island of kept) fabric.canvas.sendToBack?.(island);
-                    fabric.canvas.requestRenderAll?.();
-
-                    if (presetID != null) {
-                        for (const island of kept) fabric.changeAnnotationPreset(island, presetID);
-                    }
-                    this._setOperand(slot, {
-                        kind: 'list',
-                        objects: kept,
-                        label: fmt.presetName(this.annotations, kept[0]?.presetID, this.t),
+                    res = await this.module.deriveTissueMask(viewer, {
+                        subject: this.subjects[0] || null, factor, presetID,
                     });
-                } catch (err) {
-                    this.log.warn('tissue derivation failed', err);
-                    this.compareResult.textContent = this.t('tissueFailed');
+                    if (!res.reason) {
+                        this._setOperand(slot, {
+                            kind: 'list',
+                            objects: res.islands,
+                            label: fmt.presetName(this.annotations, res.islands[0]?.presetID, this.t),
+                        });
+                    }
                 } finally {
                     this._deriving = false;
                     this._suspendSubjectSync = false;
-                    // Restore what the user had selected; this also re-syncs the subject
-                    // through the ordinary selection handler.
-                    pick.applySelection(fabric, previousSelection);
                     this._syncSubjectsFromCanvas();
                 }
                 this.refresh();
+                // After refresh: `_renderSubject` hides the reason line first.
+                if (res?.reason) this._showReason(res.reason, 1);
             }
 
             // ── measuring ───────────────────────────────────────────────────

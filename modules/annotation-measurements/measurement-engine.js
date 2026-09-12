@@ -457,6 +457,33 @@
             return slot;
         }
 
+        /**
+         * The tissue ratio last derived for `object` — annotation area over the
+         * area of the tissue mask kept around it. Independent of the sampling
+         * slot (it is geometry against a derived mask), so it has its own key;
+         * stale as soon as the annotation's shape changes, like the pixel cache.
+         *
+         * @return {{ratio: number, annotationAreaPx: number, tissueAreaPx: number,
+         *           islandIds: Array<number|string>, islandCount: number, computedAt: number}|null}
+         */
+        getTissueRatio(object) {
+            const slot = object?._measurements?.tissue;
+            if (!slot) return null;
+            if (slot.geomVersion !== geometryVersion(object)) return null;
+            return slot;
+        }
+
+        setTissueRatio(object, data) {
+            if (!object) return;
+            if (!object._measurements) object._measurements = {};
+            object._measurements.tissue = {
+                ...data,
+                geomVersion: geometryVersion(object),
+                computedAt: Date.now(),
+            };
+            this._notifyUpdated();
+        }
+
         _mergeCache(object, cfg, partial) {
             if (!object) return;
             const key = slotKey(cfg);

@@ -89,6 +89,10 @@
         if (geo.lengthLabel) {
             rows.push({ key: 'length', group: 'geometry', label: t('metrics.perimeter'), help: t('metricHelp.perimeter'), value: geo.lengthLabel, computed: true });
         }
+        // Geometry against a derived mask — exact once derived, but it needs the
+        // derivation, so it reads as a placeholder until someone asked for it.
+        const tissue = engine.getTissueRatio?.(object) || null;
+        rows.push({ key: 'tissueRatio', group: 'geometry', label: t('metrics.tissueRatio'), help: t('metricHelp.tissueRatio'), value: pct(tissue?.ratio), computed: isNum(tissue?.ratio) });
         rows.push(
             { key: 'mean', group: 'pixels', label: t('metrics.mean'), help: t('metricHelp.mean'), value: num(cached.mean, 1), computed: isNum(cached.mean) },
             { key: 'percentPositive', group: 'pixels', label: t('metrics.percentPositive'), help: t('metricHelp.percentPositive'), value: pct(cached.percentPositive), computed: isNum(cached.percentPositive) },
@@ -152,7 +156,7 @@
     }
 
     /** Columns of the batch table, in render and CSV order. */
-    const TABLE_COLUMNS = ['label', 'area', 'mean', 'percentPositive', 'components', 'density'];
+    const TABLE_COLUMNS = ['label', 'area', 'tissueRatio', 'mean', 'percentPositive', 'components', 'density'];
 
     /**
      * Area labels for a set of annotations, all on ONE unit.
@@ -185,6 +189,7 @@
         return {
             label: annotationLabel(annotations, object, t),
             area: areaLabel || geo.areaLabel || EMPTY,
+            tissueRatio: pct(engine.getTissueRatio?.(object)?.ratio),
             mean: num(cached.mean, 1),
             percentPositive: pct(cached.percentPositive),
             components: comp.count != null ? String(comp.count) : EMPTY,

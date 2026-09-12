@@ -98,6 +98,154 @@
         }
 
         /**
+         * The optional pathology module, or null. Never hard-required:
+         * `singletonModule` throws when the module is not loaded.
+         */
+        pathology() {
+            try {
+                return (typeof singletonModule === 'function') ? singletonModule('pathology-foundation') : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        /**
+         * How far from the subject a tissue island may sit, as a fraction of the
+         * current viewport width — so the rule follows the zoom. User preference.
+         */
+        tissueFactor() {
+            return Number(this.getOption('tissueFactor', 0.25)) || 0.25;
+        }
+
+        /** Width of the current viewport in image px — the unit proximity is quoted in. */
+        _viewportWidthImagePx(viewer) {
+            const image = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
+            const bounds = viewer?.viewport?.getBounds?.();
+            if (!image || !bounds) return NaN;
+            const tl = image.viewportToImageCoordinates(bounds.x, bounds.y);
+            const br = image.viewportToImageCoordinates(bounds.x + bounds.width, bounds.y + bounds.height);
+            return Math.abs(br.x - tl.x);
+        }
+
+        /**
+         * Decide which islands of a fresh derivation belong to the subject.
+         *
+         * Islands are ranked by proximity to the subject — the island it sits ON
+         * first (distance 0), then by boundary distance. The nearest one is ALWAYS
+         * kept: a mask derived for a region must contain that region's tissue,
+         * whatever the reach says. The others survive only within `reach`, a
+         * fraction of the CURRENT viewport width, so the rule moves with the zoom:
+         * framed on one gland it keeps that gland's tissue, zoomed out to the whole
+         * section it keeps the section. Rejected polygons are deleted — this action
+         * created them a moment ago, and pruning them is the point rather than a
+         * side effect. With no subject there is nothing to be near, so all stay.
+         *
+         * @return {fabric.Object[]} kept islands, nearest first
+         */
+        _keepIslands(viewer, fabric, subject, created, factor) {
+            if (!subject) return created;
+            const ranked = global.AnnotationMeasurements.geometry.rankByProximity(this.annotations, subject, created);
+            // Nothing measurable: keep the derivation rather than silently delete it.
+            if (!ranked.length) return created;
+
+            const reach = factor > 0 ? factor * this._viewportWidthImagePx(viewer) : 0;
+            const limit = Number.isFinite(reach) ? reach : Infinity;
+            const kept = ranked
+                .filter((r, i) => i === 0 || r.distancePx <= limit)
+                .map((r) => r.object);
+
+            const keep = new Set(kept);
+            for (const island of created) {
+                if (!keep.has(island)) fabric.deleteAnnotation(island);
+            }
+            return kept;
+        }
+
+        /**
+         * Derive the tissue mask of the current view and keep the part that belongs
+         * to `subject`; when a subject is given, also compute and cache its tissue
+         * ratio (annotation area ÷ kept tissue area). The one code path behind the
+         * panel's "Derive tissue mask", the popover / canvas-menu shortcut and the
+         * scripting `tissueRatio()`.
+         *
+         * The mask polygons remain on the slide, in the active preset unless
+         * `presetID` says otherwise — the user can delete unwanted parts.
+         *
+         * Two facts about the annotations module shape this method. Every annotation
+         * it adds becomes the canvas selection (`fromCanvas: true`), so the selection
+         * in place before the call is put back afterwards; callers that follow the
+         * selection (the panel) suspend their sync for the duration. And a freshly
+         * added polygon is topmost and, while selected, wins every hit-test inside
+         * it, so it would swallow clicks meant for the annotation drawn on it: kept
+         * islands are sent to the back.
+         *
+         * @param {OpenSeadragon.Viewer} viewer
+         * @param {object} [opts]
+         * @param {fabric.Object|null} [opts.subject] the annotation the mask is for
+         * @param {number} [opts.factor] reach as a fraction of the viewport width
+         * @param {*} [opts.presetID] move kept islands into this class
+         * @param {string} [opts.driver] pathology tissue driver
+         * @return {Promise<{islands: fabric.Object[], ratio: number, annotationAreaPx: number,
+         *   tissueAreaPx: number, reason: string|null}>} `reason` is a `reason.*` key
+         *   (`no-pathology`, `no-image`, `tissue-empty`, or the error message) when
+         *   nothing was derived.
+         */
+        async deriveTissueMask(viewer, opts = {}) {
+            const NS = global.AnnotationMeasurements;
+            const none = (reason) => ({ islands: [], ratio: NaN, annotationAreaPx: NaN, tissueAreaPx: NaN, reason });
+            const pathology = this.pathology();
+            if (!pathology) return none('no-pathology');
+            const annotations = this.annotations;
+            const fabric = viewer ? annotations?.getFabric?.(viewer) : null;
+            if (!fabric) return none('no-image');
+
+            const subject = opts.subject || null;
+            const factor = Number.isFinite(opts.factor) ? opts.factor : this.tissueFactor();
+            const previousSelection = (fabric.getSelectedAnnotations?.() || []).filter(Boolean);
+            const list = () => NS.ui.format.annotationsIn(annotations, viewer);
+            const before = new Set(list().map((o) => o.incrementId));
+
+            let islands = [];
+            try {
+                await pathology.annotateTissue(viewer, { driver: opts.driver });
+                const created = list().filter((o) => !before.has(o.incrementId));
+                if (!created.length) return none('tissue-empty');
+
+                islands = this._keepIslands(viewer, fabric, subject, created, factor);
+
+                // Fabric draws (and hit-tests) the active object on top regardless of
+                // stacking order, so drop the selection before reordering — the same
+                // dance the annotations plugin's "Send to back" does.
+                fabric.canvas.discardActiveObject?.();
+                for (const island of islands) fabric.canvas.sendToBack?.(island);
+                fabric.canvas.requestRenderAll?.();
+
+                if (opts.presetID != null) {
+                    for (const island of islands) fabric.changeAnnotationPreset(island, opts.presetID);
+                }
+            } catch (err) {
+                APPLICATION_CONTEXT.log(`module.${this.id}`).warn('tissue derivation failed', err);
+                return none(err?.message || String(err));
+            } finally {
+                NS.ui.picker.applySelection(fabric, previousSelection);
+            }
+
+            let ratio = NaN, annotationAreaPx = NaN, tissueAreaPx = NaN;
+            if (subject) {
+                const r = this.getEngine().areaRatioAgainstSet(viewer, subject, islands) || {};
+                ratio = r.ratio;
+                annotationAreaPx = r.numeratorAreaPx;
+                tissueAreaPx = r.denominatorAreaPx;
+                this.getEngine().setTissueRatio(subject, {
+                    ratio, annotationAreaPx, tissueAreaPx,
+                    islandIds: islands.map((o) => o.incrementId),
+                    islandCount: islands.length,
+                });
+            }
+            return { islands, ratio, annotationAreaPx, tissueAreaPx, reason: null };
+        }
+
+        /**
          * Opens the measurements panel, optionally on a given annotation. Async because
          * the panel builds its static labels once, in `create()`.
          */
@@ -158,10 +306,42 @@
                 if (!fabric) return null;
                 const active = ctx.active ?? fabric.canvas?.findTarget?.(ctx.event);
                 if (!active || !fabric.isAnnotation?.(active)) return null;
+                // One nested entry: the quick read, the two one-click computations
+                // (each opens the popover, which shows progress, the result or the
+                // reason), and the full panel. The tissue entry is listed even when
+                // the pathology module is missing — dimmed, saying why — so the
+                // feature is discoverable rather than silently absent.
+                const pathology = this.pathology();
                 return [{
-                    title: this.t('viewMeasurements'),
+                    title: this.t('menuRoot'),
                     icon: 'ph-chart-bar-horizontal',
-                    action: () => this.openPopover(active),
+                    children: [
+                        {
+                            title: this.t('viewMeasurements'),
+                            icon: 'ph-list-numbers',
+                            action: () => this.openPopover(active),
+                        },
+                        {
+                            title: this.t('menuMeasurePixels'),
+                            icon: 'ph-scan',
+                            action: async () => (await this.openPopover(active))?.measure(),
+                        },
+                        pathology ? {
+                            title: this.t('menuTissueRatio'),
+                            icon: 'ph-circles-three',
+                            action: async () => (await this.openPopover(active))?.deriveTissue(),
+                        } : {
+                            title: this.t('tissueUnavailable'),
+                            icon: 'ph-circles-three',
+                            containerCss: 'opacity-50',
+                            action: () => {},
+                        },
+                        {
+                            title: this.t('openWorkspace'),
+                            icon: 'ph-arrows-left-right',
+                            action: () => this.openWorkspace(active),
+                        },
+                    ],
                 }];
             }, 15);
         }
