@@ -957,6 +957,25 @@ class ChatModule extends XOpatModuleSingleton {
         APPLICATION_CONTEXT?.Scripting?.syncNamespaceConsent?.(this._scriptConsent);
     }
 
+    /**
+     * May identifying / patient-sensitive values reach the model right now?
+     *
+     * True exactly when the user (or a trusted operator default) granted every namespace
+     * that declares itself `sensitive` — which under the default `all-but-sensitive` posture
+     * means `patient` is off and the answer is false. Namespaces that are not themselves
+     * sensitive consult this before handing out a value one of them gates: a raw slide path,
+     * a study UID, a specimen site read out of a file name.
+     *
+     * Read from the live consent state rather than cached, so toggling the switch mid-session
+     * takes effect on the next call instead of the next reload. With no sensitive namespace
+     * loaded at all there is nothing to withhold, and the answer is true.
+     */
+    _mayExposeSensitiveData(): boolean {
+        const entries = Object.values(this._scriptConsent || {});
+        const sensitive = entries.filter((entry: any) => entry?.sensitive);
+        return sensitive.every((entry: any) => entry?.granted === true);
+    }
+
     getAllowedScriptApiManifest(): AllowedScriptApiManifest {
         const manager = APPLICATION_CONTEXT?.Scripting;
         if (!manager?.getAllowedApiManifest) return { namespaces: [] };
@@ -1568,6 +1587,10 @@ class ChatModule extends XOpatModuleSingleton {
 
         // Install the identity-aliasing resolver so the model only round-trips opaque handles.
         this._installViewerAliasResolver(context);
+        // ...and the sensitive-data policy, so a namespace that is not itself `sensitive`
+        // stops re-exporting what the denied `patient` namespace gates. Re-installed per
+        // turn: the closure reads live consent, and the context outlives this call.
+        context?.setSensitiveDataResolver?.(() => this._mayExposeSensitiveData());
 
         context?.setLabel?.(`Chat: ${contextId}`);
         context?.patchMetadata?.({
@@ -2868,10 +2891,22 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * Provider/model default to the panel's current selection, so a caller can pass
      * nothing. Pass `metadata.source` to tag externally-owned sessions — the picker
      * filters on it, which is how chat-based-tester keeps its sessions out of the UI.
+     *
+     * `transcriptOnly` declares that this session will never run an assistant turn —
+     * it is a record of what was said (dictation/reporting), and the caller owns all
+     * inference. Such a session therefore does NOT wait on the scripting baseline:
+     * that gate exists so the FIRST TURN's tool manifest is complete, and a session
+     * with no turns waits out every boot plugin's namespace registration for nothing.
+     * That wait was seconds of dead time between "Start recording" and a live
+     * microphone. Should the caller later send a real turn, the send path gates on
+     * the baseline itself, so nothing is bypassed — only the waiting is skipped.
      */
-    async createSession(input: Partial<CreateSessionInput> = {}): Promise<ChatSession> {
+    async createSession(
+        input: Partial<CreateSessionInput> = {},
+        options: { transcriptOnly?: boolean } = {}
+    ): Promise<ChatSession> {
         await this._awaitChatUsable();
-        await this.whenScriptBaselineSettled();
+        if (!options.transcriptOnly) await this.whenScriptBaselineSettled();
 
         const panel = this.chatPanel;
         const providerId = input.providerId || panel?._providerId;
@@ -2905,13 +2940,21 @@ When scripting is not available or insufficient, explain the limitation clearly.
         return session;
     }
 
-    /** Hydrate an existing session into the panel and make it the live one. */
-    async openSession(sessionId: string): Promise<ChatSession> {
+    /**
+     * Hydrate an existing session into the panel and make it the live one.
+     *
+     * `showChatView: false` keeps the panel's VIEW where the user left it (the session
+     * list, another tab's content) while still making the session live. A headless
+     * consumer re-attaching to its own session — a dictation resumed on reload — has no
+     * business yanking the chat into the conversation view of a session the user never
+     * asked to read.
+     */
+    async openSession(sessionId: string, options: { showChatView?: boolean } = {}): Promise<ChatSession> {
         if (!sessionId) throw new Error('openSession requires a session id.');
         const panel = this.chatPanel;
         if (!panel) throw new Error('Chat panel is not available.');
 
-        const session = await panel._loadSession(sessionId);
+        const session = await panel._loadSession(sessionId, options);
         if (!session) throw new Error(`Failed to open chat session '${sessionId}'.`);
         return session;
     }
@@ -3034,13 +3077,6 @@ When scripting is not available or insufficient, explain the limitation clearly.
     }
 
     /**
-     * What dictation audio is retained, or null when there is none: `count`
-     * recordings, and `truncated` when the archive hit its size/duration cap and
-     * therefore does NOT cover the whole dictation. A caller must check `truncated`
-     * before adopting a whole-audio transcript as authoritative — it would be more
-     * accurate but silently incomplete.
-     */
-    /**
      * Dictation windows transcribed in the BACKGROUND while recording ran — each ~90 s
      * of speech decoded with its full surrounding context, in seal order.
      *
@@ -3066,17 +3102,57 @@ When scripting is not available or insufficient, explain the limitation clearly.
         catch (_e) { /* voice absent */ }
     }
 
-    sessionAudioInfo(): { count: number; windows: number; truncated: boolean } | null {
+    /**
+     * Wait until the session's recorded audio exists and has been decoded.
+     *
+     * **Call this before `sessionAudioInfo()`, always.** Two things finish after dictation
+     * stops and neither is visible to a synchronous read: the archive's last blob is
+     * produced in the recorder's `onstop` (a browser event), and the window it becomes is
+     * transcribed in the background. Between the two, the session looks empty.
+     *
+     * For a dictation shorter than one ~90 s window that window is the only one, so an
+     * immediate read reported "no audio" every time — and MIXTURE's review modal silently
+     * showed the per-segment transcript that the whole-audio pass exists to replace.
+     *
+     * `signal` cancels the wait, not the decode: giving up here leaves the work running,
+     * so a second attempt moments later is served immediately. Never rejects.
+     */
+    async whenSessionAudioSettled(options: { signal?: AbortSignal } = {}): Promise<void> {
+        const panel: any = this.chatPanel;
+        try { await panel?.whenSessionAudioSettled?.(options); }
+        catch (_e) { /* a settle point must never reject */ }
+    }
+
+    /**
+     * What dictation audio EXISTS, or null when there is none.
+     *
+     * `windows` counts every archive window including those still being transcribed;
+     * `pending` are the ones still worth waiting for, and `failed` the ones that produced
+     * no text and no longer hold their audio. Counting only DECODED windows (as this once
+     * did) conflates "nothing was recorded" with "the decode has not landed yet", and the
+     * caller then degrades on a race rather than on a fact. Await
+     * {@link whenSessionAudioSettled} first if you want `pending` to be 0.
+     *
+     * **`failed > 0` means speech is gone**, not delayed — a whole-audio transcript built
+     * from what is left is missing those windows, and nothing will bring them back.
+     * `retryable` windows are the middle case: their decode produced no text but the
+     * audio is still held, and `transcribeSessionAudio()` retries them.
+     *
+     * `truncated` means the archive hit its size/duration cap and does NOT cover the whole
+     * dictation — check it before adopting a whole-audio transcript as authoritative, or
+     * it reads as complete while missing the end.
+     */
+    sessionAudioInfo(): { count: number; windows: number; pending: number; retryable: number; failed: number; truncated: boolean } | null {
         const panel: any = this.chatPanel;
         try {
             const audio = panel?.getSessionAudio?.();
-            const windows = panel?.getSessionWindows?.() || [];
+            const counts = panel?.sessionWindowCounts?.() || {total: 0, pending: 0, retryable: 0, failed: 0};
             const count = audio ? audio.blobs.length : 0;
-            if (!count && !windows.length) return null;
+            if (!count && !counts.total) return null;
             // With windowing the blobs are handed over as they seal, so the truncation
             // flag has to come from the module rather than from a retained recording.
             const truncated = !!(audio?.truncated) || !!panel?.isSessionAudioTruncated?.();
-            return { count, windows: windows.length, truncated };
+            return { count, windows: counts.total, pending: counts.pending, retryable: counts.retryable || 0, failed: counts.failed || 0, truncated };
         } catch (_e) { return null; }
     }
 

@@ -26,6 +26,12 @@ await chat.destroySession(session.id);
 
 Sessions: `createSession` · `openSession` · `listSessions` · `getTranscript` ·
 `destroySession` · `getActiveSessionId`.
+Two options exist for consumers that are not having a conversation:
+`createSession(input, {transcriptOnly: true})` declares that the session will never run an
+assistant turn, so it does not wait on the scripting baseline (that gate exists to complete a
+FIRST TURN's tool manifest — a dictation store waited seconds for nothing), and
+`openSession(id, {showChatView: false})` makes a session live without pulling the panel's view
+into it, which is what a consumer re-attaching to its own session wants.
 Turns: `appendUserUtterance(text, {sessionId?, signal?})` · `stopTurn()` · `isTurnRunning()`.
 Transcript-only: `appendTranscriptUtterance(text, {sessionId?, source?})` appends a user message to
 the transcript (visible + persisted, raises `utterance-appended`) **without** running an assistant

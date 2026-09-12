@@ -23,11 +23,25 @@ microphone access.
 
 ## Drivers & the fallback chain
 
-Transcription runs through an ordered **fallback chain**: the active driver
+Transcription can run through an ordered **fallback chain**: the active driver
 first, then any others, with the local (in-browser) driver **last** as the
-guaranteed offline fallback. If a preferred cloud/remote model is missing or
-errors, transcription degrades to local Whisper automatically — so a driver that
-"isn't guaranteed to be there" is safe to prefer.
+offline fallback.
+
+**The live dictation path does NOT fall back by default.** A configured cloud model
+that errors makes the segment fail — visibly (`transcription-error`, a status line
+in the composer) — and its audio stays in the archive for the review-time retry.
+It used to degrade silently to `Xenova/whisper-tiny.en` on any non-auth error,
+and the metrics still named the configured model: a worse transcript, filed under
+the primary recognizer's name, with nothing on screen. A deployment that prefers
+degraded text over a visible failure opts back in:
+
+```jsonc
+"speech-to-text": { "liveFallback": true }
+```
+
+The one-shot `transcribeOnce` / `transcribeAudio(…, {allowFallback: true})` paths
+keep the chain when asked for it. Every result now carries `driverId` / `model`
+from the driver that **answered**, and the same fields in `SegmentMetrics`.
 
 | Driver id | What it is | Audio leaves browser? |
 |-----------|------------|-----------------------|
@@ -193,9 +207,53 @@ resolve `{text: "", noSpeech: true}`.
 
 ```jsonc
 "speech-to-text": {
-  "minVoicedMs": 250      // min detected voiced ms before audio may be transcribed
+  "minVoicedMs": 400      // min detected voiced ms before audio may be transcribed
 }
 ```
+
+The floor is 400 because 250 was not enough: a 10.8 s segment carrying 359 ms of
+voice cleared it, reached `whisper-large-v3`, and came back as the invented word
+`"the"` in a pathology transcript. The consumer-side gate applies the same idea as
+a *ratio* (see `modules/vercel-ai-chat-sdk/shared/segment-noise.ts`), which is what
+catches the end-of-session flush segment — that one bypasses `minVoicedMs` by
+design, so it can arrive with `voicedMs: 0`. That ratio is taken against the
+segment's **speech span** (`SegmentMetrics.speechSpanMs`, first to last detected
+speech), not its wall-clock length: wall time always includes the trailing-silence
+window that cut the segment plus any pause before the word, and "UIP" after a
+2.5 s think scored 0.09 against it and was rejected as a hallucination.
+
+Three rules keep these filters from eating speech, each learned from a transcript
+that lost some:
+
+- **Digital silence is never uploaded, in any mode.** A segment whose loudest
+  sample is ~0 (`maxPeak`) is a muted or dead track, not a quiet room. It is
+  discarded (`segment-discarded`, reason `silent`) even in fail-open mode, and it
+  never counts as evidence that the VAD misjudged speech. A dead microphone used
+  to produce one 15 s blob of zeros after another for an hour, each transcribed to
+  `"The"`, and the probe on the third flipped the session fail-open.
+- **A probe proves speech only if the consumer's gate accepts it.** "Non-empty"
+  was the test, and a hallucinated `"The"` passed it.
+- **The `minVoicedMs` gate has a ladder too.** The third gated segment in a row
+  goes through as a probe (a quiet speaker's every short answer otherwise falls
+  under the floor with no signal), and every gate raises `segment-gated`.
+
+Filters that alter what the model said record it in `TranscriptionResult.filtered`
+(`non-speech`, `repetition`, `prompt-echo`, `operator-filter`, `truncated`) and
+raise `segment-filtered` — with `emptied: true` when a filter blanked a non-empty
+decode, which used to be indistinguishable from silence at every layer above.
+The repetition filter **collapses** a loop to what it repeats instead of blanking
+the whole result (a 90 s window used to lose a minute and a half of dictation to
+a loop in its last five seconds); only a decode that was nothing but loop empties.
+The prompt-echo filter blanks only an echo led by one of the prompt's own labels
+(`Common terms:`) — "two glossary terms and nothing else" is a finding, not an
+echo, and `"fibrosis, necrosis."` was being deleted.
+
+When the backend returns `verbose_json` (the OpenAI-compatible path asks for it
+and degrades to `json` per model when refused), Whisper's own verdicts ride along:
+`noSpeechProb`, `avgLogprob`, `compressionRatio` on the result and in the
+metrics. The consumer gate takes `noSpeechProb ≥ 0.6` as the model saying it heard
+silence, ahead of every audio heuristic. `temperature=0` is sent on that path too
+(the self-hosted driver always did), so the same audio decodes to the same words.
 
 The VAD's clock is an `AudioWorklet` peak meter (`vad-worklet.js`, a static
 module asset loaded at capture start) running on the audio render thread, which
@@ -251,9 +309,39 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
 "speech-to-text": {
   "language": "en",          // BCP-47; unset → inherits the live UI locale ($.i18n.language)
   "prompt": "histology, immunohistochemistry, mitosis, stroma, carcinoma",
-  "contextPromptChars": 240  // rolling previous-transcript context per segment; 0 = off
+  "contextPromptChars": 0,   // rolling previous-transcript context per segment; 0 = off (default)
 }
 ```
+
+**The prompt is OFF by default (`promptMaxChars: 0`) — nothing is sent.** It was the
+cause of every "dropped content" symptom in the MIXTURE field rounds. Measured on the
+deployment's own endpoint (`whisper-large-v3`, one 93 s dictation, the same blob each
+time, `verbose_json`, `temperature=0`):
+
+| prompt sent | result |
+|---|---|
+| none / `language=en` only | full 93 s, correct from the first word |
+| 60 chars | full |
+| 120 chars | full span, text thinner |
+| 200 chars | **first 30 s gone** |
+| 495 chars (the base glossary) | **last third gone** |
+| ~870 chars (glossary + report terms) | **30 s of the middle, nothing else** |
+
+The container, the RPC hop and the model were all fine; the `prompt` field alone made
+the decoder drop whole stretches of audio, in proportion to its length. The rolling
+context tail (`contextPromptChars`) was the same effect through a different prompt.
+Vocabulary belongs to the post-hoc corrector (the report flow's `learnedCorrections`
+already feed it), not to the recognizer.
+
+A deployment that has measured a gain on its own backend opts in with a cap:
+
+```jsonc
+"speech-to-text": { "promptMaxChars": 60 }   // ≤ 60 measured safe on the endpoint above; hard ceiling 700
+```
+
+The server applies the same rule per provider (`transcriptionPromptMaxChars` on the
+provider config, default 0), so no client can re-enable it by accident. When enabled
+the prompt is cut on a word boundary.
 
 - **`language`** pins the model's language instead of letting it free-detect one
   per utterance (the drift behind e.g. an English clause read as another tongue).
@@ -268,18 +356,59 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
   prompt automatically (see below); this static-meta value is the module-wide
   fallback for other consumers.
 - **`contextPromptChars`** (continuous dictation only) feeds the tail of what has
-  already been transcribed this session back as the *next* segment's prompt. This is
-  the single biggest accuracy lever in long dictation: segments are decoded
-  independently, so without it every segment starts blind and the model resolves
-  domain vocabulary from general priors — which is how "pleura" comes back as
+  already been transcribed this session back as the *next* segment's prompt. Segments
+  are decoded independently, so in principle this stops each one starting blind and
+  resolving domain vocabulary from general priors — which is how "pleura" comes back as
   "prostate". The tail is appended AFTER the glossary (closest to the audio = the
   strongest bias) and the combined prompt is trimmed to the same ~1000-char cap,
-  glossary first. Set `0` to restore the old session-constant prompt.
+  glossary first.
+
+  **Default `0` — off. Measure before switching it on.** It is a feedback path into
+  the decoder and its sign is model-dependent. On `whisper-large-v3` it truncated
+  output badly, measured as words produced per second of VAD-detected voiced audio
+  (a figure the recognizer has no say in; normal read-aloud speech is ~2.5–3):
+
+  | segment | rolling tail | words / voiced second |
+  |---|---|---|
+  | 0 of a capture | none | **2.86**, **1.83** |
+  | 1 | 240 chars | 0.63, 1.20 |
+  | 2 | 240 chars | 0.72 |
+
+  Every segment after the first was cut to roughly its opening few seconds, and it
+  compounded — the shrinking tail became the next segment's prompt. The same code path
+  feeds the 90 s archive windows (`_enqueueWindow`), so the whole-audio transcript
+  degrades identically. The earlier provider showed none of this on the same setting,
+  which is exactly why it has to be measured per model rather than assumed.
 
 An echo guard removes a returned transcript that is merely the prompt repeated
 back (a known Whisper behaviour on near-silence). The glossary is matched
 fragment-wise, the rolling context only as a whole run — so a speaker legitimately
 repeating a phrase they just said keeps it.
+
+### Repetition locks
+
+The rolling context is a **feedback path**: what the model emits becomes the bias for
+the next segment. A prompt-obedient model that re-emits its own tail therefore
+reinforces itself, and each round the bias is more concentrated than the last. This is
+not hypothetical — with `whisper-large-v3` one 450 s dictation came back as `"I'm not
+the"` for ten consecutive segments, while the whole-audio pass over the *same* audio
+read as ordinary speech.
+
+Length cannot tell an echo from a real repeat: the echo guard above deliberately ignores
+anything under 25 chars so a pathologist saying one glossary term keeps it, and `"I'm
+not the"` is eleven. The pairing can — a segment that both repeats the previous one
+verbatim **and** is contained in the tail it was prompted with is an echo. `repetitionLock.ts`
+acts on that, asymmetrically, because the two mistakes cost differently:
+
+- **The context tail is muted** on any repeat, echo or not. That costs one segment's
+  worth of accuracy and no words at all, and with no tail to copy a locked decoder has
+  nothing to sustain the lock with. It is restored as soon as the output moves on.
+- **The segment is dropped** only for the echo pairing, and never the first instance. A
+  speaker who genuinely said something twice loses a duplicate the transcript did not
+  need, never a finding.
+
+The transition raises `transcription-repeat-lock` once (payload `{ text, index }`), so a
+stuck recognizer is visible instead of reaching the transcript as ordinary short segments.
 
 ## Voice UX config (chat composer)
 
@@ -294,7 +423,7 @@ Under the chat module's `voice` block (all optional):
 | `language` | UI locale | BCP-47 hint (remote / multilingual WASM). Unset → inherits the live app locale (`$.i18n.language`) so transcription tracks the UI language instead of free-detecting it. |
 | `prompt` | — | Domain/vocabulary biasing text (Whisper `prompt` / whisper.cpp `initial_prompt`) — appended to the built-in translatable pathology glossary and live domain-tool terms so homophones resolve toward the domain ("histology", not "history"). Ignored by the in-browser WASM driver. Length-capped (~1000 chars). |
 | `autoSubmit` | false | Manual dictation: fill-and-review vs. send. |
-| `minVoicedMs` | 250 | Minimum detected voiced ms a capture/segment needs before it is transcribed at all (see hallucination filtering above). |
+| `minVoicedMs` | 400 | Minimum detected voiced ms a capture/segment needs before it is transcribed at all (see hallucination filtering above). |
 | `reArmDelayMs` | 500 | Settle pause between an assistant reply and the next queued submission. |
 | `turnSilenceMs` | 2000 | Hands-free only: longer end-of-turn silence that completes a turn. The mic stays hot through each segment's transcription while the user pauses only briefly, so nothing is lost; a pause this long completes the turn. Must exceed `silenceMs`. |
 | `idleAutoOffMs` | 300000 | Hands-free only: after this long with no real speech, voice conversation switches itself off (status note shown). A silent, *thinking* user is fine — silence submits nothing and the session just keeps waiting until this generous timer runs out. |
@@ -329,7 +458,46 @@ stt.createMicButton({ onResult }).attachTo(el);  // reusable BaseComponent mic
 
 Events (via the module's EventSource): `recording-started` / `recording-stopped`
 / `transcription-started` / `transcription` / `transcription-error` /
-`capture-warning` / `driver-error`. `transcription-started` fires when a
+`capture-warning` / `driver-error` / `transcription-repeat-lock` /
+`segments-abandoned` / `segment-gated` / `segment-discarded` /
+`segment-filtered` / `segment-empty` / `segment-trimmed` / `capture-started` /
+`window-transcription-started` / `window-transcription` /
+`window-transcription-error` / `window-empty`.
+
+`capture-started` fires once the segment recorder is actually running — permission
+granted, stream open, encoder started. `recording-started` fires on the start *call*,
+before the `getUserMedia` promise; a UI that shows "listening" on it invites the speaker
+to begin a second early, and those words were never recorded. `segment-empty`
+(`{ index, audioMs, voicedMs, speechSpanMs, maxPeak, latencyMs, driverId, noSpeechProb,
+avgLogprob, reportedDurationMs, filtered, probe }`) fires when a driver returned no text
+for a segment that was uploaded — an endpoint answering 200 with an empty body for two
+minutes used to look exactly like silence. `segment-trimmed` (`{ index, words,
+overlapMs, dropped? }`) fires when the repeated head of a piece was cut at the seam with
+the previous one (consecutive recordings share up to a timeslice of audio, and the
+recognizer transcribes it twice — `metaplasia, metaplasia`); see `joinSegments.ts`.
+
+The `segment-*` trio is the module's "no silent path" contract — every recorded
+segment that does not reach the transcript says why: `segment-discarded`
+(`{ reason: "no-speech" | "silent" | "session-ended", audioMs, voicedMs, maxPeak }`)
+for audio the capture never emitted; `segment-gated`
+(`{ index, voicedMs, minVoicedMs, speechSpanMs, probe }`) for audio under the
+voiced floor; `segment-filtered`
+(`{ filters, emptied, rawChars, chars, rawText, channel }`) for text a filter
+changed or blanked. The `window-*` events are the archive path's own, so a 90 s
+background decode no longer paints the live caption band or flips the composer's
+"transcribing" indicator; `window-empty`
+(`{ index, bytes, reportedSec, localDecodeSec, localDecodeError, noSpeechProb }`)
+carries the diagnosis of a window that decoded to nothing — `localDecodeSec` is
+the browser's own decode of the same blob, so a full local length beside an empty
+upstream result names the backend, and a failed local decode names the capture.
+`transcription-repeat-lock` fires **once**, on the transition, when continuous
+dictation starts repeating itself — payload `{ text, index }`. See
+*Repetition locks* below for what the module does about it.
+`segments-abandoned` fires when a stop/abort discards audio that was captured and
+queued but never transcribed — payload `{ indices, bytes, audioMs, reason }`. This
+is the module's one path to losing speech outright, and "the last thing I said
+before stopping never appeared" is indistinguishable from a dozen other faults
+without it. `transcription-started` fires when a
 transcription batch actually begins — in continuous mode, each time the
 in-flight count leaves 0 — not once at session start, so "transcribing"
 indicators reflect real work. `driver-error` fires per failed driver *before*
@@ -359,8 +527,13 @@ const stt = singletonModule('speech-to-text');
 const h = stt.startContinuousDictation({
   language: 'en',
   onLevel: (lvl) => meter(lvl),                 // 0..1 live input level
-  onPartial: ({ appended, text, index }) => {   // each in-order segment as it lands
+  onPartial: ({ appended, text, index, metrics }) => {  // each in-order segment as it lands
     feedToModel(appended);                       // incremental, or use `text` (full so far)
+    // `metrics` = { audioMs, voicedMs, tracked, bytes, latencyMs, driverId, model,
+    //               probe, failOpen, flush } — what the text was decoded FROM.
+    // Log it: three words out of ten seconds of speech and three words out of a
+    // three-word utterance are otherwise the same event, and telling a bad model
+    // apart from bad audio after the fact is impossible without it.
   },
   turnSilenceMs: 2000,                           // optional: end-of-turn silence signal
   onTurnIdle: () => h.stop(),                    // optional: react to a long pause
@@ -381,6 +554,29 @@ Consecutive segments also overlap by the recorder flush latency instead of leavi
 a gap, so nothing spoken across a boundary is dropped. Both matter because a word
 split across two independently-decoded blobs is not transcribed as half a word —
 the model invents a whole, plausible, wrong one.
+
+#### Session scoping — who owns the dictation boundary
+
+`startContinuousDictation` drops the previous dictation's retained recording and
+windows unless `continuesSession: true` is passed. The **chat controller always passes
+it**: the archive is only ever on in transcript-only mode, where the consumer (the
+report flow) clears the recording at report start and after confirmation and compares
+the whole-audio text against everything said since that confirmation — a start that
+dropped the recording made it cover one capture while "live" still held the previous,
+unconfirmed round, so the whole-audio pass read as "too short" and was discarded.
+Direct module users keep the clean-start default; a consumer that retains audio owns
+its lifetime via `clearSessionAudio()`. `clearSessionAudio()` also **aborts** any window upload
+still in flight, so "delete my recording" means none of it leaves the browser
+afterwards.
+
+Every window has a state — `pending` (queued or decoding), `done`, `retryable`
+(no text, audio still held: `transcribeSessionAudio()` retries it), `failed` (no
+text, no audio) — read through `sessionWindowCount` / `pendingWindowCount` /
+`retryableWindowCount` / `failedWindowCount`. `pending` reaches 0 once
+`whenSessionAudioSettled()` resolves; `pending` and `retryable` used to be one
+state, so a decode that had failed minutes ago read as "about to arrive".
+`transcribeSessionAudio()` awaits the settle point itself, retries each window on
+its own, and returns what decoded even when one window fails.
 
 #### Rolling windows (`windowMs` / `onWindow`) — accuracy paid for during dictation
 
@@ -469,8 +665,22 @@ dropped.
 
 ## Diagnostics
 
-`localStorage.setItem('xopat-stt-debug','1')` logs VAD decisions (noise floor,
-peak, stop reason) to the console; remove the key to disable.
+The module logs through the client broker (`APPLICATION_CONTEXT.log`, see
+`src/LOGGING.md`) on `module.speech-to-text`; the VAD's cut decisions (noise floor,
+gate, peak, why a segment was cut) are on the `module.speech-to-text:vad` sub-channel at
+`debug`. The root level defaults to `warn`, so none of it costs anything in production;
+a deployment turns it on in `env.client.logging.channels`:
+
+```jsonc
+"client": { "logging": { "channels": {
+  "module.speech-to-text": "debug",            // everything the module says
+  "module.speech-to-text:vad": "debug",        // only the VAD decisions
+  "module.vercel-ai-chat-sdk:voice": "debug"   // the chat composer's voice controller
+} } }
+```
+
+(There is no per-feature flag any more — the old `xopat-stt-debug` localStorage key is gone;
+a channel level is the switch, the same for every subsystem.)
 
 To see which driver actually served each segment — a silent fall back to the WASM
 tiny model looks identical in the UI but transcribes far worse — listen in:
@@ -479,6 +689,15 @@ tiny model looks identical in the UI but transcribes far worse — listen in:
 const stt = singletonModule('speech-to-text');
 stt.addHandler('transcription', e => console.log('[stt] driver=', e.driverId, '|', e.result?.text));
 stt.addHandler('driver-error', e => console.warn('[stt] driver-error', e.driverId, e.error));
+stt.addHandler('segment-filtered', e => console.warn('[stt] filtered', e.filters, e.emptied ? 'EMPTIED' : '', e.rawText));
+stt.addHandler('segment-gated', e => console.log('[stt] gated', e));
+stt.addHandler('segment-discarded', e => console.log('[stt] discarded', e.reason, e));
+stt.addHandler('window-empty', e => console.warn('[stt] window empty', e));
+// the audio of every window that produced no text, for decoding elsewhere:
+stt.getFailedWindowBlobs();
+stt.exportFailedWindows();   // …or download each as window-<index>.webm right away
+// then, e.g.: ffprobe window-0.webm; curl -F file=@window-0.webm -F model=… /audio/transcriptions
+// with and without -F prompt=… — that comparison is what found the prompt defect above.
 // queue pressure on the background HTTP lane (transcription is `background-urgent`)
 setInterval(() => console.log('[stt] sched', APPLICATION_CONTEXT.requestScheduler.stats()), 3000);
 ```

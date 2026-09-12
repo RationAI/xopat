@@ -7,6 +7,9 @@ import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
 import {VercelTranscribeConfig, VercelTranscribeDriver} from "./drivers/vercelTranscribe";
+import {createRepetitionLock} from "./repetitionLock";
+import {stripPromptEcho} from "./promptEcho";
+import {trimOverlap} from "./joinSegments";
 import {MicButton, MicButtonOptions} from "./ui/MicButton";
 import {CaptionOverlay} from "./ui/CaptionOverlay";
 
@@ -15,7 +18,17 @@ import {CaptionOverlay} from "./ui/CaptionOverlay";
  * background where nobody is waiting on it, but bounded so a stuck request cannot
  * hold up the whole chain behind it.
  */
-const WINDOW_TIMEOUT_MS = 120_000;
+const WINDOW_TIMEOUT_MS = 110_000;
+// Below the server's own 120 s bound, deliberately: equal deadlines race, and the client
+// timer also counts request-scheduler queue time, so a window queued behind live segments
+// used to be aborted client-side — opaquely — while the server was still decoding it.
+
+/**
+ * How long a window's audio waits for a local decode probe (diagnostic only). A blob
+ * that decodes fine here but came back empty from the backend is a backend problem; one
+ * that fails here is ours. Bounded so a stuck decoder cannot hold a warning hostage.
+ */
+const LOCAL_DECODE_PROBE_MS = 4000;
 
 /**
  * Handle returned by {@link SpeechToTextModule.startDictation}: lets the caller
@@ -38,6 +51,83 @@ export interface ContinuousPartial {
     index: number;
     /** The raw driver result for the appended segment. */
     result: TranscriptionResult;
+    /** What this segment cost and what it was made of — see {@link SegmentMetrics}. */
+    metrics?: SegmentMetrics;
+}
+
+/**
+ * Per-segment facts a consumer needs to tell a BAD MODEL apart from BAD AUDIO.
+ *
+ * Without them a three-word transcript of a ten-second segment and a three-word transcript
+ * of a three-word utterance are the same event. That is not hypothetical: attributing the
+ * whisper-large-v3 segment collapse in the 9-10 reporting round needed the source read,
+ * because the telemetry carried only `{text, index, accepted, mode}`.
+ */
+export interface SegmentMetrics {
+    /**
+     * The capture's own segment index — the authoritative one.
+     *
+     * A consumer counting accepted segments itself gets a different number, and a REJECTED
+     * segment then reports the index the next accepted one will take: two records claiming
+     * to be segment 2, one of which is not. Carry the real index so a trace can be read in
+     * order.
+     */
+    index?: number;
+    /** Wall-clock length of the captured segment, silence included. */
+    audioMs?: number;
+    /** Detected voiced duration within it. `audioMs` >> `voicedMs` means mostly silence. */
+    voicedMs?: number;
+    /** False when Web Audio was unavailable, so the two figures above are absent, not zero. */
+    tracked?: boolean;
+    /** Encoded audio actually sent to the driver. */
+    bytes?: number;
+    /** Driver round-trip for this segment. */
+    latencyMs?: number;
+    /**
+     * Audio duration the BACKEND measured, in ms, when it reports one.
+     *
+     * Compare it with `audioMs`: they should agree. A segment the capture timed at 15 s
+     * and the backend measured at ~0 never decoded — `MediaRecorder` writes a live-stream
+     * container with no duration in its header, and a decoder that reads that as zero
+     * returns an empty transcript and no error.
+     */
+    reportedDurationMs?: number;
+    /**
+     * Characters of rolling context the decoder was primed with; `0` when it was given
+     * only the static glossary.
+     *
+     * Recorded because the prompt is the variable that most changes what comes back, and
+     * a dump without it cannot explain why one segment decoded a third of the speech the
+     * previous one did.
+     */
+    contextChars?: number;
+    /**
+     * Which driver and model produced the text — the one that ANSWERED. Stamped from the
+     * result, never from the configured driver, so a fallback's output is never filed
+     * under the primary model's name.
+     */
+    driverId?: string;
+    model?: string;
+    /** First-to-last speech frame within the segment (ms); 0 when none was detected. */
+    speechSpanMs?: number;
+    /** Highest peak amplitude seen (0..1); 0 is digital silence. */
+    maxPeak?: number;
+    /** The trailing-silence window that cuts a segment (ms), for ratio rules. */
+    silenceMs?: number;
+    /** Audio this recording shared with its successor (ms) — see SegmentMeta.overlapMs. */
+    overlapMs?: number;
+    /** Whisper's own decode verdicts when the backend reports them (see TranscriptionResult). */
+    noSpeechProb?: number;
+    avgLogprob?: number;
+    compressionRatio?: number;
+    /** Text filters that altered the driver's raw output (see TranscriptionResult.filtered). */
+    filtered?: string[];
+    /** Emitted despite a VAD discard verdict, to test the gate. */
+    probe?: boolean;
+    /** The whole session bypasses the voiced-ms gate. */
+    failOpen?: boolean;
+    /** The final flush segment, emitted regardless of speech evidence. */
+    flush?: boolean;
 }
 
 /** One completed speaking turn delivered by `onTurn` (see {@link ContinuousDictationOptions}). */
@@ -82,13 +172,17 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
      * (background noise / mistranscription). Rejected segments are NOT concatenated
      * and do NOT fire `onPartial` — so noise never enters the turn. Applied on top
      * of the built-in empty-text skip. `stripNonSpeech`/operator filters run first.
+     *
+     * `metrics` describes the audio the text came from (see {@link SegmentMetrics}), so
+     * the gate can weigh a transcript against how much speech produced it. Absent when
+     * the capture had no VAD evidence — treat that as "cannot tell", not as zero.
      */
-    validateSegment?: (result: TranscriptionResult) => boolean;
+    validateSegment?: (result: TranscriptionResult, metrics?: SegmentMetrics) => boolean;
     /**
      * Minimum voiced milliseconds a segment must contain to be transcribed at all.
      * Sub-threshold segments (a click or cough that snuck past the onset gate)
      * never reach a driver — no audio egress, no hallucination. Falls back to the
-     * module's `minVoicedMs` static meta (default 250).
+     * module's `minVoicedMs` static meta (default 400).
      */
     minVoicedMs?: number;
     /**
@@ -118,10 +212,17 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
     maxSegmentMs?: number;
     /**
      * How many characters of already-transcribed text to feed back as the biasing
-     * prompt of the NEXT segment (default from the `contextPromptChars` static meta,
-     * 240). Segments are decoded independently, so without this the model starts each
-     * one blind — the main source of mis-heard domain vocabulary mid-dictation. `0`
-     * disables it and restores the session-constant prompt. See `_composePrompt`.
+     * prompt of the NEXT segment (from the `contextPromptChars` static meta, default
+     * **0 — off**). Segments are decoded independently, so in principle this gives
+     * the model the surrounding dictation instead of starting each one blind.
+     *
+     * **Measure it before switching it on.** It is a feedback path into the decoder and
+     * its effect is model-dependent, in both directions. On `whisper-large-v3` it
+     * truncated output badly: the only segment of each capture decoded without a tail
+     * ran at 2.9 words per second of voiced audio, every later one at 0.6–1.2, and the
+     * decline compounded as the degraded tail fed itself forward — and the direct
+     * endpoint test later showed ANY prompt does this on that backend (see the README).
+     * Capped by `promptMaxChars`, which is 0 by default, so this is doubly opt-in.
      */
     contextPromptChars?: number;
     /**
@@ -144,6 +245,21 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
     windowMs?: number;
     /** Called with each window's transcript as it lands (in seal order, best-effort). */
     onWindow?: (window: TranscribedWindow) => void;
+    /**
+     * This start CONTINUES the dictation the previous session belonged to — a resume after
+     * an edit pause, an in-place restart after a microphone stall. The retained recording
+     * and its windows are kept and the new capture's windows join them.
+     *
+     * Default `false`: a start is a NEW dictation, and everything retained from the
+     * previous one is dropped first. That is the module's responsibility, not the
+     * consumer's: `_windows` used to be cleared only by an explicit `clearSessionAudio()`
+     * that nobody called at start, so a review of case B was served case A's windows.
+     */
+    continuesSession?: boolean;
+    /** Browser DSP constraints for the microphone (see CaptureOptions); default = browser default. */
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
 }
 
 /** A sealed archive window plus the text it transcribed to. */
@@ -187,6 +303,32 @@ export interface ContinuousDictationHandle {
 }
 
 /**
+ * Lifecycle of an archive window's transcription.
+ *  - `pending`   — queued or decoding; text not in yet. Worth waiting for.
+ *  - `done`      — text landed; the audio was freed.
+ *  - `retryable` — the decode finished with no text (empty result, error, abort) and the
+ *                  audio is still held: a review-time retry can recover it.
+ *  - `failed`    — no text and no audio: the speech in it is gone.
+ * `pending` and `retryable` used to be one state ("no text, has blob"), so a window whose
+ * decode had failed minutes ago read as "about to arrive" and callers waited forever.
+ */
+export type WindowState = "pending" | "done" | "retryable" | "failed";
+
+interface WindowRecord {
+    index: number;
+    text: string;
+    fromSegment: number;
+    toSegment: number;
+    final: boolean;
+    blob: Blob | null;
+    state: WindowState;
+    /** The dictation this window belongs to (see `_windowSession`). */
+    session: number;
+    /** Which driver produced `text`. */
+    driverId?: string;
+}
+
+/**
  * Speech-to-Text module.
  *
  * A standalone, viewer-agnostic capability: capture microphone audio and turn it
@@ -204,14 +346,34 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _activeDriverId: string | null;
     private _capture: AudioCapture;
     private _defaults: { language?: string; silenceMs?: number; prompt?: string };
-    /** Hard cap on the biasing prompt sent to a driver (~224 Whisper tokens ≈ 1000 chars). */
-    private static readonly MAX_PROMPT_CHARS = 1000;
+    /**
+     * Ceiling on the biasing prompt a deployment may enable. The effective cap is
+     * `promptMaxChars` static meta, default **0 — no prompt is sent at all**.
+     *
+     * Measured on the deployment's own Whisper endpoint with one 93 s dictation: no prompt
+     * → the full transcript; a 60-char prompt → full; 120 chars → text thinning; 200 chars →
+     * the first 30 s gone; the 495-char base glossary → the last third gone; glossary plus
+     * report terms (~870 chars) → 30 s of the middle and nothing else. Every "dropped
+     * content" symptom of the last field rounds was this. Vocabulary belongs to the
+     * post-hoc corrector, not to the recognizer's prompt.
+     */
+    private static readonly MAX_PROMPT_CHARS = 700;
+    /** Effective prompt cap for this deployment (see MAX_PROMPT_CHARS); 0 = never send one. */
+    private _promptMaxChars: number;
+
+    /** Cut `s` to at most `cap` characters on a word boundary — half a word biases toward nonsense. */
+    private static _cutAtWord(s: string, cap: number): string {
+        if (s.length <= cap) return s;
+        const cut = s.slice(0, cap);
+        const space = cut.lastIndexOf(" ");
+        return (space > cap / 2 ? cut.slice(0, space) : cut).trim();
+    }
     private _localeReady: Promise<void>;
     /** Operator-configured extra non-speech patterns (on top of the built-ins). */
     private _filterPatterns: RegExp[];
     /** Minimum voiced ms a capture/segment needs before it may reach a driver. */
     private _minVoicedMs: number;
-    /** Default rolling-context length fed back as the next segment's prompt. */
+    /** Default rolling-context length fed back as the next segment's prompt. 0 = off. */
     private _contextPromptChars: number;
     /**
      * Abort controller of the current continuous session, if any. `stop()` aborts
@@ -233,7 +395,22 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * been decoded — audio is both sensitive and the bulk of the memory a long
      * dictation holds, and the text is what every consumer actually wants.
      */
-    private _windows: Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean; blob: Blob | null }> = [];
+    private _windows: WindowRecord[] = [];
+    /**
+     * Identifies the dictation the windows belong to. Bumped by every start that is not
+     * a continuation and by `clearSessionAudio`; a background decode that lands after
+     * the bump belongs to a recording the consumer has already discarded.
+     */
+    private _windowSession = 0;
+    /** Aborts every in-flight window upload when the recording is cleared. */
+    private _windowAbort: AbortController | null = null;
+    /**
+     * Whether the LIVE segment path may fall back to another driver (WASM tiny) when the
+     * configured one fails. Off by default: a fallback answering silently produced a
+     * worse transcript under the primary model's name, with nothing in the UI to say so.
+     * Operators who prefer degraded text over a visible failure opt in via ENV.
+     */
+    private _liveFallback: boolean;
     /**
      * Serializes window transcription. Windows are big requests and strictly lower
      * priority than live segments: one at a time means they fill the gaps in the
@@ -272,7 +449,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         catch (_e) { workletUrl = undefined; /* uninitialized module: rAF fallback */ }
         this._capture = new AudioCapture({workletUrl});
         this._localeReady = this.loadLocale().catch((e: any) =>
-            console.warn("[speech-to-text] locale load failed:", e));
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "locale load failed"));
 
         const language = this.getStaticMeta("language", undefined) as string | undefined;
         const silenceMs = this.getStaticMeta("silenceMs", 0) as number;
@@ -281,19 +458,31 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // a richer, live prompt at the call site.
         const prompt = this.getStaticMeta("prompt", undefined) as string | undefined;
         this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs, prompt};
-        // A real word carries ≥ ~250ms of voice; anything the VAD heard less of
-        // is a blip that must never reach a transcription model (hallucination
-        // source). Deployment-tunable, and overridable per call.
-        this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 250)) || 0);
-        // Enough to carry the current sentence plus the one before it into the next
-        // segment's decode, while leaving most of the prompt budget to the glossary.
-        this._contextPromptChars = Math.max(0, Number(this.getStaticMeta("contextPromptChars", 240)) || 0);
+        // A real word carries ≥ ~400ms of voice; anything the VAD heard less of is a blip
+        // that must never reach a transcription model (hallucination source). Raised from
+        // 250: a segment with 359 ms of voice in 10.8 s of audio cleared the old floor,
+        // was sent to whisper-large-v3, and came back as "the" — an invented word in a
+        // medical transcript, and a round-trip spent to get it. Deployment-tunable, and
+        // overridable per call; the audio is still archived either way, so the
+        // whole-audio pass can still hear anything a quiet speaker said.
+        this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 400)) || 0);
+        // OFF by default. Feeding the previous segment's text back as the next segment's
+        // biasing prompt is a feedback path into the decoder, and its sign is
+        // model-dependent: on whisper-large-v3 it truncated output to roughly the first
+        // few seconds of every segment after the first, compounding as the shrinking tail
+        // fed itself forward (2.9 words/voiced-second with no tail, 0.6–1.2 with one).
+        // Deployments that have MEASURED a gain on their own transcription provider turn
+        // it on in ENV. See the README.
+        this._contextPromptChars = Math.max(0, Number(this.getStaticMeta("contextPromptChars", 0)) || 0);
         // OFF by default: this is a TOTAL wall-clock bound and a driver's transcribe
         // may legitimately include a slow first-time model download (~40 MB), which
         // must not be killed. The real hang guards are abort-on-stop and the WASM
         // driver's own progress-aware load stall timeout; this is an opt-in extra
         // for operators who want a hard per-segment ceiling. 0 disables.
         this._transcribeTimeoutMs = Math.max(0, Number(this.getStaticMeta("transcribeTimeoutMs", 0)) || 0);
+        this._liveFallback = this.getStaticMeta("liveFallback", false) === true;
+        this._promptMaxChars = Math.max(0, Math.min(SpeechToTextModule.MAX_PROMPT_CHARS,
+            Math.floor(Number(this.getStaticMeta("promptMaxChars", 0)) || 0)));
 
         // Extra hallucination filters. Models vary in how they render non-speech
         // audio (e.g. "*Buzzing*", "(coughs)"); the built-in stripNonSpeech covers
@@ -301,13 +490,13 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const rawFilters = this.getStaticMeta("filterPatterns", []);
         this._filterPatterns = (Array.isArray(rawFilters) ? rawFilters : [])
             .map((src: unknown) => {
-                if (typeof src !== "string") { console.warn(`[speech-to-text] ignoring non-string filterPatterns entry:`, src); return null; }
+                if (typeof src !== "string") { APPLICATION_CONTEXT.log("module.speech-to-text").warn(src, `ignoring non-string filterPatterns entry`); return null; }
                 try { return new RegExp(src, "gi"); }
-                catch (e) { console.warn(`[speech-to-text] invalid filterPatterns entry ${JSON.stringify(src)}:`, e); return null; }
+                catch (e) { APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `invalid filterPatterns entry ${JSON.stringify(src)}`); return null; }
             })
             .filter(Boolean) as RegExp[];
         if (!Array.isArray(rawFilters) && rawFilters != null) {
-            console.warn(`[speech-to-text] filterPatterns must be an array; ignoring:`, rawFilters);
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(rawFilters, `filterPatterns must be an array; ignoring`);
         }
 
         this._buildConfiguredDrivers();
@@ -334,10 +523,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _resolvePrompt(prompt?: string): string | undefined {
         const p = (prompt ?? this._defaults.prompt);
         const s = String(p ?? "").trim();
-        if (!s) return undefined;
-        return s.length > SpeechToTextModule.MAX_PROMPT_CHARS
-            ? s.slice(0, SpeechToTextModule.MAX_PROMPT_CHARS)
-            : s;
+        if (!s || this._promptMaxChars <= 0) return undefined;
+        return SpeechToTextModule._cutAtWord(s, this._promptMaxChars);
     }
 
     /**
@@ -357,10 +544,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      */
     private _composePrompt(glossary: string | undefined, transcript: string, contextChars: number): { prompt?: string; context?: string } {
         const base = String(glossary || "").trim();
-        const cap = SpeechToTextModule.MAX_PROMPT_CHARS;
-        if (contextChars <= 0) return {prompt: base ? base.slice(0, cap) : undefined};
+        const cap = this._promptMaxChars;
+        if (cap <= 0) return {};
+        const cut = SpeechToTextModule._cutAtWord;
+        if (contextChars <= 0) return {prompt: base ? cut(base, cap) : undefined};
         const full = String(transcript || "").replace(/\s+/g, " ").trim();
-        if (!full) return {prompt: base ? base.slice(0, cap) : undefined};
+        if (!full) return {prompt: base ? cut(base, cap) : undefined};
         // Cut the tail on a word boundary — half a word biases toward nonsense.
         let tail = full.slice(-Math.min(contextChars, cap));
         if (tail.length < full.length) {
@@ -368,7 +557,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             if (space > 0) tail = tail.slice(space + 1);
         }
         const room = cap - tail.length - 1;
-        const head = room > 0 ? base.slice(0, room) : "";
+        const head = room > 0 ? cut(base, room) : "";
         const prompt = head ? `${head} ${tail}` : tail;
         return {prompt, context: tail};
     }
@@ -406,38 +595,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * block instead of transcribing must not.
      */
     private _stripPromptEcho(text: string, prompt?: string, context?: string): string {
-        const original = String(text || "");
-        const contextNorm = String(context || "").replace(/\s+/g, " ").trim();
-        // Only the glossary part is fragment-split; the context tail is excluded
-        // from it so its sentences are not individually removable.
-        let promptNorm = String(prompt || "").replace(/\s+/g, " ").trim();
-        if (contextNorm && promptNorm.endsWith(contextNorm)) {
-            promptNorm = promptNorm.slice(0, -contextNorm.length).trim();
-        }
-        if (!original.trim() || (promptNorm.length < 25 && contextNorm.length < 25)) return original;
-
-        // Candidate fragments: the whole prompt plus its sentence/section splits;
-        // ≥25 chars keeps single terms out. Longest first so a big run is removed
-        // before its sub-parts (avoids leaving orphan slivers).
-        const frags = new Set<string>();
-        if (promptNorm.length >= 25) frags.add(promptNorm);
-        if (contextNorm.length >= 25) frags.add(contextNorm);
-        for (const part of promptNorm.split(/[.:]|#{2,}/)) {
-            const p = part.trim();
-            if (p.length >= 25) frags.add(p);
-        }
-        const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        let t = ` ${original.replace(/\s+/g, " ").trim()} `;
-        for (const f of [...frags].sort((a, b) => b.length - a.length)) {
-            try { t = t.replace(new RegExp(escape(f), "gi"), " "); }
-            catch (_e) { /* skip a fragment that won't compile */ }
-        }
-        // Markers the echo introduces around the repeated prompt.
-        t = t.replace(/\b(?:context|prompt)\s*:/gi, " ").replace(/#{2,}/g, " ");
-        t = t.replace(/\s+/g, " ").trim();
-
-        // Nothing but stray punctuation left ⇒ it was pure echo ⇒ no speech.
-        return /[a-z0-9]/i.test(t) ? t : "";
+        return stripPromptEcho(text, prompt, context);
     }
 
     /** Instantiate drivers declared in ENV/include.json and pick the active one. */
@@ -454,7 +612,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 try {
                     this.registerDriver(new RemoteWhisperDriver(id, cfg));
                 } catch (e) {
-                    console.error(`[speech-to-text] failed to build remote driver "${id}":`, e);
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `failed to build remote driver "${id}"`);
                 }
             }
         }
@@ -472,7 +630,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 try {
                     this.registerDriver(new VercelTranscribeDriver(id, cfg));
                 } catch (e) {
-                    console.error(`[speech-to-text] failed to build vercel driver "${id}":`, e);
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `failed to build vercel driver "${id}"`);
                 }
             }
         }
@@ -493,7 +651,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     onProgress: (p) => this._onModelProgress("wasm", p),
                 }));
             } catch (e) {
-                console.error("[speech-to-text] failed to build wasm driver:", e);
+                APPLICATION_CONTEXT.log("module.speech-to-text").error(e, "failed to build wasm driver");
             }
         }
 
@@ -634,8 +792,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * degrade to in-browser Whisper instead of failing. Shared by the one-shot and
      * continuous paths; emits `transcription` / `transcription-error`.
      */
-    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions & { context?: string; allowFallback?: boolean } = {}): Promise<TranscriptionResult> {
+    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions & { context?: string; allowFallback?: boolean; channel?: "live" | "window" } = {}): Promise<TranscriptionResult> {
         const {language, prompt, signal, context, timeoutMs} = opts;
+        const channel = opts.channel || "live";
         const active = this._activeDriver();
         if (!active) throw new CaptureError("capture-failed", "no transcription driver");
         const chain = opts.allowFallback === false ? [active] : this._driverChain(active);
@@ -659,9 +818,30 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // Built-in stripNonSpeech ran in the driver; apply operator filters
                 // and strip biasing-prompt echo on top so a hallucinated non-speech
                 // transcript is blanked (and thus never submitted by consumers).
-                const cleaned = this._stripPromptEcho(this._applyExtraFilters(raw.text), prompt, context);
-                const result = {...raw, text: cleaned, ...(cleaned ? {} : {noSpeech: true})};
-                this.raiseEvent("transcription", {result, driverId: d.id});
+                const afterOperator = this._applyExtraFilters(raw.text);
+                const cleaned = this._stripPromptEcho(afterOperator, prompt, context);
+                const filtered = [...(raw.filtered || [])];
+                if (afterOperator !== String(raw.text || "").replace(/\s+/g, " ").trim()) filtered.push("operator-filter");
+                if (cleaned !== afterOperator) filtered.push("prompt-echo");
+                const result: TranscriptionResult = {
+                    ...raw,
+                    text: cleaned,
+                    driverId: d.id,
+                    ...(d.modelId ? {model: d.modelId} : {}),
+                    ...(filtered.length ? {filtered} : {}),
+                    ...(cleaned ? {} : {noSpeech: true}),
+                };
+                // A filter that changed what the model said is worth seeing, and one that
+                // EMPTIED it is the loudest thing that can happen to a segment: that used
+                // to be indistinguishable from silence at every layer above this one.
+                if (filtered.length) {
+                    this.raiseEvent("segment-filtered", {
+                        driverId: d.id, filters: filtered, channel,
+                        emptied: !cleaned, rawChars: String(raw.text || "").length, chars: cleaned.length,
+                        rawText: String(raw.text || "").slice(0, 400),
+                    });
+                }
+                this.raiseEvent(channel === "window" ? "window-transcription" : "transcription", {result, driverId: d.id});
                 return result;
             } catch (e) {
                 if (signal?.aborted || (e as any)?.name === "AbortError") throw e;
@@ -674,16 +854,16 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // is an operator problem, so log it as an error, not a warning.
                 this.raiseEvent("driver-error", {driverId: d.id, error: e, permanent});
                 if (permanent) {
-                    console.error(`[speech-to-text] driver "${d.id}" is misconfigured; trying fallback:`, e);
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `driver "${d.id}" is misconfigured; trying fallback`);
                 } else {
-                    console.warn(`[speech-to-text] driver "${d.id}" failed; trying fallback:`, e);
+                    APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `driver "${d.id}" failed; trying fallback`);
                 }
             }
         }
         // Prefer the permanent config error over the last (typically WASM-fallback)
         // one so consumers can distinguish "operator must fix this" from transient.
         const finalError = permanentError ?? lastError;
-        this.raiseEvent("transcription-error", {error: finalError, permanent: !!permanentError});
+        this.raiseEvent(channel === "window" ? "window-transcription-error" : "transcription-error", {error: finalError, permanent: !!permanentError});
         throw finalError ?? new CaptureError("capture-failed", "transcription failed");
     }
 
@@ -775,6 +955,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
             : 2;
         const minVoicedMs = Math.max(0, opts.minVoicedMs ?? this._minVoicedMs);
+        const silenceMs = opts.silenceMs ?? this._defaults.silenceMs;
+        // A new dictation drops what the previous one retained — its recording and its
+        // windows — before any audio accumulates. A continuation keeps them.
+        if (!opts.continuesSession) this.clearSessionAudio();
+        const windowSession = this._windowSession;
 
         // The session owns an abort controller so `stop()` (or the module-level
         // `stop()`) cancels in-flight transcriptions — otherwise a hung driver
@@ -786,6 +971,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const releaseAbort = () => { if (this._continuousAbort === abort) this._continuousAbort = null; };
 
         let fullText = "";
+        let lastAppended = "";                         // previous piece, for seam trimming
         let nextEmit = 0;                              // next segment index to append
         const ready = new Map<number, TranscriptionResult>();
         const queue: Array<{ blob: Blob; index: number; probe?: boolean }> = [];
@@ -795,6 +981,21 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // Set by finish(): deliver the trailing (not-yet-idle) turn as one last
         // onTurn before resolving, instead of stop()'s discard.
         let finishing = false;
+
+        // Rolling context is a feedback path: what the model emits becomes the bias for
+        // the next segment, so a prompt-obedient model that re-emits its own tail
+        // reinforces itself. See repetitionLock.ts for why the response is asymmetric.
+        const repetitionLock = createRepetitionLock();
+        /** Context each in-flight segment was decoded with, for the echo test on arrival. */
+        const contextOf = new Map<number, string>();
+        /** What each segment was made of and what it cost — see {@link SegmentMetrics}. */
+        const metricsOf = new Map<number, SegmentMetrics>();
+        /**
+         * The consumer gate's verdict for a probe, taken when its result lands (it decides
+         * fail-open) and reused by the drain — the gate reports rejections to observers, and
+         * asking it twice reported the same segment twice.
+         */
+        const gateVerdict = new Map<number, boolean>();
 
         // ---- turn-based delivery (see ContinuousDictationOptions.onTurn) ----
         let deliveredMax = -1;                         // highest index handed over by capture
@@ -867,16 +1068,54 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // Skip empty (no speech) and consumer-rejected (noise / mistranscription)
                 // segments — they never enter the concatenated turn nor fire onPartial,
                 // but their index is still consumed so neighbors are not lost.
-                if (!piece) continue;
+                if (!piece) { metricsOf.delete(idx); contextOf.delete(idx); continue; }
                 if (opts.validateSegment) {
                     let ok = true;
-                    try { ok = opts.validateSegment(r); } catch (_e) { ok = true; }
-                    if (!ok) continue;
+                    // The metrics go with the text: whether one short word is a real answer
+                    // or the residue of a lost sentence is a question about the AUDIO, and
+                    // the consumer cannot answer it from spelling alone.
+                    if (gateVerdict.has(idx)) ok = gateVerdict.get(idx)!;
+                    else {
+                        try { ok = opts.validateSegment(r, metricsOf.get(idx)); }
+                        catch (e) {
+                            // A gate that crashed has not judged anything; letting the text
+                            // through would make a consumer bug the opposite of a gate.
+                            ok = false;
+                            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "validateSegment threw; rejecting the segment");
+                        }
+                    }
+                    gateVerdict.delete(idx);
+                    if (!ok) { metricsOf.delete(idx); contextOf.delete(idx); continue; }
                 }
-                fullText = fullText ? `${fullText} ${piece}` : piece;
-                turnPieces.push(piece);
+
+                const verdict = repetitionLock.note(piece, contextOf.get(idx));
+                contextOf.delete(idx);
+                // Raised on the transition only, so a long lock is one event, not one per
+                // segment. Consumers surface it as "the recognizer got stuck"; without it
+                // the lock reaches the transcript as ordinary short segments and reads as
+                // a microphone problem.
+                if (verdict.locked) this.raiseEvent("transcription-repeat-lock", {text: piece, index: idx});
+                if (verdict.drop) { metricsOf.delete(idx); continue; }
+
+                const metrics = metricsOf.get(idx);
+                metricsOf.delete(idx);
+                // Consecutive recordings share up to a timeslice of audio (the successor
+                // starts before the predecessor stops), and the recognizer transcribes the
+                // shared stretch twice. Trim the repeated head off this piece.
+                const join = trimOverlap(lastAppended, piece, metrics?.overlapMs ?? 0);
+                if (join.trimmedWords) {
+                    this.raiseEvent("segment-trimmed", {
+                        index: idx, words: join.trimmedWords, overlapMs: metrics?.overlapMs ?? 0,
+                        ...(join.text ? {} : {dropped: piece}),
+                    });
+                }
+                if (!join.text) continue;
+                const appended = join.text;
+                lastAppended = appended;
+                fullText = fullText ? `${fullText} ${appended}` : appended;
+                turnPieces.push(appended);
                 try {
-                    opts.onPartial?.({text: fullText, appended: piece, index: idx, result: r});
+                    opts.onPartial?.({text: fullText, appended, index: idx, result: r, metrics});
                 } catch (_e) { /* consumer callback error is theirs */ }
             }
             flushTurns();
@@ -897,7 +1136,26 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // Same result the abort path already produces below, minus the phantom
                 // event and the pointless driver call: an empty result keeps the
                 // ordered drain moving so `done` still settles.
-                while (queue.length) ready.set(queue.shift()!.index, {text: ""});
+                //
+                // This audio IS discarded — captured, queued, never transcribed. It is
+                // the one place the module can lose speech without anything saying so,
+                // and "the last thing I said before stopping never appeared" is
+                // indistinguishable from a hundred other faults without the event.
+                const abandoned: number[] = [];
+                while (queue.length) {
+                    const {index} = queue.shift()!;
+                    abandoned.push(index);
+                    ready.set(index, {text: ""});
+                }
+                if (abandoned.length) {
+                    this.raiseEvent("segments-abandoned", {
+                        indices: abandoned,
+                        bytes: abandoned.reduce((n, i) => n + (metricsOf.get(i)?.bytes || 0), 0),
+                        audioMs: abandoned.reduce((n, i) => n + (metricsOf.get(i)?.audioMs || 0), 0),
+                        reason: "aborted",
+                    });
+                    for (const index of abandoned) metricsOf.delete(index);
+                }
                 drain();
                 return;
             }
@@ -913,16 +1171,67 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 active++;
                 // Composed per segment, not once per session: the context tail is
                 // whatever has drained so far. Out-of-order completions simply get a
-                // slightly older tail — still context, never wrong context.
-                const {prompt, context} = this._composePrompt(glossary, fullText, contextChars);
-                this._transcribeBlob(blob, {language, prompt, context, signal})
+                // slightly older tail — still context, never wrong context. While the
+                // output is repeating itself the tail is withheld, because feeding it
+                // back is what makes a repetition self-sustaining (see the drain loop);
+                // the glossary half still goes, so the segment is biased, just not by
+                // the phrase it is stuck on.
+                const wantContext = repetitionLock.muted ? 0 : contextChars;
+                const {prompt, context} = this._composePrompt(glossary, fullText, wantContext);
+                contextOf.set(index, context || "");
+                // What the decoder was actually primed with. The single most useful field
+                // in a dictation dump: without it, "why is this segment a third as long as
+                // the one before it" is unanswerable from the trace.
+                const metrics = metricsOf.get(index);
+                if (metrics) metrics.contextChars = (context || "").length;
+                const startedAt = Date.now();
+                const stampLatency = () => {
+                    const m = metricsOf.get(index);
+                    if (m) m.latencyMs = Date.now() - startedAt;
+                };
+                this._transcribeBlob(blob, {language, prompt, context, signal, allowFallback: this._liveFallback})
                     .then((r) => {
+                        stampLatency();
+                        const m = metricsOf.get(index);
+                        if (m) {
+                            // Beside `audioMs` this says whether the upload decoded at all.
+                            if (Number.isFinite(r?.durationInSeconds as number)) {
+                                m.reportedDurationMs = Math.round((r.durationInSeconds as number) * 1000);
+                            }
+                            // The driver that ANSWERED, not the one configured.
+                            if (r.driverId) m.driverId = r.driverId;
+                            if (r.model) m.model = r.model;
+                            if (Number.isFinite(r.noSpeechProb as number)) m.noSpeechProb = r.noSpeechProb;
+                            if (Number.isFinite(r.avgLogprob as number)) m.avgLogprob = r.avgLogprob;
+                            if (Number.isFinite(r.compressionRatio as number)) m.compressionRatio = r.compressionRatio;
+                            if (r.filtered?.length) m.filtered = r.filtered;
+                        }
                         ready.set(index, r);
-                        // A probe is a segment the VAD wanted to discard. Real text
-                        // coming back means the gate is misjudging speech — flip the
-                        // capture to fail-open and tell the UI. (_transcribeBlob output
-                        // is post text-filters, so silence hallucinations stay empty.)
-                        if (probe && String(r.text || "").trim()) {
+                        // A probe is a segment the VAD wanted to discard. Real SPEECH coming
+                        // back means the gate is misjudging — flip the capture to fail-open
+                        // and tell the UI. "Real speech" is judged by the same consumer gate
+                        // an ordinary segment faces, not by "non-empty": a hallucinated "The"
+                        // over a dead microphone used to pass here and flip an hour-long
+                        // session into uploading every 15 s of silence.
+                        const text = String(r.text || "").trim();
+                        if (!text) {
+                            // A driver returned nothing (a filter that emptied it has also
+                            // raised segment-filtered). Without this the segment simply never
+                            // appears anywhere — and an endpoint that answers 200 with an
+                            // empty body for two minutes looks exactly like silence.
+                            this.raiseEvent("segment-empty", {
+                                index, audioMs: m?.audioMs, voicedMs: m?.voicedMs, speechSpanMs: m?.speechSpanMs,
+                                maxPeak: m?.maxPeak, latencyMs: m?.latencyMs, driverId: r.driverId, model: r.model,
+                                noSpeechProb: r.noSpeechProb, avgLogprob: r.avgLogprob,
+                                reportedDurationMs: m?.reportedDurationMs, filtered: r.filtered, probe: !!probe,
+                            });
+                        }
+                        let speech = !!text;
+                        if (probe && speech && opts.validateSegment) {
+                            try { speech = opts.validateSegment(r, m); } catch (_e) { speech = false; }
+                            gateVerdict.set(index, speech);
+                        }
+                        if (probe && speech && !captureEnded) {
                             try { this._capture.enterFailOpen(); } catch (_e) { /* ignore */ }
                             this._reportCaptureWarning(new CaptureError("vad-degraded"));
                         }
@@ -930,6 +1239,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     .catch((_e) => {
                         // A failed segment must not stall the ordered drain or drop
                         // its neighbors: record an empty result so drain skips it.
+                        stampLatency();
                         ready.set(index, {text: ""});
                     })
                     .finally(() => {
@@ -943,9 +1253,17 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
 
         this.raiseEvent("recording-started");
         try {
+            let gatedInARow = 0;
             this._capture.startSegmented({
-                silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
+                silenceMs,
+                echoCancellation: opts.echoCancellation,
+                noiseSuppression: opts.noiseSuppression,
+                autoGainControl: opts.autoGainControl,
                 onLevel: opts.onLevel,
+                // Recording actually began — a UI that says "listening" before this
+                // invites the speaker to start a second early, and the opening words are
+                // never captured.
+                onStarted: () => this.raiseEvent("capture-started"),
                 onAlive: opts.onAlive,
                 turnSilenceMs: opts.turnSilenceMs,
                 onTurnIdle: () => {
@@ -969,10 +1287,29 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 // Only ask for windows when the caller archives — without archiving
                 // there is no recording to slice.
                 onWindow: opts.archive
-                    ? (w) => this._enqueueWindow(w, {language, glossary, contextChars, onWindow: opts.onWindow})
+                    // Windows carry the SAME risk: `_enqueueWindow` primes each decode with
+                    // the joined text of the previous windows, so a tail that truncates a
+                    // 15 s segment truncates a 90 s window too — and the whole-audio
+                    // transcript is built from these. They get the PLAIN setting, never the
+                    // A/B arm: the archive transcript is authoritative, not an experiment.
+                    ? (w) => this._enqueueWindow(w, {language, glossary, contextChars, onWindow: opts.onWindow, session: windowSession})
                     : undefined,
+                // A capture-side discard is the one loss no layer above could see.
+                onDiscard: (meta, reason) => {
+                    this.raiseEvent("segment-discarded", {
+                        reason, audioMs: meta.durationMs, voicedMs: meta.voicedMs,
+                        maxPeak: meta.maxPeak, tracked: meta.tracked, flush: !!meta.flush,
+                    });
+                },
                 onSegment: (blob, index, meta: SegmentMeta) => {
-                    if (settled) return;
+                    if (settled) {
+                        // Late delivery after the session settled — still audio somebody
+                        // spoke. Say so, the same way the abort path does.
+                        this.raiseEvent("segments-abandoned", {
+                            indices: [index], bytes: blob?.size || 0, audioMs: meta?.durationMs || 0, reason: "settled",
+                        });
+                        return;
+                    }
                     deliveredMax = index;
                     // Voiced-content gate: a segment the VAD barely heard never
                     // reaches a driver (no audio egress, no hallucination). Record
@@ -981,11 +1318,48 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     // whole point is to let the text filters judge them (the VAD
                     // verdict is suspect or overridden by explicit user intent).
                     const bypassGate = !!(meta?.probe || meta?.failOpen || meta?.flush);
+                    const metrics: SegmentMetrics = {
+                        index,
+                        audioMs: meta?.durationMs,
+                        voicedMs: meta?.voicedMs,
+                        speechSpanMs: meta?.speechSpanMs,
+                        maxPeak: meta?.maxPeak,
+                        silenceMs: silenceMs && silenceMs > 0 ? silenceMs : 1500,
+                        overlapMs: meta?.overlapMs,
+                        tracked: meta?.tracked,
+                        bytes: blob?.size,
+                        // Provisional: overwritten by the driver that actually answers.
+                        driverId: driver?.id,
+                        model: driver?.modelId,
+                        probe: !!meta?.probe,
+                        failOpen: !!meta?.failOpen,
+                        flush: !!meta?.flush,
+                    };
+                    metricsOf.set(index, metrics);
                     if (!bypassGate && meta?.tracked && meta.voicedMs < minVoicedMs) {
-                        ready.set(index, {text: "", noSpeech: true});
-                        drain();
+                        // Below the voiced floor the audio never reaches a driver. But a
+                        // quiet speaker's every short answer falls under it, so — like the
+                        // capture's own discard ladder — the third gated segment in a row
+                        // goes through as a probe, and the gate is reported either way.
+                        gatedInARow++;
+                        const asProbe = gatedInARow >= 3;
+                        this.raiseEvent("segment-gated", {
+                            index, voicedMs: meta.voicedMs, minVoicedMs, audioMs: meta.durationMs,
+                            speechSpanMs: meta.speechSpanMs, maxPeak: meta.maxPeak, probe: asProbe,
+                        });
+                        if (!asProbe) {
+                            ready.set(index, {text: "", noSpeech: true});
+                            metricsOf.delete(index);
+                            drain();
+                            return;
+                        }
+                        gatedInARow = 0;
+                        metrics.probe = true;
+                        queue.push({blob, index, probe: true});
+                        pump();
                         return;
                     }
+                    gatedInARow = 0;
                     queue.push({blob, index, probe: !!meta?.probe});
                     pump();
                 },
@@ -1021,15 +1395,28 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             if (timeoutMs > 0) {
                 const timer = setTimeout(() => {
                     if (settled) return;
-                    console.warn("[speech-to-text] finish() safety timeout — aborting trailing transcriptions");
-                    // Abort any stuck transcription, then force the drain gate open
-                    // and finalize so `done` can never hang (e.g. if capture stop
-                    // never delivered onStopped). finalize() is a no-op if already
-                    // settled or still draining an in-flight segment (its .finally
-                    // re-runs finalize once it lands).
+                    APPLICATION_CONTEXT.log("module.speech-to-text").warn("finish() safety timeout — aborting trailing transcriptions");
+                    // Abort any stuck transcription, force the drain gate open and
+                    // finalize. If a driver ignores the abort (a hung model load) the
+                    // in-flight count never drops and finalize() would keep declining —
+                    // so after one more grace tick the session is settled by force:
+                    // `done` can never hang, whatever the driver does.
                     try { abort.abort(); } catch (_e) { /* ignore */ }
                     captureEnded = true;
                     finalize();
+                    if (settled) return;
+                    setTimeout(() => {
+                        if (settled) return;
+                        const stuck = [...queue.map((q) => q.index)];
+                        queue.length = 0;
+                        if (active > 0 || stuck.length) {
+                            this.raiseEvent("segments-abandoned", {
+                                indices: stuck, bytes: 0, audioMs: 0, reason: "finish-timeout", inFlight: active,
+                            });
+                        }
+                        active = 0;
+                        finalize();
+                    }, 1000);
                 }, timeoutMs);
                 done.then(() => clearTimeout(timer), () => clearTimeout(timer));
             }
@@ -1092,17 +1479,44 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * background pass failed is retried here.
      */
     async transcribeSessionAudio(opts: TranscriptionOptions & { allowFallback?: boolean } = {}): Promise<string> {
-        // Let an in-flight background window land rather than decoding it twice.
-        if (this._windowChain) { try { await this._windowChain; } catch (_e) { /* retried below */ } }
+        // The final window is only ENQUEUED by the archive seal, which is a browser event
+        // after stop; awaiting just the chain returned before that window existed and the
+        // review missed the last minute and a half. Settle first, then let the background
+        // pass land rather than decoding it twice.
+        await this.whenSessionAudioSettled({signal: opts.signal});
+        if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
         const parts: string[] = [];
-        for (const w of this._windows) {
+        const errors: unknown[] = [];
+        for (const w of this._windows.filter((x) => x.session === this._windowSession)) {
             if (w.text) { parts.push(w.text); continue; }
-            if (!w.blob) continue;                       // failed and its audio was freed
-            const res = await this.transcribeAudio(w.blob, opts);
+            if (!w.blob) continue;                       // failed for good — nothing left to try
+            // One failing window must not throw away the ones that decoded: each is
+            // retried on its own, and what decoded is returned. The rest stay retryable.
+            let res: TranscriptionResult | null = null;
+            try {
+                w.state = "pending";
+                res = await this.transcribeAudio(w.blob, opts);
+            } catch (e) {
+                if (opts.signal?.aborted) { w.state = "retryable"; throw e; }
+                errors.push(e);
+                w.state = "retryable";
+                APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `window ${w.index} retry failed; keeping its audio`);
+                continue;
+            }
             w.text = String(res?.text || "").trim();
-            w.blob = null;
-            if (w.text) parts.push(w.text);
+            // Free the audio ONLY once it has produced text. Nulling it regardless made a
+            // single empty decode permanent: the record kept no text and no blob, every
+            // later call skipped it, `transcribeSessionAudio` returned "", and the
+            // consumer fell back to the per-segment transcript for the rest of the
+            // session — with the recording it needed already discarded. A window that
+            // came back empty is exactly the one worth keeping the audio for.
+            if (w.text) { w.blob = null; w.state = "done"; parts.push(w.text); }
+            else {
+                w.state = "retryable";
+                void this._diagnoseEmptyWindow(w, res, "re-transcribed to nothing");
+            }
         }
+        if (!parts.length && errors.length) throw errors[0];
         // Un-windowed captures (windowMs 0, or an archive with no window consumer)
         // still live as retained blobs.
         const audio = this.getSessionAudio();
@@ -1126,38 +1540,67 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      */
     private _enqueueWindow(
         w: { blob: Blob; index: number; fromSegment: number; toSegment: number; final: boolean },
-        ctx: { language?: string; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void },
+        ctx: { language?: string; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; session: number },
     ): void {
-        const record = {index: w.index, text: "", fromSegment: w.fromSegment, toSegment: w.toSegment, final: w.final, blob: w.blob as Blob | null};
+        // Sealed after the recording it belongs to was cleared: the consumer has already
+        // discarded that dictation, and its audio must not be uploaded now.
+        if (ctx.session !== this._windowSession) return;
+        const record: WindowRecord = {
+            index: w.index, text: "", fromSegment: w.fromSegment, toSegment: w.toSegment, final: w.final,
+            blob: w.blob as Blob | null, state: "pending", session: ctx.session,
+        };
         this._windows.push(record);
+        if (!this._windowAbort) this._windowAbort = new AbortController();
+        const signal = this._windowAbort.signal;
         const run = async () => {
+            if (record.session !== this._windowSession || !record.blob || signal.aborted) {
+                record.state = record.blob ? "retryable" : "failed";
+                return;
+            }
+            let res: TranscriptionResult | null = null;
             try {
                 // Same rolling-context trick as segments, one level up: the tail of the
-                // PREVIOUS window's transcript orients the model at this one's opening,
-                // which is otherwise the least-anchored part of it.
+                // PREVIOUS windows' transcript orients the model at this one's opening.
+                // Only EARLIER windows of THIS dictation — never a later one, never
+                // another case's text as bias for this one's audio.
                 const prior = this._windows
-                    .filter((x) => x !== record && x.text)
+                    .filter((x) => x !== record && x.session === record.session && x.index < record.index && x.text)
                     .map((x) => x.text)
                     .join(" ");
                 const {prompt, context} = this._composePrompt(ctx.glossary, prior, ctx.contextChars);
-                const res = await this._transcribeBlob(record.blob!, {
+                this.raiseEvent("window-transcription-started", {index: record.index, bytes: record.blob.size});
+                res = await this._transcribeBlob(record.blob, {
                     language: ctx.language,
                     prompt,
                     context,
+                    signal,
                     // A tiny-model window would be worse than the segments it is meant
                     // to replace, and nothing in the UI would say so.
                     allowFallback: false,
                     timeoutMs: WINDOW_TIMEOUT_MS,
+                    channel: "window",
                 });
                 record.text = String(res?.text || "").trim();
+                if (res?.driverId) record.driverId = res.driverId;
+                // An empty result throws nothing, so this was previously indistinguishable
+                // from "not decoded yet" — the state that then quietly outlived the
+                // recording. A window is ~90 s of speech; coming back with none of it is
+                // the loudest thing that can happen to a dictation.
+                if (!record.text) {
+                    record.state = "retryable";
+                    void this._diagnoseEmptyWindow(record, res, "transcribed to nothing");
+                } else {
+                    record.state = "done";
+                }
             } catch (e) {
                 // Keep the blob so transcribeSessionAudio can retry it at review time.
-                console.warn(`[speech-to-text] window ${record.index} transcription failed; will retry at review`, e);
+                record.state = "retryable";
+                if (!signal.aborted) APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `window ${record.index} transcription failed; will retry at review`);
                 return;
             } finally {
                 if (record.text) record.blob = null;   // decoded — free the audio
             }
-            if (record.text && ctx.onWindow) {
+            if (record.text && ctx.onWindow && record.session === this._windowSession) {
                 try {
                     ctx.onWindow({index: record.index, text: record.text, fromSegment: record.fromSegment, toSegment: record.toSegment, final: record.final});
                 } catch (_e) { /* consumer error is theirs */ }
@@ -1166,17 +1609,189 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         this._windowChain = (this._windowChain || Promise.resolve()).then(run, run);
     }
 
+    /**
+     * Say WHY a window came back empty, with the one measurement that decides whose
+     * fault it is: whether the browser itself can decode the blob. A blob that decodes
+     * to its full length locally but produced nothing upstream is the backend's problem
+     * (raise it with the provider); one that fails to decode here is the capture's.
+     * `reportedSec` (the backend's measured duration) and `noSpeechProb` (the model's
+     * own silence verdict, when reported) sit beside it. Diagnostic only — never throws.
+     */
+    private async _diagnoseEmptyWindow(record: WindowRecord, res: TranscriptionResult | null, what: string): Promise<void> {
+        const blob = record.blob;
+        const local = blob ? await this._probeLocalDecode(blob) : null;
+        APPLICATION_CONTEXT.log("module.speech-to-text").warn({
+            window: record.index,
+            bytes: blob?.size ?? 0,
+            mime: blob?.type || "",
+            reportedSec: res?.durationInSeconds ?? null,
+            localDecodeSec: local?.seconds ?? null,
+            localDecodeError: local?.error ?? null,
+            noSpeechProb: res?.noSpeechProb ?? null,
+            avgLogprob: res?.avgLogprob ?? null,
+            filtered: res?.filtered ?? null,
+            driverId: res?.driverId ?? null,
+            note: "keeping its audio to retry at review",
+        }, `window ${record.index} ${what}`);
+        this.raiseEvent("window-empty", {
+            index: record.index, bytes: blob?.size ?? 0, reportedSec: res?.durationInSeconds ?? null,
+            localDecodeSec: local?.seconds ?? null, localDecodeError: local?.error ?? null,
+            noSpeechProb: res?.noSpeechProb ?? null, filtered: res?.filtered ?? null,
+        });
+    }
+
+    /** Decode a blob with Web Audio, bounded; `{seconds}` on success, `{error}` otherwise. */
+    private async _probeLocalDecode(blob: Blob): Promise<{ seconds?: number; error?: string } | null> {
+        const Ctx = (window as any).OfflineAudioContext || (window as any).AudioContext;
+        if (typeof Ctx !== "function") return null;
+        let ctx: any = null;
+        try {
+            const buf = await blob.arrayBuffer();
+            ctx = (window as any).OfflineAudioContext ? new Ctx(1, 16000, 16000) : new Ctx();
+            const decoded = await Promise.race([
+                ctx.decodeAudioData(buf),
+                new Promise((_r, reject) => setTimeout(() => reject(new Error("local decode timed out")), LOCAL_DECODE_PROBE_MS)),
+            ]);
+            return {seconds: Math.round(((decoded as AudioBuffer).duration || 0) * 10) / 10};
+        } catch (e) {
+            return {error: String((e as any)?.message || e)};
+        } finally {
+            try { await ctx?.close?.(); } catch (_e) { /* offline contexts have no close */ }
+        }
+    }
+
+    /**
+     * The audio of every window that produced no text and still holds its recording —
+     * for a developer to pull out of the page and decode elsewhere when the diagnostics
+     * above are not enough. Same lifetime as the windows; cleared with them.
+     */
+    getFailedWindowBlobs(): Array<{ index: number; blob: Blob; state: WindowState }> {
+        return this._windows
+            .filter((w) => w.session === this._windowSession && !w.text && w.blob)
+            .map((w) => ({index: w.index, blob: w.blob!, state: w.state}));
+    }
+
+    /**
+     * Download every retained failing window as `window-<index>.webm` — the console one-liner
+     * that got the decisive specimen out of the page, as a method. Returns how many were
+     * offered; 0 when nothing failed (or the recording was already cleared).
+     */
+    exportFailedWindows(): number {
+        const list = this.getFailedWindowBlobs();
+        for (const w of list) {
+            try {
+                const url = URL.createObjectURL(w.blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `window-${w.index}.${w.blob.type.includes("ogg") ? "ogg" : w.blob.type.includes("wav") ? "wav" : "webm"}`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            } catch (e) { APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "window export failed"); }
+        }
+        return list.length;
+    }
+
+    /**
+     * Wait until the session's recorded audio EXISTS and has been decoded.
+     *
+     * Two things happen after dictation stops that a synchronous read cannot see: the
+     * archive's final blob is produced in the recorder's `onstop` (a browser event), and
+     * the window it becomes is transcribed in the background. Between them,
+     * `getSessionAudio()` is null and `getSessionWindows()` is empty — a state
+     * indistinguishable from "nothing was recorded".
+     *
+     * That is not a theoretical race. For a dictation shorter than one window the
+     * stop-sealed window is the ONLY one, so a consumer asking immediately after stop
+     * always got "no audio" and silently fell back to the per-segment text — which is the
+     * text the whole-audio pass exists to replace.
+     *
+     * `signal` cancels the WAIT, not the work: the background decode keeps running, so a
+     * consumer that gave up and asks again a moment later is served immediately. Never
+     * rejects — an abort resolves, and the caller re-reads whatever state it finds.
+     */
+    async whenSessionAudioSettled(opts: { signal?: AbortSignal } = {}): Promise<void> {
+        const {signal} = opts;
+        if (signal?.aborted) return;
+        const raceAbort = <T>(p: Promise<T>): Promise<unknown> => {
+            if (!signal) return p;
+            return Promise.race([p, new Promise<void>((resolve) => {
+                signal.addEventListener("abort", () => resolve(), {once: true});
+            })]);
+        };
+        try {
+            await raceAbort(this._capture.whenArchiveSettled());
+            if (signal?.aborted) return;
+            // Awaited AFTER the seal: the final window is only enqueued by the seal, so
+            // awaiting the chain first would return before that window even exists.
+            if (this._windowChain) await raceAbort(this._windowChain.catch(() => {}));
+        } catch (_e) { /* a settle point must never reject */ }
+    }
+
+    /**
+     * How many archive windows exist, decoded or not.
+     *
+     * `getSessionWindows()` deliberately reports only DECODED ones — its callers want
+     * text. A caller asking "was anything recorded?" needs this instead; conflating the
+     * two is what made a pending decode look like an empty microphone.
+     */
+    get sessionWindowCount(): number {
+        return this._currentWindows().length;
+    }
+
+    /**
+     * Windows whose background transcription has not finished — text not in yet, a
+     * decode in flight or queued. Worth waiting for. Reaches 0 once
+     * {@link whenSessionAudioSettled} resolves.
+     */
+    get pendingWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "pending").length;
+    }
+
+    /**
+     * Windows whose decode finished WITHOUT text but whose audio is still held: a
+     * retry (the review's `transcribeSessionAudio`) can still recover the speech.
+     * Kept apart from `pending` — these are not about to arrive on their own.
+     */
+    get retryableWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "retryable").length;
+    }
+
+    /**
+     * Windows that produced no text and no longer hold their audio: nothing more can be
+     * done with them, and the speech they covered is gone.
+     *
+     * Counted apart from `pending` because conflating the two reports a dead window as
+     * one that is about to arrive. A caller then waits for something that will never
+     * land, and — worse — reads "still decoding" as reassurance while degrading.
+     */
+    get failedWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "failed" || (!w.text && !w.blob)).length;
+    }
+
+    /** The windows of the CURRENT dictation only — a cleared dictation's are never served. */
+    private _currentWindows(): WindowRecord[] {
+        return this._windows.filter((w) => w.session === this._windowSession);
+    }
+
     /** The transcribed windows so far, in seal order. Empty when windowing is off. */
     getSessionWindows(): TranscribedWindow[] {
-        return this._windows
+        return this._currentWindows()
             .filter((w) => w.text)
             .map(({index, text, fromSegment, toSegment, final}) => ({index, text, fromSegment, toSegment, final}));
     }
 
-    /** Drop the retained session recording once a consumer is done with it. */
+    /**
+     * Drop the retained session recording once a consumer is done with it — and stop
+     * uploading it: a window already queued for its background decode is aborted, so
+     * "delete my recording" means no more of it leaves the browser afterwards.
+     */
     clearSessionAudio(): void {
         this._capture.clearArchive();
+        this._windowSession++;
+        for (const w of this._windows) w.blob = null;
         this._windows = [];
+        try { this._windowAbort?.abort(new DOMException("session audio cleared", "AbortError")); } catch (_e) { /* ignore */ }
+        this._windowAbort = null;
     }
 
     /**
@@ -1198,7 +1813,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * the turn. Consumers subscribe via `addHandler('capture-warning', e => …)`.
      */
     private _reportCaptureWarning(error: CaptureError): void {
-        console.warn(`[speech-to-text] capture warning (${error.code}):`, error.message || "");
+        APPLICATION_CONTEXT.log("module.speech-to-text").warn({code: error.code, message: error.message || ""}, "capture warning");
         this.raiseEvent("capture-warning", {error, code: error.code});
     }
 
@@ -1303,7 +1918,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 this._captions.attachTo(this._captions.mountId);
             }
         } catch (e) {
-            console.warn("[speech-to-text] caption overlay unavailable:", e);
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "caption overlay unavailable");
             this._captions = null;
         }
         return this._captions;

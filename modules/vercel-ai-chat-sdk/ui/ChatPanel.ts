@@ -42,6 +42,37 @@ const BACKGROUND_BUSY_KINDS: Set<ChatBusyKind> = new Set(["sessions", "models", 
 
 /** How long a Stop may sit unacknowledged before the bubble admits the step is still finishing. */
 const STOP_ESCALATION_MS = 5000;
+/**
+ * How long an appended utterance suppresses a byte-identical repeat of itself.
+ *
+ * Whisper is given the rolling context tail as a bias prompt and re-emits it
+ * verbatim on near-silence, so a single dictated sentence can arrive many times in
+ * a row; observed in real sessions up to nine copies of one sentence, each of which
+ * the extractor then read as fresh evidence. Only an EXACT repeat of the message
+ * immediately before it is suppressed, and only inside this window — a pathologist
+ * genuinely repeating a phrase minutes later is real speech.
+ */
+const DUPLICATE_UTTERANCE_MS = 15000;
+
+/**
+ * A repeat this long is suppressed for much longer, because the 15 s above is
+ * calibrated for how fast an echo arrives, not for how long a sentence takes to say.
+ * A whole re-dictated closing paragraph landed ~30 s after the first one and was
+ * recorded twice; nobody re-utters this many words verbatim by accident.
+ */
+const LONG_UTTERANCE_WORDS = 25;
+const LONG_DUPLICATE_UTTERANCE_MS = 120000;
+
+/**
+ * Below this, a repeat is NOT suppressed at all.
+ *
+ * A recognizer locked onto its own biasing prompt emits the same two or three words
+ * for minutes ("I'm not the", ten segments running). Hiding some of those here made
+ * the lock read as ordinary sparse dictation instead of the fault it was, and cost a
+ * diagnostic round. The recognizer owns that failure now (speech-to-text
+ * `repetitionLock.ts`); anything that still reaches this point should be visible.
+ */
+const MIN_DUPLICATE_WORDS = 4;
 
 /**
  * Keys that mean "I am working inside this text", not "I am dictating into it".
@@ -228,6 +259,8 @@ export class ChatPanel extends BaseComponent {
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
+    /** The last utterance appended, for duplicate suppression (see DUPLICATE_UTTERANCE_MS). */
+    _lastAppend: { text: string; at: number; sessionId: string | null; message: ChatMessage } | null = null;
 
     // Streamed-reply state for the CURRENT model step (see _onStreamDelta).
     _streamStepActive = false;
@@ -848,14 +881,12 @@ export class ChatPanel extends BaseComponent {
             if (typeof voiceCfg.prompt === 'string' && voiceCfg.prompt.trim()) {
                 parts.push(voiceCfg.prompt.trim());
             }
-            try {
-                const pathology = (window as any).singletonModule?.('pathology-foundation');
-                const drivers = pathology?.listDrivers?.();
-                if (Array.isArray(drivers)) {
-                    const labels = drivers.map((d: any) => String(d?.label || '').trim()).filter(Boolean);
-                    if (labels.length) parts.push(labels.join(', '));
-                }
-            } catch (_e) { /* pathology-foundation absent — the glossary alone still helps */ }
+            // Driver LABELS are deliberately not added. A transcription prompt biases
+            // the recognizer's vocabulary, and a UI control name ("Built-in tissue
+            // detector") is not vocabulary anyone dictates into a report — but Whisper
+            // regurgitates its prompt on near-silence, and that label is short enough
+            // to survive the echo stripper. It reached real dictated transcripts, where
+            // the extractor read it as clinical speech.
             // Terms a consumer has learned are mis-heard here. LAST, because the tail
             // of the prompt is the strongest bias — and preventing the mistake beats
             // correcting it afterwards. Only correct spellings are ever added; feeding
@@ -874,6 +905,10 @@ export class ChatPanel extends BaseComponent {
             onVoiceUI: (state, level) => this._setVoiceUI(state, level),
             onHold: (state) => { this._renderVoiceHold(state.active); this._emit("voice-hold", { ...state }); },
             onSegment: (segment) => this._emit("voice-segment", { ...segment }),
+            // Segments that did NOT reach the transcript, with why. Observers (the report
+            // recorder) need these beside `voice-segment`, or a dump shows uploads with no
+            // outcome and cannot tell an empty endpoint answer from a quiet room.
+            onGate: (gate) => this._emit("voice-gate", { ...gate }),
             onStateChange: (state) => {
                 this._renderAutoBadge(state.auto, state.paused);
                 // The trash drops OUR transcript, so it follows the held draft only:
@@ -904,6 +939,9 @@ export class ChatPanel extends BaseComponent {
             speechFloorMult: voiceCfg.speechFloorMult,
             minSpeechMs: voiceCfg.minSpeechMs,
             minVoicedMs: voiceCfg.minVoicedMs,
+            echoCancellation: voiceCfg.echoCancellation,
+            noiseSuppression: voiceCfg.noiseSuppression,
+            autoGainControl: voiceCfg.autoGainControl,
             idleAutoOffMs: voiceCfg.idleAutoOffMs,
             busyHoldMs: voiceCfg.busyHoldMs,
             holdVoiceCommands: voiceCfg.holdVoiceCommands,
@@ -2569,8 +2607,12 @@ export class ChatPanel extends BaseComponent {
      * Hydrate `sessionId` into the panel. Returns the session on success, or null when the
      * load failed or was superseded — external callers (ChatModule.openSession) need to tell
      * those apart, while the UI call sites simply ignore the value.
+     *
+     * `showChatView` (default true) is what a UI click wants: pick a session, read it. A
+     * headless consumer re-attaching to its own session passes false so the user's current
+     * view is left alone — the session still becomes the live one either way.
      */
-    async _loadSession(sessionId: string): Promise<ChatSession | null> {
+    async _loadSession(sessionId: string, options: { showChatView?: boolean } = {}): Promise<ChatSession | null> {
         // Hydration replaces the whole message list, so a load that has been superseded (provider
         // switched, another session picked, a new session created) must never apply its result.
         const epoch = ++this._sessionLoadEpoch;
@@ -2619,7 +2661,7 @@ export class ChatPanel extends BaseComponent {
                 if (epoch !== this._sessionLoadEpoch) return null;
             }
 
-            this._showChatView();
+            if (options.showChatView !== false) this._showChatView();
             this._setStatus($.t('chat.loadedSession', { title: hydration.session.title }));
             return hydration.session;
         } catch (error) {
@@ -3270,6 +3312,10 @@ export class ChatPanel extends BaseComponent {
         // fed to extraction but NOT rendered as bubbles — see appendTranscriptMessage
         // stamping `hiddenFromChatUi` and addMessage honoring it.
         this._hideTranscriptEcho = !!on && options.hideEcho === true;
+        // With the echoes hidden this session renders nothing at all, and the default
+        // empty state ("no messages yet — ask about the slide") then describes a chat
+        // that lost a dictation it is in fact recording.
+        this._messageList?.setHiddenByConsumer?.(this._hideTranscriptEcho);
         // No assistant reply to let settle — drain queued voice turns immediately.
         this._voiceController?.setReArmDelayMs(this._transcriptOnly ? 0 : null);
         // Dictation is a record, not a conversation: each transcribed segment is
@@ -3321,6 +3367,20 @@ export class ChatPanel extends BaseComponent {
         return this._voiceController?.getSessionWindows() ?? [];
     }
 
+    /**
+     * Wait until the session's recorded audio exists and has been decoded. Anything that
+     * inspects the session recording must await this first — see
+     * `ChatVoiceController.whenSessionAudioSettled`.
+     */
+    async whenSessionAudioSettled(opts: { signal?: AbortSignal } = {}): Promise<void> {
+        await this._voiceController?.whenSessionAudioSettled(opts);
+    }
+
+    /** Archive windows that exist, split by decoded / still decoding / lost. */
+    sessionWindowCounts(): { total: number; pending: number; retryable: number; failed: number } {
+        return this._voiceController?.sessionWindowCounts() ?? {total: 0, pending: 0, retryable: 0, failed: 0};
+    }
+
     /** True when the archive hit its cap, so any transcript from it is incomplete. */
     isSessionAudioTruncated(): boolean {
         return this._voiceController?.isSessionAudioTruncated() ?? false;
@@ -3366,6 +3426,59 @@ export class ChatPanel extends BaseComponent {
             throw err;
         }
 
+        // A verbatim repeat of the message just appended is transcription echo, not
+        // speech. Reported rather than dropped in silence — a suppression the caller
+        // cannot see is indistinguishable from speech that was never heard.
+        //
+        // Two calibrations, from opposite failures in one recorded round:
+        //
+        //   A very short repeat is NOT suppressed. "I'm" and "I'm not the" came back
+        //   again and again because the recognizer had locked onto its own bias, and
+        //   hiding some of them here made the lock look like ordinary sparse dictation
+        //   instead of the fault it was. The recognizer owns that problem now (see
+        //   speech-to-text `repetitionLock.ts`); what reaches this point should be seen.
+        //
+        //   A long repeat IS suppressed past the window. A whole closing paragraph was
+        //   re-dictated more than 15 s after the first time and duplicated itself in the
+        //   record, because the window is calibrated for echo latency, not for how long
+        //   a sentence takes to say. Length is the discriminator: nobody re-utters
+        //   forty words verbatim by accident.
+        const last = this._lastAppend;
+        const wordCount = text ? text.split(/\s+/).length : 0;
+        const window = wordCount >= LONG_UTTERANCE_WORDS ? LONG_DUPLICATE_UTTERANCE_MS : DUPLICATE_UTTERANCE_MS;
+        const fresh = last && (Date.now() - last.at) < window ? last : null;
+        if (fresh && fresh.text === text && wordCount >= MIN_DUPLICATE_WORDS) {
+            this._emit("utterance-rejected", {
+                sessionId: fresh.sessionId, text, source, reason: "duplicate",
+                sinceMs: Date.now() - fresh.at,
+            });
+            return { sessionId: fresh.sessionId, message: fresh.message };
+        }
+
+        // The whole-utterance repeat above is only one shape this arrives in. Two more,
+        // both observed in a recorded dictation, survive it: the recognizer merging a
+        // repeated sentence into ONE segment, and its sliding window re-emitting speech
+        // it already transcribed as the head of the next segment. Neither is a repeat of
+        // the previous *message*, so neither is visible to an equality test.
+        const trimmedText = this._stripTranscriptionRepeats(text, fresh?.text || "");
+        if (trimmedText !== text) {
+            this._emit("utterance-trimmed", {
+                sessionId: fresh?.sessionId ?? null, source, text: trimmedText, original: text,
+                removed: text.length - trimmedText.length,
+            });
+            // Nothing but already-transcribed speech: same outcome as the exact repeat
+            // above. Without a previous message to point at there is nothing to return,
+            // so it degrades to the empty-text error the caller already handles.
+            if (!trimmedText) {
+                this._emit("utterance-rejected", {
+                    sessionId: fresh?.sessionId ?? null, text, source, reason: "repeat-only",
+                });
+                if (fresh) return { sessionId: fresh.sessionId, message: fresh.message };
+                throw new Error("appendTranscriptMessage: empty text");
+            }
+            text = trimmedText;
+        }
+
         // Same session-hydration hold as sendText: the message must join the
         // hydrated session, not race it.
         if (this._sessionsReady) {
@@ -3388,6 +3501,9 @@ export class ChatPanel extends BaseComponent {
         } as ChatMessage;
 
         this.addMessage(userMsg);
+        // Set before the persist await: the message is already in `_messages`, so an
+        // echo arriving while the round-trip is in flight must be suppressed too.
+        this._lastAppend = { text, at: Date.now(), sessionId, message: userMsg };
         // Track until the server confirms the persist, so a concurrent session
         // hydration cannot wipe the bubble (see _loadSession).
         this._unpersistedAppends.push({ sessionId, message: userMsg });
@@ -3411,6 +3527,77 @@ export class ChatPanel extends BaseComponent {
         this._setStatus($.t('chat.utteranceNoted'));
         this._emit("utterance-appended", { sessionId, text, source, message: userMsg, persisted: !!sessionId });
         return { sessionId, message: userMsg };
+    }
+
+    /**
+     * Remove speech the recognizer transcribed twice.
+     *
+     * Two shapes, both taken from a recorded dictation session:
+     *
+     * 1. **Inside one utterance.** A sentence dictated twice in a row was merged into a
+     *    single segment: `"Focal peribronchiolar metaplasia … is present. Focal
+     *    peribronchiolar metaplasia … is present."` An equality test against the previous
+     *    message cannot see this, because it is one message.
+     * 2. **Across the seam.** The sliding re-transcription window re-emits speech it has
+     *    already delivered as the head of the next segment, so one sentence reaches the
+     *    transcript three or four times from two or three utterances.
+     *
+     * Deliberately conservative: only an EXACT adjacent sentence repeat is collapsed, and
+     * an overlap with the previous utterance is trimmed only when it is at least
+     * `MIN_OVERLAP_WORDS` long. A pathologist saying "No granulomas." twice in a row keeps
+     * both, and every trim is reported as `utterance-trimmed` — this is the one change in
+     * this area that alters the text the model reads, so it must not do so silently.
+     */
+    private _stripTranscriptionRepeats(text: string, previousText: string): string {
+        const MIN_OVERLAP_WORDS = 6;
+        const key = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+        // (1) Adjacent identical sentences within this utterance.
+        const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+        const kept: string[] = [];
+        for (const sentence of sentences) {
+            const prev = kept.length ? kept[kept.length - 1] : "";
+            if (prev && key(prev) && key(prev) === key(sentence)) continue;
+            kept.push(sentence);
+        }
+        let out = kept.join("").trim();
+
+        if (previousText) {
+            const prevWords = key(previousText).split(" ").filter(Boolean);
+
+            // (2a) A head that repeats the TAIL of the previous utterance. Longest match
+            // first, so the whole re-emitted run goes rather than only its last sentence.
+            const outSentences = out.match(/[^.!?]+[.!?]*\s*/g) || [];
+            for (let take = outSentences.length; take >= 1; take--) {
+                const head = outSentences.slice(0, take).join("");
+                const headWords = key(head).split(" ").filter(Boolean);
+                if (headWords.length < MIN_OVERLAP_WORDS) break;
+                const prevTail = prevWords.slice(-headWords.length).join(" ");
+                if (prevTail && prevTail === headWords.join(" ")) {
+                    out = out.slice(head.length).trim();
+                    break;
+                }
+            }
+
+            // (2b) The previous utterance repeated WHOLE, anywhere in this one. The window
+            // can re-emit more than one earlier segment, in which case the run does not sit
+            // at the head and (2a) cannot reach it. Contiguous and exact, so removing it
+            // cannot cut a sentence in half.
+            if (prevWords.length >= MIN_OVERLAP_WORDS) {
+                const sentences2 = out.match(/[^.!?]+[.!?]*\s*/g) || [];
+                const prevKey = prevWords.join(" ");
+                for (let start = 0; start < sentences2.length; start++) {
+                    for (let end = sentences2.length; end > start; end--) {
+                        const run = sentences2.slice(start, end).join("");
+                        if (key(run) !== prevKey) continue;
+                        out = (sentences2.slice(0, start).join("") + sentences2.slice(end).join("")).trim();
+                        start = sentences2.length;
+                        break;
+                    }
+                }
+            }
+        }
+        return out.replace(/\s+/g, " ").trim();
     }
 
     /**

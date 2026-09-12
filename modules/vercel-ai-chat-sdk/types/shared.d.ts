@@ -728,6 +728,52 @@ interface ChatVoiceSegmentPayload {
      * mode that asks an observer to REMOVE text rather than add it.
      */
     mode: "once" | "continuous" | "flush" | "discarded";
+    /**
+     * What the segment was made of and what it cost, when the recognizer reported it
+     * (`continuous` mode only — a flush or a retraction re-reports existing text and
+     * has no capture of its own).
+     *
+     * This is what separates a BAD MODEL from BAD AUDIO in a session trace. Without it
+     * a three-word transcript of ten seconds of speech and a three-word transcript of a
+     * three-word utterance are the same event, which is why attributing the
+     * whisper-large-v3 segment collapse needed the source rather than the dump.
+     */
+    metrics?: {
+        /** Wall-clock length of the captured segment, silence included. */
+        audioMs?: number;
+        /** Detected voiced duration within it. `audioMs` >> `voicedMs` = mostly silence. */
+        voicedMs?: number;
+        /** False when Web Audio was unavailable, so the two above are absent, not zero. */
+        tracked?: boolean;
+        /** Encoded audio actually sent to the driver. */
+        bytes?: number;
+        /** Driver round-trip for this segment. */
+        latencyMs?: number;
+        /** First to last detected speech (ms) — the ratio rule's denominator. */
+        speechSpanMs?: number;
+        /** Loudest sample 0..1; 0 is digital silence, which is never uploaded. */
+        maxPeak?: number;
+        /** The trailing-silence window that cuts a segment (ms). */
+        silenceMs?: number;
+        /** Audio this recording shared with its successor (ms); trimmed at the seam after transcription. */
+        overlapMs?: number;
+        /** Audio duration the backend measured (ms), when it reports one. */
+        reportedDurationMs?: number;
+        /** Rolling-context characters the decoder was primed with. */
+        contextChars?: number;
+        /** The driver/model that ANSWERED — never the configured one. */
+        driverId?: string;
+        model?: string;
+        /** Whisper's own decode verdicts (verbose_json backends). */
+        noSpeechProb?: number;
+        avgLogprob?: number;
+        compressionRatio?: number;
+        /** Text filters that altered the raw decode. */
+        filtered?: string[];
+        probe?: boolean;
+        failOpen?: boolean;
+        flush?: boolean;
+    };
 }
 
 /** Payload of the `voice-transcribing` module event (segment transcription start/end). */

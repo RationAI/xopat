@@ -55,6 +55,14 @@ export class ChatMessageList {
     /** The pane currently shows skeletons or the empty hint rather than a transcript. */
     _placeholderShown: boolean;
 
+    /**
+     * A consumer owns this session and its messages are deliberately not rendered
+     * (dictation echoes under `hideEcho`). The pane is then empty for a reason, and
+     * saying "no messages yet — ask about the slide" in front of a running dictation
+     * reads as the chat having lost it.
+     */
+    _hiddenByConsumer: boolean = false;
+
     constructor(options: ChatMessageListOptions = {}) {
         this.options = options;
         this._root = null;
@@ -80,6 +88,13 @@ export class ChatMessageList {
     setDisplayMode(mode: "all" | "user-friendly"): void {
         this._displayMode = mode;
         this.rerender();
+    }
+
+    /** See {@link _hiddenByConsumer}. Only changes the empty state's wording. */
+    setHiddenByConsumer(on: boolean): void {
+        if (this._hiddenByConsumer === !!on) return;
+        this._hiddenByConsumer = !!on;
+        if (this._placeholderShown) this.rerender();
     }
 
     setMessages(messages: ChatMessage[]): void {
@@ -125,7 +140,8 @@ export class ChatMessageList {
     _buildEmptyNode(): HTMLElement {
         return div(
             { class: "h-full flex items-center justify-center px-4 py-4" },
-            span({ class: "text-[12px] text-base-content/60 italic text-center" }, $.t('chat.emptyTranscriptHint')),
+            span({ class: "text-[12px] text-base-content/60 italic text-center" },
+                $.t(this._hiddenByConsumer ? 'chat.emptyTranscriptDictation' : 'chat.emptyTranscriptHint')),
         ) as HTMLElement;
     }
 

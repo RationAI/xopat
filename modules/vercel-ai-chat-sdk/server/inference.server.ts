@@ -128,6 +128,20 @@ export interface RunVisionInferenceInput {
      * avoid the "max_tokens too large" rejection. Ignored if >= the server default.
      */
     maxOutputTokens?: number | null;
+    /**
+     * Ask the provider to constrain the reply to a JSON object.
+     *
+     * The JSON contract has always been carried in prose ("Return ONLY a JSON object…"),
+     * which is why callers ship parse-repair machinery — fence stripping, per-entry
+     * salvage, truncated-prefix repair — and why a weaker model still gets through it.
+     * `gpt-oss-120b` returned `"{\n  }\n"` and `"{\n  {}\n}"` in the 9-10 reporting round;
+     * the latter defeats both salvage strategies and costs the whole chunk.
+     *
+     * Best-effort by construction: not every adapter or model supports a response format,
+     * so a provider that rejects it falls back to the prose contract rather than failing
+     * the call. It narrows the failure rate; it does not replace the parser.
+     */
+    jsonMode?: boolean | null;
 }
 
 export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
@@ -202,6 +216,11 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     // rejects with a "max_tokens too large / context length" error. Halve and retry (bounded) so a
     // small-context vision model degrades gracefully instead of hard-failing every call.
     let result;
+    // Dropped, and the call retried once, when the provider rejects the response format.
+    // Support is per adapter AND per model, and neither is knowable here, so the only
+    // honest test is to ask — a caller must never lose an extraction because it wanted
+    // stricter output than the endpoint offers.
+    let wantJson = !!input.jsonMode;
     for (let attempt = 0; ; attempt++) {
         try {
             result = await generateText({
@@ -211,6 +230,7 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
                 maxOutputTokens,
                 abortSignal: signal,
                 maxRetries: VISION_MAX_RETRIES,
+                ...(wantJson ? { providerOptions: { openai: { response_format: { type: 'json_object' } } } } : {}),
             });
             break;
         } catch (e: any) {
@@ -222,6 +242,11 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
                 && (msg.includes('too large') || msg.includes('context length') || msg.includes('maximum context'));
             if (capTooLarge && attempt < 4 && maxOutputTokens > 256) {
                 maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
+                continue;
+            }
+            if (wantJson && msg.includes('response_format')) {
+                vision.debug('provider rejected json_object response format; retrying without it', { modelId });
+                wantJson = false;
                 continue;
             }
             throw e;
@@ -272,8 +297,22 @@ export interface RunTranscriptionInput {
     prompt?: string | null;
 }
 
-/** Hard cap on the biasing prompt forwarded upstream (~224 Whisper tokens ≈ 1000 chars). */
+/**
+ * Hard ceiling on the biasing prompt forwarded upstream. The DEFAULT is zero — no prompt
+ * at all — because on the deployment's own Whisper endpoint the prompt made the decoder drop
+ * whole stretches of audio, in proportion to its length: measured on one 93 s dictation,
+ * no prompt → the full text; a 495-char glossary → the last third gone; ~870 chars (glossary
+ * + report terms) → 30 s of the middle and nothing else. A provider opts in per instance with
+ * `transcriptionPromptMaxChars` (≤ 60 measured safe there), never above this ceiling.
+ */
 const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
+
+/** The prompt cap this provider allows: its `transcriptionPromptMaxChars`, else 0 (off). */
+function promptCapFor(config: any): number {
+    const raw = Number(config?.transcriptionPromptMaxChars);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(Math.floor(raw), TRANSCRIBE_MAX_PROMPT_CHARS);
+}
 
 /** A usable string, or '' — never a stringified object. */
 function trimmedString(value: unknown): string {
@@ -398,7 +437,11 @@ function transcriptionConfigError(message: string): Error {
     return new Error(`${TRANSCRIPTION_CONFIG_ERROR_TAG} ${message}`);
 }
 
-export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string; language?: string; durationInSeconds?: number }> {
+export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{
+    text: string; language?: string; durationInSeconds?: number;
+    /** Whisper decode verdicts summarized by the adapter (verbose_json only) — see openaiCompatibleTranscription.server.ts. */
+    noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number; responseFormat?: string;
+}> {
     if (!input?.audioBase64) throw new Error('runTranscription requires audioBase64.');
     // Spends a provider credential — require an identified caller at the call
     // site so a misconfigured `rpcVerifiers` cannot re-expose it.
@@ -484,8 +527,14 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     // names the namespace its SDK package reads (defaults to model.provider).
     const hints: Record<string, unknown> = {};
     if (input.language) hints.language = String(input.language);
-    const bias = String(input.prompt ?? '').trim().slice(0, TRANSCRIBE_MAX_PROMPT_CHARS);
+    const promptCap = promptCapFor(runtime.config);
+    const requestedBias = String(input.prompt ?? '').trim();
+    const bias = requestedBias.slice(0, promptCap);
     if (bias) hints.prompt = bias;
+    else if (requestedBias) {
+        chatLog('transcription').debug({ providerId, requestedChars: requestedBias.length, promptCap },
+            'biasing prompt dropped: provider allows none (transcriptionPromptMaxChars)');
+    }
 
     const result = await model.doGenerate({
         audio: new Uint8Array(Buffer.from(input.audioBase64, 'base64')),
@@ -496,10 +545,18 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
         abortSignal: createTimeoutLinkedSignal(ctx?.signal, TRANSCRIBE_TIMEOUT_MS),
     });
 
+    // Decode verdicts, when the adapter reports them (`providerMetadata.xopat`).
+    // Forwarded as plain numbers so the client's `normalizeResult` picks them up.
+    const meta: any = (result as any)?.providerMetadata?.xopat || {};
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
     return {
         text: typeof result?.text === 'string' ? result.text : '',
         ...(result?.language ? { language: String(result.language) } : {}),
         ...(typeof result?.durationInSeconds === 'number' ? { durationInSeconds: result.durationInSeconds } : {}),
+        ...(num(meta.noSpeechProb) !== undefined ? { noSpeechProb: num(meta.noSpeechProb) } : {}),
+        ...(num(meta.avgLogprob) !== undefined ? { avgLogprob: num(meta.avgLogprob) } : {}),
+        ...(num(meta.compressionRatio) !== undefined ? { compressionRatio: num(meta.compressionRatio) } : {}),
+        ...(typeof meta.responseFormat === 'string' ? { responseFormat: meta.responseFormat } : {}),
     };
 }
 

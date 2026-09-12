@@ -10,6 +10,7 @@
     "insecureContext": "Voice needs a secure page (https or localhost). This page isn't a secure context, so the browser blocks the microphone.",
     "audioDevice": "The audio device could not start. Another app may be using the microphone, or it was disconnected — close other apps using it, replug it, then try again. (This is not caused by a self-signed certificate.)",
     "captureFailed": "Could not start recording.",
+    "micOpening": "Opening microphone…",
     "vadDegraded": "The microphone's speech detector misjudged your voice — everything is now being transcribed instead. Check for background noise or auto-adjusting microphone settings.",
     "voiceSessionRecovering": "Voice capture stopped responding — reconnecting the microphone…",
     "voiceSessionLost": "Voice capture could not be restored — finishing and saving what was heard.",

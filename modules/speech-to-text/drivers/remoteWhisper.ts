@@ -1,6 +1,6 @@
 /// <reference path="../../../src/types/globals.d.ts" />
 
-import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult} from "./driver";
+import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult, bareTypeBlob} from "./driver";
 
 /**
  * Deployment-controlled config for a remote Whisper-compatible endpoint. Read
@@ -53,6 +53,8 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
     readonly id: string;
     readonly label: string;
     readonly local = false;
+    /** Configured model, or undefined when the endpoint picks its own. @see TranscriptionDriver */
+    get modelId(): string | undefined { return this._cfg.model || undefined; }
 
     private _cfg: RemoteWhisperConfig;
     private _client: any;
@@ -102,7 +104,13 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         const form = new FormData();
         const ext = (audio.type && audio.type.includes("wav")) ? "wav"
             : (audio.type && audio.type.includes("ogg")) ? "ogg" : "webm";
-        form.append(this._fileField, audio, `audio.${ext}`);
+        // Re-wrap without the codec parameter. `MediaRecorder` is asked for
+        // `audio/webm;codecs=opus` — the browser needs the codec to pick an encoder — and
+        // that full string becomes the Blob's `type`, hence the multipart part's
+        // `Content-Type`. Upstreams read the audio format out of that header and reject
+        // the parameterised value verbatim: `Unsupported file format webm;codecs=opus`.
+        // The container is what they need; the codec is inside the file.
+        form.append(this._fileField, bareTypeBlob(audio), `audio.${ext}`);
         if (this._cfg.model) form.append("model", this._cfg.model);
         if (opts.language) form.append("language", opts.language);
         // Domain/vocabulary biasing (Whisper `prompt` / whisper.cpp `initial_prompt`).

@@ -77,6 +77,21 @@ export interface SegmentMeta {
     voicedMs: number;
     /** Wall-clock length of the segment (ms), including leading/trailing silence. */
     durationMs: number;
+    /**
+     * From the first detected speech frame to the last (ms) — the segment without its
+     * leading pause and without the trailing-silence window that cut it. 0 when no speech
+     * was detected. The honest denominator for "how much of this was voice".
+     */
+    speechSpanMs: number;
+    /** Highest peak amplitude (0..1) seen in the segment; 0 means digital silence. */
+    maxPeak: number;
+    /**
+     * How long this recording kept running after its successor had started (ms) — the
+     * audio the two blobs share. The successor is started BEFORE the predecessor is
+     * stopped so no speech falls in the gap; the price is that the shared stretch is
+     * transcribed twice, and a consumer joining segment texts needs this to trim the seam.
+     */
+    overlapMs: number;
     /** False when Web Audio was unavailable and no VAD evidence exists. */
     tracked: boolean;
     /**
@@ -196,6 +211,15 @@ export interface CaptureOptions {
     speechOnsetTimeoutMs?: number;
     /** Hard cap on utterance length in ms (safety). Default 60000. */
     maxDurationMs?: number;
+    /**
+     * Browser audio-processing constraints for getUserMedia. Left undefined the browser
+     * default applies. Noise suppression and automatic gain both alter what the VAD and
+     * the recognizer hear (a far-field laptop microphone in a quiet room can have quiet
+     * consonants gated away), so a deployment sets them from measurement.
+     */
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
 }
 
 export interface SegmentedOptions extends CaptureOptions {
@@ -214,6 +238,20 @@ export interface SegmentedOptions extends CaptureOptions {
      * evidence for finer consumer-side gating.
      */
     onSegment: (blob: Blob, index: number, meta: SegmentMeta) => void;
+    /**
+     * Called for every recorded segment that is NOT emitted, with why. A discard is the
+     * one thing a capture can do to speech that nobody would otherwise see; reporting it
+     * is what lets a consumer's trace say "the microphone heard nothing" instead of
+     * "the transcript has a hole". Never throws into the capture.
+     */
+    onDiscard?: (meta: SegmentMeta, reason: "no-speech" | "silent" | "session-ended") => void;
+    /**
+     * Called once the segment recorder is actually running — permission granted, stream
+     * open, encoder started. Anything said before this was not recorded. A consumer that
+     * shows "listening" on the start CALL rather than on this callback invites the user
+     * to begin a second or two early, and the opening words are lost.
+     */
+    onStarted?: () => void;
     /** Called if capture fails fatally (permission denied/lost, recorder error). */
     onError?: (error: CaptureError) => void;
     /**
@@ -327,9 +365,34 @@ const ALIVE_POLL_MS = 1000;
  * stop making.
  */
 const DATA_STALL_MS = 8000;
-/** ~20 MB of Opus is hours of speech, and stays under the 25 MB transcription RPC body cap. */
-const DEFAULT_ARCHIVE_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * ~18 MB of Opus at {@link RECORDER_BITRATE} is over an hour of speech. Sized against the
+ * 25 MB transcription RPC body cap AFTER base64 inflation (×4/3): 18 MB on the wire is
+ * 24 MB in the JSON body. The old 20 MB figure ignored the inflation and, with no bitrate
+ * pinned, Chrome's ~128 kbps default reached it in about 21 minutes of dictation.
+ */
+const DEFAULT_ARCHIVE_MAX_BYTES = 18 * 1024 * 1024;
 const DEFAULT_ARCHIVE_MAX_MS = 45 * 60 * 1000;
+/**
+ * Opus bitrate for both recorders. Speech is intelligible to a recognizer at 24 kbps;
+ * 32 kbps leaves headroom and is a quarter of Chrome's unpinned default (~128 kbps), so
+ * the byte cap means what its comment says and uploads are a quarter of the size.
+ */
+const RECORDER_BITRATE = 32_000;
+/**
+ * How long {@link AudioCapture.whenArchiveSettled} waits for the final `onstop` before
+ * releasing its waiters anyway. A recorder whose stop never lands (a torn-down track, a
+ * browser that dropped the event) must not hang a review flow forever; twice the archive
+ * timeslice is longer than any legitimate flush.
+ */
+const ARCHIVE_SETTLE_TIMEOUT_MS = 5000;
+/**
+ * A segment whose loudest sample never exceeded this is digital silence — not "quiet",
+ * silence: a muted or dead track delivering zeros. Nothing decodable is in it, so it is
+ * never uploaded, not even in fail-open mode, and it never counts as a VAD misjudgment.
+ * Any real microphone, however quiet the room, sits well above this on self-noise alone.
+ */
+const SILENT_PEAK = 0.0005;
 
 /**
  * Default archive window. Long enough that a transcription model sees whole
@@ -354,7 +417,16 @@ interface SegmentRecording {
     /** What happens once this recorder's `onstop` has been handled. */
     action: "restart" | "restart-discard" | "end";
     /** Evidence as of the cut; null while the segment is still open. */
-    evidence: { voicedMs: number; heardSpeech: boolean; tracked: boolean; maxPeak: number } | null;
+    evidence: { voicedMs: number; heardSpeech: boolean; tracked: boolean; maxPeak: number; speechSpanMs: number } | null;
+    /** `startedAt` of the successor recorder, once one was started; 0 until then. */
+    successorStartedAt: number;
+    /** Guards against finishing twice (a `stop()` that throws after scheduling `onstop`). */
+    finished: boolean;
+    /** The session this recording belongs to; a stale `onstop` must not emit into a newer one. */
+    token: number;
+    /** Sinks captured at creation: teardown nulls `_segOpts` before a late `onstop` lands. */
+    onSegment: SegmentedOptions["onSegment"];
+    onDiscard: SegmentedOptions["onDiscard"];
 }
 
 export class AudioCapture {
@@ -362,7 +434,6 @@ export class AudioCapture {
     private _recorder: MediaRecorder | null = null;
     private _chunks: Blob[] = [];
     private _audioCtx: AudioContext | null = null;
-    private _silenceTimer: number | null = null;
     private _maxTimer: number | null = null;
     private _rafId: number | null = null;
     private _recording = false;
@@ -426,8 +497,11 @@ export class AudioCapture {
     private _segConsecDiscards = 0;
     /** Diagnostic: highest peak observed within the current segment. */
     private _segMaxPeak = 0;
-    /** Cached `xopat-stt-debug` flag for gated VAD diagnostics. */
-    private _vadDebug = false;
+    /** First / last speech frame of the current segment (performance.now()); 0 = none yet. */
+    private _segFirstSpeechAt = 0;
+    private _segLastSpeechAt = 0;
+    /** Detaches the audio track listeners of the running session. */
+    private _detachTrack: (() => void) | null = null;
     /** Timestamp of the last VAD tick (rAF or worklet). Stall watchdog input. */
     private _lastVadTickAt = 0;
     /**
@@ -454,8 +528,24 @@ export class AudioCapture {
     private _archiveParts: Blob[] = [];
     /** Total retained bytes across parts — the cap spans the whole dictation. */
     private _archiveBytes = 0;
+    /** When the archive first started this dictation; the time cap counts from here. */
+    private _archiveStartedAt = 0;
+    /**
+     * Archive recorders started but not yet sealed. A rotation leaves the outgoing
+     * recorder flushing while its successor records, so "the archive is settled" is
+     * "every one of them has sealed", not "the current one has".
+     */
+    private _archiveOpenSeals = 0;
     private _archiveMime: string | undefined = undefined;
     private _archiveTruncated = false;
+    /**
+     * True between `stop()` being called on the archive recorder and its final part
+     * actually being sealed. In that gap the recording exists but its blob does not —
+     * see {@link whenArchiveSettled} for why anyone cares.
+     */
+    private _archiveSealPending = false;
+    private _archiveSettled: Promise<void> | null = null;
+    private _resolveArchiveSettled: (() => void) | null = null;
     /**
      * Timestamp of the last archive flush. The archive recorder is timesliced, so
      * this is a Web-Audio-INDEPENDENT proof that audio is still flowing: bytes
@@ -540,6 +630,54 @@ export class AudioCapture {
         return true;
     }
 
+    /**
+     * Options for every MediaRecorder this capture creates. The bitrate is pinned
+     * (see {@link RECORDER_BITRATE}); left unset, Chrome encodes Opus at ~128 kbps and
+     * the archive byte cap was reached four times sooner than its comment claimed.
+     */
+    private _recorderOptions(mimeType?: string): MediaRecorderOptions {
+        return {...(mimeType ? {mimeType} : {}), audioBitsPerSecond: RECORDER_BITRATE};
+    }
+
+    /**
+     * getUserMedia constraints for dictation. Mono, because a recognizer downmixes
+     * anyway and stereo doubles the upload. Echo cancellation stays on (the viewer may
+     * play audio). Noise suppression and automatic gain are left to the browser default
+     * unless the consumer says otherwise: both alter the very signal the VAD and the
+     * recognizer judge, and their effect is device-specific — a deployment tunes them
+     * from measurement, not from here.
+     */
+    private _audioConstraints(opts: { noiseSuppression?: boolean; autoGainControl?: boolean; echoCancellation?: boolean } = {}): MediaStreamConstraints {
+        const audio: MediaTrackConstraints = {channelCount: {ideal: 1}};
+        if (typeof opts.echoCancellation === "boolean") audio.echoCancellation = opts.echoCancellation;
+        if (typeof opts.noiseSuppression === "boolean") audio.noiseSuppression = opts.noiseSuppression;
+        if (typeof opts.autoGainControl === "boolean") audio.autoGainControl = opts.autoGainControl;
+        return {audio};
+    }
+
+    /**
+     * Watch the session's audio track for the two events that mean the microphone
+     * went away under a running capture: `mute` (the OS/browser stopped delivering
+     * samples — a muted headset, a device switch) and `ended` (unplugged, permission
+     * revoked). Both leave MediaRecorder running on silence, which no level meter can
+     * distinguish from a quiet room, so they are reported as a device warning.
+     */
+    private _watchTrack(stream: MediaStream): void {
+        this._detachTrack?.();
+        const track = stream.getAudioTracks?.()[0];
+        if (!track) return;
+        const onMute = () => this._reportDeviceError(new Error("audio track muted"));
+        const onEnded = () => this._reportDeviceError(new Error("audio track ended"));
+        try {
+            track.addEventListener("mute", onMute);
+            track.addEventListener("ended", onEnded);
+        } catch (_e) { return; }
+        this._detachTrack = () => {
+            try { track.removeEventListener("mute", onMute); track.removeEventListener("ended", onEnded); } catch (_e) { /* ignore */ }
+            this._detachTrack = null;
+        };
+    }
+
     private _pickMimeType(preferred?: string): string | undefined {
         const MR = (window as any).MediaRecorder;
         const candidates = [preferred, "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"]
@@ -568,14 +706,15 @@ export class AudioCapture {
         this._deviceErrorReported = false;
 
         try {
-            this._stream = await navigator.mediaDevices.getUserMedia({audio: true});
+            this._stream = await navigator.mediaDevices.getUserMedia(this._audioConstraints(opts));
         } catch (e) {
             throw mapGumError(e);
         }
+        this._watchTrack(this._stream);
 
         const mimeType = this._pickMimeType(opts.mimeType);
         try {
-            this._recorder = new (window as any).MediaRecorder(this._stream, mimeType ? {mimeType} : undefined);
+            this._recorder = new (window as any).MediaRecorder(this._stream, this._recorderOptions(mimeType));
         } catch (e) {
             this._teardown();
             throw new CaptureError("capture-failed", (e as any)?.message);
@@ -682,7 +821,7 @@ export class AudioCapture {
         this._hardTimer = window.setTimeout(() => {
             this._hardTimer = null;
             if (!this._segmented || !this._recording || this._cutting) return;
-            if (this._vadDebug) console.log("[speech-to-text] cut: hard duration cap");
+            APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug("cut: hard duration cap");
             this._cutSegment(this._segFailOpen ? false : !this._segHeardSpeech);
         }, this._segMaxDurationMs + HARD_CUT_GRACE_MS);
     }
@@ -784,7 +923,7 @@ export class AudioCapture {
             this._workletNode = node;
             return true;
         } catch (e) {
-            if (this._vadDebug) console.log("[speech-to-text] VAD worklet unavailable, staying on rAF", e);
+            APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug(e, "VAD worklet unavailable, staying on rAF");
             return false;
         }
     }
@@ -821,11 +960,11 @@ export class AudioCapture {
             // and cutting a sentence mid-pause.
             let noiseFloor = Infinity;
             let maxPeak = 0;
-            // Opt-in diagnostics: run `localStorage.setItem('xopat-stt-debug','1')`.
-            let debug = false;
-            try { debug = !!window.localStorage?.getItem("xopat-stt-debug"); } catch (_e) { /* ignore */ }
+            // Diagnostics live on the `module.speech-to-text:vad` channel at `debug`.
             const dbgStop = (reason: string) => {
-                if (debug) console.log(`[speech-to-text] stop: ${reason} · noiseFloor=${(isFinite(noiseFloor) ? noiseFloor : 0).toFixed(4)} maxPeak=${maxPeak.toFixed(4)} heardSpeech=${heardSpeech}`);
+                const vad = APPLICATION_CONTEXT.log("module.speech-to-text:vad");
+                if (!vad.isEnabled("debug")) return;
+                vad.debug({reason, noiseFloor: isFinite(noiseFloor) ? noiseFloor : 0, maxPeak, heardSpeech}, "one-shot stop");
             };
 
             // The VAD logic, driven per peak sample by either the rAF tick below
@@ -940,6 +1079,8 @@ export class AudioCapture {
         this._deviceErrorReported = false;
         this._onAlive = opts.onAlive ?? null;
         this._lastRecorderDataAt = 0;
+        this._lastArchiveDataAt = 0;
+        this._lastPortMsgAt = 0;
         this._lastCtxTime = -1;
 
         const sessionToken = ++this._segSessionToken;
@@ -955,16 +1096,17 @@ export class AudioCapture {
         // would silently reduce the "whole recording" to its last stretch — a partial
         // transcript that still looks complete. The consumer clears it explicitly
         // (clearArchive) when a new dictation begins or the audio has been used.
-        try { this._vadDebug = !!window.localStorage?.getItem("xopat-stt-debug"); } catch (_e) { this._vadDebug = false; }
 
-        navigator.mediaDevices.getUserMedia({audio: true}).then((stream) => {
+        navigator.mediaDevices.getUserMedia(this._audioConstraints(opts)).then((stream) => {
             // The session may have been stopped/replaced before permission resolved.
             if (sessionToken !== this._segSessionToken || !this._segmented) {
                 try { stream.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
                 return;
             }
             this._stream = stream;
+            this._watchTrack(stream);
             this._recording = true;
+            if (opts.archive && !this._archiveStartedAt) this._archiveStartedAt = performance.now();
             this._armHealthPoll();
             // Segments need a silence boundary to be cut; fall back to a sensible
             // window if the caller left it unset (0 = "manual only" makes no sense
@@ -982,6 +1124,8 @@ export class AudioCapture {
             );
             if (opts.archive) this._startArchiveRecorder(opts);
             this._startSegmentRecorder();
+            // Only now is anything being recorded.
+            if (this._segRec) { try { opts.onStarted?.(); } catch (_e) { /* consumer error is theirs */ } }
         }).catch((e) => {
             if (sessionToken !== this._segSessionToken || !this._segmented) return;
             const err = mapGumError(e);
@@ -1104,7 +1248,13 @@ export class AudioCapture {
             this._beat("poll", 0);
             return;
         }
-        if (verdict !== "healthy") return; // device-lost / dead: let the clock age
+        if (verdict !== "healthy") {
+            // device-lost / dead: let the consumer's liveness clock age (no beat), and
+            // SAY SO. The verdict used to be computed and dropped here, so a microphone
+            // that died mid-dictation produced silent uploads with nothing on screen.
+            this._reportDeviceError(new Error(`capture ${verdict}`));
+            return;
+        }
         this._beat("poll", 0);
     }
 
@@ -1145,7 +1295,10 @@ export class AudioCapture {
      */
     getArchiveBlobs(): Blob[] {
         const out = [...this._archiveParts];
-        if (this._archiveChunks.length) {
+        // The open recorder's chunks are a container with no final cluster, and once it
+        // seals the same audio is delivered again — so they are only a "part" once the
+        // recorder is gone and no seal is on its way.
+        if (this._archiveChunks.length && !this._archiveRec && !this._archiveOpenSeals) {
             out.push(new Blob(this._archiveChunks, {type: this._archiveMime || this._archiveChunks[0]?.type || "audio/webm"}));
         }
         return out;
@@ -1161,6 +1314,7 @@ export class AudioCapture {
         this._archiveChunks = [];
         this._archiveParts = [];
         this._archiveBytes = 0;
+        this._archiveStartedAt = 0;
         this._archiveTruncated = false;
         this._windowIndex = 0;
     }
@@ -1179,20 +1333,40 @@ export class AudioCapture {
     private _sealArchivePart(chunks: Blob[], meta: { index: number; fromSegment: number; toSegment: number; final: boolean } | null): void {
         if (this._archiveChunks === chunks) this._archiveChunks = [];
         if (this._archiveMeta === meta) this._archiveMeta = null;
-        if (!chunks.length) return;
-        const type = this._archiveMime || chunks[0]?.type || "audio/webm";
-        const blob = new Blob(chunks, {type});
-        const onWindow = this._onArchiveWindow;
-        if (!onWindow) { this._archiveParts.push(blob); return; }
+        this._archiveOpenSeals = Math.max(0, this._archiveOpenSeals - 1);
+        // Settle LAST, in a finally-shaped flow: a waiter must not be released until the
+        // blob has actually reached `_archiveParts` or the window consumer, or it would
+        // observe the same "no audio yet" state it was waiting to leave.
         try {
-            onWindow({
-                blob,
-                index: meta ? meta.index : this._windowIndex++,
-                fromSegment: meta ? meta.fromSegment : 0,
-                toSegment: meta ? meta.toSegment : this._segIndex,
-                final: !!meta?.final,
-            });
-        } catch (_e) { /* consumer error is theirs */ }
+            if (!chunks.length) return;
+            const type = this._archiveMime || chunks[0]?.type || "audio/webm";
+            const blob = new Blob(chunks, {type});
+            const onWindow = this._onArchiveWindow;
+            if (!onWindow) { this._archiveParts.push(blob); return; }
+            // Handed over ⇒ no longer retained here, so it no longer counts against the
+            // retained-bytes cap. Without this the cap accumulated across every window of
+            // every dictation in the tab and, once crossed, sealed the open window short
+            // and refused every later one.
+            this._archiveBytes = Math.max(0, this._archiveBytes - blob.size);
+            try {
+                onWindow({
+                    blob,
+                    index: meta ? meta.index : this._windowIndex++,
+                    fromSegment: meta ? meta.fromSegment : 0,
+                    toSegment: meta ? meta.toSegment : this._segIndex,
+                    final: !!meta?.final,
+                });
+            } catch (_e) { /* consumer error is theirs */ }
+        } finally {
+            // Only the LAST seal ends the archive: a mid-capture rotation seals a part
+            // while its successor records, and the successor's own seal is still owed.
+            this._maybeSettleArchive();
+        }
+    }
+
+    /** Release waiters once no archive recorder is running and none is still flushing. */
+    private _maybeSettleArchive(): void {
+        if (!this._archiveRec && this._archiveOpenSeals === 0) this._settleArchive();
     }
 
     /**
@@ -1206,10 +1380,10 @@ export class AudioCapture {
      * @private
      */
     private _rotateArchive(): void {
-        const rec = this._archiveRec;
-        if (!rec || !this._segmented || !this._stream) return;
         this._windowWantRotate = false;
         this._clearWindowTimers();
+        const rec = this._archiveRec;
+        if (!rec || !this._segmented || !this._stream) return;
         if (this._archiveMeta) this._archiveMeta.toSegment = this._segIndex;
         this._archiveRec = null;
         // Starts the successor, re-points _archiveChunks/_archiveMeta at it and re-arms
@@ -1256,7 +1430,7 @@ export class AudioCapture {
         const maxMs = opts.archiveMaxMs ?? DEFAULT_ARCHIVE_MAX_MS;
         let rec: MediaRecorder;
         try {
-            rec = new (window as any).MediaRecorder(this._stream, this._segMime ? {mimeType: this._segMime} : undefined);
+            rec = new (window as any).MediaRecorder(this._stream, this._recorderOptions(this._segMime));
         } catch (_e) {
             return; // no archive this session; dictation is unaffected
         }
@@ -1272,7 +1446,14 @@ export class AudioCapture {
         // reports its OWN range rather than the successor's.
         const meta = { index: this._windowIndex++, fromSegment: this._segIndex, toSegment: this._segIndex, final: false };
         this._archiveMeta = meta;
-        const startedAt = performance.now();
+        const startedAt = this._archiveStartedAt || performance.now();
+        // A retired recorder (rotated out, still flushing) must act on ITSELF, never on
+        // `this._archiveRec` — that is its successor by then, and stopping it cut a fresh
+        // 90 s window seconds in and marked it final.
+        const stopSelf = () => {
+            if (this._archiveRec === rec) this._stopArchive();
+            else { try { if (rec.state !== "inactive") rec.stop(); } catch (_e) { /* ignore */ } }
+        };
         rec.ondataavailable = (ev: BlobEvent) => {
             if (!ev.data || ev.data.size <= 0) return;
             // Stamped before the cap check: a truncated archive still proves the
@@ -1281,22 +1462,28 @@ export class AudioCapture {
             this._noteRecorderData("archive", ev.data.size);
             // Past a cap, keep what we have rather than growing without bound: the
             // recording is uploaded in one request and held wholly in memory on both
-            // ends. The byte cap spans the whole dictation, the time cap one capture.
+            // ends. Both caps span the whole dictation (windows handed over are
+            // subtracted again in _sealArchivePart, so only RETAINED bytes count).
             if (this._archiveBytes + ev.data.size > maxBytes || (performance.now() - startedAt) > maxMs) {
                 this._archiveTruncated = true;
-                this._stopArchive();
+                stopSelf();
                 return;
             }
             chunks.push(ev.data);
             this._archiveBytes += ev.data.size;
         };
         rec.onstop = () => this._sealArchivePart(chunks, meta);
-        rec.onerror = () => this._stopArchive();
+        rec.onerror = () => stopSelf();
         try {
+            this._archiveOpenSeals++;
             rec.start(ARCHIVE_TIMESLICE_MS);
             this._armWindowTimers();
         } catch (_e) {
+            this._archiveOpenSeals = Math.max(0, this._archiveOpenSeals - 1);
             this._archiveRec = null;
+            // Never started, so no `onstop` is coming: release anyone waiting for a seal
+            // that can no longer happen.
+            this._maybeSettleArchive();
         }
     }
 
@@ -1311,12 +1498,61 @@ export class AudioCapture {
             this._archiveMeta.final = true;
             this._archiveMeta.toSegment = this._segIndex;
         }
+        // The blob does not exist yet: `stop()` only schedules the final
+        // `dataavailable`/`onstop`, which arrive as browser events afterwards. Anything
+        // that wants the finished recording has to wait for THAT, not for this call —
+        // see `whenArchiveSettled`.
+        this._archiveSealPending = true;
         try {
             // requestData() first: teardown stops the tracks moments later, and the
             // final timeslice would otherwise be lost.
             if (rec.state === "recording") rec.requestData();
             if (rec.state !== "inactive") rec.stop();
-        } catch (_e) { /* best-effort */ }
+            // Already inactive ⇒ its `onstop` fired long ago and no seal is coming from it.
+            else this._maybeSettleArchive();
+        } catch (_e) { this._maybeSettleArchive(); }
+    }
+
+    /**
+     * Resolves once the archive is finished — recorder stopped AND its final part sealed.
+     *
+     * A consumer that asks "is there recorded audio?" the instant after `stop()` gets the
+     * wrong answer, because the last blob is produced in the recorder's `onstop` handler,
+     * which is a browser event delivered later. For a dictation shorter than one window
+     * that blob is the ONLY one, so the honest answer flips from "nothing" to "everything"
+     * a few milliseconds after stop. That race silently cost the MIXTURE review modal its
+     * whole-audio transcript on every short dictation.
+     *
+     * Resolves immediately when nothing is pending — no archive, already sealed, or the
+     * recorder threw on stop. It is a synchronisation point, never a gate: it must not be
+     * able to hang a caller.
+     */
+    whenArchiveSettled(): Promise<void> {
+        if (!this._archiveSealPending) return Promise.resolve();
+        if (!this._archiveSettled) {
+            this._archiveSettled = new Promise<void>((resolve) => { this._resolveArchiveSettled = resolve; });
+            // Bounded: a seal that never lands (a dropped `onstop`) must not hang a review
+            // flow. Whatever was sealed by then is what the consumer gets, and the miss is
+            // logged rather than silently waited on forever.
+            const timer = setTimeout(() => {
+                if (!this._archiveSealPending) return;
+                APPLICATION_CONTEXT.log("module.speech-to-text").warn({
+                    openSeals: this._archiveOpenSeals, recState: this._archiveRec?.state ?? "none", timeoutMs: ARCHIVE_SETTLE_TIMEOUT_MS,
+                }, "archive seal did not land in time; releasing waiters");
+                this._settleArchive();
+            }, ARCHIVE_SETTLE_TIMEOUT_MS);
+            this._archiveSettled.then(() => clearTimeout(timer), () => clearTimeout(timer));
+        }
+        return this._archiveSettled;
+    }
+
+    /** Release {@link whenArchiveSettled} waiters. Idempotent. @private */
+    private _settleArchive(): void {
+        this._archiveSealPending = false;
+        const resolve = this._resolveArchiveSettled;
+        this._resolveArchiveSettled = null;
+        this._archiveSettled = null;
+        if (resolve) resolve();
     }
 
     /**
@@ -1331,18 +1567,26 @@ export class AudioCapture {
         this._segConsecDiscards = 0;
     }
 
+    /** The token of the running continuous session (changes on every start and teardown). */
+    get sessionToken(): number {
+        return this._segSessionToken;
+    }
+
     /** Spin up a fresh recorder on the persistent stream for the next segment. */
     private _startSegmentRecorder(): void {
         if (!this._segmented || !this._stream) return;
-        let rec: MediaRecorder;
-        try {
-            rec = new (window as any).MediaRecorder(this._stream, this._segMime ? {mimeType: this._segMime} : undefined);
-        } catch (e) {
+        const fail = (e: unknown) => {
             const err = new CaptureError("capture-failed", (e as any)?.message);
             const cb = this._segOpts?.onError;
             this._segmented = false;
             this._teardown();
             try { cb?.(err); } catch (_e) { /* ignore */ }
+        };
+        let rec: MediaRecorder;
+        try {
+            rec = new (window as any).MediaRecorder(this._stream, this._recorderOptions(this._segMime));
+        } catch (e) {
+            fail(e);
             return;
         }
         // Each recording owns its chunk buffer: with the successor started before
@@ -1353,6 +1597,11 @@ export class AudioCapture {
             startedAt: performance.now(),
             action: "restart",
             evidence: null,
+            successorStartedAt: 0,
+            finished: false,
+            token: this._segSessionToken,
+            onSegment: this._segOpts!.onSegment,
+            onDiscard: this._segOpts!.onDiscard,
         };
         this._segRec = recording;
         this._recorder = rec;
@@ -1361,9 +1610,10 @@ export class AudioCapture {
         this._segSilentSince = 0;
         this._segVoicedMs = 0;
         this._segMaxPeak = 0;
+        this._segFirstSpeechAt = 0;
+        this._segLastSpeechAt = 0;
         this._segVadStalled = false;
         this._segWantCut = false;
-        this._cutting = false;
 
         rec.ondataavailable = (ev: BlobEvent) => {
             if (!ev.data || ev.data.size <= 0) return;
@@ -1381,7 +1631,15 @@ export class AudioCapture {
         // Timesliced so the recorder ticks observably (see SEGMENT_TIMESLICE_MS): the
         // blob is still assembled from all chunks at onstop, so the output is
         // byte-identical to a single final flush.
-        rec.start(SEGMENT_TIMESLICE_MS);
+        try {
+            rec.start(SEGMENT_TIMESLICE_MS);
+        } catch (e) {
+            // A throw here used to escape _cutSegment before the predecessor was
+            // stopped, orphaning it: every later cut then emitted empty blobs and the
+            // dictation went silent with no error.
+            fail(e);
+            return;
+        }
         this._armSegmentMaxDuration();
     }
 
@@ -1400,6 +1658,7 @@ export class AudioCapture {
             heardSpeech: tracked ? this._segHeardSpeech : true,
             tracked,
             maxPeak: this._segMaxPeak,
+            speechSpanMs: this._segFirstSpeechAt ? Math.max(0, this._segLastSpeechAt - this._segFirstSpeechAt) : 0,
         };
     }
 
@@ -1418,15 +1677,45 @@ export class AudioCapture {
      *    (self-healing against gate misjudgment).
      */
     private _finishSegmentRecording(recording: SegmentRecording): void {
+        if (recording.finished) return; // a stop() that threw after scheduling onstop
+        recording.finished = true;
         if (this._segRec === recording) this._segRec = null;
         const type = this._segMime || (recording.chunks[0]?.type) || "audio/webm";
         const blob = new Blob(recording.chunks, {type});
         const action = recording.action;
-        const {voicedMs, heardSpeech: heard, tracked, maxPeak} = recording.evidence ?? this._snapshotSegmentEvidence();
+        // A recorder torn down or errored mid-segment carries no snapshot; judge it by
+        // its own counters only while they are still its own (its successor resets them).
+        const evidence = recording.evidence ?? (this._segRec ? {voicedMs: 0, heardSpeech: true, tracked: false, maxPeak: 0, speechSpanMs: 0} : this._snapshotSegmentEvidence());
+        const {voicedMs, heardSpeech: heard, tracked, maxPeak, speechSpanMs} = evidence;
         const isFinal = action === "end";
-        let emit = blob.size > 0 && !!this._segOpts;
+        // Stale: a newer session has started since this recording was made. Its audio
+        // belongs to the OLD dictation and must not take an index in the new one.
+        const stale = recording.token !== this._segSessionToken && this._segmented;
+        const meta: SegmentMeta = {
+            voicedMs,
+            durationMs: performance.now() - recording.startedAt,
+            speechSpanMs,
+            maxPeak,
+            overlapMs: recording.successorStartedAt ? Math.max(0, Math.round(performance.now() - recording.successorStartedAt)) : 0,
+            tracked,
+            ...(this._segFailOpen ? {failOpen: true} : {}),
+            ...(isFinal ? {flush: true} : {}),
+        };
+        const discard = (reason: "no-speech" | "silent" | "session-ended") => {
+            try { recording.onDiscard?.(meta, reason); } catch (_e) { /* consumer error is theirs */ }
+        };
+        let emit = blob.size > 0 && !stale;
         let probe = false;
-        if (emit && !isFinal && !this._segFailOpen) {
+        // Digital silence (a muted or dead track) is provably empty: never uploaded, in
+        // no mode, and never evidence that the VAD misjudged speech. This is the shape a
+        // dead microphone produced for an hour — one 15 s blob of zeros after another,
+        // each transcribed to "The" — and the probe on the third one flipped the session
+        // fail-open, which then uploaded every later one too.
+        const silent = tracked && maxPeak <= SILENT_PEAK;
+        if (emit && silent) {
+            emit = false;
+            discard("silent");
+        } else if (emit && !isFinal && !this._segFailOpen) {
             if (action === "restart-discard" || !heard) {
                 if (this._segConsecDiscards >= 2) {
                     probe = true;
@@ -1434,26 +1723,24 @@ export class AudioCapture {
                 } else {
                     this._segConsecDiscards++;
                     emit = false;
+                    discard("no-speech");
                 }
             } else {
                 this._segConsecDiscards = 0;
             }
+        } else if (stale && blob.size > 0) {
+            discard("session-ended");
         }
-        if (this._vadDebug) console.log("[speech-to-text] segment onstop", {action, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, probe, failOpen: this._segFailOpen, emit});
-        if (emit && this._segOpts) {
-            const meta: SegmentMeta = {
-                voicedMs,
-                durationMs: performance.now() - recording.startedAt,
-                tracked,
-                ...(probe ? {probe: true} : {}),
-                ...(this._segFailOpen ? {failOpen: true} : {}),
-                ...(isFinal ? {flush: true} : {}),
-            };
+        if (probe) meta.probe = true;
+        if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({action, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, speechSpanMs, probe, failOpen: this._segFailOpen, emit, stale}, "segment onstop");
+        if (emit) {
             // The index is consumed only by an EMITTED segment: the consumer's ordered
             // drain waits for every index in sequence, so a discarded segment must not
             // burn one or the drain would stall on a number that never arrives.
             // Recordings stop in creation order, so emit order stays capture order.
-            try { this._segOpts.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
+            // The sink was captured at creation: teardown nulls `_segOpts` before a
+            // late `onstop` lands, and that used to drop the last segment silently.
+            try { recording.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
         }
         if (isFinal) this._finishSegmented();
     }
@@ -1480,6 +1767,9 @@ export class AudioCapture {
         current.action = discard ? "restart-discard" : "restart";
         current.evidence = this._snapshotSegmentEvidence();
         this._startSegmentRecorder();
+        // From here until the predecessor's `onstop`, both recorders capture the same
+        // audio — measured and reported so the seam can be trimmed after transcription.
+        if (this._segRec && this._segRec !== current) current.successorStartedAt = this._segRec.startedAt;
         try {
             if (current.rec.state !== "inactive") current.rec.stop();
             else this._finishSegmentRecording(current);
@@ -1490,13 +1780,22 @@ export class AudioCapture {
         // window may close without splitting a word. The window length only REQUESTS
         // a rotation; it is taken here.
         if (this._windowWantRotate) this._rotateArchive();
+        // Released HERE, not inside _startSegmentRecorder: a worklet message landing
+        // between the successor's start and the predecessor's stop must not evaluate
+        // cut conditions against counters that were just reset.
+        if (this._segmented) this._cutting = false;
     }
 
     /** Persistent VAD/level loop for a continuous session (survives segment cuts). */
     private _armSegmentedVad(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void, turnSilenceMs = 0, onTurnIdle?: () => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
         this._segEvidenceTracked = false;
         const setup = this._createAnalyser();
-        if (!setup) return;
+        if (!setup) {
+            // No analyser ⇒ no speech evidence for the whole session: every segment
+            // degrades open and is uploaded, silence included. Worth a warning.
+            this._reportDeviceError(new Error("no audio analyser: speech evidence untracked"));
+            return;
+        }
         const {analyser, buf} = setup;
         this._segEvidenceTracked = true;
         this._lastVadTickAt = 0;
@@ -1571,7 +1870,7 @@ export class AudioCapture {
             if (onTurnIdle && turnSilenceMs > 0 && heardAnySpeech && !turnIdleFired
                 && (now - lastSpeechAt) >= turnSilenceMs) {
                 turnIdleFired = true;
-                if (this._vadDebug) console.log("[speech-to-text] turn idle");
+                APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug("turn idle");
                 try { onTurnIdle(); } catch (_e) { /* consumer error is theirs */ }
             }
 
@@ -1589,6 +1888,8 @@ export class AudioCapture {
                     // Credit the withheld onset run-up on the transition frame so
                     // a short word ("okay") isn't undercounted below minVoicedMs.
                     this._segVoicedMs += (!this._segHeardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
+                    if (!this._segFirstSpeechAt) this._segFirstSpeechAt = speechRunStart || now;
+                    this._segLastSpeechAt = now;
                     this._segHeardSpeech = true;
                     this._segSilentSince = 0;
                 } else if (this._segHeardSpeech) {
@@ -1596,12 +1897,12 @@ export class AudioCapture {
                     else {
                         const silentFor = now - this._segSilentSince;
                         if (silentFor >= silenceMs) {
-                            if (this._vadDebug) console.log("[speech-to-text] cut: trailing-silence", {noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen});
+                            if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: trailing-silence");
                             this._cutSegment(false);
                         } else if (this._segWantCut && silentFor >= SOFT_CUT_SILENCE_MS) {
                             // Duration cap elapsed mid-monologue: take the first real
                             // word gap rather than slicing through a word.
-                            if (this._vadDebug) console.log("[speech-to-text] cut: duration cap at word gap", {silentFor, voicedMs: this._segVoicedMs});
+                            if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({silentFor, voicedMs: this._segVoicedMs}, "cut: duration cap at word gap");
                             this._cutSegment(false);
                         }
                     }
@@ -1610,7 +1911,7 @@ export class AudioCapture {
                     // an unbounded silent blob. In fail-open mode the blob is
                     // emitted (VAD only labels); otherwise it enters the
                     // discard/probe policy in onstop.
-                    if (this._vadDebug) console.log("[speech-to-text] cut: onset-timeout", {noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen});
+                    if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: onset-timeout");
                     this._cutSegment(this._segFailOpen ? false : true);
                 }
             }
@@ -1692,7 +1993,6 @@ export class AudioCapture {
         if (this._aliveTimer) { clearInterval(this._aliveTimer); this._aliveTimer = null; }
         this._onAlive = null;
         this._restartLevelClock = null;
-        if (this._silenceTimer) { clearTimeout(this._silenceTimer); this._silenceTimer = null; }
         this._clearSegmentTimers();
         if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
         if (this._workletNode) {
@@ -1706,9 +2006,18 @@ export class AudioCapture {
         }
         try { this._audioCtx?.close(); } catch (_e) { /* ignore */ }
         this._audioCtx = null;
-        try { this._stream?.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
+        this._detachTrack?.();
+        // The tracks are released only once the archive's final flush has landed.
+        // `stop()`/`requestData()` above merely QUEUE that flush; stopping the source
+        // track in the same turn truncated the last timeslice of every dictation and,
+        // in some browsers, lost the final `onstop` altogether. Bounded by the settle
+        // timeout, so a flush that never lands still releases the microphone.
+        const stream = this._stream;
         this._stream = null;
         this._recorder = null;
         this._onDeviceError = undefined;
+        const release = () => { try { stream?.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ } };
+        if (stream && this._archiveSealPending) this.whenArchiveSettled().then(release, release);
+        else release();
     }
 }
