@@ -407,15 +407,6 @@ export const viewerMenuMethods = {
             };
         }
 
-        let measurementsItem = null;
-        if (active && typeof this.showMeasurementsPopover === 'function') {
-            measurementsItem = {
-                title: 'View measurements',
-                icon: 'ph-chart-bar-horizontal',
-                action: () => this.showMeasurementsPopover(active),
-            };
-        }
-
         // Group — "From selection (N)" plus criterion-based grouping that
         // used to live on the board panel's right-click menu. Both paths
         // funnel into layer-based grouping (annotations move into a layer;
@@ -512,7 +503,6 @@ export const viewerMenuMethods = {
             if (groupParent) children.push(groupParent);
             if (zOrderItems) children.push(...zOrderItems);
             if (privateItem) children.push(privateItem);
-            if (measurementsItem) children.push(measurementsItem);
             return [{ title: 'Annotation', icon: 'ph-shapes', children }];
         }
 
@@ -539,7 +529,6 @@ export const viewerMenuMethods = {
             actions.push({ title: 'Modify annotation:' });
             actions.push(privateItem);
         }
-        if (measurementsItem) actions.push(measurementsItem);
         return actions;
     },
 

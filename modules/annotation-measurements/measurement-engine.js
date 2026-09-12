@@ -52,10 +52,21 @@
 
     // A measurement is identified by (source, channel) so the same annotation
     // can cache background-raw-L alongside rendered-G without collision.
+    /**
+     * The channel a config actually measures. One definition, because the three
+     * call sites used to disagree: the projection fell back to 'L' while the
+     * result was reported as 'V' and the cache slot keyed on 'L' again — so a
+     * call without an explicit channel (scripting `measure()`) sampled luminance
+     * and labelled it Value.
+     */
+    const DEFAULT_CHANNEL = 'V';
+    function channelOf(cfg) {
+        return cfg?.channel || DEFAULT_CHANNEL;
+    }
+
     function slotKey(cfg) {
         const source = cfg?.source === 'rendered' ? 'rendered' : 'background-raw';
-        const channel = cfg?.channel || 'L';
-        return `${source}:${channel}`;
+        return `${source}:${channelOf(cfg)}`;
     }
 
     /**
@@ -146,16 +157,35 @@
             return NS.geometry.areaRatioAgainstSet(this._annots(), numerator, denominators);
         }
 
+        /** Summed area ÷ summed area. The form that makes a ratio swappable. */
+        areaRatioBetweenSets(viewer, numerators, denominators) {
+            return NS.geometry.areaRatioBetweenSets(this._annots(), numerators, denominators);
+        }
+
+        /** Closest approach between two sets, in px + µm. */
+        nearestDistanceBetweenSets(viewer, fromObjects, targets) {
+            const res = NS.geometry.nearestDistanceBetweenSets(this._annots(), fromObjects, targets);
+            if (!res) return null;
+            const conv = NS.geometry.unitConverter(viewer);
+            res.distanceUm = conv.lengthImagePxToUm(res.distancePx);
+            res.distanceLabel = conv.formatLength(res.distancePx);
+            return res;
+        }
+
         /** per-preset area breakdown of annotations contained in `parent`. */
         composition(viewer, parent, candidates, presetLabelOf) {
             const res = NS.geometry.presetComposition(this._annots(), parent, candidates, presetLabelOf);
             if (!res) return null;
             const conv = NS.geometry.unitConverter(viewer);
             res.parentAreaUm2 = conv.areaImagePxToUm2(res.parentAreaPx);
-            for (const row of res.rows) {
+            // One unit across the breakdown: these rows are read against each other,
+            // so a per-row prefix would make the smallest class look comparable to
+            // the largest.
+            const labels = conv.formatAreaSeries(res.rows.map((row) => row.areaPx));
+            res.rows.forEach((row, i) => {
                 row.areaUm2 = conv.areaImagePxToUm2(row.areaPx);
-                row.areaLabel = conv.formatArea(row.areaPx);
-            }
+                row.areaLabel = labels[i];
+            });
             return res;
         }
 
@@ -226,7 +256,7 @@
             }
             if (covered === 0) return { reason: 'no-coverage' };
 
-            const intensities = NS.sampler.projectChannel(rgba, cfg?.channel || 'L');
+            const intensities = NS.sampler.projectChannel(rgba, channelOf(cfg));
             return {
                 bbox,
                 width: w,
@@ -260,7 +290,7 @@
             const threshold = this._resolveThreshold(cfg, arr);
             return {
                 source: s.source,
-                channel: cfg?.channel || 'V',
+                channel: channelOf(cfg),
                 pixelCount: arr.length,
                 mean: NS.stats.mean(arr),
                 median: NS.stats.median(arr),
@@ -309,7 +339,7 @@
 
             return {
                 source: s.source,
-                channel: cfg?.channel || 'L',
+                channel: channelOf(cfg),
                 threshold,
                 count: stats.count,
                 meanAreaPx: stats.meanArea,
@@ -503,6 +533,17 @@
         cancelActiveRun() {
             this._activeController?.abort();
             this._activeController = null;
+        }
+
+        /**
+         * The annotation objects a scope stands for. Public because the UI needs
+         * exactly this list to render a table before anything has been sampled.
+         * @param {OpenSeadragon.Viewer} viewer
+         * @param {{kind: 'list'|'preset'|'selection'|'visible'|'all', list?: object[], presetID?: any}} scope
+         * @return {fabric.Object[]}
+         */
+        collectScope(viewer, scope) {
+            return this._collectScope(viewer, scope);
         }
 
         _collectScope(viewer, scope) {

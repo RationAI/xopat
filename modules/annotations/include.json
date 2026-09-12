@@ -12,6 +12,11 @@
         "ext/rbush.min.js",
         "scripting/read.scripts.js",
         "scripting/write.scripts.js",
+        "objects.js",
+        "objectGenericFactories.js",
+        "objectAdvancedFactories.js",
+        "presets.js",
+        "freeFormTool.js",
         "spatial-index.js",
         "annotations-canvas.js",
         "convert/convertor.js",
@@ -21,12 +26,7 @@
         "convert/qupath.js",
         "magic-wand.js",
         "viewport-segmentation.js",
-        "fixed-area-mode.js",
-        "presets.js",
-        "objects.js",
-        "objectGenericFactories.js",
-        "objectAdvancedFactories.js",
-        "freeFormTool.js"
+        "fixed-area-mode.js"
     ],
     "requires": ["fabricjs"],
     // Generic IO pipeline declarations. Bundle-* covers the legacy

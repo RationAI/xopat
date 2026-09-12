@@ -19,7 +19,10 @@
     "noData": "There is no data to annotate!",
     "noPreset": "Select a preset to annotate!",
     "noOverlays": "There are no overlays to segment!",
-    "noVisualizationLayer": "No visualization layer to segment from. Toggle one on, or load a visualization."
+    "noVisualizationLayer": "No visualization layer to segment from. Toggle one on, or load a visualization.",
+    "coversViewport": "The detected region fills the whole viewport, so it was not selected.",
+    "nothingHere": "Nothing to select here — no overlay was detected at this spot.",
+    "snapshotFailed": "Could not read the overlay to select from. Try moving the view slightly."
   },
   "modeOptions": {
     "magicWand": {

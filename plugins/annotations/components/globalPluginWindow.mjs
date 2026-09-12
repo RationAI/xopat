@@ -188,16 +188,6 @@ export const globalPluginWindowMethods = {
                 })
             );
 
-            // Measurements is a utility window, not a drawing control — it lives
-            // in the app-bar Tools category, not the annotation toolbar.
-            USER_INTERFACE.AppBar.Tools.register('annotations.measurements', {
-                section: 'annotations',
-                sectionTitle: this.t('annotations.toolbar.title'),
-                icon: 'ph-chart-bar-horizontal',
-                label: this.t('annotations.toolbar.measurements'),
-                onClick: () => this.showMeasurementsWindow()
-            });
-
             const factories = this._allowedFactories
                 .map((factoryId) => this.context.getAnnotationObjectFactory(factoryId))
                 .filter(Boolean);
@@ -205,8 +195,9 @@ export const globalPluginWindowMethods = {
             const gModes = new ui.ToolbarGroup({
                 itemID: 'g-modes',
                 selectable: true,
-                defaultSelected: modes.AUTO.getId(),
-                extraClasses: { padding: 'mx-2' }
+                defaultSelected: modes.AUTO.getId()
+                // no extra padding: the group renders as its own pill and the
+                // ToolbarSeparators already carry the spacing
             });
 
             new ui.ToolbarItem({

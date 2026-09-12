@@ -3,6 +3,13 @@
 
     const NS = global.AnnotationMeasurements = global.AnnotationMeasurements || {};
 
+    /**
+     * Redraws allowed while the renderer reports an incomplete frame. A cold drawer
+     * needs a frame boundary or two; beyond that the region genuinely has no tiles
+     * and the sample is refused rather than measured.
+     */
+    const DRAW_ATTEMPTS = 4;
+
     // Channel extraction. RGBA is Uint8Clamped; we project to a single
     // Float32Array in [0, 255]. Luminance uses Rec. 709 weights.
     function projectChannel(rgba, channel) {
@@ -104,9 +111,19 @@
     function imageMppPerPx(viewer) {
         const sb = viewer?.scalebar;
         if (!sb) return undefined;
-        // scalebar exposes micronsPerPixel via 1e6 / pixelsPerMeter; guard both.
-        if (typeof sb.imagePixelSizeOnScreen === 'function' && sb.pixelsPerMeter) {
-            return 1e6 / sb.pixelsPerMeter;
+        // An uncalibrated slide is given `pixelsPerMeter = 1` plus a px renderer
+        // (src/classes/app/scalebar-utilities.ts). `1` is truthy, so every naive guard
+        // reports one metre per pixel as a real calibration — that is where
+        // "1000000.000 µm/px" came from. There is no `isCalibrated` flag in the repo, so
+        // defer to the authority that already decides the on-canvas label: the scalebar
+        // renders `px` exactly when it has nothing physical to show.
+        if (typeof sb.lengthMetric === 'function' && sb.lengthMetric() === 'px') return undefined;
+        // `micronsPerPixel()` is the scalebar's own accessor for exactly this; prefer it
+        // over re-deriving 1e6/pixelsPerMeter so there is one definition of the slide
+        // scale. The fallback covers a scalebar built before that accessor existed.
+        if (typeof sb.micronsPerPixel === 'function') {
+            const mpp = sb.micronsPerPixel();
+            if (typeof mpp === 'number' && mpp > 0) return mpp;
         }
         if (typeof sb.pixelsPerMeter === 'number' && sb.pixelsPerMeter > 0) {
             return 1e6 / sb.pixelsPerMeter;
@@ -196,35 +213,51 @@
         const gl = renderer?.gl;
         if (!gl) return { rgba: null, reason: 'no-gl' };
 
+        // `drawWithConfiguration` reports the completeness of the frame it produced
+        // through `options.status`. Reading the pixels without consulting it is what
+        // produced the worst failure this module had: measure region A, then region
+        // B, and B came back holding A's pixels — the same count, the same two
+        // values, entirely plausible and entirely wrong. Both bad reads carried
+        // `fullyLoaded: false`; the correct one carried `true`. So the signal was
+        // always there, and only the caller was missing.
         const drawOnce = async () => {
+            const status = {};
             // Off-screen canvas is not auto-cleared between draws; transparent
             // areas would otherwise leak the previous frame (same fix as
             // viewport-segmentation.js / magic-wand.js). Dropping the cached
             // first-pass forces a re-steal of the live viewer's textures.
             renderer.__firstPassResult = null;
             gl.clear(gl.COLOR_BUFFER_BIT);
-            await drawer.drawWithConfiguration(viewer.world._items, config, view, { x: w, y: h });
+            await drawer.drawWithConfiguration(viewer.world._items, config, view, { x: w, y: h }, { status });
             const buf = new Uint8Array(w * h * 4);
             gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
             gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-            return buf;
+            return { buf, status };
         };
 
-        let data;
+        /** A frame is usable only when it is complete AND something was painted. */
+        const usable = (attempt) => attempt.status.fullyLoaded && hasCoverage(attempt.buf);
+
+        let attempt;
         try {
-            data = await drawOnce();
-            // Cold-drawer first render can land before the background textures
-            // are ready, yielding an all-transparent frame (the "first run gives
-            // different numbers" symptom). If nothing was painted, settle a
-            // frame and redraw once.
-            if (!hasCoverage(data) && !opts.signal?.aborted) {
+            attempt = await drawOnce();
+            // A cold drawer needs a frame boundary to settle; retrying in a tight
+            // loop does not help, which is why this waits between tries.
+            for (let i = 0; i < DRAW_ATTEMPTS && !usable(attempt) && !opts.signal?.aborted; i++) {
                 await new Promise((r) => (global.requestAnimationFrame || setTimeout)(r, 16));
                 try { image.update?.(true); } catch (e) { /* best effort */ }
-                data = await drawOnce();
+                attempt = await drawOnce();
             }
         } catch (e) {
             return { rgba: null, reason: (e && e.message) || 'render-failed' };
         }
+        if (opts.signal?.aborted) return { rgba: null, reason: 'aborted' };
+        // Refuse rather than measure a frame the renderer says is incomplete: a
+        // wrong number here is indistinguishable from a right one.
+        if (!attempt.status.fullyLoaded) {
+            return { rgba: null, reason: attempt.status.stalled ? 'render-stalled' : 'not-fully-loaded' };
+        }
+        const data = attempt.buf;
 
         // GL origin is bottom-left; flip to top-left raster order so mask and
         // sample indices agree.

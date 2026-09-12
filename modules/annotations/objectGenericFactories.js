@@ -74,7 +74,11 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getArea(theObject) {
-        return theObject.width * theObject.height;
+        // `width`/`height` are the UNtransformed dimensions; a rect being resized by
+        // a corner handle carries the change in `scaleX`/`scaleY` until `recalculate`
+        // folds it back in, and an imported rect can carry one permanently.
+        return theObject.width * theObject.height
+            * OSDAnnotations.PolygonUtilities.transformScale(theObject);
     }
 
     exportsGeometry() {
@@ -191,21 +195,23 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        let w = obj.width, h = obj.height;
-        if (digits !== undefined) {
-            return [
-                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
-                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
-                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits))),
-                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits)))
+        const w = obj.width, h = obj.height;
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        // Fabric's local space is centred on the object's origin, so the corners are
+        // ±w/2, ±h/2 and the matrix places them — carrying scale, rotation, flip and
+        // the origin convention with it. Without a matrix `left/top` already are the
+        // top-left corner and this is exactly what it always was.
+        const corners = m
+            ? [{x: -w / 2, y: -h / 2}, {x: w / 2, y: -h / 2}, {x: w / 2, y: h / 2}, {x: -w / 2, y: h / 2}]
+                .map(p => U.absolutePoint(obj, p, m))
+            : [
+                {x: obj.left, y: obj.top},
+                {x: obj.left + w, y: obj.top},
+                {x: obj.left + w, y: obj.top + h},
+                {x: obj.left, y: obj.top + h},
             ];
-        }
-        return [
-            converter(obj.left, obj.top),
-            converter(obj.left + w, obj.top),
-            converter(obj.left + w, obj.top + h),
-            converter(obj.left, obj.top + h)
-        ];
+        return this._emitPoints(corners, converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -338,7 +344,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getArea(theObject) {
-        return Math.PI * theObject.rx * theObject.ry;
+        // Analytic and exact; the transform only rescales it. Rotation leaves an
+        // ellipse's area alone, which the determinant expresses for free.
+        return Math.PI * theObject.rx * theObject.ry
+            * OSDAnnotations.PolygonUtilities.transformScale(theObject);
     }
 
     edit(theObject) {
@@ -514,37 +523,45 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
                 + (29 * pow6e / 6144) * Math.sin(6 * t),
                 x,y;
             if (reversed) {
-                x = ry * Math.sin(param) + obj.left + ry;
-                y = rx * Math.cos(param) + obj.top + rx;
+                x = ry * Math.sin(param);
+                y = rx * Math.cos(param);
             } else {
-                x = rx * Math.cos(param) + obj.left + rx;
-                y = ry * Math.sin(param) + obj.top + ry;
+                x = rx * Math.cos(param);
+                y = ry * Math.sin(param);
             }
-
-            const angle = (obj.angle || 0) * Math.PI / 180;
-            if (angle !== 0) {
-                const cx = obj.left + obj.rx;
-                const cy = obj.top + obj.ry;
-                const dx = x - cx;
-                const dy = y - cy;
-                const cos = Math.cos(angle);
-                const sin = Math.sin(angle);
-                const rxp = cx + dx * cos - dy * sin;
-                const ryp = cy + dx * sin + dy * cos;
-                x = rxp;
-                y = ryp;
-            }
-
-            points.push(
-                digits === undefined
-                    ? converter(x, y)
-                    : converter(
-                        parseFloat(Number(x).toFixed(digits)),
-                        parseFloat(Number(y).toFixed(digits))
-                    )
-            );
+            // Centre-relative; placed below. The hand-rolled rotate-about-centre that
+            // used to live here is gone: the object matrix already carries the angle,
+            // and it carries scale and flip too, which this never did.
+            points.push({x, y});
         }
-        return points;
+
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        if (m) {
+            // Samples are already centre-relative, i.e. fabric's local space — the
+            // matrix places them, carrying angle, scale and flip. The hand-rolled
+            // rotate-about-centre that used to live here only ever did the angle.
+            return this._emitPoints(
+                points.map(p => U.absolutePoint(obj, p, m)), converter, digits);
+        }
+
+        // No matrix (a plain literal): place and rotate the way this always did,
+        // keeping the previous centre exactly, `reversed` axis swap included.
+        const placed = points.map(p => ({
+            x: p.x + obj.left + (reversed ? ry : rx),
+            y: p.y + obj.top + (reversed ? rx : ry),
+        }));
+        if ((obj.angle || 0) !== 0) {
+            const angle = (obj.angle || 0) * Math.PI / 180;
+            const cx = obj.left + obj.rx, cy = obj.top + obj.ry;
+            const cos = Math.cos(angle), sin = Math.sin(angle);
+            for (const p of placed) {
+                const dx = p.x - cx, dy = p.y - cy;
+                p.x = cx + dx * cos - dy * sin;
+                p.y = cy + dx * sin + dy * cos;
+            }
+        }
+        return this._emitPoints(placed, converter, digits);
     }
 
     /**
@@ -1186,7 +1203,11 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     getArea(theObject) {
-        return OSDAnnotations.PolygonUtilities.polygonArea(theObject.points);
+        // Shoelace over the TRANSFORMED ring rather than the raw one. Equivalent to
+        // multiplying by the determinant, but stated once and in the same terms as
+        // `toPointArray`, so the area and the outline cannot drift apart.
+        return OSDAnnotations.PolygonUtilities.polygonArea(
+            OSDAnnotations.PolygonUtilities.absolutePoints(theObject, theObject.points));
     }
 
     edit(theObject) {
@@ -1494,19 +1515,10 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     toPointArray(obj, converter, digits=undefined, quality=1) {
         let points = obj.points;
         if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, this._context.viewer.scalebar.imagePixelSizeOnScreen(), quality);
-
-        //we already have object points, convert only if necessary
-        if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
-            if (digits !== undefined) {
-                return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
-                    parseFloat(Number(p.y).toFixed(digits))));
-            }
-            return points.map(p => converter(p.x, p.y));
-        } else if (digits !== undefined) {
-            return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
-                parseFloat(Number(p.y).toFixed(digits))));
-        }
-        return points;
+        // Points are stored absolute, so this is the identity while the object is
+        // unscaled and unrotated — and the only correct answer once it is not.
+        return this._emitPoints(
+            OSDAnnotations.PolygonUtilities.absolutePoints(obj, points), converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -1604,7 +1616,14 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getLength(theObject) {
-        return Math.hypot(theObject.x1 - theObject.x2, theObject.y1 - theObject.y2);
+        // Endpoints first, THEN the distance. A length cannot be scaled by a single
+        // factor the way an area can: under an anisotropic transform a diagonal
+        // grows by neither scaleX nor scaleY.
+        const [a, b] = OSDAnnotations.PolygonUtilities.absolutePoints(theObject, [
+            {x: theObject.x1, y: theObject.y1},
+            {x: theObject.x2, y: theObject.y2},
+        ]);
+        return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
@@ -1801,16 +1820,14 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        if (digits !== undefined) {
-            return [
-                converter(parseFloat(Number(obj.x1).toFixed(digits)), parseFloat(Number(obj.y1).toFixed(digits))),
-                converter(parseFloat(Number(obj.x2).toFixed(digits)), parseFloat(Number(obj.y2).toFixed(digits))),
-            ];
-        }
-        return [
-            converter(obj.x1, obj.y1),
-            converter(obj.x2, obj.y2),
-        ];
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        // A fabric Line keeps x1..y2 centre-relative in its local space, exactly like
+        // a polygon's points relative to pathOffset — so the same mapping applies.
+        const ends = m
+            ? U.absolutePoints(obj, [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}])
+            : [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}];
+        return this._emitPoints(ends, converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -1919,10 +1936,13 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return undefined;
     }
 
-    // Sum of segment lengths between consecutive points.
+    // Sum of segment lengths between consecutive points, measured after the
+    // transform: each segment stretches by its own amount under an anisotropic
+    // scale, so summing raw lengths and scaling the total is wrong.
     getLength(theObject) {
-        const points = theObject?.points;
-        if (!Array.isArray(points) || points.length < 2) return undefined;
+        const raw = theObject?.points;
+        if (!Array.isArray(raw) || raw.length < 2) return undefined;
+        const points = OSDAnnotations.PolygonUtilities.absolutePoints(theObject, raw);
         let total = 0;
         for (let i = 1; i < points.length; i++) {
             const dx = points[i].x - points[i - 1].x;
@@ -2263,10 +2283,15 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getArea(theObject) {
-        let area = this._polygonFactory.getArea({points: theObject.points[0]});
+        // Each ring is transformed by the MULTIPOLYGON's matrix — the per-ring
+        // `{points: …}` literals handed to the polygon factory carry none of their
+        // own, so the transform has to be applied here or it is lost entirely.
+        const U = OSDAnnotations.PolygonUtilities;
+        const ring = (i) => U.absolutePoints(theObject, theObject.points[i]);
 
+        let area = U.polygonArea(ring(0));
         for (let i = 1; i < theObject.points.length; i++) {
-            area -= this._polygonFactory.getArea({points: theObject.points[i]});
+            area -= U.polygonArea(ring(i));
         }
         return area;
     }
@@ -2276,7 +2301,10 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         let result = [];
 
         for (let i = 0; i < obj.points.length; i++) {
-            polygon = {"points": obj.points[i]};
+            // Transform HERE: the per-ring `{points: …}` literal handed to the polygon
+            // factory carries no matrix of its own, so the multipolygon's transform
+            // would otherwise be dropped for every ring.
+            polygon = {"points": OSDAnnotations.PolygonUtilities.absolutePoints(obj, obj.points[i])};
             let newPoints = this._polygonFactory.toPointArray(polygon, converter, digits, quality);
             result.push(newPoints);
         }

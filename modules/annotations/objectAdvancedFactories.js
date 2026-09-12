@@ -601,6 +601,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         // asks for a length (e.g. the annotation board row renderer).
         const line = theObject?.item?.(0);
         if (!line) return undefined;
+        // NO transform here, deliberately. The shaft endpoints are stored ABSOLUTE on
+        // the child (see `configure` and the note in `toPointArray`); applying the
+        // group matrix would double-count the centre, which is the bug that made
+        // every exported arrow land at ~2x its real position. An arrow is also
+        // `isEditable() === false`, so it never acquires a scale of its own.
         return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
     }
 

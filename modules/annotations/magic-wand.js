@@ -84,6 +84,13 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             return;
         }
 
+        // Hovering stays silent - a tool that detects on every pointer move
+        // cannot talk. The click is where the user asks for a result, so it is
+        // the only place a refusal is worth explaining.
+        if (!this.result && this._droppedCovering) {
+            Dialogs.show($.t('autoSelect.coversViewport', { ns: 'annotations' }), 4000, Dialogs.MSG_INFO);
+        }
+
         this._allowCreation = true;
         this.context.fabric.clearAnnotationSelection(true);
         this._isLeft = isLeftClick;
@@ -241,6 +248,12 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         if (largest && OSDAnnotations.PolygonUtilities.coversViewport(
             largest, this.data.width, this.data.height)) {
             largest = null;
+            // Remembered so a click can explain the refusal. On screen this is
+            // indistinguishable from "found nothing", which is what made the
+            // drop feel like a broken tool rather than a deliberate one.
+            this._droppedCovering = true;
+        } else {
+            this._droppedCovering = false;
         }
 
         const factory = this.context.getAnnotationObjectFactory("polygon");

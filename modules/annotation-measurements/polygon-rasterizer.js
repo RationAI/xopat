@@ -40,7 +40,7 @@
      * Rasterize a fabric polygon-like annotation into a binary mask.
      * - bbox: {x, y, width, height} in slide px (typically from annotationBboxImagePx)
      * - downscale: ≥1 (output px = slide px / downscale)
-     * Returns { mask: Uint8Array (0 / 255 in alpha), width, height, downscale }
+     * Returns { mask: Uint8Array (1 inside / 0 outside), width, height, downscale }
      * or null when the shape is not rasterizable.
      */
     function rasterizePolygonMask(object, bbox, downscale) {
@@ -55,6 +55,37 @@
      * dimensions (which may have been shrunk to satisfy the pixel cap),
      * eliminating the old 1-px mask/sample realignment hack.
      */
+    /**
+     * The shape's outline(s) in image coordinates, via its factory.
+     *
+     * This is the same call `geometry-metrics.ringsForObject` makes, and using it
+     * here is the point: the mask and the geometry now come from one source and
+     * cannot disagree. It replaces per-shape sniffing that drew everything
+     * axis-aligned — the rect branch ignored `angle`, the ellipse branch passed a
+     * hard-coded rotation of 0, and multipolygon fell into the polygon branch and
+     * read `.x` off an array of rings, producing NaN coordinates.
+     *
+     * @return {Array<Array<{x,y}>>|null} one ring per sub-path (outer first)
+     */
+    function outlineRings(object) {
+        const annotations = global.OSDAnnotations?.instance?.();
+        const factory = annotations?.getAnnotationObjectFactory?.(object?.factoryID);
+        if (!factory || typeof factory.toPointArray !== 'function') return null;
+
+        let pts;
+        try {
+            pts = factory.toPointArray(
+                object, global.OSDAnnotations.AnnotationObjectFactory.withObjectPoint, undefined, 1);
+        } catch (e) {
+            return null;
+        }
+        if (!Array.isArray(pts) || !pts.length) return null;
+        // Multipolygon answers with rings-of-rings; everything else with one ring.
+        const rings = Array.isArray(pts[0]) ? pts : [pts];
+        const usable = rings.filter(r => Array.isArray(r) && r.length >= 3);
+        return usable.length ? usable : null;
+    }
+
     function rasterizePolygonMaskAt(object, bbox, w, h) {
         if (!object || !bbox || !(bbox.width > 0) || !(bbox.height > 0)) return null;
         w = Math.max(1, w | 0);
@@ -77,41 +108,18 @@
         const mapY = (y) => (y - bbox.y) * syMap;
         const downscale = bbox.width / w;
 
-        let drew = false;
-        if (Array.isArray(object.points) && object.points.length) {
-            // Polygon / polyline. fabric's points are relative to pathOffset; we
-            // honor the object-level transform by adding object.left / top first.
-            const ox = (object.left || 0) - (object.pathOffset?.x || 0) * (object.scaleX || 1);
-            const oy = (object.top || 0) - (object.pathOffset?.y || 0) * (object.scaleY || 1);
-            const sx = object.scaleX || 1;
-            const sy = object.scaleY || 1;
-            const pts = object.points;
-            ctx.moveTo(mapX(ox + pts[0].x * sx), mapY(oy + pts[0].y * sy));
-            for (let i = 1; i < pts.length; i++) {
-                ctx.lineTo(mapX(ox + pts[i].x * sx), mapY(oy + pts[i].y * sy));
+        const rings = outlineRings(object);
+        if (!rings) return null;
+        for (const ring of rings) {
+            ctx.moveTo(mapX(ring[0].x), mapY(ring[0].y));
+            for (let i = 1; i < ring.length; i++) {
+                ctx.lineTo(mapX(ring[i].x), mapY(ring[i].y));
             }
             ctx.closePath();
-            drew = true;
-        } else if (object.type === 'rect') {
-            const x0 = mapX(object.left || 0);
-            const y0 = mapY(object.top || 0);
-            const ww = (object.width || 0) * (object.scaleX || 1) * sxMap;
-            const hh = (object.height || 0) * (object.scaleY || 1) * syMap;
-            ctx.rect(x0, y0, ww, hh);
-            drew = true;
-        } else if (object.type === 'ellipse' || object.type === 'circle') {
-            // rx/ry in slide px; center is left/top + slide-px radius.
-            const rxSlide = (object.rx ?? object.radius ?? 0) * (object.scaleX || 1);
-            const rySlide = (object.ry ?? object.radius ?? 0) * (object.scaleY || 1);
-            const cx = mapX((object.left || 0) + rxSlide);
-            const cy = mapY((object.top || 0) + rySlide);
-            if (typeof ctx.ellipse === 'function') {
-                ctx.ellipse(cx, cy, rxSlide * sxMap, rySlide * syMap, 0, 0, Math.PI * 2);
-                drew = true;
-            }
         }
 
-        if (!drew) return null;
+        // even-odd so a multipolygon's inner rings punch holes rather than filling
+        // them; with a single ring it is identical to nonzero.
         ctx.fill('evenodd');
 
         // Read back. We use the alpha channel as the mask: 255 inside, 0 outside.

@@ -6,8 +6,6 @@ import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
 import { quickDrawMethods } from './methods/quickDraw.mjs';
-import { MeasurementsWorkspace } from './components/measurementsWorkspace.mjs';
-import { MeasurementsPopover } from './components/measurementsPopover.mjs';
 
 /**
  * GUI/controller layer for the annotations module.
@@ -94,13 +92,13 @@ class AnnotationsGUI extends XOpatPlugin {
         this._refreshCommentsInterval = null;
     }
 
-    // `_pickAnnotationForContext` and `showMeasurementsPopover` remain
-    // public on the plugin so the unified canvas right-click menu (built
-    // in `methods/viewerMenu.mjs::_buildAnnotationContextActions`) can
-    // call them via `this`. The standalone `annotation-measurements`
-    // provider that used to live here was folded into that unified menu —
-    // a separate top-level entry would have been a third "Annotation"
-    // section alongside z-order and Change-preset/Copy/Cut/etc.
+    // `_pickAnnotationForContext` remains public on the plugin so the unified
+    // canvas right-click menu (built in
+    // `methods/viewerMenu.mjs::_buildAnnotationContextActions`) can call it via
+    // `this`. Measurements are no longer part of that menu: the
+    // `annotation-measurements` module owns its own UI end to end and registers
+    // its own provider, so measuring works in deployments that do not ship this
+    // plugin at all.
 
     _pickAnnotationForContext(fabric, ctx) {
         // Prefer single-selection scenarios so we don't have to do hit-testing.
@@ -125,18 +123,6 @@ class AnnotationsGUI extends XOpatPlugin {
             }
         }
         return null;
-    }
-
-    showMeasurementsPopover(annotation) {
-        if (!this._measurementsPopover) {
-            this._measurementsPopover = new MeasurementsPopover({
-                plugin: this,
-                annotations: this.context,
-                userInterface: USER_INTERFACE,
-                pluginId: this.id,
-            });
-        }
-        this._measurementsPopover.showFor(annotation);
     }
 
     async setupFromParams() {
@@ -244,17 +230,6 @@ class AnnotationsGUI extends XOpatPlugin {
         return true;
     }
 
-    showMeasurementsWindow() {
-        if (!this.measurementsWindow) {
-            this.measurementsWindow = new MeasurementsWorkspace({
-                plugin: this,
-                annotations: this.context,
-                userInterface: USER_INTERFACE,
-                pluginId: this.id
-            });
-        }
-        this.measurementsWindow.open();
-    }
 }
 
 AnnotationsGUI.annotationMenuIconOrder = ['private', 'locked', 'comments'];
@@ -263,7 +238,6 @@ AnnotationsGUI._isAnnotationMenuSorted = function(array) {
     return array.length === order.length && array.every((value, index) => value.includes(order[index]));
 };
 
-AnnotationsGUI.MeasurementsWorkspace = MeasurementsWorkspace;
 Object.assign(
     AnnotationsGUI.prototype,
     globalPluginWindowMethods,

@@ -1639,6 +1639,32 @@ OSDAnnotations.AnnotationObjectFactory = class {
     static fromArrayPoint(point) {
         return {x: point[0], y: point[1]};
     }
+
+    /**
+     * Hand an already-absolute ring to the caller in the shape it asked for.
+     *
+     * Every `toPointArray` override needs the same converter/rounding tail; keeping
+     * it here means an override only has to answer the interesting question — where
+     * this shape's outline actually is.
+     *
+     * Always returns a NEW array. The points-based override used to return the
+     * object's live `points` by reference, which made every caller a potential
+     * mutator of the annotation it was only trying to read.
+     *
+     * @param {Array<{x: number, y: number}>} points absolute image coordinates
+     * @param {function} converter `withObjectPoint` / `withArrayPoint` / custom
+     * @param {number} [digits] rounding, when the caller wants it
+     */
+    _emitPoints(points, converter, digits = undefined) {
+        const asObject = converter === OSDAnnotations.AnnotationObjectFactory.withObjectPoint;
+        const round = digits === undefined
+            ? (v) => v
+            : (v) => parseFloat(Number(v).toFixed(digits));
+        return (points || []).map(p => {
+            const x = round(p.x), y = round(p.y);
+            return asObject ? {x, y} : converter(x, y);
+        });
+    }
 };
 
 /**
@@ -1646,6 +1672,81 @@ OSDAnnotations.AnnotationObjectFactory = class {
  * todo move here stuff from magic wand code
  */
 OSDAnnotations.PolygonUtilities = {
+
+    /**
+     * The object's local→image transform, or `null` when it has none.
+     *
+     * A bare literal `{points: […]}` is a legitimate argument throughout this file
+     * (`Multipolygon.getArea` passes one per ring, and tests pass them everywhere),
+     * so "no matrix" means identity rather than an error.
+     *
+     * @param {fabric.Object|object} object
+     * @return {number[]|null} a fabric 6-element matrix, or null for identity
+     */
+    transformMatrixOf: function (object) {
+        if (!object || typeof object.calcTransformMatrix !== 'function') return null;
+        const m = object.calcTransformMatrix();
+        return Array.isArray(m) && m.length >= 6 ? m : null;
+    },
+
+    /**
+     * A local point in image coordinates, through the object's own transform.
+     *
+     * Fabric's matrix is the authority, and it must be used whole. It is tempting to
+     * apply only the linear part about the shape's geometric centre — that keeps
+     * `left`/`top` meaning what they look like they mean — but fabric rotates about
+     * the object's **origin**, which for these annotations is the top-left, not the
+     * centre. Anchoring anywhere else puts the outline in a different place from
+     * `getBoundingRect`, and the mask then measures pixels the annotation does not
+     * cover.
+     *
+     * The apparent half-stroke offset is not an error either: `left` is the outer
+     * edge of the stroke, and the painted path starts `strokeWidth / 2` inside it.
+     * The matrix agrees with `getBoundingRect` about that; a hand-rolled anchor does
+     * not.
+     *
+     * @param {fabric.Object|object} object
+     * @param {{x: number, y: number}} point in the object's local space
+     * @param {number[]} [matrix] hoisted out of a loop by the caller
+     */
+    absolutePoint: function (object, point, matrix) {
+        const m = matrix !== undefined ? matrix : this.transformMatrixOf(object);
+        if (!m) return {x: point.x, y: point.y};
+        return fabric.util.transformPoint({x: point.x, y: point.y}, m);
+    },
+
+    /**
+     * A points-based ring in image coordinates; always a new array.
+     *
+     * `points` are stored absolute (see `_syncPointGeometry`) and `pathOffset` is
+     * derived from them, so `M · (p − pathOffset)` reproduces `p` while the object
+     * is untransformed — today's behaviour is the identity case of this one.
+     */
+    absolutePoints: function (object, points) {
+        if (!Array.isArray(points)) return [];
+        const m = this.transformMatrixOf(object);
+        if (!m) return points.map(p => ({x: p.x, y: p.y}));
+        const offset = object.pathOffset || {x: 0, y: 0};
+        return points.map(p => this.absolutePoint(
+            object, {x: p.x - (offset.x || 0), y: p.y - (offset.y || 0)}, m));
+    },
+
+    /**
+     * How much the transform multiplies AREA: the absolute determinant of the
+     * matrix's linear part.
+     *
+     * Rotation cancels out of a determinant, which is exactly why area needs no
+     * angle term — and why `|scaleX · scaleY|` would have been enough if skew were
+     * impossible. Taking it from the matrix covers skew and flip for free.
+     *
+     * @return {number} 1 when the object carries no transform
+     */
+    transformScale: function (object) {
+        const m = this.transformMatrixOf(object);
+        if (!m) return 1;
+        const det = Math.abs(m[0] * m[3] - m[1] * m[2]);
+        return Number.isFinite(det) && det > 0 ? det : 1;
+    },
 
     intersectAABB: function (a, b) {
         const dx = a.x - b.x;
