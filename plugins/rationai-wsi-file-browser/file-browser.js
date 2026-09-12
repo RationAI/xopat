@@ -3,10 +3,34 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
         super(id);
 
         this.wsi_server = this.getStaticMeta('wsiService');
-        if (!this.wsi_server) {
-            console.warn('Wsi server not configured: exitting..');
+        // Judged once, here, and reported with the key and the value.
+        //
+        // A missing value used to say only "not configured", and an unusable one
+        // said nothing at all until `new URL()` threw `Invalid URL` per listing
+        // attempt — naming neither the setting nor its content. That cost real
+        // debugging time for a value that was simply corrupt: an `env/.env` line
+        // appended without a trailing newline resolved `<% WSI_PORT %>` to
+        // `9002"WSI_PORT=9002"`, so the base read
+        // `http://localhost:9002"WSI_PORT=9002"`. Printing the value makes that
+        // self-evident; a TypeError from a URL constructor does not.
+        const configured = typeof this.wsi_server === "string" ? this.wsi_server.trim() : "";
+        let baseIsValid = false;
+        if (configured) {
+            try {
+                new URL(configured);
+                baseIsValid = true;
+            } catch (e) {
+                baseIsValid = false;
+            }
+        }
+        if (!baseIsValid) {
+            console.warn(`[${id}] not starting: 'wsiService' must be an absolute URL, got ` +
+                `${JSON.stringify(this.wsi_server)}. Set it per deployment under ` +
+                `ENV.plugins["${id}"].wsiService.`);
             return;
         }
+        // Trailing slashes would double up against the `/v3/...` paths below.
+        this.wsi_server = configured.replace(/\/+$/, "");
 
         this.integrateWithPlugin("slide-info", async (info) => {
             this.slideMenu = info.menu;

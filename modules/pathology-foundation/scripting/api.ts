@@ -1426,21 +1426,33 @@ export function registerPathologyScriptingApi(): void {
          * Lives HERE and not in the module on purpose. That namespace is marked
          * `sensitive` and is deliberately withheld from the assistant's default grants so
          * it can be granted and revoked on its own; the module reaching it in-process
-         * would bypass that decision silently. The adapter is the layer that already owns
-         * consent, so it is the only layer allowed to touch it — and it never passes what
-         * it reads any further than {@link _matchVocabulary}.
+         * would bypass that decision silently. The adapter is the layer that owns the
+         * consent question, so it is the only layer allowed to touch it — and it never
+         * passes what it reads any further than {@link _matchVocabulary}.
+         *
+         * `getApi()` is the trusted main-thread path and does NOT check the namespace
+         * grant (only the worker dispatcher does), so the synthetic context must carry the
+         * caller's own policy rather than inventing an unconstrained one. Callers gate on
+         * {@link XOpatScriptingApi.mayExposeSensitive} BEFORE getting here; forwarding the
+         * hooks is what keeps that true for anything the patient namespace masks itself.
          */
         _patientApiForActiveViewer(): any {
             const manager = (globalThis as any).APPLICATION_CONTEXT?.Scripting;
             const base = manager?.getApi?.("patient");
             if (!base?.bindInvocationContext) return null;
             const uid = this.activeViewer?.uniqueId;
+            const host: any = this._invocationContext?.scriptingContext;
             return base.bindInvocationContext({
                 scriptingContext: {
                     id: `__pathology_context_${uid}__`,
                     getActiveViewerContextId: () => uid,
                     activeViewerContextId: uid,
                     isConsentDialogBypassed: () => false,
+                    mayExposeSensitiveData: () => host?.mayExposeSensitiveData?.() ?? true,
+                    toPresentedViewerId: (id: string) => host?.toPresentedViewerId?.(id) ?? id,
+                    toInternalViewerId: (id: string) => host?.toInternalViewerId?.(id) ?? id,
+                    presentViewerName: (realId: string, name: string | null | undefined) =>
+                        host?.presentViewerName?.(realId, name) ?? name ?? null,
                 },
             });
         }
@@ -1490,12 +1502,19 @@ export function registerPathologyScriptingApi(): void {
         /**
          * Derive stain/site from patient-sensitive sources through a closed vocabulary.
          *
-         * The safety property is that this function can only ever EMIT a `label` from the
-         * configured vocabulary. Unmatched text is not sanitized or truncated — it is never
-         * emitted at all, so identifiers in a file name cannot leak no matter how the
-         * vocabulary grows. Nothing read here is returned raw.
+         * The closed vocabulary bounds WHAT can be emitted — only a configured `label`, never
+         * the text it was matched in — but it does not answer WHETHER anything may be. A
+         * specimen site read out of a file name is a clinical fact about a person, and a
+         * caller who revoked the `patient` namespace revoked exactly that; "lung" is as much
+         * withheld data as the path it came from. So the consent question is asked first, and
+         * a denied context derives nothing at all rather than deriving something narrow.
+         *
+         * `{source: "unknown"}` is not a failure: {@link _resolveContext} routes it into
+         * asking the user, which is the right outcome — state nothing, ask for both.
          */
         async _deriveContext(): Promise<any> {
+            if (!this.mayExposeSensitive) return { source: "unknown" };
+
             const patient = this._patientApiForActiveViewer();
             if (!patient) return { source: "unknown" };
 

@@ -286,6 +286,22 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     /**
+     * Identity of a ROW, as opposed to the identity of the background it shows.
+     *
+     * The flat catalog keys rows by their position (`bg-<i>`, `_flatCatalogItems`)
+     * and a custom browser by its own item id; both are unique within one listing,
+     * which `bg.id` is not — see the note in `_renderSlideCard`. Sanitized because
+     * the value ends up in DOM ids that `_applyToDOM` also resolves via
+     * `querySelector('#...')`, where a raw DICOM UID's dots would parse as a class
+     * selector.
+     * @private
+     */
+    _rowKey(item) {
+        const raw = item?.id ?? item?.__bgIndex;
+        return UTILITIES.sanitizeID(String(raw ?? "row"));
+    }
+
+    /**
      * Whether the given background has been visited (opened at least once). The
      * visited store is owned by the slide-info plugin; the menu only reads it.
      */
@@ -738,7 +754,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             })
             .map(({ b, i }) => ({
                 id: `bg-${i}`,
-                label: UTILITIES.nameFromBGOrIndex(b) ?? `Slide ${i + 1}`,
+                // No `??` fallback: the namer always returns a string (worst case
+                // its own "unknown"), so one would be dead code — and an English
+                // literal at that.
+                label: UTILITIES.nameFromBGOrIndex(b),
                 originalItem: b,
                 __bgIndex: i,
             }));
@@ -886,6 +905,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (!bg) return div({ class: "text-error text-xs", style: "pointer-events: none;" }, this._t("switcher.noConfig"));
 
         const id = bg.id;
+        // Background ids are NOT unique — an entry without an explicit `id`
+        // derives one from its data locator, so two entries on the same slide
+        // share it by design (one viewer identity, one IO scope). Open-state
+        // below is a background question and stays on `id`; everything that
+        // belongs to THIS ROW — its cache slots and its DOM ids — must use the
+        // row key instead, or the second row silently renders onto the first.
+        const rowKey = this._rowKey(item);
         const name = UTILITIES.nameFromBGOrIndex(bg);
         // Background identity, NOT data identity: a viewport shows THIS slide only
         // when its per-slot `uniqueId` equals this background id. `getViewerForConfig`
@@ -900,7 +926,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         // purged and does not include the w-*/h-* scale used here.
         const thumbClass = "block object-contain h-full w-full select-none pointer-events-none";
         const previewImage = img({
-            id: `${this.windowId}-thumb-${id}`,
+            id: `${this.windowId}-thumb-${rowKey}`,
             class: thumbClass,
             alt: name,
             draggable: "false",
@@ -913,9 +939,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             style: "width: 96px; height: 60px;"
         }, withImagery ? previewImage : null);
 
-        const labelImgId = `${this.windowId}-label-${id}`;
-        const labelWrapId = `${this.windowId}-lbl-${id}`;
-        const labelToggleId = `${this.windowId}-lbl-tog-${id}`;
+        const labelImgId = `${this.windowId}-label-${rowKey}`;
+        const labelWrapId = `${this.windowId}-lbl-${rowKey}`;
+        const labelToggleId = `${this.windowId}-lbl-tog-${rowKey}`;
         const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
         // Label image lives in the actions area. `transform: scale` on hover
@@ -973,15 +999,15 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 // opinion: falling back to the standard preview here is what keeps
                 // a card from rendering as an empty box whenever the custom hook
                 // has nothing for that particular item.
-                this._loadSlideComplementaryImage(this._cachedPreviews, async () =>
+                this._loadSlideComplementaryImage(this._cachedPreviews, rowKey, async () =>
                         await this._customItemPreviewNode(item)
                         ?? (usedViewer?.tools ? await usedViewer.tools.createImagePreview(bg) : null),
                     bg, thumb, previewImage, thumbClass, thumb);
             } else if (usedViewer?.tools) {
-                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass, thumb);
+                this._loadSlideComplementaryImage(this._cachedPreviews, rowKey, c => usedViewer.tools.createImagePreview(c), bg, thumb, previewImage, thumbClass, thumb);
             }
             if (usedViewer?.tools) {
-                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass, thumb);
+                this._loadAndRevealLabel(bg, rowKey, usedViewer, [labelWrap, labelToggle], labelImgId, labelImageClass, thumb);
             }
         }
 
@@ -1058,7 +1084,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         );
 
         return div({
-                id: `${this.windowId}-card-${id}`,
+                id: `${this.windowId}-card-${rowKey}`,
                 class: "flex items-center gap-2 w-full min-w-0 cursor-grab",
                 title: isOpen ? this._t("switcher.focusCardHint") : this._t("switcher.openCardHint"),
                 draggable: "true",
@@ -1247,9 +1273,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._observedThumbs?.delete(node);
     }
 
-    _loadAndRevealLabel(bg, viewer, revealEls, targetImgId, classes, observeNode = null) {
+    _loadAndRevealLabel(bg, key, viewer, revealEls, targetImgId, classes, observeNode = null) {
         const cache = this._cachedLabels;
-        const key = bg.id;
         const toReveal = Array.isArray(revealEls) ? revealEls : [revealEls];
 
         const apply = (node) => {
@@ -1327,9 +1352,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return node;
     }
 
-    _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses, observeNode = null) {
-        const cacheKey = bg.id;
-
+    _loadSlideComplementaryImage(cacheMap, cacheKey, method, bg, parentNode, replacedImageNode, imageClasses, observeNode = null) {
         if (cacheMap[cacheKey] instanceof HTMLElement) {
             this._applyToDOM(cacheMap[cacheKey], replacedImageNode, parentNode, imageClasses);
             return;

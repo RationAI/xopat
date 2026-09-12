@@ -270,5 +270,5 @@ test("an empty page stays falsy so the tab stays transient", { tag: ["@unit"] },
 
 test("a non-empty page is wrapped once and parsed", { tag: ["@unit"] }, () => {
     expect(builder()._pageBody(["<div>x</div>"]))
-        .toEqual(['<div class="w-full"><div>x</div></div>']);
+        .toEqual(['<div class="w-full px-2 py-1"><div>x</div></div>']);
 });

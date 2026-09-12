@@ -48,7 +48,21 @@ builder.buildMetaDataViewerMenu(config, sanitizeConfig);
 ```
 
 * `config`: an array of menu page specifications (see below), or a single one.
-* `sanitizeConfig`: `false` (no sanitization), `true` (default sanitize-html), or an object (custom sanitize-html config).
+* `sanitizeConfig`: the sanitization **policy** for raw `{type:"html"}` content — not a
+  switch. A page config may arrive with a session bundle, so "render it raw" cannot be one
+  of its choices.
+
+  | value | meaning |
+  |---|---|
+  | `false` / omitted | the module default allowlist (`AdvancedMenuPages.SANITIZE_DEFAULTS`) |
+  | `true` | identical to `false` |
+  | object | merged **over** the defaults, shallowly — this is how an operator widens the policy from `include.json` / ENV |
+
+  The merge is shallow because sanitize-html's own is: supplying `allowedAttributes`
+  replaces the whole map rather than extending it, so copy the key you are changing from
+  `SANITIZE_DEFAULTS` and edit that. Passing `allowedTags: false` disables the tag check
+  entirely — legitimate for an operator, and unreachable from a session, which is the
+  point of reading the policy from static meta (see `plugins/custom-pages`).
 
 Both consume the **same** page specification, so a caller can send the same config to
 either (or both) targets. For dynamic, viewer-dependent content in the viewer menu, use
@@ -60,10 +74,25 @@ returns a page spec.
 > `BaseComponent.parseDomNodes`) before handing it over. Passing the string on
 > would re-enter `BaseComponent.toNode`, whose *untrusted-text* renderer either
 > shows the markup as literal text (no `SanitizeHtml` loaded — it degrades closed)
-> or strips every attribute outside its own narrow allowlist, `id` included. That
-> is a second sanitize policy over content this module has already judged per
-> `sanitizeConfig`, and it breaks any page that fills a placeholder by id after
-> render. Keep the conversion here if you touch `_pageToViewerItem`.
+> or strips every attribute outside its own narrow allowlist, `id` included,
+> which breaks any page that fills a placeholder by id after render. Keep the
+> conversion here if you touch `_pageToViewerItem`.
+>
+> **What makes that safe is where the sanitization happens.** `parseDomNodes` does
+> not sanitize, so `renderUIFromJson` sanitizes where untrusted content *enters* —
+> never at the end, which would mangle the component markup the ids live on:
+>
+> | entry point | treatment |
+> |---|---|
+> | `{type:"html"}` | sanitized against `SANITIZE_DEFAULTS`, degrading **closed** to escaped text when `SanitizeHtml` is unavailable |
+> | a value interpolated into an attribute (`classes`) | HTML-**escaped**. Not a duplicate of sanitizing: sanitize-html escapes text with `escapeHtml(text, false)` and leaves `"` intact, so a sanitized string still breaks out of `class="…"` |
+> | `{type:"<Element>"}` | resolved against `JSON_ELEMENTS`; anything else renders nothing |
+> | component options and string children | untouched — van.js and `toNode` escape them, and sanitizing here only double-escaped every label |
+>
+> A page spec is *data*, so it may name a presentational element, never an
+> application shell. Without `JSON_ELEMENTS` the resolver reached the whole `UI`
+> namespace, including `UI.RawHtml` and `UI.StatusBar`, both of which `innerHTML`
+> their own input — script execution with no `{type:"html"}` node involved at all.
 
 ### Menu Page Specification
 
@@ -111,11 +140,38 @@ Arrange children into equal-width columns.
 
 #### `html`
 
-Inject raw HTML. Blocked in secure mode unless sanitization is enabled.
+Author-supplied markup, always filtered through the sanitization policy — there is no
+raw mode, and `secureMode` no longer changes anything here.
 
 ```json
-{ "type": "html", "html": "<b>Raw HTML</b>" }
+{ "type": "html", "html": "<b>Formatted text</b>" }
 ```
+
+The default allowlist is `HTML_ALLOWLIST` (`ui/classes/baseComponent.mjs`) widened by
+exactly two groups: `details`/`summary` (this module's collapse idiom) and inert
+text-structure tags (`figure`, `blockquote`, `dl`, `abbr`, `time`, …). Plus the `id`
+attribute, which is the placeholder contract this module is built around.
+
+Not allowed, and not oversights: `script`, `style`, `iframe`, `object`, `embed`, `form`
+and every form control; any `on*` attribute; the `style` attribute; the `data-*` glob
+(`data-action` drives delegated app handlers). Nor `svg` — `<foreignObject>`/`<animate>`
+are script surface, and htmlparser2 lowercases attribute names, so `viewBox` breaks
+without `parser: {lowerCaseAttributeNames: false}` anyway. An operator who needs inline
+SVG opts in explicitly:
+
+```json
+{ "sanitizeConfig": { "allowedTags": ["svg", "path", "…"], "parser": { "lowerCaseAttributeNames": false } } }
+```
+
+> **`id` caveat.** Allowing `id` on markup you do not control enables DOM clobbering of
+> another element's `getElementById` target — an integrity nuisance, not code execution.
+> A deployment that cares drops it by overriding `allowedAttributes`.
+
+If `sanitize-html` is not loaded the content degrades **closed**: it renders as escaped
+text, and a one-shot module load is requested so the degrade is temporary. The build
+entry points avoid the degraded first render by waiting for the module when — and only
+when — the config actually contains a `html` node (`AdvancedMenuPages.needsSanitizer`),
+so a placeholder-only page stays synchronous.
 
 #### `newline`
 
@@ -140,7 +196,11 @@ options; `children` is likewise consumed as child nodes, not an option.
 > styling instead, and reserve interactive components for code-built UIs (`buildViewerMenu`
 > getters, or `BaseComponent` directly).
 
-The mapping is forgiving:
+The mapping below is an **allowlist**, not a convenience table: a `type` outside it
+renders nothing at all. Name *matching* stays forgiving (exact, PascalCase, alias), but
+what a JSON page may instantiate does not — see `AdvancedMenuPages.JSON_ELEMENTS`.
+Anything else belongs in a code-built UI (`buildViewerMenu` getters, or `BaseComponent`
+directly), where the author is the deployment rather than the session.
 
 * `button` → `UI.Button`
 * `ph-icon`, `phicon`, `PhIcon` → `UI.PhIcon` (Phosphor — preferred for new code)
@@ -267,15 +327,15 @@ const json = {
   }
 };
 
-const html = builder.guessUIFromJson(json);
-
-builder._build([
-  {
-    title: "Auto UI",
-    page: [ { type: "html", html } ]
-  }
-], false);
+// Pick the strategy at construction; every build entry point then uses it.
+const builder = new AdvancedMenuPages(myPluginId, "guessUIFromJson");
+builder.buildMetaDataMenu([{ title: "Auto UI", page: [json] }]);
 ```
+
+> Do **not** round-trip the output back in as `{type:"html", html}`. That treats the
+> module's own component markup as author-supplied HTML and runs it through the
+> allowlist, which strips the ids and attributes the components need. Set the strategy
+> and hand over the data.
 
 ---
 
@@ -306,12 +366,7 @@ builder._build([
 
 ```js
 const data = { user: "Alice", active: true, roles: ["admin", "editor"] };
-const html = builder.guessUIFromJson(data);
 
-builder._build([
-  {
-    title: "User Info",
-    page: [ { type: "html", html } ]
-  }
-], false);
+const builder = new AdvancedMenuPages(myPluginId, "guessUIFromJson");
+builder.buildMetaDataMenu([{ title: "User Info", page: [data] }]);
 ```

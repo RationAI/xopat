@@ -7,14 +7,15 @@
  * `application.getGlobalInfo` and `application.setActiveViewer` do. A slide id is
  * free-form and routinely carries the case: `winter-school-prostate-prostate14_HE-mrxs`.
  *
- * `_slotInfo` returns `slot.viewerId` untouched, so one call re-introduces the real id
- * into a session where every other surface was anonymized — and any handle the model then
- * echoes back no longer joins to the same map. The `recorder` namespace refuses this
- * exact shortcut on purpose ("a raw `viewerId` param would leak viewer identity past the
- * anonymization layer"); the questionnaire namespace does not.
+ * `_slotInfo` used to return `slot.viewerId` untouched, so one call re-introduced the
+ * real id into a session where every other surface was anonymized — and any handle the
+ * model then echoed back no longer joined to the same map. The `recorder` namespace
+ * refuses this exact shortcut on purpose ("a raw `viewerId` param would leak viewer
+ * identity past the anonymization layer"); the questionnaire namespace now does too.
  *
- * THE FIRST TEST FAILS TODAY. That failure is the bug report; the fix is not part of
- * this file.
+ * Both directions are asserted because the alias is optional: local scripting installs
+ * none, and passing the id through unchanged there is the correct behaviour, not a
+ * second leak.
  */
 import { test, expect } from "@xopat/test-harness";
 

@@ -45,6 +45,18 @@ export class JobsWindow {
             filter: s("all"),
             mode: s("all"),
             expandedJobId: s(undefined),
+            /**
+             * The expanded analysis's job RECORD, kept next to its id.
+             *
+             * With the record in hand the workbench can ask the EAD what the job
+             * declared; without it, it re-finds the job by id and that search
+             * only covers the active mode's bucket — so a job from another mode
+             * resolves no declared outputs and the pane reports "declared N
+             * results, none could be read back". Refreshes happen on job events
+             * that carry an id only, which is why the record is retained here
+             * rather than re-derived.
+             */
+            expandedJob: s(undefined),
             /** Outputs of the expanded analysis, once fetched. */
             expandedOutputs: s(undefined),
         };
@@ -350,7 +362,10 @@ export class JobsWindow {
      */
     refreshExpandedOutputs(jobId) {
         if (!jobId || this.view.expandedJobId.val !== jobId) return;
-        this.plugin.loadJobOutputs(jobId).then(outputs => {
+        // Same arguments the expand used: a refresh that dropped the job record
+        // resolved fewer outputs than the open that preceded it, so results
+        // appeared and then vanished on the next job event.
+        this.plugin.loadJobOutputs(jobId, this.view.expandedJob.val).then(outputs => {
             if (this.view.expandedJobId.val === jobId) this.view.expandedOutputs.val = outputs;
         }).catch(e => console.warn("empaia-app-ui: output refresh failed", e));
     }
@@ -359,10 +374,12 @@ export class JobsWindow {
     _expand(jobId, job = undefined) {
         if (this.view.expandedJobId.val === jobId) {
             this.view.expandedJobId.val = undefined;
+            this.view.expandedJob.val = undefined;
             this.view.expandedOutputs.val = undefined;
             return;
         }
         this.view.expandedJobId.val = jobId;
+        this.view.expandedJob.val = job;
         this.view.expandedOutputs.val = undefined;
         // Fetched on demand: pre-loading every run's results would put one query
         // per analysis on the wire for rows nobody opened.

@@ -527,8 +527,25 @@ export function registerQuestionnaireScriptingApi(): void {
             }
         }
 
+        /**
+         * A slot as the caller may see it.
+         *
+         * The viewer id goes through the context's alias, the same chokepoint
+         * `application.getGlobalInfo` uses: a slide id is free-form and routinely carries
+         * the case (`winter-school-prostate-prostate14_HE-mrxs`), so handing back the raw
+         * one would re-introduce the real identity into a session where every other
+         * surface is anonymized — and the handle the model echoes back would no longer
+         * join to the same map. Identity when no alias is installed.
+         */
         _slotInfo(slot: any): any {
-            return { index: slot?.index, title: slot?.title, viewerId: slot?.viewerId };
+            const viewerId = slot?.viewerId;
+            return {
+                index: slot?.index,
+                title: slot?.title,
+                viewerId: viewerId != null
+                    ? this.scriptingContext.toPresentedViewerId?.(viewerId) ?? viewerId
+                    : viewerId,
+            };
         }
 
         async capturePageScene(pageRef: string | number): Promise<any> {

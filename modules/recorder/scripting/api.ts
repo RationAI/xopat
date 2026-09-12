@@ -698,18 +698,25 @@ export function registerRecorderScriptingApi(): void {
             if (!target) return;
             const viewerId = this._vid();
             if (target.viewerId !== viewerId) {
+                // An error message reaches the model like any other value. The namespace
+                // refuses a raw `viewerId` PARAMETER for exactly this reason (see the header),
+                // so it must not hand the id back in prose either — and the id it tells the
+                // caller to pass to setActiveViewer has to be the one that call accepts,
+                // which is the handle.
+                const presented = (id: string) => this.scriptingContext.toPresentedViewerId?.(id) ?? id;
                 throw new Error(
-                    `Recording '${target.name}' belongs to viewer '${target.viewerId}', but the active viewer is now `
-                    + `'${viewerId}' — writing here would go to a different recording. A recording covers ONE viewer and `
-                    + `its slide: call recorder.createRecording(name) on this viewer to start its own recording (a tour `
-                    + `across slides is one recording per viewer), or switch back with `
-                    + `application.setActiveViewer('${target.viewerId}') to keep building '${target.name}'.`
+                    `Recording '${target.name}' belongs to viewer '${presented(target.viewerId)}', but the active viewer `
+                    + `is now '${presented(viewerId)}' — writing here would go to a different recording. A recording `
+                    + `covers ONE viewer and its slide: call recorder.createRecording(name) on this viewer to start its `
+                    + `own recording (a tour across slides is one recording per viewer), or switch back with `
+                    + `application.setActiveViewer('${presented(target.viewerId)}') to keep building '${target.name}'.`
                 );
             }
             const active = this._recorder().getActiveRecording(viewerId);
             if (active && active.id !== target.id) {
                 throw new Error(
-                    `Recording '${target.name}' is no longer the active recording of viewer '${viewerId}' `
+                    `Recording '${target.name}' is no longer the active recording of viewer `
+                    + `'${this.scriptingContext.toPresentedViewerId?.(viewerId) ?? viewerId}' `
                     + `('${active.name}' is) — writing here would go to the wrong recording. Call `
                     + `recorder.setActiveRecording('${target.id}') to keep building '${target.name}', or `
                     + `recorder.createRecording(name) to start a new one.`

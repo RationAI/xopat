@@ -154,6 +154,19 @@ addPlugin('slide-info', class extends XOpatPlugin {
             //     }
             // });
 
+            // Reactive, because this handler runs at BOOT and the locale bundle
+            // is fetched asynchronously (`this._localeReady`, seeded in the
+            // constructor). Reading a key before its bundle is registered gets
+            // the key back verbatim — `demo.title` on the canvas — which is the
+            // i18next behaviour AGENTS.md §3 warns about, not a missing string:
+            // both keys exist in `locales/en.json`.
+            //
+            // Seeded eagerly because this is already correct on every later call
+            // (a second demo page, a slide closed mid-session), and only the
+            // first paint of a cold boot needs the fill-in below.
+            const title = van.state(this.t('demo.title'));
+            const hint = van.state(this.t('demo.hint'));
+
             const demoUI = van.tags.div({
                     id: e.id,
                     class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
@@ -161,12 +174,23 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 van.tags.div({ class: "mb-6 opacity-20" },
                     new UI.PhIcon({ name: "ph-images", extraClasses: "text-9xl" }).create()
                 ),
-                van.tags.h2({ class: "text-2xl font-bold mb-2" }, this.t('demo.title')),
-                van.tags.p({ class: "max-w-md mb-6 opacity-70" }, this.t('demo.hint')),
+                // Bound as text, not through a node-returning derivation: van
+                // patches the text node in place instead of swapping the subtree.
+                van.tags.h2({ class: "text-2xl font-bold mb-2" }, title),
+                van.tags.p({ class: "max-w-md mb-6 opacity-70" }, hint),
                 // openBtn
             );
 
+            // Synchronously, and NOT after awaiting the locale: `show-demo-page`
+            // is first-call-wins (src/EVENTS.md), so awaiting here hands the
+            // canvas to the built-in overlay and this UI never appears. Claim the
+            // slot now, translate when the bundle lands.
             e.show(demoUI);
+
+            this._localeReady.then(() => {
+                title.val = this.t('demo.title');
+                hint.val = this.t('demo.hint');
+            });
         });
 
         this._customControlButtons = undefined;
