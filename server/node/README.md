@@ -200,6 +200,11 @@ auth: {
 }
 ```
 
+`auth: false` is **not** an opt-out. Policy normalization
+(`server-runtime.js:879`, `rawPolicy.auth || { required: false }`) turns it into
+an object, so the method keeps the default session + CSRF gate. Write
+`{ public: true, requireSession: false }` when you mean "no checks".
+
 ### Meaning
 `public: false`
 
@@ -208,8 +213,11 @@ context, or both — see the decision matrix below.
 
 `public: true`
 
-The method is public and skips both session and verifier checks. Anyone who
-can reach the endpoint can call the method.
+The method skips the **verifier** check. It does *not* skip the session check —
+that gate is governed by `requireSession` alone and runs first, independently of
+`public` (`server-runtime.js:1847` vs `:1859`). On its own, `public: true` means
+"any viewer tab may call this, no credential needed". For an endpoint anybody on
+the network may call, pair it with `requireSession: false`.
 
 `requireSession: true`
 
@@ -233,7 +241,8 @@ resolved verifier context. The outcome:
 
 | `public` | `requireSession` | Verifier context | Verifier entries | Result |
 |---|---|---|---|---|
-| `true` | — | — | — | Accepted (no checks) |
+| `true` | `true` (default) | — | — | Session + CSRF; verifier skipped |
+| `true` | `false` | — | — | Accepted (no checks) — truly public |
 | `false` | `true`  | any                  | any   | Session + CSRF (+ verifier if present); all must pass |
 | `false` | `false` | has `verifiers`      | ≥ 1   | Verifier only (e.g. raw JWT calls) |
 | `false` | `false` | `{ enabled: false }` | —     | Accepted — explicit operator opt-out |
@@ -482,18 +491,19 @@ network ACL).
 
 ### How to make a method "auth-less"
 
-There are three legitimate ways to expose a method without bothering with
+There are four legitimate ways to expose a method without bothering with
 JWT/RPC verifiers, depending on what "auth-less" should mean for your use
 case:
 
 1. **Truly public** — anybody on the network can call it.
    ```ts
    export const policy = {
-     pingHealth: { auth: { public: true } },
+     pingHealth: { auth: { public: true, requireSession: false } },
    } as const;
    ```
-   Skip session, CSRF and verifier checks. Suitable only for endpoints that
-   leak nothing and have no side effects.
+   Skips session, CSRF and verifier checks. **Both flags are required**:
+   `public` alone only skips the verifier, and the call stays session-gated.
+   Suitable only for endpoints that leak nothing and have no side effects.
 
 2. **Session-only** — the call must come from a logged-in viewer tab. This
    is the *default*; you can leave `auth` off entirely.
@@ -525,6 +535,18 @@ case:
    An empty `default: {}` (or no `default` at all) is rejected — that was
    the original silent-bypass shape and is the failure mode the fail-closed
    guard is named after.
+
+4. **Credential-free but tab-bound** — any viewer tab may call it, the network
+   may not. This is what `public: true` alone means.
+   ```ts
+   export const policy = {
+     beginLogin: { auth: { public: true, requireSession: true } },
+   } as const;
+   ```
+   Session + CSRF are enforced; no verifier runs. Use it for the methods that
+   *establish* a credential and therefore cannot require one —
+   `modules/oidc-server-ts/register.server.ts` and `modules/saml-auth/register.server.ts`
+   both do exactly this, and spell `requireSession: true` out for the reader.
 
 #### Note on Proxy auth configuration
 
