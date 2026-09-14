@@ -150,6 +150,21 @@
             "demonstrates": "empty `background` and `visualizations`: `activeBackgroundIndex: []` means nothing open, not everything"
         },
 
+        "annotations-lab": {
+            "title": "Bare H&E, real pixel size",
+            "group": "annotations",
+            "deployment": "annotations-lab",
+            "requires": ["fixtures"],
+            "demonstrates": "the subject of the annotations/measurements/pathology loop: one stained background with `microns` declared, so measured areas come back in µm² instead of pixels"
+        },
+        "annotations-lab-overlay": {
+            "title": "H&E with a prediction heatmap over it",
+            "group": "annotations",
+            "deployment": "annotations-lab",
+            "requires": ["fixtures"],
+            "demonstrates": "measuring with `source: \"rendered\"` — the sampler reads the composited canvas, so what a threshold selects changes with the overlay, unlike the raw-data sources"
+        },
+
         "dicom-google-standalone": {
             "title": "Google Healthcare DICOMweb, derived series auto-discovered",
             "group": "dicom",

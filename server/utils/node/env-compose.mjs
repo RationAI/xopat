@@ -386,6 +386,26 @@ export function composeLayers(layers) {
         if (ids.length > 1) conflicts.push({ kind: "dimension", dimension, parties: ids.map((id) => ({ layer: id })) });
     }
 
+    // A proxy alias and an absolute `baseURL` in one block is never what was
+    // meant: the client appends `baseURL` AFTER `/proxy/<alias>/`, so the pair
+    // composes `/proxy/<alias>/http://host:port/...`. It is reported as a
+    // conflict because it is one — two layers each stating the transport, with
+    // `data/*` naming the origin and a `transport/*` overlay naming the alias —
+    // and because a composition that cannot work should not start.
+    for (const [p, { value }] of leaves) {
+        if (!p.endsWith(".proxy") || typeof value !== "string" || !value) continue;
+        const basePath = `${p.slice(0, -".proxy".length)}.baseURL`;
+        const baseLeaf = leaves.get(basePath);
+        if (!baseLeaf || typeof baseLeaf.value !== "string" || !/^https?:\/\//i.test(baseLeaf.value)) continue;
+        conflicts.push({
+            kind: "proxy-absolute-base", path: basePath,
+            parties: [
+                { layer: baseLeaf.layer.id, value: baseLeaf.value },
+                { layer: leaves.get(p).layer.id, value: `proxy: ${value}` },
+            ],
+        });
+    }
+
     // Declared incompatibilities, symmetric.
     const present = new Set(layers.map((l) => l.id));
     for (const layer of layers) {
@@ -624,6 +644,14 @@ export function formatConflicts(conflicts) {
         if (c.kind === "dimension") {
             return `CONFLICT  dimension "${c.dimension}"\n  ${
                 c.parties.map((p) => p.layer).join(", ")} — pick one, or pass --force`;
+        }
+        if (c.kind === "proxy-absolute-base") {
+            const w = Math.max(...c.parties.map((p) => p.layer.length));
+            const rows = c.parties.map((p) => `  ${p.layer.padEnd(w)}  ${brief(p.value)}`).join("\n");
+            return `CONFLICT  ${c.path}  (${c.kind})\n${rows}\n`
+                + "  in proxy mode baseURL is the path AFTER /proxy/<alias>/ — the upstream origin belongs"
+                + "\n  to core.server.secure.proxies.<alias>.baseUrl. Clear it (\"baseURL\": null in the"
+                + "\n  preset override) or make it relative.";
         }
         if (c.kind === "declared") {
             return `CONFLICT  declared incompatible\n  ${c.parties.map((p) => p.layer).join(" ↔ ")}`;

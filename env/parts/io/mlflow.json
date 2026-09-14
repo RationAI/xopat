@@ -16,19 +16,29 @@
    * `experimentAllow` is the only thing standing between a script-registered
    * mapper and an arbitrary experiment name; keep it set. A violation refuses
    * with W_MLFLOW_EXPERIMENT_DENIED and writes nothing. Everything
-   * security-relevant here (proxy, baseURL, auth, experimentAllow) is trusted
-   * config and may only be set in ENV or include.json — record structure
-   * (template/mapper) deliberately is not.
+   * security-relevant here (proxy, baseURL, auth, experimentAllow,
+   * artifactPathPrefix) is trusted config and may only be set in ENV or
+   * include.json — record structure (template/mapper) deliberately is not.
    */
   "core": {
     "client": {
       "localhost": {
         "io": {
+          /* A binding target is either a bare sink id or `{sink, config}`, where
+             `config` is the per-(owner, capability) option layer the sink reads
+             back through `IO_PIPELINE.bindingConfig`. One `mlflow` sink can
+             therefore shape each capability differently without a second sink id.
+
+             That matters here: the `slide-scoring` template maps ONE numeric
+             record, so handing it a whole bundle (`{version, scores:[…]}`) makes
+             it decline cleanly and write nothing. The bundle capabilities get
+             `bundle-artifact` instead — which is also why the sink needs the
+             `artifacts` adapter configured below. */
           "bindings": {
             "slide-scoring": {
               "crud:score": ["mlflow"],
-              "bundle-export": ["mlflow"],
-              "bundle-import": ["mlflow"]
+              "bundle-export": [{ "sink": "mlflow", "config": { "template": "bundle-artifact" } }],
+              "bundle-import": [{ "sink": "mlflow", "config": { "template": "bundle-artifact" } }]
             }
           },
           "sinkOverrides": {
@@ -82,7 +92,9 @@
         "proxy": "mlflow",
         "baseURL": "/api/2.0/mlflow",
         /* Shipped templates: slide-scoring | run-per-viewer | run-per-session |
-           bundle-artifact (the last needs an "artifacts" block). */
+           bundle-artifact (the last needs the "artifacts" block below).
+           This is the DEFAULT for any capability whose binding does not name
+           one; the bundle capabilities above override it per binding. */
         "template": "slide-scoring",
         /* Placeholders: {ownerId} {ownerUid} {viewerId} {backgroundId}
            {capabilityId} {xoType} {resourceName} {itemId} — must stay inside
@@ -90,7 +102,19 @@
         "experimentTemplate": "xopat-{ownerId}",
         "runTemplate": "xopat-{viewerId}",
         "identifierTag": "data_id",
-        "artifacts": null,
+        /* Artifact uploads ride the same `mlflow` proxy alias — only the REST
+           base differs, so the browser still never reaches the tracking server
+           directly. Without this the sink refuses a bundle with
+           W_MLFLOW_NO_ARTIFACTS instead of dropping it silently. */
+        "artifacts": {
+          "type": "mlflow-artifacts",
+          "baseURL": "/api/2.0/mlflow-artifacts"
+        },
+        /* Bounds every mapper-emitted artifact path. The shipped bundle-artifact
+           template writes `xopat/…`; a mapper registered at runtime cannot
+           escape the prefix (W_MLFLOW_ARTIFACT_DENIED). Trusted config —
+           keep it set for the same reason as experimentAllow. */
+        "artifactPathPrefix": "xopat/",
         "auth": null
       }
     },

@@ -160,9 +160,18 @@ If the refresh fails or another non-retriable error occurs, the original error i
 - **Timeouts:** Requests are aborted after `timeoutMs` using `AbortController`.
 
 ### Response parsing
-- `expect: "json"` → parse JSON, `expect: "text"` → text, default is **auto**:
+- `expect: "json"` → parse JSON (an unparseable body throws an `HTTPError`, not a
+  bare `SyntaxError`, so it is not replayed by the retry arm), `expect: "text"` →
+  text, default is **auto**:
     1. If `content-type` includes `application/json`, parse JSON.
-    2. Otherwise, try JSON, then fall back to text.
+    2. Otherwise read the body once, then: refuse an **HTML document** (by
+       content-type or by sniff) with an `HTTPError` — what answers `text/html`
+       to an API call is an intermediary, and returning that markup as a result
+       hands third-party HTML to a caller that may render it (AGENTS.md §7) —
+       parse it as JSON if it parses, otherwise return it as text. An empty body
+       returns `{}`.
+
+  See `src/HTTP_CLIENT.md` for the full contract.
 
 ### Errors (`HTTPError`)
 `HttpClient` throws a specialized `HTTPError` that extends `Error` and includes:

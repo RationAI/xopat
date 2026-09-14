@@ -72,3 +72,40 @@ test("the RPC_TIMEOUT carve-out survives the new flag @unit", () => {
     // An explicit verdict still wins over the carve-out.
     expect(isRetriable(504, rpcError({ code: "RPC_TIMEOUT", retriable: true }))).toBe(true);
 });
+
+/**
+ * The verdict is ours to give, not the upstream's to claim.
+ *
+ * `retriable` describes OUR RPC layer, which answers 500 for every handler
+ * throw. A third-party upstream — a DICOM server, an LLM endpoint, anything
+ * behind a slide protocol — speaks for itself only, and honouring its
+ * `retriable` lets it spend our retry budget: `{"retriable":true}` on a 400 it
+ * will never stop returning buys 1 + maxRetries round trips and 1s+2s+4s of
+ * backoff, per request, on demand.
+ *
+ * The gate is the APP's origin, not the client's own `baseURL` — a client
+ * configured for a foreign upstream considers all of its own traffic
+ * same-origin, so comparing against `baseURL` would check nothing.
+ */
+const foreign = new HttpClient({ baseURL: "https://pacs.example.org" });
+
+test("a foreign upstream cannot declare its own failure retriable @unit @security", () => {
+    const body = rpcError({ retriable: true });
+
+    // Same body, same status. The only difference is who sent it.
+    expect(foreign._isRetriable(400, body, "https://pacs.example.org/studies")).toBe(false);
+    expect(isRetriable(400, body)).toBe(true);
+
+    // And it cannot talk us OUT of a retry either — a `retriable:false` from an
+    // upstream must not suppress the 5xx heuristic that protects a flapping one.
+    const stop = rpcError({ retriable: false });
+    expect(foreign._isRetriable(500, stop, "https://pacs.example.org/studies")).toBe(true);
+});
+
+test("our own origin keeps the verdict however the request was addressed @unit", () => {
+    // Explicit app-origin URL, and the `/proxy/<alias>` route, which is ours.
+    expect(client._isRetriable(400, rpcError({ retriable: true }),
+        "https://viewer.example.org/__rpc/server/core/x")).toBe(true);
+    const proxied = new HttpClient({ proxy: "somewhere" });
+    expect(proxied._isRetriable(400, rpcError({ retriable: true }))).toBe(true);
+});

@@ -346,6 +346,15 @@ enforced it.
 
 Upstream request hygiene the proxy must implement:
 
+- **Rebuild the remainder, do not forward it.** `/proxy/<alias>/<rest>` splits the
+  path and drops empty segments, so `/proxy/<alias>//evil.com/x` and a pasted
+  absolute URL both collapse into ordinary path segments instead of
+  reconstructing an origin. The one thing that collapse must put back is a
+  **trailing slash**: upstreams distinguish `/v3/cases/` from `/v3/cases`, and
+  the latter is typically answered with a redirect to the former — which a proxy
+  that refuses redirect hops then turns into a 502. A lone slash cannot carry an
+  origin. Both backends do this; `test/suites/integration/proxy-path.test.mjs`
+  pins both halves against Node.
 - **Forward request headers by ALLOWLIST, not denylist.** The browser's `Cookie`
   (which carries the xOpat session id), its `Authorization`, and `X-XOPAT-CSRF`
   are not the upstream's business. A verifier that wants the caller's bearer

@@ -154,8 +154,14 @@ class ToolbarGroup extends BaseComponent {
     /**
      * Select a child inside this group by itemID.
      * Pass `null` to clear selection.
+     * @param {string|null} id logical item ID (child.options.itemID or child.id)
+     * @param {boolean} [fireOnChange=true] whether to call this.options.onChange.
+     *   Pass false when reflecting a change the owner already knows about, so a
+     *   group whose onChange drives that owner cannot loop. Matches
+     *   {@link ToolbarChoiceGroup#setSelected}, whose signature this used to
+     *   contradict while callers already passed the flag.
      */
-    setSelected(id) {
+    setSelected(id, fireOnChange = true) {
         const item = this._children.find(i => i.itemID === id || i.id === id);
         if (!item) {
             this._selectedId.val = id;
@@ -165,7 +171,7 @@ class ToolbarGroup extends BaseComponent {
         // External API: `id` is the logical itemID. For backwards compatibility
         // callers can still use the child's DOM id when no custom itemID is used.
         this._selectedId.val = id;
-        if (id != null) {
+        if (id != null && fireOnChange) {
             this.options.onChange?.(id);
         }
     }

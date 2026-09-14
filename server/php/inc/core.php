@@ -14,21 +14,11 @@ function server_forwarded($key, $fallback = null) {
     return $_SERVER[$k] ?? $fallback;
 }
 
-function detect_public_scheme() {
-    // honor X-Forwarded-Proto when present
-    $xfp = server_forwarded('X-Forwarded-Proto');
-    if ($xfp) return strtolower(explode(',', $xfp)[0]) . '://';
-    if (
-        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
-        (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
-    ) return 'https://';
-    return 'http://';
-}
-
-function detect_public_host() {
-    // prefer X-Forwarded-Host, fallback to Host
-    return server_forwarded('X-Forwarded-Host', $_SERVER['HTTP_HOST'] ?? 'localhost');
-}
+// There is deliberately no `detect_public_scheme()` / `detect_public_host()`.
+// The viewer domain is trusted config (it is the root of every derived URL,
+// including the proxy base), and `Host` / `X-Forwarded-Host` / `X-Forwarded-Proto`
+// are request input. An unset `core.client.<active>.domain` resolves to the
+// `__ORIGIN__` sentinel instead — see the domain block further down.
 
 function detect_public_basepath() {
     // 1) explicit header from ingress (recommended)
@@ -279,23 +269,28 @@ if ($C["path"] == null) {
     $CORE["client"]["path"] = PROJECT_ROOT;
 }
 if ($C["domain"] == null) {
-    //https://stackoverflow.com/questions/4503135/php-get-site-url-protocol-http-vs-https
-    if (isset($_SERVER['HTTPS']) &&
-        ($_SERVER['HTTPS'] == 'on' || $_SERVER['HTTPS'] == 1) ||
-        isset($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
-        $_SERVER['HTTP_X_FORWARDED_PROTO'] == 'https') {
-        $protocol = 'https://';
-    }
-    else {
-        $protocol = 'http://';
-    }
-    $protocol = detect_public_scheme();
-    $host     = detect_public_host();
-    $basePath = detect_public_basepath();
-
-    $CORE["client"]["domain"]  = $protocol . $host;
-    $CORE["client"]["basePath"] = $basePath;
-    $CORE["client"]["baseURL"]  = $protocol . $host . $basePath;
+    // Defer the domain to the browser instead of deriving it from the request.
+    //
+    // `domain` is the root of every derived URL — `APPLICATION_CONTEXT.url` and
+    // with it the `/proxy/<alias>` base — so it is trusted config. Building it
+    // from `X-Forwarded-Host` / `Host` let the *request* write a trusted value:
+    // a `Host: evil.example` request (or a cached response for one) pointed a
+    // subsequent viewer's derived URLs at an attacker-chosen origin. Those
+    // headers are attacker-settable unless an ingress rewrites them, and there
+    // is no way here to tell whether one did. (AGENTS.md §7)
+    //
+    // `__ORIGIN__` is the documented deferred-resolution sentinel: `src/app.ts`
+    // replaces it with `window.location.origin` at boot. For a legitimate
+    // request that is the same value the header path produced, and it cannot be
+    // poisoned or cached across origins. The Node renderer refuses a missing
+    // domain outright (`server/templates/javascript/core.js`); deferring is the
+    // same refusal to guess, with a working default.
+    $CORE["client"]["domain"]  = "__ORIGIN__";
+    // Path prefix only — no host in it, so the ingress hint is harmless here.
+    // `baseURL` is deliberately not set: it cannot be assembled without a host,
+    // and nothing in the client reads it (`APPLICATION_CONTEXT.url` is built
+    // from `domain` + `path`).
+    $CORE["client"]["basePath"] = detect_public_basepath();
 }
 
 // An explicitly configured domain must carry a protocol: the domain is the root

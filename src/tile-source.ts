@@ -226,6 +226,18 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      */
     _dataFormat?: string;
     /**
+     * Whether this source can back a VIRTUAL REGION split (`virtual-region`
+     * protocol, `src/classes/virtual-region-protocol.ts`). Tiles on a region
+     * border are recomposited by re-fetching `getTileUrl(...)` and decoding it
+     * in the BROWSER, so the split needs plainly-fetchable, browser-decodable
+     * image tiles. Leave unset: `canCompositeRegions` then derives the answer
+     * from whether the source still uses the base `downloadTileStart` (it does
+     * ⇒ it is on that exact path). Set `true` to opt a source that overrides
+     * the download path but serves plain image URLs anyway; `false` to opt out.
+     * TODO: remove once Flex Render virtual region support lands
+     */
+    supportsRegionCompositing?: boolean;
+    /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
      * resolved protocol declares `httpClient` options (proxy alias, auth ctx, …).
      * When present, both the metadata fetch (via the patched

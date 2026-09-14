@@ -90,7 +90,7 @@ export class ApplicationLifecycleController {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show(
                 $.t("error.rendererUnavailableTitle"),
-                `${$.t("error.rendererUnavailable")} <br><code>${renderingCapability.error || ""}</code>`,
+                USER_INTERFACE.Errors.detail($.t("error.rendererUnavailable"), renderingCapability.error),
                 true
             );
             console.error("xOpat renderer unavailable; aborting application lifecycle.", renderingCapability.error || renderingCapability);
@@ -193,7 +193,7 @@ export class ApplicationLifecycleController {
             });
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
-            USER_INTERFACE.Errors.show($.t("error.unknown"), `${$.t("error.reachUs")} <br><code>${e}</code>`, true);
+            USER_INTERFACE.Errors.show($.t("error.unknown"), USER_INTERFACE.Errors.detail($.t("error.reachUs"), e), true);
             console.error(e);
         }
     }

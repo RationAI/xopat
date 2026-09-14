@@ -24,7 +24,7 @@ import { test, expect } from "@xopat/test-harness";
 globalThis.window = globalThis.window ?? globalThis;
 
 const { resolveSideMenuTabOpen } = await import(
-    "../../../ui/classes/components/sideMenuPreferences.mjs");
+    "../../../ui/classes/mixins/utils.mjs");
 
 /**
  * @param {object} opts

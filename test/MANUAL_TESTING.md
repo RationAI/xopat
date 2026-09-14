@@ -184,6 +184,43 @@ Verify:
 - `viz-flex-mask-preview` — preview injection **fires** on the overlay: first
   paint is one request, then it refines.
 
+### `annotations-lab` — annotations, measurements and pathology
+
+```bash
+npm run up:dev -- annotations-lab
+npm run fixtures:urls -- --deployment annotations-lab
+```
+
+The three subsystems are one feature in use — draw a region, measure what is
+under it, bound the sample by a tissue mask — so they get one deployment rather
+than three ENV edits. Nothing external: the tissue detector in
+`pathology-foundation` is dependency-free and nothing leaves the viewer. Quick
+draw arrives with combos already bound (`Digit1`-`Digit4`), which ships unbound
+everywhere else.
+
+Verify, on `annotations-lab` (bare H&E):
+- `Digit1` / `Digit2` / `Digit3` each enter manual drawing with that shape and
+  preset in one press — no trip through the toolbar. `Digit4` swaps only the
+  preset and leaves the shape alone.
+- A drawn region reports an area in **µm²**, not pixels: the session declares
+  `microns`, and a measurement quoted in px means the pixel size was lost
+  between the background config and the scalebar, not that the engine is wrong.
+- The tissue-mask action exists. If it is missing, `pathology-foundation` did
+  not load — the measurements module degrades silently when it is absent, which
+  reads as a broken build rather than a deployment that did not ask for it.
+- A mask derived while framed on one island keeps that island; zoomed out to the
+  whole section it keeps the section. The reach is a fraction of the *current*
+  viewport width, so the same action at two zooms must not give the same answer.
+- Every field coming back `reason: "unread"` is a **latency** symptom, not an
+  unreadable slide. This deployment already raises the three
+  `pathology-foundation` timeouts over their defaults; raise them further before
+  concluding the slide is at fault.
+
+On `annotations-lab-overlay` (the same slide with a prediction heatmap):
+- With `source: "rendered"` the sampler reads the **composited** canvas, so
+  toggling the overlay changes what a threshold selects. If it does not, the
+  sampler is reading raw data while claiming to read the render.
+
 ---
 
 ## Tier 2 — a wsi-service container
@@ -227,20 +264,54 @@ npm run up:dev -- image-proxy
 ```
 
 Verify:
-- Tiles load, and the network panel shows them going to the viewer origin, not
-  straight to :9002.
-- **A session cookie plus a CSRF token is not authorization.** Request a proxy
-  alias the session never opened and confirm it is refused — `session.allowedProxies`
-  is what decides.
+- **Nothing reaches :9002.** Filter the network panel on the image-server port and
+  keep it empty: the slide info, the tiles, the thumbnail/label/ICC requests, *and*
+  the WSI file browser's case listing all travel `…/proxy/image-server/v3/…` on the
+  viewer origin. The browser listing is the half that used to go direct — it owns a
+  separate config key (`plugins["rationai-wsi-file-browser"].proxy`).
+- No `…/proxy/image-server/http:/…` anywhere. The client `baseURL` is the path
+  *after* the alias; `data/wsi-service` states an absolute one for the direct
+  deployment, and the preset's `override` clears it (see `env/README.md` →
+  *Conflicts are an error*). `npm run up:check` refuses the pair outright now.
+- **A session cookie plus a CSRF token is not authorization.** `/proxy/<alias>/`
+  with an alias this deployment does not configure answers
+  `403 Proxy target alias is not allowed or not configured.` — deliberately the
+  same response a session-refused alias gets, so the manual check proves the
+  lookup only. Under `auth/none` the minted session is `allowedProxies: 'ALL'`,
+  so nothing here is session-refused; that gate is pinned by
+  `test/suites/unit/proxy-access.test.mjs` and exercised by the Keycloak tiers.
 
 ### `storage-persistent` — durable server state
+
+Boots with no key. Every namespace `storage/persistent-30d` binds belongs to the
+chat module, so the assistant is what produces the state to restart over:
+`chat/all-providers` registers Anthropic, OpenAI and the OpenAI-compatible
+(CERIT) provider at once, each taking its operator key from `env/.env`
+(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CERIT_API_KEY`) when you hold one. A
+provider with no key is still listed and asks the user for one in chat settings →
+*Providers & API keys*.
 
 ```bash
 npm run up:dev -- storage-persistent
 ```
 
-Verify: create some state, restart the server (Ctrl-C, re-run), and confirm it
-is still there — then that it expires per the 30-day retention window.
+Verify:
+- Hold a conversation (any provider), then restart the server (Ctrl-C, re-run):
+  the session is still in the picker, its messages are still there, and **another
+  turn sends** — `kv:sessions` and `log:messages` are bound to `tiered`,
+  attachments to `file`, and the session re-binds itself to the provider's new
+  instance id (those are minted per boot; the session names the provider by
+  `managedKey`/`typeId` instead).
+- **A per-user API key does *not* come back.** `kv:secrets` is declared
+  sensitivity `"secret"`, so the broker refuses to bind it to a persistent driver
+  without an explicit operator opt-in; re-entering the key after a restart is the
+  designed behaviour, not a lost write.
+- Anonymous ownership is bounded by the browser session too
+  (`XOPAT_SESSION_TTL_SEC`, 24 h idle) — a `user:<id>` principal is the robust
+  answer for long-lived history.
+- Retention: `kv:sessions` 30 days / 20000 entries, `log:messages` 500 per
+  transcript, `blob:attachments` 30 days. Inspect what the server actually holds
+  with `POST /__rpc/server/core/getStorageStats`.
 
 ### `annotations-github` — annotation bundles to a repository
 
@@ -345,6 +416,22 @@ Verify:
   it describes is the region on screen.
 - An assistant-authored `[label](#xopat-region?viewer=…&x=…)` link navigates the
   viewer when clicked.
+
+### `annotations-lab-vision` — the annotations lab with vision inference
+
+Same variables as `roles-dev-vision`, plus the CERIT chat key.
+
+```bash
+npm run up:dev -- annotations-lab-vision
+```
+
+Verify:
+- `pathology.analyzeRegion(...)` returns findings for the region on screen — the
+  `analyze` feature has a driver, which the base lab deliberately does not ship.
+- Under `auth/none` the call is **refused**: `runVisionInference` requires a
+  logged-in session. That refusal is the correct behaviour, not a broken
+  deployment — compose an `auth/*` fragment over the preset to exercise the
+  allowed path.
 
 ### `byok-chat` — no server key at all
 

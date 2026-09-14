@@ -33,6 +33,20 @@ window.HTTPError = HTTPError;
 import { XOpatRemoteEndpoint } from "./remote-endpoint";
 import type { RemoteEndpointOptions } from "./remote-endpoint";
 
+/**
+ * A response that is an HTML *document* is never this client's data.
+ *
+ * What actually answers `text/html` to an API call is an intermediary: a proxy
+ * error page, a captive portal, a WAF block page, a login redirect that landed
+ * on a page instead of a 401. Handing that markup back as "the result" makes
+ * third-party-authored HTML look like the upstream's own answer to a caller
+ * that may go on to render or interpolate it. Degrade closed and throw instead.
+ * The sniff covers the content-type-less case; it deliberately does not match
+ * XML/SVG, which are legitimate `text` payloads. (AGENTS.md §7)
+ */
+const HTML_CONTENT_TYPE = /\b(?:text\/html|application\/xhtml\+xml)\b/;
+const HTML_DOCUMENT_SNIFF = /^\s*(?:<!doctype\s+html|<html[\s>])/i;
+
 // Re-export for backward compatibility (consumers historically imported these from http-client).
 export type { AuthHandler, AuthHandlerParams } from "./remote-endpoint";
 
@@ -192,7 +206,78 @@ export class HttpClient extends XOpatRemoteEndpoint {
         this.maxRetries = Math.max(0, maxRetries);
     }
 
-    private _isRetriable(status: number, bodyText?: string): boolean {
+    /**
+     * How much of a failed response body is kept for diagnostics.
+     *
+     * The body of a non-2xx is read, retained on `HTTPError.textData`, and
+     * interpolated into `.message` by callers. Reading it unbounded means a
+     * broken or hostile upstream can have a multi-hundred-megabyte body
+     * buffered and held by a rejected promise. This prefix is still more than
+     * an RPC error envelope needs, and more than a developer reads.
+     */
+    private static readonly ERROR_BODY_LIMIT = 16 * 1024;
+
+    /**
+     * Read at most {@link ERROR_BODY_LIMIT} of a response body, then stop pulling.
+     * @param res the response to read
+     * @param clone read a clone, for a response the caller still owns
+     */
+    private async _readErrorBody(res: Response, clone = false): Promise<string> {
+        try {
+            const source = clone ? res.clone() : res;
+            const body = source.body;
+            if (!body) return (await source.text()).slice(0, HttpClient.ERROR_BODY_LIMIT);
+
+            const reader = body.getReader();
+            const decoder = new TextDecoder();
+            let out = "";
+            try {
+                while (out.length < HttpClient.ERROR_BODY_LIMIT) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    out += decoder.decode(value, { stream: true });
+                }
+            } finally {
+                // The rest of the body cannot change the verdict — do not buffer it.
+                try { await reader.cancel(); } catch (_) { /* already closed */ }
+            }
+            return out.length > HttpClient.ERROR_BODY_LIMIT
+                ? out.slice(0, HttpClient.ERROR_BODY_LIMIT) + "… [truncated]"
+                : out;
+        } catch (_) {
+            return "";
+        }
+    }
+
+    /**
+     * True when `url` is served by the VIEWER's own origin — where our RPC layer
+     * lives, and therefore the only source whose `retriable` verdict is a
+     * statement about our own code rather than a foreign server's opinion.
+     *
+     * Deliberately NOT `isCrossOriginUrl`: that compares against this client's
+     * own `baseURL`, so a client configured for a foreign upstream finds every
+     * one of its own requests "same-origin" and the check does nothing. The
+     * question here is whose code wrote the body, which is the app origin.
+     *
+     * `usingProxy` counts because `/proxy/<alias>` is our own route, and a
+     * relative target counts because it can only resolve onto our origin.
+     *
+     * @param url the request URL; falls back to `baseURL` when a caller has none
+     */
+    private _isAppOriginUrl(url?: string): boolean {
+        if (this.usingProxy) return true;
+        try {
+            const appUrl = (globalThis as any).APPLICATION_CONTEXT?.url;
+            if (typeof appUrl !== "string" || !appUrl) return false;
+            const target = url ?? this.baseURL;
+            if (!target) return false;
+            return new URL(target, appUrl).origin === new URL(appUrl).origin;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    private _isRetriable(status: number, bodyText?: string, url?: string): boolean {
         // An explicit verdict from the server wins over any status heuristic, at
         // every status. Our RPC layer answers 500 for *every* handler throw, so
         // the status alone cannot distinguish an overloaded gateway from an
@@ -200,7 +285,13 @@ export class HttpClient extends XOpatRemoteEndpoint {
         // whole retry budget (1s+2s+4s) on a question whose answer cannot change.
         // The thrower is the only party that knows, and says so via `retriable`
         // (see server/node/ssrf-guard.js, forwarded by #rpcErrorPayload).
-        const declared = bodyText ? this._parseErrorPayload(bodyText) : null;
+        //
+        // Only OUR origin gets that authority. `retriable` is a statement about
+        // our own RPC layer, and honouring it from a foreign upstream lets that
+        // upstream dictate our retry policy — a 400 with `{"retriable":true}`
+        // buys it 1+maxRetries round trips and seconds of backoff per request.
+        // Same reason as the origin gate in `_tryHandleSessionExpiry`.
+        const declared = this._isAppOriginUrl(url) && bodyText ? this._parseErrorPayload(bodyText) : null;
         if (typeof declared?.retriable === "boolean") return declared.retriable;
 
         if (status === 429) return true;
@@ -403,7 +494,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 const res = await fetch(url, getInit(currentHeaders));
 
                 if (!res.ok) {
-                    const text = await res.text().catch(() => "");
+                    const text = await this._readErrorBody(res);
 
                     if (this._tryHandleSessionExpiry(res.status, text, url)) {
                         throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
@@ -417,7 +508,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         }
                     }
 
-                    if (this._isRetriable(res.status, text) && attempt < this.maxRetries) {
+                    if (this._isRetriable(res.status, text, url) && attempt < this.maxRetries) {
                         attempt += 1;
                         const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                         await this._delay(backoff);
@@ -436,12 +527,38 @@ export class HttpClient extends XOpatRemoteEndpoint {
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
-                if (expect === "json") return await res.json();
+                if (expect === "json") {
+                    try {
+                        return await res.json();
+                    } catch (_) {
+                        // A bare SyntaxError here falls into the generic retry arm
+                        // below and replays a request whose answer cannot change.
+                        // The caller asked for JSON and the server did not send it:
+                        // that is definitive, so surface it as an HTTPError.
+                        throw new HTTPError(
+                            `HTTP ${method} ${url} returned ${ct || "an unparseable body"} where JSON was expected`,
+                            res);
+                    }
+                }
 
                 if (ct.includes("application/json")) return await res.json();
-                try { return await res.json(); } catch (_) {}
-                try { return await res.text(); } catch (_) {}
-                return {};
+
+                // `auto`: read the body ONCE and branch on the text. The previous
+                // `try json → catch → try text` ladder could never reach its text
+                // arm — `res.json()` consumes the body, so the second read threw
+                // "body already read" and every non-JSON response silently became
+                // `{}`. Reading first restores the documented text fallback.
+                const text = await res.text();
+                if (!text) return {};
+                if (HTML_CONTENT_TYPE.test(ct) || HTML_DOCUMENT_SNIFF.test(text)) {
+                    // See HTML_CONTENT_TYPE: a document is an intermediary's page,
+                    // not this endpoint's data. Refuse rather than hand markup back.
+                    throw new HTTPError(
+                        `HTTP ${method} ${url} returned an HTML document where a data response was expected`,
+                        res, text.slice(0, HttpClient.ERROR_BODY_LIMIT));
+                }
+                try { return JSON.parse(text); } catch (_) {}
+                return text;
             } catch (err: any) {
                 if (err.name === "AbortError") {
                     // Distinguish our own timeout from a caller abort — the latter
@@ -583,7 +700,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     });
 
                     if (!res.ok) {
-                        const text = await res.clone().text().catch(() => "");
+                        const text = await this._readErrorBody(res, true);
 
                         if (this._tryHandleSessionExpiry(res.status, text, url)) {
                             throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
@@ -597,7 +714,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                             }
                         }
 
-                        if (this._isRetriable(res.status, text) && attempt < maxRetries) {
+                        if (this._isRetriable(res.status, text, url) && attempt < maxRetries) {
                             attempt += 1;
                             const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
                             await this._delay(backoff);

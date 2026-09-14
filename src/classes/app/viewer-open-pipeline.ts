@@ -6,6 +6,7 @@ import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-sha
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
 import { buildShaderIdNamespace, renameShaderIds } from "../visualization/shader-id-namespace";
 import { readPixelScale, computeOverlayWidth } from "./overlay-pixel-scale";
+import { canCompositeRegions } from "../virtual-region-protocol";
 
 export interface OpenViewerWithOptions {
     dataMode?: "replace" | "merge" | "merge-exact";
@@ -189,6 +190,28 @@ export class ViewerOpenPipeline {
         if (!decomp || !Array.isArray(decomp.regions) || decomp.regions.length < 1) {
             console.warn(`[virtualization] background "${parentBgId}" has no stored decomposition to switch.`);
             return false;
+        }
+
+        // A split recomposites the tiles on each region BORDER as plain images
+        // (see `canCompositeRegions`), and it does so for EVERY data layer of the
+        // stack, not just the background. Refuse here, while the un-split parent
+        // is still on screen, rather than reopening into a viewer ringed with
+        // failed tiles. Only reachable when the parent is already open; a session
+        // authored straight into a split is caught by the source-level gate.
+        if (mode !== "none") {
+            const world: any = this.deps.viewerManager.getViewer?.(parentBgId)?.world;
+            if (world?.getItemCount) {
+                for (let i = 0; i < world.getItemCount(); i++) {
+                    const source = world.getItemAt(i)?.source;
+                    if (source && !canCompositeRegions(source)) {
+                        console.warn(`[virtualization] background "${parentBgId}" cannot be split: a data layer's tiles are not plain images.`);
+                        try {
+                            Dialogs.show($.t("virtualization.sourceNotCompositable"), 12000, Dialogs.MSG_WARN);
+                        } catch (_) { /* Dialogs not ready */ }
+                        return false;
+                    }
+                }
+            }
         }
 
         const childIndices: number[] = [];

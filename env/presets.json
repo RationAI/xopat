@@ -121,6 +121,78 @@
       }
     },
 
+    "annotations-lab": {
+      /**
+       * The deployment for annotations + annotation-measurements +
+       * pathology-foundation, which in practice are one feature: draw a
+       * region, measure what is under it, bound the sample by a tissue mask.
+       *
+       *     npm run fixtures:fetch              # once
+       *     npm run up:dev -- annotations-lab
+       *
+       * `data/tiff-webtiff` rather than `synthetic`: the tissue detector and
+       * the measurement sampler both need real stained tissue, and a generated
+       * pyramid has none — a tissue mask over it is uniformly everything or
+       * uniformly nothing, which proves the plumbing and nothing else. The
+       * fixture slide is a real H&E, its sessions declare `microns`, and the
+       * viewer serves it itself over `core.server.media`.
+       *
+       * Nothing external: the built-in tissue detector needs no key, no model
+       * and no network. Add `annotations-lab-vision` for the `analyze` feature.
+       */
+      "description": "Annotations, measurements and pathology over a real H&E slide — quick-draw keys bound, no external service",
+      "layers": [
+        "base/core", "data/tiff-webtiff", "demo/annotations-pathology",
+        "auth/none", "chat/off"
+      ],
+      "override": {
+        "core": { "client": { "localhost": {
+          /* Differs from a plain `webtiff` deployment only in per-element
+             config, which the derived deployment key does not fingerprint — so
+             without an explicit key the two share boot caches and a session
+             captured under one replays under the other. Same reasoning as
+             `dicom-regress` and `viz-flex-demo`. */
+          "cacheKey": "annotations-lab"
+        }}}
+      }
+    },
+
+    "annotations-lab-vision": {
+      /**
+       * The same lab with the `analyze` feature: `chat/medgemma-vision`
+       * registers the MedGemma driver on `pathology-foundation`, so
+       * `pathology.analyzeRegion(...)` and the chat agent's vision step work
+       * against a region instead of only the local tissue/cellularity priors.
+       *
+       * Not `extends: "annotations-lab"`: that preset answers the chat
+       * dimension with `chat/off`, which also disables `vercel-ai-chat-sdk` —
+       * the module MedGemma's driver goes through. Two fragments in the chat
+       * dimension is a conflict, not an override, so the layers are restated
+       * with a real provider, exactly as `dicom-idc-chat` does. The layer
+       * shape is `roles-dev-vision` minus the roles.
+       *
+       * Needs more than the base lab: a CERIT key for the agent
+       * (`CERIT_BASE_URL` defaults to the public endpoint) and a MedGemma
+       * endpoint (`MEDGEMMA_BASE_URL`, default loopback Ollama). MedGemma's
+       * `runVisionInference` also requires a logged-in session — under
+       * `auth/none` the analyze call is refused upstream, which is a correct
+       * refusal and not a broken deployment. Compose an `auth/*` fragment over
+       * this when testing that path.
+       */
+      "description": "The annotations lab plus the MedGemma vision driver — adds the `analyze` pathology feature",
+      "layers": [
+        "base/core", "data/tiff-webtiff", "demo/annotations-pathology",
+        "auth/none", "chat/openai-compatible-cerit", "chat/medgemma-vision",
+        "storage/tiered-sessions"
+      ],
+      /* MedGemma defaults to a loopback endpoint, and the SSRF guard refuses
+         private upstreams unless the operator allowlists them. */
+      "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" },
+      "override": {
+        "core": { "client": { "localhost": { "cacheKey": "annotations-lab-vision" } } }
+      }
+    },
+
     "roles-dev": {
       "description": "Role gating exercised by hand: five roles, no login, switch them in the user menu",
       /* `flags/…` is deliberately absent — debugMode comes from `--dev`
@@ -236,27 +308,56 @@
 
     "mlflow": {
       /* The other IO destination: slide-scoring results to an MLflow tracking
-         server. `io/github` and `io/mlflow` bind different capabilities, so they
-         can be layered together — this preset is the one-at-a-time case. */
+         server. `io/github` and `io/mlflow` both claim the `io` dimension, so
+         they cannot be layered as peers — a fragment that wants both states one
+         as its `$base`, the way `io/mlflow-annotations` does. */
       "description": "Slide-scoring results persisted to an MLflow tracking server",
       "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow"]
     },
 
+    "mlflow-annotations": {
+      /* Both MLflow record shapes in one deployment: a score is a metric on a
+         per-slide run, an annotation bundle is an artifact on a per-viewer run.
+         Same sink, same proxy alias — only the per-binding `template` differs,
+         which is the thing worth seeing work. */
+      "description": "Slide scores as MLflow metrics and annotation bundles as MLflow artifacts",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow-annotations"]
+    },
+
     "image-proxy": {
       /* Tiles routed through the server's `image-server` proxy alias instead of
-         straight to the image server. The thing to verify is that a session
-         cookie plus a CSRF token is NOT authorization: `session.allowedProxies`
-         decides, and a request for an alias the session never opened is refused. */
+         straight to the image server. The thing to verify is that nothing in the
+         deployment reaches the image server directly — tiles and the WSI file
+         browser listing both travel the viewer origin. */
       "description": "The default deployment with tiles routed through the image-server proxy alias",
-      "layers": ["base/core", "data/wsi-service", "transport/proxy-image-server", "auth/none", "chat/off"]
+      "layers": ["base/core", "data/wsi-service", "transport/proxy-image-server", "auth/none", "chat/off"],
+      /* `data/wsi-service` states the upstream origin as the client `baseURL`; in
+         proxy mode that origin lives server-side in `proxies.image-server.baseUrl`
+         and the client `baseURL` is the path AFTER `/proxy/<alias>/` — i.e.
+         nothing. A layer cannot delete a key an earlier layer wrote (the merge
+         has no removal sentinel), so the preset states the last word. Without
+         this the composed client asks for
+         `/proxy/image-server/http://localhost:9002/v3/...` and every slide 404s. */
+      "override": {
+        "core": { "client": { "localhost": { "slide_protocols": { "wsi_service": { "baseURL": null } } } } }
+      }
     },
 
     "storage-persistent": {
       /* Server-side state that survives a restart, with a retention window.
          `storage/persistent-30d` and `storage/tiered-sessions` both answer the
-         storage question, so they are alternatives rather than layers. */
-      "description": "Durable server-side storage with a 30-day retention window",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "storage/persistent-30d"]
+         storage question, so they are alternatives rather than layers.
+
+         Chat is layered in because it is what the storage fragment actually
+         binds: every namespace in `persistent-30d` (`kv:sessions`,
+         `log:messages`, `blob:attachments`) belongs to `vercel-ai-chat-sdk`, so
+         with `chat/off` this preset configured durability for a module it
+         disabled — there was nothing to restart over. `chat/all-providers`
+         registers all three and needs no key to boot: set whichever of
+         `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CERIT_API_KEY` you hold in
+         `env/.env`, or enter one per user in the chat settings. */
+      "description": "Durable server-side storage with a 30-day retention window, exercised by the assistant",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/all-providers", "storage/persistent-30d"]
     },
 
     "chat-logging": {

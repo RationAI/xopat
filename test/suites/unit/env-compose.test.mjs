@@ -171,6 +171,35 @@ test("non-public hosts are detected, public and templated ones are not @unit", (
     expect(hits.find((h) => h.path === "internal.issuer").kind).toBe("unlisted-host");
 });
 
+test("a proxy alias with an absolute baseURL is refused @unit", () => {
+    // The combination composes `/proxy/<alias>/http://host:port/...`: the client
+    // appends `baseURL` AFTER the alias, so the origin lands inside the path and
+    // every request 404s. It shipped once, in `image-proxy`.
+    const { conflicts } = composeLayers([
+        layer("data/wsi", { core: { client: { localhost: { slide_protocols: {
+            wsi_service: { url: "u", baseURL: "http://localhost:9002" } } } } } }),
+        layer("transport/proxy", { core: { client: { localhost: { slide_protocols: {
+            wsi_service: { url: "u", proxy: "image-server" } } } } } }),
+    ]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].kind).toBe("proxy-absolute-base");
+    expect(conflicts[0].path).toBe("core.client.localhost.slide_protocols.wsi_service.baseURL");
+    expect(conflicts[0].parties.map((p) => p.layer)).toEqual(["data/wsi", "transport/proxy"]);
+});
+
+test("a proxy alias with a relative or cleared baseURL is fine @unit", () => {
+    // The two legitimate shapes: a path after the alias (io/mlflow), and nothing
+    // at all — which a later layer can only express as `null`, the merge having
+    // no removal sentinel.
+    const relative = composeLayers([layer("io/mlflow",
+        { modules: { "io-mlflow-sink": { mlflow: { proxy: "mlflow", baseURL: "/api/2.0/mlflow" } } } })]);
+    expect(relative.conflicts).toEqual([]);
+
+    const cleared = composeLayers([layer("transport/proxy", { core: { client: { localhost: {
+        slide_protocols: { wsi_service: { proxy: "image-server", baseURL: null } } } } } })]);
+    expect(cleared.conflicts).toEqual([]);
+});
+
 /* ---------------------------------------------------- the shipped library */
 
 test("base/core + data/wsi-service reproduces env/env.default.json exactly @unit", () => {
@@ -183,6 +212,35 @@ test("every shipped preset composes without conflicts @unit", () => {
         const { conflicts } = composeEnv([name], {});
         expect(conflicts, `preset "${name}"`).toEqual([]);
     }
+});
+
+test("the image-proxy preset reaches the upstream only through the alias @unit", () => {
+    const { env } = composeEnv(["image-proxy"], {});
+    const protocol = env.core.client.localhost.slide_protocols.wsi_service;
+    expect(protocol.proxy).toBe("image-server");
+    // Falsy, not absent: the preset `override` block clears what
+    // `data/wsi-service` set, and `XOpatRemoteEndpoint` reads falsy as absent.
+    expect(protocol.baseURL).toBeFalsy();
+    expect(env.core.server.secure.proxies["image-server"].baseUrl).toContain("WSI_PORT");
+    // The file browser is the other half: its own client, its own config key.
+    expect(env.plugins["rationai-wsi-file-browser"].proxy).toBe("image-server");
+});
+
+test("storage-persistent enables the module whose namespaces it binds @unit", () => {
+    // `storage/persistent-30d` binds and retains `vercel-ai-chat-sdk` namespaces
+    // only, so composing it with `chat/off` configured durability for a disabled
+    // module — the deployment had nothing to restart over.
+    const { env } = composeEnv(["storage-persistent"], {});
+    const bound = Object.keys(env.core.server.secure.storage.bindings);
+    expect(bound).toContain("vercel-ai-chat-sdk");
+    expect(env.modules["vercel-ai-chat-sdk"].enabled).toBe(true);
+    // All three conversational providers register; an unset key resolves to the
+    // "" state (bring-your-own-key), so none of them is a required variable.
+    for (const id of ["chat-anthropic", "chat-openai", "chat-openai-compatible"]) {
+        expect(env.plugins[id].enabled, id).toBe(true);
+    }
+    expect(composeEnv(["storage-persistent"], {}).layers
+        .flatMap((l) => l.meta?.requires ?? [])).toEqual([]);
 });
 
 test("no tracked fragment carries a literal credential @unit", () => {

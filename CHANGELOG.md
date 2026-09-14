@@ -2,6 +2,326 @@
 
 ### Unreleased
 
+* **The earlier-dictation banner announced a non-event, and offered the wrong thing.** Once
+  the mixture report's resume offer was declined — or simply overtaken by pressing Start —
+  the row stayed up saying *"The earlier dictation from … is not part of this report"* beside
+  a **Start new report** button whose title read "leave the earlier dictation behind", while
+  the code behind it cleared **this** report: session, drafted fields, the confirmed
+  transcript, back to the findings phase. A decision already taken is not news, so the row
+  now collapses to one muted line and a link back while this report is still empty, and
+  disappears entirely once it has speech of its own (`resumeRowState()`, covered by a new
+  unit test). The confirmation names what is actually being cleared, mentioning the earlier
+  dictation only when this report is holding it. And clearing a report is now a permanent
+  **New report** action in the panel header — it lived only inside that banner, so a case
+  that never had an earlier dictation had no way to start over at all.
+
+* **A chat session outlived the server; its provider did not.** With storage bound durably
+  (`storage-persistent`), a restart left the session picker empty — transcript on disk, owner
+  principal intact, nothing listed. Provider *instances* are minted with `uid('prov')` into a map
+  on `globalThis`, so the id is re-minted every boot, while the session record that stores it is
+  durable; the panel lists sessions **for the current provider**, so every pre-restart
+  conversation was filtered out, and `getProviderRuntime` could not have resolved one anyway. A
+  session now stamps `metadata.providerRef` — the provider's durable identity
+  (`managedKey`/`managedByPlugin`/`typeId`), read from the registry, never from caller metadata —
+  `listSessions` matches through it, and `requireSessionAccess` rewrites the stale `providerId`
+  to the live instance on first access. Records written before the stamp fall back to
+  `providerTypeId`, so transcripts already on disk come back. A session created against a user's
+  own BYOK instance is deliberately **not** re-bound (its only same-type candidate is the
+  operator's provider, on the operator's key): it is listed with `providerUnavailable`, readable,
+  and sending waits for an explicit provider choice.
+
+* **`storage-persistent` had nothing to persist.** Every namespace the preset's
+  `storage/persistent-30d` fragment binds and retains (`kv:sessions`, `log:messages`,
+  `blob:attachments`) belongs to `vercel-ai-chat-sdk`, and the preset layered `chat/off` —
+  it configured durability for a module it disabled, so "restart and confirm the state
+  survived" had no state to produce. It now layers a new `chat/all-providers` fragment:
+  Anthropic, OpenAI and the OpenAI-compatible (CERIT) provider all register, each taking
+  its operator key from `env/.env` when one is set. No key is required to boot — an unset
+  `<% VAR %>` resolves to the `""` three-state middle value, which lists the provider and
+  asks the user for a key — so the preset still composes on a bare checkout. The restart
+  then demonstrates both halves: the transcript comes back, and the per-user key does not
+  (`kv:secrets` is `sensitivity: "secret"` and refuses persistent drivers).
+
+* **The `image-proxy` deployment reached the image server through nothing at all.** Every
+  request composed as `/proxy/image-server/http://localhost:9002/v3/...`: `data/wsi-service`
+  states the upstream origin as the client `baseURL`, `transport/proxy-image-server` adds
+  the alias on top, and the ENV merge has no removal sentinel — so the protocol carried
+  both, and `XOpatRemoteEndpoint` concatenated them after warning about it. In proxy mode
+  `baseURL` is the path *after* `/proxy/<alias>/`; the origin belongs server-side to
+  `proxies.<alias>.baseUrl`. The preset now clears it (`"baseURL": null` in its `override`
+  block), the endpoint keeps only the *path* of an absolute `baseURL` under an alias so the
+  broken URL is unconstructible, and `up:check` refuses the pair as a `proxy-absolute-base`
+  conflict naming both layers. The WSI file browser — the one piece of that deployment
+  still on a bare `fetch()` to its own absolute `wsiService`, which kept the case listing
+  going direct while the tiles were proxied — now builds an `HttpClient`, taking a `proxy`
+  alias when the deployment names one and the `wsiService` base otherwise. Proxying it then
+  surfaced a third defect: `/proxy/<alias>/` rebuilds the remainder with
+  `split('/').filter(Boolean)` — the collapse that stops a pasted origin from
+  reconstructing itself — and lost the **trailing slash** with it, so `/v3/cases/` reached
+  the upstream as `/v3/cases`, was answered with a 307 back to itself, and the redirect
+  guard refused the loopback hop with a 502. The slash is restored explicitly (it cannot
+  carry an origin) and both halves are pinned by
+  `test/suites/integration/proxy-path.test.mjs`.
+
+* **Dictation in any language.** The transcription language was pinned to the UI locale —
+  which can only be English or Czech — so a Japanese dictation reached Whisper hinted `en`
+  and came back as English filler ("I'm … and the"); the chat's wrong-language gate then
+  discarded anything decoded in another language, and five Latin-only text filters (prompt
+  echo, the segment-noise word count, the correction guard, quote grounding, repetition
+  locks) would have blanked or refused correct Japanese text anyway. `voice.language` /
+  speech-to-text `language` now default to `"auto"`: the recognizer detects the language,
+  two agreeing segments pin it for the dictation (`language-pinned` / chat `voice-language`,
+  per-segment `metrics.language`/`languageHint`), the English glossary prompt is withheld from
+  non-English sessions, `remoteWhisper` asks for `verbose_json` so it learns the language too,
+  and every text filter tokenises with `Intl.Segmenter` (one `textWords` helper per module;
+  Japanese subtitle fillers blanked like English ones). The MIXTURE corrector keeps the
+  transcript in the spoken language and uses the English form only as a reference; the
+  extraction prompt says option fields resolve in any language and free text is never
+  translated; the report panel shows the detected language and the session trace records it.
+
+* **The transcript review starts from what the pathologist watched arrive.** The
+  MIXTURE review modal used to prefer a re-read of the recording (90 s archive windows)
+  over the live per-segment transcript, a preference from the days of 7 s blind chunks;
+  with silence-cut Silero segments the live text is the better one, and the window text
+  brought its own errors (hallucinated tails over trailing silence) that the guard then
+  kept. The live transcript is now the review base — the recording is decoded only when
+  a new integrity ledger (`modules/mixture-interface/live-integrity.mjs`) can point at
+  speech the live text lost (a segment sent and answered with nothing, a queue abandoned
+  at stop, a permanent transcription error, an impossible word rate), and adopted only
+  when it is not shorter. Archive windows are banked lazily (speech-to-text
+  `windowMode: "lazy"`; nothing uploaded during dictation), the per-window background
+  LLM corrections are gone, the correction pass runs over exactly the text on screen,
+  the chat `voice-gate` event gained kind `abandoned`, and the session trace records
+  `transcript-source {base, reason, integrity}` plus a new `transcript-review` (what the
+  modal showed and what was accepted). The modal says so when the recording replaced the
+  live text.
+
+* **Speech-to-text hears speech, not loudness.** The dictation capture's voice activity
+  detector is now Silero VAD (v5 via `@ricky0123/vad-web`, onnxruntime-web WASM, assets
+  served same-origin from `modules/speech-to-text/dist/silero/`); the peak-amplitude meter
+  every silence gate used to infer from stays as the fallback engine, reported per session
+  (`capture-warning {code:"vad-fallback"}`) and per segment (`metrics.vad`). Both engines
+  feed one pure gate (`speechGate.ts`, unit-tested). Under Silero each segment is uploaded
+  as a PCM16 WAV cut from the VAD's own frames — no per-segment MediaRecorder, no seam
+  overlap — and the probe / fail-open ladder is off (a model verdict is not second-guessed
+  by a transcript). The chat composer emits `voice-ui {state, speaking}` on change, and the
+  MIXTURE report panel shows **Speaking** beside **Capturing** from it.
+
+* **A control point is never something you can grab.** The dots a drawing in progress
+  puts on the canvas — the polygon's red start point, the orange follow points, the shape
+  itself, the free-form-tool working polygon — were intermittently selectable, and
+  clicking one painted fabric's scale corners and rotation handle over the drawing and
+  took the gesture away from the creation mode. The factories always passed the right
+  flags; three later passes overwrote them (`renderAllControls`, the preset
+  `commonAnnotationVisuals` merged *over* the helper properties, and
+  `_applyAnnotationVisibilityState` which guarded highlights but not helpers, reached
+  for every helper by the interaction toggle, the spatial index's lazy refresh and the
+  layer loops). Non-interactivity is now stated once,
+  `OSDAnnotations.freezeHelperInteractivity`, and enforced once, by
+  `addHelperAnnotation` — including emptying `controls`, so a stray `hasControls`
+  has nothing left to draw. Promotion restores all of it, so a finished annotation is
+  interactive as before. Factories consequently pass **no** interactivity properties at
+  all — they state geometry and preset visuals, the canvas states the rest — which also
+  retires the shared props bag whose in-place mutation used to copy the control point's
+  own geometry (`radius`, centred origins, the first click's position, `factory:
+  "__private"`) onto the polygon being drawn.
+
+* **A mode button no longer lies about the mode.** Clicking *edit* in the annotations
+  toolbar left it highlighted while the module was still in navigation, and re-clicking
+  retried the same refusal: `ToolbarGroup` paints its selection on click, before the app
+  decides, and `mode-changed` was the only thing that could repaint it — but a mode that
+  refused to activate *from* AUTO (a read-only annotation vetoing `edit-start`, magic wand
+  with no data, viewport segmentation with no preset) raised no event at all. A refused
+  switch now states the mode that is in effect, so every listener corrects itself. Two
+  neighbours of the same bug: `_setModeToAuto` assigns `this.mode` before announcing it,
+  and `enableInteraction(false)` resets the mode *before* setting
+  `disabledInteraction` — `setMode` refuses on exactly that flag, so its own "return to
+  the default state, always" reset was a no-op and rights gating could freeze the viewer
+  in edit mode. `ToolbarGroup.setSelected(id, fireOnChange)` now takes the flag its
+  callers were already passing, matching `ToolbarChoiceGroup`.
+
+* **Translations stopped mangling the values they interpolate.** i18next escapes
+  interpolated values for HTML by default, and xOpat renders translations as text — so a
+  date arrived as `9&#x2F;12&#x2F;2026`, a quoted word as `&quot;knows&quot;`, and any
+  file name with an ampersand the same way. Escaping is now off at both inits (client
+  `src/app.ts`, server `server/node/index.js`); the sinks that do build HTML already
+  escape at the sink (`escapeHtml` in `loader.ts`) or sanitize (Dialogs/Toast), which is
+  where that decision belongs. The three per-call `interpolation: {escapeValue:false}`
+  workarounds (questionnaire, measurements, chat) are now redundant.
+* **The corrections the assistant withheld can be accepted.** The transcript-review
+  modal listed them under the editor as dead text ("edit it yourself if one of them was
+  right"). They now lead the modal — the contested edits belong above the text they are
+  about — and each carries **Apply**, which inserts it into the transcript as an accepted
+  suggestion chip: readable in context, reversible in one click, and reported by
+  `getDecisions()` like any other decision. They stay out of *Accept all* on purpose.
+  New generic component API: `SuggestionEditor.applyReplacement(from, to)`.
+
+* **Reporting: an earlier dictation is offered, never folded in.** A report used to
+  reattach to the case's most recent conversation inside `start()`, while a separate
+  probe fed the banner describing it — so the banner arrived after recording had begun,
+  could appear and vanish around a start, and the old session ended up in the new
+  recording anyway. Resume is now opt-in and single-sourced: the panel states what it
+  found *before* anything is dictated, with **Continue it** · **Ignore it**, and a start
+  with no answer opens a clean session. The offer closes once this report has speech of
+  its own (two dictations in one transcript cannot be reviewed apart) and says so.
+  *Start new report* now runs under a labelled busy op instead of greying the buttons
+  with nothing on screen, skips the "you will lose this" dialog when there is nothing to
+  lose, and **resumes recording** when it was pressed mid-dictation — it was leaving the
+  microphone off, so the next sentence went nowhere and the pathologist pressed record
+  twice. A failed start ("the provider has not finished loading its models") is cleared by
+  the next start attempt rather than surviving until an extraction pass lands, which made
+  a working report look broken.
+* **Reporting is a silent consumer of the chat module.** The report session is a
+  transcript/audio store, not a conversation on screen: the per-pass change-log bubble is
+  gone (it never rendered — `ChatMessageList` hides any message carrying an
+  `internalSource` outside the "all" display mode — so the chat showed an empty transcript
+  while the report drafted), and re-attaching to a report session no longer pulls the Chat
+  tab into it (`openSession(id, {showChatView:false})`). Starting is faster:
+  `createSession(input, {transcriptOnly:true})` skips the scripting-baseline wait, which
+  exists to complete a first turn's tool manifest and has nothing to do with a session that
+  runs no turns, and the provider reference + model catalogue are resolved at panel open
+  instead of under the Start spinner. The transcript-review modal no longer carries the
+  "this is the live transcription, not the re-read recording" notice; the whole-audio
+  re-read and its `reason` trace are unchanged.
+
+* **Measurements panel: picking and tissue masks behave.** A derived tissue mask now
+  keeps the island the measured annotation sits on (containment ranks first, then boundary
+  distance; the nearest island always survives the reach filter) instead of whichever
+  island happened to be near the *last* polygon the derivation added — the annotations
+  module selects every annotation it adds with `fromCanvas: true`, which silently turned the
+  panel subject into that polygon mid-derivation. The mask is sent to the back and the
+  previous selection restored, so the annotation drawn on it stays clickable. The mask lands
+  in the slot as the concrete islands (numbered, hoverable, focusable), not as an inert
+  class chip; class/all chips are hoverable and focus the union of their members too. A pick
+  for slot B puts the pre-pick selection back (a pick is a click, not a selection change),
+  operands whose annotation was deleted are dropped (no more ghost highlight), the operand
+  menu offers the current selection, and "Derive tissue mask into class…" opens again
+  (`presets.getExistingIds()` is a Map iterator; `.map` on it threw before the dialog built).
+  The right-click popover now says what it shows: rows are grouped into *Geometry* (exact,
+  always current) and *Pixel sampling* (with the source · channel · threshold the cached
+  numbers were taken with, or "not sampled yet"), every metric has a one-line tooltip, a
+  failed sample prints its reason instead of dashes, the header shows the shape and
+  hover-highlights / click-focuses the annotation, and the two buttons explain themselves.
+* **Tissue ratio in one click, and a popup inside a modal is no longer painted behind it.**
+  The canvas right-click menu has a nested **Measurements ▸** entry: quick view, *Measure
+  pixels*, *Tissue ratio (derive mask)* and *Open panel*; the two computations open the
+  popover, which shows progress, the result or the failure reason. Tissue derivation is now
+  one module method (`deriveTissueMask`) shared by the panel, the popover, the canvas menu and
+  the scripting `tissueRatio()` — which thereby gains the island pruning it never had. The
+  ratio is cached on the annotation (own key; stale with the shape) and shows as a *Tissue
+  ratio* row in the popover and panel and a *Tissue %* column in the table and CSV. The mask
+  polygons stay on the slide, in the active class, so unwanted parts can be deleted; the
+  dimmed entry says so when the pathology module is missing.
+  `FloatingManager.register` takes an `anchor`: the popup's z-index floor becomes its anchor's
+  stacking context + 1 (and survives `bringToFront` / renormalisation). The manager's band is
+  100–899 while a DaisyUI `.modal` is 999, so every `Autocomplete`/`Dropdown` list portaled
+  to `<body>` from inside a dialog — the class picker in "Derive tissue mask into class…", the
+  annotations preset dialog — opened behind the modal. Raising the band would put popups over
+  modals that should cover floating windows; only the anchored popup is lifted.
+  A ruler (line, polyline, arrow) no longer reads "NaN km²": an open shape has no area,
+  and the engine formatted the missing value through the unit ladder anyway. Its length row
+  is now labelled *Length*; *Perimeter* is reserved for closed shapes, and the dimmed Area
+  placeholder is dropped when there is a length to show.
+* **Dictation no longer loses speech silently.** A field round on MIXTURE turned up a
+  dozen defects in `speech-to-text` and the chat voice controller that each, on its own,
+  produced the observed symptom — segments with ten seconds of voice decoding to `"The"`,
+  the whole-audio review transcript coming back as a fraction of the dictation or empty.
+  The live path **fell back to the in-browser `whisper-tiny.en`** on any non-auth endpoint
+  error while the metrics still named the configured model (`liveFallback` now opts in;
+  results and metrics carry the driver that *answered*). A dead or muted microphone
+  produced 15 s blobs of digital silence, whisper hallucinated `"The"` on each, and the
+  third one — a VAD "probe" — flipped the session **fail-open** for an hour of uploads
+  (silence is never uploaded now in any mode; a probe counts only if the consumer gate
+  accepts it). The archive byte cap accumulated across every dictation in the tab and,
+  with no `audioBitsPerSecond`, was reached in ~21 minutes, after which every window
+  sealed short or empty (32 kbps pinned; bytes handed over are subtracted). A rotated-out
+  archive recorder's error/cap handler **stopped its successor**; `whenArchiveSettled`
+  resolved after the *first* of two pending seals and could also hang forever; teardown
+  stopped the tracks in the same turn as the final flush. The prompt-echo filter blanked
+  any segment made of two glossary terms (`"fibrosis, necrosis."`) and `looksRepetitive`
+  erased a whole window for a four-times-repeated phrase — both now keep the speech and
+  report what they changed (`segment-filtered`). Window records have real states
+  (`pending` / `done` / `retryable` / `failed`) — `pending` used to never drain and
+  `failed` was unreachable, which is why "first Submit spun until Cancel". Windows are
+  scoped to the dictation (a start is a new dictation unless `continuesSession`), a
+  cleared recording aborts in-flight uploads, and an empty window logs its own local
+  decode length beside the backend's (`window-empty`, `getFailedWindowBlobs()`). The
+  OpenAI-compatible shim sends `temperature=0` and asks for `verbose_json` (per-model
+  fallback to `json`), so Whisper's `no_speech_prob` / `avg_logprob` /
+  `compression_ratio` reach the consumer gate. The level meter no longer beats the
+  liveness watchdog (a dead mic never triggered it); Send during hands-free finishes
+  gracefully instead of aborting the in-flight segment; the lone-word ratio is taken
+  against the speech span rather than wall time (`"UIP"` after a pause was rejected).
+  Every recorded segment that does not reach the transcript now says why:
+  `segment-discarded` / `segment-gated` / `segment-filtered` / `segments-abandoned`.
+  Follow-up from the first field round on the fix: the chat controller now always *continues*
+  the dictation on start (the consumer that retains audio owns its boundary — a start that
+  dropped the recording made the review compare one capture against a whole session and
+  discard the whole-audio text as "too short"); `capture-started` marks when recording
+  actually begins and the composer shows "Opening microphone…" until then (the listening UI
+  never drops while hands-free is on); dictation mode no longer switches itself off after
+  five quiet minutes and a lost session is retried every 5 s instead of finishing;
+  consecutive segments share up to a timeslice of audio and the repeated seam is trimmed
+  (`segment-trimmed`); an endpoint answering with no text raises `segment-empty`; all of
+  these reach observers as `voice-gate`.
+  **Root cause, found by posting a retained failing window straight to the endpoint: the
+  biasing `prompt` made the deployment’s Whisper drop whole stretches of audio in proportion
+  to its length** (no prompt: the full 93 s; the 495-char glossary: the last third gone;
+  glossary + report terms: 30 s of the middle and nothing else). The prompt is now off by
+  default (`promptMaxChars: 0` in the module, `transcriptionPromptMaxChars` per provider on
+  the server); vocabulary correction stays with the post-hoc corrector. A `null` decode verdict
+  from the backend is absent, not zero; `stt.exportFailedWindows()` downloads retained failing
+  windows for exactly this kind of test.
+  Cleanup: the module and the voice controller log through `APPLICATION_CONTEXT.log`
+  (`module.speech-to-text`, `:vad`, `module.vercel-ai-chat-sdk:voice`) instead of `console.*`,
+  so VAD diagnostics are a channel level in `env.client.logging` rather than the removed
+  `xopat-stt-debug` localStorage flag; the concluded `contextPromptAB` experiment and its
+  `promptContext.ts` are gone.
+  Whisper’s short silence fillers (`Thank you.`, `Hello.`) are blanked as whole transcripts and
+  a ≤3-word transcript over <400 ms of voice is rejected by the consumer gate (probe and flush
+  segments bypass the module’s floor), so a filler can no longer flip a session fail-open; a
+  probe’s gate verdict is reused by the drain instead of judged twice; `overlapMs` reaches the
+  metrics so one-word seams are trimmed.
+* **The View menu has an "Appearance" group, and the capture markers finally live somewhere.**
+  `CaptureIndicator` registered its on/off row with `View.append(...)` — the un-categorised path
+  meant for plugin *windows* — so "Analysis capture markers" rendered as a loose row **above** the
+  Viewer Side Menus / Tool Bars / Global Menus submenus, and it was the only caller of that method
+  in the repo. It now registers under a new `appearance` category, joined by the **scalebar**, which
+  previously had no live toggle outside Settings. Both keep the hide-UI contract (`on`/`off` do not
+  persist, `set` does), so hiding and unhiding the interface no longer risks rewriting the user's
+  preference. The scalebar registers under its component *kind* rather than its per-viewer id, so a
+  multi-viewport grid gets one row that fans out to every viewport. **Watch out if you pin quick
+  actions:** the catalogue key is built from the category, so
+  `view:core.captureIndicator` becomes `view:appearance.core.captureIndicator` and an ENV
+  `setup.quickActions` entry using the old key is silently dropped; the scalebar arrives as a new
+  `view:appearance.scaleBar`.
+* **The context menu is compact, and its group separator is a rule instead of a gap.**
+  `CanvasContextMenu.collect` pushes `{title: ""}` between provider groups, and the renderer drew
+  that as a 10px text row *with* a `border-bottom` — an empty line box plus a rule, so a
+  three-provider menu read as gapped. Separators are now hairlines, leading/trailing ones are
+  dropped and runs collapse (the producers cannot know whether the next provider will contribute,
+  so a dangling trailing rule was the normal case). Titled headers render as `menu-title`, which is
+  also DaisyUI's opt-out from the hover highlight they should never have had. Row geometry moved to
+  inline styles keyed off two constants — `.menu`'s `.5rem` sidebar padding was being re-paid by
+  every cascade level, and the flyout's vertical offset was an independent magic number that had
+  drifted from it, so submenus did not line up with the row that opened them. Also drops
+  `dropdown-item` and `pointer`, two classes nothing has defined since Primer left.
+* **A deployment can now decide which right-side panels a viewer boots with.** `ui.navigator` was the
+  only side-menu panel config could reach; every other tab read the user's cached `<tabId>-open`
+  toggle and defaulted to open, so "hand the pathologist a clean viewer with just the navigator" was
+  not expressible without per-user setup. The new `setup.ui.sideMenuTabs` takes a boolean or a map of
+  tab id → boolean with `"*"` as the fallback for tabs it does not name, so
+  `{"*": false, "navigator": true}` also covers panels appended later by plugins the operator has
+  never heard of. Resolution moved into a leaf module (`ui/classes/mixins/utils.mjs`,
+  alongside `resolveSideMenuCompact`) and reaches `Menu.append`/`appendExtended` through a new
+  `options.initialOpenResolver` — the two plugin-panel call sites had their own copy of the
+  cache read, which is why the first version of this only worked for the built-in tabs. Precedence
+  matches the rest of the `ui.*` namespace: session param > the user's cached toggle > deployment
+  default > open, so a returning user keeps panels they opened and a deployment needing a
+  deterministic boot state sets it in the session `params.ui`. Same commit declares `sideMenuTabs`,
+  `sideMenuCompact` and `globalMenuMode` in `src/config.json`'s `setup.ui`: session params are
+  filtered one level deep against that block, so the latter two were silently dropped from a session
+  despite being documented as session params.
 * **Fixed upstream and re-vendored**: a multi-channel OME-TIFF rendered one channel, silently. Files
   of that shape store each channel as its own full-size IFD with `SamplesPerPixel = 1` and hang the
   pyramid off each plane as SubIFDs; web-tiff's request carried a single directory, so planes 1..N
@@ -56,6 +376,33 @@
 * A degraded `HtmlRenderer` render is now upgraded when `sanitize-html` finishes loading, matching
   what `modules/markdown` and `Toast` already do — degrading closed is only defensible while
   temporary.
+* **Security: that fix removed the only sanitization on the viewer-menu path.** Handing over parsed
+  nodes means `BaseComponent.parseDomNodes`, i.e. `template.innerHTML` with no allowlist, and
+  `<template>` is inert only for `<script>` — an `onerror` fires the moment the nodes are attached.
+  Reachable because `plugins/custom-pages` reads its page list *and* its `sanitizeConfig` from
+  `getOption`: a session bundle could supply `{type:"html", html:"<img src=x onerror=…>"}`, pick
+  `target:"viewer"`, and run script on the viewer's origin. Sanitization now happens where untrusted
+  content **enters** `renderUIFromJson` rather than over the assembled body — which is what stripped
+  the ids in the first place, so both properties hold at once:
+  - raw `{type:"html"}` is filtered through a module-owned allowlist (`HTML_ALLOWLIST` widened by
+    `details`/`summary`, inert text-structure tags, and `id`), degrading **closed** to escaped text;
+    the `secureMode`-gated raw pass-through is gone, and `sanitizeConfig` now selects a policy rather
+    than switching one off.
+  - values interpolated into attributes are **escaped**. Not redundant: sanitize-html escapes text
+    with `escapeHtml(text, false)`, so `classes: '" onmouseover="…'` broke out of `class="…"` *with
+    the sanitizer enabled*.
+  - a page `type` is resolved against an allowlist of presentational elements. It previously reached
+    the whole `UI` namespace, including `UI.RawHtml` (innerHTMLs its children) and `UI.StatusBar`
+    (innerHTMLs `initialMessage`) — script execution with no `{type:"html"}` node involved at all.
+  - component options and string children stopped being sanitized: they go through van.js/`toNode`,
+    which escape, and running them through a *markup* sanitizer only rendered "Tumor & stroma" as
+    "Tumor &amp;amp; stroma".
+  `custom-pages` reads `sanitizeConfig`/`target` from `getStaticMeta` only (§7) and splits pages by
+  provenance — operator pages get the operator's policy, session pages always get the module default.
+  As a side effect `ENV.plugins["custom-pages"].data` works for the first time; `getOption('data', [])`
+  passed an explicit default, which suppresses the ENV fallback (`loader.ts`).
+  Pinned by `modules/menu-pages/test/unit/render-sanitize.test.mjs` and
+  `plugins/custom-pages/test/e2e/session-pages-xss.test.mjs`.
 
 * **Preview-level injection is source-gated, not role-gated.** The synthetic coarsest level
   (`src/classes/preview-level.ts`) used to be offered only to backgrounds, on the grounds that an

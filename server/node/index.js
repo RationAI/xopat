@@ -1451,9 +1451,17 @@ async function responseProxy(req, res, requestUrl, session) {
     if (!core) return;
 
     // 2. Extract alias from /proxy/alias/v1/...
+    // `filter(Boolean)` is load-bearing: it collapses the empty segments that let
+    // `/proxy/<alias>//evil.com/x` (or a pasted absolute URL) reconstruct into a
+    // second origin. It also drops a TRAILING slash, which upstreams distinguish
+    // — wsi-service answers `/v3/cases/` with 200 and `/v3/cases` with a 307 to
+    // itself, and the redirect guard then refuses the loopback hop with a 502.
+    // Restore that one slash explicitly; it cannot carry an origin.
     const parts = requestUrl.pathname.split('/').filter(Boolean);
     const alias = parts[1];
-    const targetPath = '/' + parts.slice(2).join('/') + (requestUrl.search || '');
+    const rest = parts.slice(2).join('/');
+    const trailing = rest && requestUrl.pathname.endsWith('/') ? '/' : '';
+    const targetPath = '/' + rest + trailing + (requestUrl.search || '');
 
     // 3. Match against the "secure.proxies" definition. `hasOwnProperty`, not a
     // bare index: `alias` is client-supplied, so `/proxy/constructor/...` would

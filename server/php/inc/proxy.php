@@ -50,8 +50,13 @@ function handleProxyRequest($pathInfo) {
     if (!enforceProxyCredentialGate($alias, $proxyConfig)) exit;
 
     // 3. Prepare Upstream
-    // Target path starts AFTER the alias
-    $targetPath = '/' . implode('/', array_slice($parts, $proxyIndex + 2));
+    // Target path starts AFTER the alias. The trailing slash is restored: the
+    // `trim()` above drops it, and upstreams distinguish `/v3/cases/` from
+    // `/v3/cases` — the latter is commonly answered with a redirect back to the
+    // former, which this proxy hands to the caller rather than following. Mirrors
+    // the same fix in server/node/index.js.
+    $rest = implode('/', array_slice($parts, $proxyIndex + 2));
+    $targetPath = '/' . $rest . ($rest !== '' && substr($pathInfo, -1) === '/' ? '/' : '');
     $targetUrl = rtrim($proxyConfig['baseUrl'], '/') . $targetPath . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : '');
 
     $incoming = getallheaders();

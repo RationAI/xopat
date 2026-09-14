@@ -269,6 +269,44 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
     let pluginsToolsBuilder, tissueMenuBuilder;
 
     /**
+     * Turn an `Errors.show` argument into a Node that can never execute script.
+     *
+     * The error screen is markup-capable by contract (payloads embed `<br>` and
+     * `<code>`), but its inputs are not all ours: `src/app.ts` renders
+     * `CONFIG.error` / `.description` / `.details`, which come straight from the
+     * session bundle (POST_DATA, `?visualization=`, the URL hash) — i.e. from
+     * whoever handed the user the link. Those used to be assigned to `innerHTML`
+     * verbatim. (AGENTS.md §7)
+     *
+     * A Node passes through untouched, which is how core callers avoid the
+     * sanitizer entirely: they build `<code>` themselves and hand over the text.
+     * A string with no `<` becomes a text node — no sanitizer needed, so a boot
+     * error still renders correctly before modules load. Only a string that
+     * genuinely carries markup goes through `BaseComponent.toNode`, which applies
+     * the component allowlist and degrades to text when `SanitizeHtml` is absent.
+     *
+     * @param {string|Node} value
+     * @return {Node}
+     */
+    function errorMessageNode(value) {
+        if (value instanceof Node) return value;
+        if (value === undefined || value === null) return document.createTextNode("");
+        const text = String(value);
+        if (!text.includes("<")) return document.createTextNode(text);
+        // `toNode` only treats a string as markup when it *starts* with `<`;
+        // wrap so an embedded `<br>`/`<code>` is sanitized, not shown verbatim.
+        const wrapped = text.trimStart().startsWith("<") ? text : `<span>${text}</span>`;
+        try {
+            return UI.BaseComponent.toNode(wrapped, false) ?? document.createTextNode(text);
+        } catch (e) {
+            // This is the error screen: it must render whatever happens, and a
+            // throw from inside it replaces a legible failure with a silent one.
+            console.warn("Errors.show: falling back to text rendering.", e);
+            return document.createTextNode(text);
+        }
+    }
+
+    /**
      * Definition of UI Namespaces driving menus and UI-ready utilities.
      * @namespace USER_INTERFACE
      */
@@ -335,23 +373,47 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
             active: false,
             /**
              * Show viewport-covering error
-             * @param title
-             * @param description
+             * @param {string|Node} title markup-capable; a string is sanitized,
+             *   a Node is used as-is (build one to keep control of the markup)
+             * @param {string|Node} description same contract as `title`
              * @param withHiddenMenu
              */
             show: function(title, description, withHiddenMenu = false) {
                 USER_INTERFACE.Tutorials._hideImpl(); //preventive
-                // Title/details are markup-capable (error payloads embed <code>),
-                // matching the previous jQuery `.html(...)` contract.
+                // Markup-capable (error payloads embed <code>), but never raw —
+                // see `errorMessageNode`: part of this content is session-supplied.
                 const titleNode = document.getElementById("system-message-title");
-                if (titleNode) titleNode.innerHTML = title;
+                if (titleNode) titleNode.replaceChildren(errorMessageNode(title));
                 const detailNode = document.getElementById("system-message-details");
-                if (detailNode) detailNode.innerHTML = description;
+                if (detailNode) detailNode.replaceChildren(errorMessageNode(description));
                 document.getElementById("system-message")?.classList.remove("hidden");
                 document.body.classList.add("disabled");
                 USER_INTERFACE.Tools.close();
                 this.active = true;
             },
+            /**
+             * Build the standard `<message> <br><code><detail></code>` body as a
+             * Node. Prefer it over assembling that markup in a template string:
+             * the detail is usually an exception, and an exception's message can
+             * carry an upstream response body (a proxied error page, a DICOM
+             * server's 500). Here it is `textContent`, so it cannot be markup.
+             * @param {string} message translated lead-in text
+             * @param {*} [detail] exception or string; stringified, may be empty
+             * @return {Node} pass straight to {@link USER_INTERFACE.Errors.show}
+             */
+            detail: function(message, detail) {
+                const fragment = document.createDocumentFragment();
+                fragment.append(message === undefined || message === null ? "" : String(message));
+                const text = detail === undefined || detail === null ? "" : String(detail);
+                if (text) {
+                    fragment.append(document.createElement("br"));
+                    const code = document.createElement("code");
+                    code.textContent = text;
+                    fragment.append(code);
+                }
+                return fragment;
+            },
+
             /**
              * Hide system-wide error.
              */

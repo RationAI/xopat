@@ -169,6 +169,30 @@ Where:
   expect: "json" | "text" | "auto", // default "auto" — drives response parsing
   }
 
+`expect` in detail:
+
+- `"json"` — `res.json()`. A body that does not parse throws an `HTTPError` (not a
+  bare `SyntaxError`), so it surfaces immediately instead of being replayed by the
+  retry arm.
+- `"text"` — `res.text()`, verbatim.
+- `"auto"` (default) — a JSON content-type parses as JSON; otherwise the body is
+  read once, parsed as JSON opportunistically, and returned as **text** when that
+  fails. An empty body returns `{}`.
+
+  **An HTML document is refused, never returned.** If the content-type is
+  `text/html` / `application/xhtml+xml`, or the body sniffs as `<!doctype html` /
+  `<html`, the call throws an `HTTPError` carrying a capped excerpt. What answers
+  `text/html` to an API call is an intermediary — a proxy error page, a captive
+  portal, a WAF block, a login redirect — and returning that markup as "the
+  result" hands third-party-authored HTML to a caller that may render or
+  interpolate it (AGENTS.md §7). Use `expect: "text"` for an endpoint that
+  genuinely serves documents.
+
+Failed responses (non-2xx) have at most 16 KiB of their body read into
+`HTTPError.textData`; longer bodies are suffixed `… [truncated]`. A server's
+`{"retriable": …}` verdict is honoured only from **our own origin** — a
+cross-origin upstream cannot dictate this client's retry policy.
+
 Example:
 
     const client = new HttpClient({
@@ -275,6 +299,14 @@ Behavior in proxy mode:
   For example:
 
   /proxy/cerit/v1/chat/completions
+
+  `baseURL` here is a **path**, not an origin: the alias already names the
+  upstream server-side (`core.server.secure.proxies.&lt;alias>.baseUrl`). An
+  absolute `baseURL` passed alongside a proxy is reduced to its path and warned
+  about — it used to be concatenated as given, producing
+  `/proxy/&lt;alias>/http://host:port/...`, a URL no server can answer. The
+  trailing slash of a request path is forwarded as written, because upstreams
+  distinguish `/v3/cases/` from `/v3/cases`.
 
 - HttpClient automatically adds **CSRF** header if `window.XOPAT_CSRF_TOKEN` is available:
 

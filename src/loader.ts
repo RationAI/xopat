@@ -384,13 +384,22 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     let _versionCheckWarned = false;
 
     /**
-     * Verify an element's `engines.xopat` range against the running app version.
-     * The check is skipped - not failed - when the deployment does not report a
+     * Verify an element's `engines.xopat` range against the running app version,
+     * and its `devOnly` marker against the server's dev mode.
+     * The version check is skipped - not failed - when the deployment does not report a
      * usable version, since refusing on an unknowable version would break
      * development builds that legitimately ship `version: null`.
      * @return a human readable reason when the element must not load, else null
      */
     function incompatibilityReason(record: XOpatElementRecord | undefined): string | null {
+        // A development harness is not a feature a deployment may opt into: it exists to
+        // hand a machine unrestricted access to the running page. Declaring it here makes
+        // the gate one refusal the loader enforces for every such element, instead of a
+        // runtime check each harness has to remember to write.
+        if (record?.devOnly === true && APPLICATION_CONTEXT.env?.server?.devMode !== true) {
+            return $.t('messages.devOnlyElement');
+        }
+
         const range = record?.engines?.xopat;
         if (!range) return null;
 

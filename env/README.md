@@ -57,6 +57,29 @@ files untrustworthy, so it is refused. Exempt by design: a layer declaring
 `role: "base"` (it exists to be overridden), and explicit overrides (`--set`, a
 preset's `override` block). `--force` downgrades everything to last-wins.
 
+**A layer cannot delete a key an earlier layer wrote** — the merge has no removal
+sentinel, and adding one would make every fragment a place to look for absences.
+When an overlay replaces a mechanism rather than a value, the deployment states
+the last word: `image-proxy` layers `transport/proxy-image-server` over
+`data/wsi-service`, where the direct upstream origin lives in the client
+`baseURL` and the proxied one must not, so the preset's `override` block sets
+`…slide_protocols.wsi_service.baseURL: null`. `null` overwrites like any scalar
+and the client reads falsy as absent.
+
+One composition check exists for exactly that pair, because getting it wrong
+produces a deployment that looks configured and answers nothing:
+
+```
+CONFLICT  core.client.localhost.slide_protocols.wsi_service.baseURL  (proxy-absolute-base)
+  data/wsi-service             "http://localhost:9002"
+  transport/proxy-image-server "proxy: image-server"
+```
+
+In proxy mode `baseURL` is the path **after** `/proxy/<alias>/` — the upstream
+origin belongs to `core.server.secure.proxies.<alias>.baseUrl`. Leaving both set
+composes `/proxy/image-server/http://localhost:9002/v3/…`, which is what shipped
+before the check existed.
+
 Fragments also declare a **dimension** — `data`, `auth`, `chat`, `io`,
 `storage`, … — and two fragments in one dimension conflict even when their keys
 never overlap, because two data sources or two auth brokers is a
@@ -107,7 +130,9 @@ project tests are then the same one, not two that drift.
 
 #### What `up:check` refuses in a tracked fragment
 
-Three separate gates, because they catch different mistakes:
+Three separate gates, because they catch different mistakes (a fourth,
+`proxy-absolute-base`, is a composition conflict rather than a fragment lint —
+see [above](#conflicts-are-an-error-not-a-merge)):
 
 - **A literal credential** — API-key, PAT, PEM and JWT shapes. Exit 4.
 - **A non-public hostname** — an RFC1918/CGNAT/link-local address, or any host

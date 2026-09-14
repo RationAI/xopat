@@ -157,11 +157,28 @@ export class XOpatRemoteEndpoint {
 
         if (baseURL) {
             if (base) {
-                if (baseURL.startsWith("http")) {
-                    console.warn("XOpatRemoteEndpoint: baseURL is an absolute URL, which is wrong with proxy usage!", baseURL, proxy);
+                // In proxy mode `baseURL` is the path AFTER `/proxy/<alias>/` —
+                // the upstream origin is the alias's business, server-side. An
+                // absolute value used to be warned about and then concatenated
+                // anyway, producing `/proxy/<alias>/http://host:port/...`: a URL
+                // no server can answer, from a deployment that looked configured
+                // (the `image-proxy` preset shipped exactly this). Keep the path
+                // — the only thing the value can usefully have meant — and say so.
+                if (/^https?:\/\//i.test(baseURL)) {
+                    let path = "";
+                    try {
+                        const parsed = new URL(baseURL);
+                        path = `${parsed.pathname}${parsed.search}`;
+                    } catch (_) { /* keep path empty: the alias alone is still valid */ }
+                    console.warn("XOpatRemoteEndpoint: baseURL is an absolute URL, which is wrong with " +
+                        "proxy usage — the proxy alias already names the upstream origin. Using its path " +
+                        "only; configure the path (or nothing) instead.", { baseURL, proxy, usingPath: path || "/" });
+                    baseURL = path;
                 }
-                if (!base.endsWith("/")) base = `${base}/`;
-                base = base + baseURL.replace(/^\//, "");
+                if (baseURL) {
+                    if (!base.endsWith("/")) base = `${base}/`;
+                    base = base + baseURL.replace(/^\//, "");
+                }
             } else {
                 base = baseURL;
             }

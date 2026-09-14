@@ -578,8 +578,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     }
 
     if (CONFIG.error) {
-        USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,
-            true);
+        // Every part of this is session-supplied (POST_DATA / `?visualization=` /
+        // the URL hash), so none of it is markup: `Errors.detail` renders the
+        // detail as `textContent` and `Errors.show` sanitizes the title.
+        USER_INTERFACE.Errors.show(CONFIG.error,
+            USER_INTERFACE.Errors.detail(CONFIG.description, CONFIG.details), true);
     }
 
     APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize"));
