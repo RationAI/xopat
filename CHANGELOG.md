@@ -63,6 +63,15 @@
   carry an origin) and both halves are pinned by
   `test/suites/integration/proxy-path.test.mjs`.
 
+* `runVisionInference` now retries an empty reply once with a larger output cap 
+  (`XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS_CEILING`, default 16384)
+  when the cap was spent, then once more without `json_object`, and returns `finishReason`,
+  token `usage` and `attempts`; the extractor's `llm-infer` records carry them, an empty
+  reply is retried with a leaner contract (`corrected` only) instead of the "JSON only"
+  nudge, and a failed pass is recorded as `correction-failed {reason}`. Also: Whisper's
+  subtitle/translation credits are blanked as non-speech in every language it learned them
+  from, and a gate-rejected segment with no voice is no longer shown as "(unclear speech)".
+
 * **Dictation in any language.** The transcription language was pinned to the UI locale —
   which can only be English or Czech — so a Japanese dictation reached Whisper hinted `en`
   and came back as English filler ("I'm … and the"); the chat's wrong-language gate then
