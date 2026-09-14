@@ -374,11 +374,10 @@ export const globalPluginWindowMethods = {
                 const modeId = mode.getId();
 
                 if (this._htmlWrap && this._modeOptionsPanel) {
-                    // Read from `e.mode`, not `this.context.mode`: the
-                    // _setModeToAuto path in annotations.js fires the event
-                    // BEFORE assigning `this.mode`, so the global would still
-                    // point at the previous (now-stale) mode and the panel
-                    // would never hide when switching to navigation.
+                    // Read from `e.mode`, not `this.context.mode`: the event
+                    // payload is the authoritative statement of what is now in
+                    // effect, including a REFUSED switch, which reports AUTO
+                    // without anything having changed.
                     const rawHtml = (mode.customHtml && mode.customHtml()) || '';
                     const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
 

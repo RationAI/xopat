@@ -153,6 +153,14 @@ addPlugin("slide-scoring", class extends XOpatPlugin {
         // Resolve by the viewer object: e.uniqueId would collide when two
         // viewports share a background id and drop the wrong viewer's bar.
         VIEWER_MANAGER.addHandler("viewer-destroy", (e: any) => this._bars.delete(e.viewer));
+
+        // `broadcastHandler` attaches to current and future viewers but never
+        // replays an `open` that already fired. This method is async — the
+        // locale and the IO pipeline are awaited above — so a viewer that
+        // finished opening in the meantime would otherwise never get a bar.
+        // `_mountViewerBar` is idempotent, so this is a no-op when the handler
+        // was in place first.
+        for (const viewer of VIEWER_MANAGER.viewers ?? []) this._mountViewerBar(viewer);
     }
 
     // ---- validation -------------------------------------------------------
