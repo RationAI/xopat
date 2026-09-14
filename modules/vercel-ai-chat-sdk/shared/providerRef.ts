@@ -186,6 +186,67 @@ export function refShadowedByUserInstance(
         ALIAS_TIERS.some(({ key }) => key(rec) === wanted));
 }
 
+/**
+ * The DURABLE identity of a provider instance — the part of it a persisted record may name.
+ *
+ * The instance id cannot be it (file header): `uid('prov')` into a `globalThis` map, re-minted
+ * every boot. A chat session is persisted, so it stores this alongside the live id and finds its
+ * provider again after a restart.
+ */
+export interface ProviderIdentity {
+    managedKey: string | null;
+    managedByPlugin: string | null;
+    typeId: string | null;
+}
+
+/** Read the durable identity off a provider instance record. All three fields are optional. */
+export function providerIdentityOf(rec: ProviderRefRecord | null | undefined): ProviderIdentity {
+    return {
+        managedKey: str(rec?.metadata?.managedKey),
+        managedByPlugin: str(rec?.metadata?.managedByPlugin),
+        typeId: str(rec?.typeId),
+    };
+}
+
+/** The subset of a persisted session this module reads. */
+export interface SessionRefSource {
+    providerId?: string | null;
+    providerTypeId?: string | null;
+    metadata?: Record<string, any> | null;
+}
+
+/**
+ * References a persisted session may use to find its provider again, strongest first — to be
+ * handed to `matchProviderRef` in order.
+ *
+ * Three cases, and the middle one is the interesting one:
+ *
+ *  - **`managedKey` / `managedByPlugin` stamped** — the session was created against an
+ *    operator-registered provider, so re-finding it restores the SAME logical provider. That is
+ *    why re-binding is safe here and not a silent re-point: `matchProviderRef`'s alias tiers are
+ *    operator-only, so a user instance can never capture the reference.
+ *  - **`typeId` only** — the provider was user-created (BYOK): nothing durable identifies it, and
+ *    the only same-type candidate would be somebody else's provider, on somebody else's key.
+ *    Deliberately returns nothing; the caller lists the session and refuses to send, rather than
+ *    spending an operator key the user never chose.
+ *  - **nothing stamped (records written before this existed)** — fall back to `providerTypeId`,
+ *    which is operator-only like every alias tier. Ambiguous in principle, and the alternative is
+ *    a transcript that is on disk and permanently invisible.
+ */
+export function durableProviderRefs(session: SessionRefSource | null | undefined): string[] {
+    const ref = session?.metadata?.providerRef;
+    if (ref && typeof ref === 'object') {
+        const managedKey = str((ref as any).managedKey);
+        const plugin = str((ref as any).managedByPlugin);
+        const typeId = str((ref as any).typeId) ?? str(session?.providerTypeId);
+        if (managedKey) return [managedKey, plugin, typeId].filter((v): v is string => !!v);
+        if (plugin) return [plugin, typeId].filter((v): v is string => !!v);
+        return [];
+    }
+    const legacy = str(session?.providerTypeId);
+    return legacy ? [legacy] : [];
+}
+
 /** One diagnostic line for a reference that resolved to nothing. Never includes secrets. */
 export function describeProviderRefFailure(ref: string | null | undefined): string {
     return `Unknown provider '${str(ref) ?? ''}'. A provider reference must be an instance id, ` +

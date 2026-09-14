@@ -255,14 +255,61 @@ metrics. The consumer gate takes `noSpeechProb ≥ 0.6` as the model saying it h
 silence, ahead of every audio heuristic. `temperature=0` is sent on that path too
 (the self-hosted driver always did), so the same audio decodes to the same words.
 
-The VAD's clock is an `AudioWorklet` peak meter (`vad-worklet.js`, a static
-module asset loaded at capture start) running on the audio render thread, which
-browsers never throttle — so capture keeps working in a hidden/unfocused tab.
-When the worklet cannot load (no `AudioWorklet`, restrictive CSP) the VAD falls
-back to a `requestAnimationFrame` analyser loop; since hidden tabs pause rAF
-entirely, a stall watchdog then marks affected segments as evidence-untracked
-(`meta.tracked=false`), which degrades open: the audio is transcribed instead of
-being discarded as "speechless", and the text-side filters remain the gate.
+### The speech detector (VAD)
+
+The verdict "is this speech" comes from **Silero VAD** (v5, via
+[`@ricky0123/vad-web`](https://www.vad.ricky0123.com/) over onnxruntime-web, WASM
+backend) — a model that scores 32 ms frames for *voice*, not loudness. The
+amplitude peak meter this module used before is still present as the **fallback**
+engine. Both feed one pure gate (`speechGate.ts`): Silero as a probability with
+hysteresis (on at `positiveSpeechThreshold`, off below `negativeSpeechThreshold`),
+amplitude as the adaptive noise-floor gate; the session's first onset must hold
+for `minSpeechMs` under either.
+
+Under Silero the engine's own 16 kHz frames are the segment audio: each segment is
+uploaded as a **PCM16 WAV** cut exactly at the frame that ended it (no per-segment
+`MediaRecorder`, no flush latency, no seam overlap — `overlapMs` is 0). The
+whole-session archive stays a MediaRecorder/Opus recording. `meta.vad` /
+`metrics.vad` and `getCaptureHealth().clock` say which engine judged a segment
+(`"silero"` | `"amplitude"` | `"none"`).
+
+One engine instance lives for the page: it owns its `AudioContext`, loads the model
+once (the first dictation waits for it — ~16 MB the first time ever, browser-cached
+after), and attaches to each capture's stream per session. It **falls back** to the
+amplitude gate — reported once per session as `capture-warning {code:
+"vad-fallback"}` — when the assets are missing, the load exceeds `vad.loadTimeoutMs`,
+the browser lacks `AudioWorklet`/WebAssembly, or the frames stop mid-session while
+the microphone is live (the open PCM segment flushes as WAV, its successor records
+through MediaRecorder; a session never switches back). The assets are served
+same-origin from `dist/silero/` (copied out of `node_modules` by the module build:
+the worklet bundle, `silero_vad_v5.onnx`, the onnxruntime-web glue and wasm), so no
+CDN, no hash pinning and nothing `secureMode` needs to gate. A deployment that
+*enforces* a CSP needs `script-src 'self' 'wasm-unsafe-eval'` for it (the worklet
+module, the wasm, and the dynamic `import()` of the ORT glue); threads are off, so
+no COOP/COEP.
+
+The amplitude engine's clock is an `AudioWorklet` peak meter (`vad-worklet.js`, a
+static module asset loaded at capture start) running on the audio render thread,
+which browsers never throttle — so capture keeps working in a hidden/unfocused tab.
+When the worklet cannot load (no `AudioWorklet`, restrictive CSP) it falls back to a
+`requestAnimationFrame` analyser loop; since hidden tabs pause rAF entirely, a stall
+watchdog then marks affected segments as evidence-untracked (`meta.tracked=false`),
+which degrades open: the audio is transcribed instead of being discarded as
+"speechless", and the text-side filters remain the gate. The probe / fail-open
+ladder described above is an **amplitude-only** device: a Silero verdict is never
+overridden by a transcript, because probing silence is exactly how hallucinated
+"Thank you." turns used to flip whole sessions into uploading everything.
+
+Configuration, module static meta `vad` (deployment ENV / `include.json`, §7 — never
+a session option):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `engine` | `"silero"` | `"amplitude"` disables the Silero engine entirely (no assets fetched). |
+| `positiveSpeechThreshold` | 0.5 | Silero probability at which speech turns on. |
+| `negativeSpeechThreshold` | 0.35 | Silero probability below which speech turns off. |
+| `loadTimeoutMs` | 15000 | Bound on the first-ever model load before the session falls back to amplitude. |
+| `assetsUrl` | `<module>/dist/silero/` | Where the vendored assets are served from (same origin). Absolute or app-relative; resolved against the page — onnxruntime-web needs an absolute base for its dynamic `import()` of the wasm glue. |
 
 On noise that *does* carry enough acoustic energy to pass the gate,
 Whisper-family models can still emit caption-like artifacts. The built-in
@@ -417,10 +464,10 @@ Under the chat module's `voice` block (all optional):
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `silenceMs` | 1200 | Trailing silence before a turn auto-stops. |
-| `silenceThreshold` | 0.04 | Peak-amplitude speech floor (with adaptive noise tracking). |
-| `speechFloorMult` | 3.0 | Noise robustness: a peak must exceed `noiseFloor × this` to count as speech. Higher rejects more background noise but risks dropping a very quiet speaker; lower it (e.g. 2.5) if soft speech is being missed. |
-| `minSpeechMs` | 200 | Noise robustness: a peak must stay above the speech gate this long before it counts as speech onset — rejects brief blips (clicks, taps, door). |
-| `language` | UI locale | BCP-47 hint (remote / multilingual WASM). Unset → inherits the live app locale (`$.i18n.language`) so transcription tracks the UI language instead of free-detecting it. |
+| `silenceThreshold` | 0.04 | Amplitude engine only: peak speech floor (with adaptive noise tracking). |
+| `speechFloorMult` | 3.0 | Amplitude engine only: a peak must exceed `noiseFloor × this` to count as speech. Higher rejects more background noise but risks dropping a very quiet speaker; lower it (e.g. 2.5) if soft speech is being missed. |
+| `minSpeechMs` | 200 | Both engines: the session's first speech must hold this long before it counts as onset — rejects brief blips (clicks, taps, door). Silero thresholds live in the module's `vad` block (see the VAD section). |
+| `language` | `"auto"` | `"auto"`: the recognizer detects the language; once two consecutive segments agree, that language is the hint for the rest of the dictation (see "Language" below). A BCP-47 code pins it for every request. Never the UI locale. |
 | `prompt` | — | Domain/vocabulary biasing text (Whisper `prompt` / whisper.cpp `initial_prompt`) — appended to the built-in translatable pathology glossary and live domain-tool terms so homophones resolve toward the domain ("histology", not "history"). Ignored by the in-browser WASM driver. Length-capped (~1000 chars). |
 | `autoSubmit` | false | Manual dictation: fill-and-review vs. send. |
 | `minVoicedMs` | 400 | Minimum detected voiced ms a capture/segment needs before it is transcribed at all (see hallucination filtering above). |
@@ -437,11 +484,42 @@ Under the chat module's `voice` block (all optional):
 | `noValidContentMs` | — | **Deprecated, ignored.** Turns are no longer force-ended on quiet users; superseded by `idleAutoOffMs`. |
 
 The chat composer builds the biasing `prompt` automatically: a translatable
-pathology glossary (`chat.voice.transcriptionPrompt`) plus the labels of any
+pathology glossary (`voice.transcriptionPrompt` in `modules/vercel-ai-chat-sdk/locales/en.json`) plus the labels of any
 loaded `pathology-foundation` domain tools, rebuilt at each capture. `voice.prompt`
 *extends* that base rather than replacing it. Only generic domain vocabulary is
 sent — never slide/patient identity, which must not egress to the transcription
-endpoint. `voice.language` unset inherits the live UI locale.
+endpoint. `voice.language` unset means `"auto"` (detect, then pin — never the UI locale).
+
+## Language
+
+The transcription language is **detected, then pinned** (`language: "auto"`, the default).
+The first segments of a dictation go out with no hint; every result's reported language is
+a vote, and once two consecutive segments agree that language becomes the hint for the rest
+of the dictation — including the recording's windows when they are decoded — and the module
+raises `language-pinned {language}`. Two agreeing ~15 s segments keep one noisy detection
+from pinning the wrong language; the pin then holds until the next dictation
+(`clearSessionAudio`), because a hinted recognizer echoes the hint back and cannot outvote
+it. A BCP-47 code in `language` pins every request instead.
+
+It is never the UI locale. The viewer's locale says what language the buttons are in, not
+what the pathologist speaks — pinning transcription to it is how a Japanese dictation came
+back as "I'm … and the … I think" (Whisper decoding Japanese audio into English filler).
+
+Each segment's `metrics` carry `language` (what the recognizer reported, primary subtag) and
+`languageHint` (what the request said; undefined = detected). A deployment that enables the
+glossary prompt (`promptMaxChars`) never sends it into a non-English session: an English
+glossary is a pull toward English output, not vocabulary help.
+
+The text filters are script-agnostic: word counting, seam trimming, repetition and echo
+detection tokenise with `Intl.Segmenter` (`textWords.ts`), so a sentence written without
+spaces is as many words as it has. Whisper's Japanese subtitle fillers
+(「ご視聴ありがとうございました」 …) are blanked like the English ones, and so is a bare subtitle or
+translation **credit** in any language it learned them from ("Titulky vytvořil JohnyX.",
+"Untertitel im Auftrag des ZDF", "Sous-titres réalisés par …", "Subtitles by …", a lone
+`www.…` line) — matched against the whole segment only, so a sentence that merely mentions
+subtitles is kept. One limitation:
+`collapseRepetition` leaves CJK text unchanged (a loop there is still caught, and blanked, by
+`looksRepetitive`).
 
 ## Global API
 
@@ -572,9 +650,11 @@ afterwards.
 Every window has a state — `pending` (queued or decoding), `done`, `retryable`
 (no text, audio still held: `transcribeSessionAudio()` retries it), `failed` (no
 text, no audio) — read through `sessionWindowCount` / `pendingWindowCount` /
-`retryableWindowCount` / `failedWindowCount`. `pending` reaches 0 once
-`whenSessionAudioSettled()` resolves; `pending` and `retryable` used to be one
-state, so a decode that had failed minutes ago read as "about to arrive".
+`retryableWindowCount` / `failedWindowCount`. In eager mode `pending` reaches 0 once
+`whenSessionAudioSettled()` resolves (in lazy mode it stays above 0 until
+`transcribeSessionAudio()` decodes them — nothing arrives on its own); `pending` and
+`retryable` used to be one state, so a decode that had failed minutes ago read as
+"about to arrive".
 `transcribeSessionAudio()` awaits the settle point itself, retries each window on
 its own, and returns what decoded even when one window fails.
 
@@ -603,6 +683,13 @@ The payoff is at the end: `transcribeSessionAudio()` joins the banked window tex
 only decodes whatever tail was still open, so what used to be a multi-minute upload at
 review time is a couple of seconds. A window whose background pass failed keeps its
 audio and is retried there.
+
+`windowMode: "lazy"` is the other trade. The windows are still sealed and banked, but
+**nothing is uploaded** and `onWindow` never fires; `transcribeSessionAudio()` decodes
+them serially only when a consumer asks for the recording. That is the right shape for a consumer whose review starts from the live
+transcript and re-reads the recording only when that looks incomplete — eager decoding
+was an upload per window for text that was usually never read. The audio is held for the
+whole dictation, bounded by `archiveMaxBytes` / `archiveMaxMs` as before.
 
 #### Whole-session archive (`archive`) — the accurate final transcript
 
@@ -666,9 +753,9 @@ dropped.
 ## Diagnostics
 
 The module logs through the client broker (`APPLICATION_CONTEXT.log`, see
-`src/LOGGING.md`) on `module.speech-to-text`; the VAD's cut decisions (noise floor,
-gate, peak, why a segment was cut) are on the `module.speech-to-text:vad` sub-channel at
-`debug`. The root level defaults to `warn`, so none of it costs anything in production;
+`src/LOGGING.md`) on `module.speech-to-text`; the VAD's cut decisions (engine, noise
+floor / gate, peak, why a segment was cut) and the Silero load / fallback are on the
+`module.speech-to-text:vad` sub-channel at `debug` (fallbacks at `warn`). The root level defaults to `warn`, so none of it costs anything in production;
 a deployment turns it on in `env.client.logging.channels`:
 
 ```jsonc
@@ -687,7 +774,9 @@ tiny model looks identical in the UI but transcribes far worse — listen in:
 
 ```js
 const stt = singletonModule('speech-to-text');
-stt.addHandler('transcription', e => console.log('[stt] driver=', e.driverId, '|', e.result?.text));
+stt.addHandler('transcription', e => console.log('[stt] driver=', e.driverId, 'vad=', e.metrics?.vad, '|', e.result?.text));
+stt.addHandler('capture-warning', e => console.warn('[stt] capture-warning', e.code));   // "vad-fallback" = amplitude gate in use
+stt.getCaptureHealth().clock;   // "silero" | "worklet" | "raf" | "none" while capturing
 stt.addHandler('driver-error', e => console.warn('[stt] driver-error', e.driverId, e.error));
 stt.addHandler('segment-filtered', e => console.warn('[stt] filtered', e.filters, e.emptied ? 'EMPTIED' : '', e.rawText));
 stt.addHandler('segment-gated', e => console.log('[stt] gated', e));

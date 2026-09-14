@@ -5,6 +5,7 @@ import {
     matchProviderRef,
     refShadowedByUserInstance,
     describeProviderRefFailure,
+    durableProviderRefs,
     type ProviderRefMatch,
 } from '../shared/providerRef';
 import type { TranscriptionModelV4 } from '@ai-sdk/provider';
@@ -544,7 +545,17 @@ export interface ChatSessionStore {
      * accept an identity from request input here — that was the original
      * cross-user disclosure. Omit the key only for server-internal listings.
      */
-    listSessions(args?: { providerId?: string; ownerPrincipal?: string | null }): Promise<ChatSession[]>;
+    listSessions(args?: {
+        providerId?: string;
+        /**
+         * Replaces the `providerId` comparison when given. The provider a persisted
+         * session belongs to is a REGISTRY question (its instance id is re-minted
+         * every boot), and the store has no registry — so the caller that does
+         * supplies the predicate. The owner ACL below is never delegated.
+         */
+        providerFilter?: (session: ChatSession) => boolean;
+        ownerPrincipal?: string | null;
+    }): Promise<ChatSession[]>;
     deleteSession(sessionId: string): Promise<void>;
     appendMessages(sessionId: string, messages: ChatMessage[]): Promise<ChatMessage[]>;
     listMessages(sessionId: string): Promise<ChatMessage[]>;
@@ -883,7 +894,11 @@ class StorageChatSessionStore implements ChatSessionStore {
         return this.sessions.get<ChatSession>(sessionId);
     }
 
-    async listSessions(args?: { providerId?: string; ownerPrincipal?: string | null }): Promise<ChatSession[]> {
+    async listSessions(args?: {
+        providerId?: string;
+        providerFilter?: (session: ChatSession) => boolean;
+        ownerPrincipal?: string | null;
+    }): Promise<ChatSession[]> {
         // ACL: match the owner PRINCIPAL exactly. Callers pass their own principal,
         // derived server-side — never a caller-supplied identity, and never null:
         // `null` is not an owner, it is "unowned", and unowned records belong to
@@ -896,7 +911,9 @@ class StorageChatSessionStore implements ChatSessionStore {
         const items: ChatSession[] = [];
         for await (const [, session] of this.sessions.scan()) {
             if (!session) continue;
-            if (args?.providerId && session.providerId !== args.providerId) continue;
+            if (args?.providerFilter) {
+                if (!args.providerFilter(session)) continue;
+            } else if (args?.providerId && session.providerId !== args.providerId) continue;
             if (filterOwner && ((session.metadata?.ownerPrincipal ?? null) as string | null) !== wanted) continue;
             items.push(session);
         }
@@ -1668,6 +1685,31 @@ class ChatServerRegistry {
                 `claim a deployment-wide reference. Register it through a provider plugin instead.`);
         }
         return match;
+    }
+
+    /**
+     * The live provider instance a PERSISTED session names, or `null` when nothing answers.
+     *
+     * A session record outlives the process; the `providerId` it was created with does not
+     * (`uid('prov')` into a `globalThis` map). Without this, every session written before a
+     * restart is filtered out of `listSessions` and `getProviderRuntime` cannot resolve it — the
+     * transcript is on disk and invisible, which is exactly the bug this exists to close.
+     *
+     * This is NOT the loose alias search `getProviderRuntime` deliberately refuses. It follows
+     * the identity the session itself stamped at creation (`metadata.providerRef`), so it restores
+     * the same logical provider rather than re-pointing a resumed conversation at another one. A
+     * session created against a user's own BYOK instance resolves to nothing on purpose — see
+     * `durableProviderRefs`.
+     */
+    resolveSessionProviderId(session: ChatSession | null | undefined): string | null {
+        if (!session) return null;
+        const live = String(session.providerId || '');
+        if (live && this.providerInstances.has(live)) return live;
+        for (const ref of durableProviderRefs(session)) {
+            const match = this.resolveProviderRef(ref);
+            if (match) return match.id;
+        }
+        return null;
     }
 
     /**

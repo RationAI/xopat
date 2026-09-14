@@ -318,7 +318,21 @@ interface ChatSession {
     createdAt: string;
     updatedAt: string;
     summary: string;
-    metadata?: Record<string, unknown> & { viewerContextId?: string | null };
+    metadata?: Record<string, unknown> & {
+        viewerContextId?: string | null;
+        /**
+         * The durable identity of `providerId`, stamped server-side at creation.
+         * Provider instance ids are re-minted every boot, so this is what lets a
+         * persisted session find its provider again. See shared/providerRef.ts.
+         */
+        providerRef?: { managedKey: string | null; managedByPlugin: string | null; typeId: string | null };
+    };
+    /**
+     * Projection only, set by `listSessions` — never stored. True when nothing in
+     * the current registry answers to this session's provider identity, so the
+     * transcript is readable but a turn cannot be sent until a provider is picked.
+     */
+    providerUnavailable?: boolean;
 }
 
 interface ChatSessionHydration {

@@ -11,6 +11,7 @@ import { hashScriptApiManifest, MANIFEST_MISS_CODE } from '../shared/manifest-ha
 import { buildSystemInstructions, type SystemSegment } from '../shared/system-segments';
 import { stripApiInterfaceDeclaration } from '../shared/api-declarations';
 import { titleFromFirstMessage, DEFAULT_SESSION_TITLE } from '../shared/session-title';
+import { providerIdentityOf } from '../shared/providerRef';
 import { ensureManagedPluginProvider } from './providerRegistration.server';
 
 // ── Native tool-calling surface ─────────────────────────────────────────────
@@ -220,6 +221,28 @@ function digestConversation(conversation: any[]): Record<string, unknown> {
  * probe for another's manifest by guessing hashes. Idle TTL, so an active
  * session keeps its entry alive and an abandoned one lets go.
  */
+/**
+ * The turn's execution mode, with `'host'` honoured only on a dev-mode server.
+ *
+ * Host mode is a development-harness posture, not a session preference: it replaces the
+ * scripting system block with "unrestricted async JavaScript in the page context", names
+ * every injected global, teaches a consent bypass, and turns the `run_viewer_script` tool
+ * off. Both sources are caller-controlled — `input.executionMode` directly, and
+ * `session.metadata.testMode` because a harness session can be replayed elsewhere — so a
+ * production server refuses it from either and falls back to the normal prompt. The other
+ * modes only steer wording and pass through untouched.
+ */
+function resolveExecutionMode(ctx: any, requested: unknown): string | null {
+    const mode = String(requested || '').trim() || null;
+    if (mode !== 'host') return mode;
+
+    const server: any = (globalThis as any).XOPAT_SERVER;
+    if (server?.isDevMode?.(ctx) === true) return mode;
+
+    ctx?.log?.warn?.('host execution mode refused: the server is not in dev mode');
+    return null;
+}
+
 let manifestCache: any = null;
 function getManifestCache(): any {
     if (manifestCache) return manifestCache;
@@ -485,6 +508,21 @@ async function requireSessionAccess(
     }
     if (owner !== resolveUserScope(ctx)) {
         throw new Error('Chat session does not belong to current user.');
+    }
+
+    // Self-heal the provider link. The id the session was created with is re-minted
+    // on every process start, so a resumed conversation would otherwise fail in
+    // `getProviderRuntime` — which stays exact-id on purpose. Re-binding here is
+    // bounded to the identity the session itself stamped (`metadata.providerRef`,
+    // operator-registered only), so it restores the same logical provider instead
+    // of re-pointing the conversation somewhere the user never chose. One write per
+    // stale session per restart; an unresolvable one is left alone and fails at the
+    // send, with its transcript still readable.
+    const registry = getRegistry();
+    const live = registry.resolveSessionProviderId(hydrated.session);
+    if (live && live !== hydrated.session.providerId) {
+        hydrated.session = await registry.getSessionStore()
+            .updateSession(hydrated.session.id, { providerId: live });
     }
 
     return hydrated;
@@ -2402,20 +2440,45 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
         contextId: input.contextId || provider.contextId || null,
         // Ownership is the caller's principal, resolved server-side. Never a
         // caller-supplied identity, and never null — see requireSessionAccess.
+        //
+        // `providerRef` is the same kind of stamp: the durable identity of the
+        // provider this session belongs to, read off the REGISTRY's record and
+        // never from caller `metadata` — a forged `managedKey` would let a user
+        // instance claim the deployment-wide reference (see the trust rule in
+        // shared/providerRef.ts). The instance id above is re-minted every boot,
+        // so without this the session is unfindable after a restart.
         metadata: {
             ...input.metadata,
             ownerPrincipal: resolveUserScope(ctx),
+            providerRef: providerIdentityOf(provider),
             ...(customPersonality ? { customPersonality } : {}),
         },
     });
 }
 
 export async function listSessions(ctx: any, input?: { providerId?: string | null }): Promise<SessionListResult> {
-    const sessions = await getRegistry().getSessionStore().listSessions({
-        providerId: input?.providerId || undefined,
+    const registry = getRegistry();
+    const wanted = input?.providerId || undefined;
+    // A session's `providerId` goes stale on every restart, so "does this session
+    // belong to the provider being asked about" is resolved through the durable
+    // identity it stamped at creation. A session whose identity answers to nothing
+    // (a BYOK instance that is gone, a provider plugin since disabled) is listed
+    // under whichever provider is selected and flagged: the transcript is still
+    // the owner's to read, and sending is what needs a provider.
+    const sessions = await registry.getSessionStore().listSessions({
         ownerPrincipal: resolveUserScope(ctx),
+        providerFilter: wanted
+            ? (session) => {
+                const resolved = registry.resolveSessionProviderId(session);
+                return resolved ? resolved === wanted : true;
+            }
+            : undefined,
     });
-    return { sessions };
+    return {
+        sessions: sessions.map((session) => (registry.resolveSessionProviderId(session)
+            ? session
+            : { ...session, providerUnavailable: true })),
+    };
 }
 
 export async function getSession(ctx: any, input: { sessionId: string; hydrateMessages?: boolean }): Promise<{ session: ChatSession; messages?: ChatMessage[]; attachments?: ChatAttachmentRecord[] }> {
@@ -2607,7 +2670,7 @@ async function runTurn(
     const runtime = await registry.getProviderRuntime(session.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
-    const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
+    const executionMode = resolveExecutionMode(ctx, input.executionMode || session.metadata?.testMode);
     // Total by contract - a malformed snapshot degrades to no viewer-state block, never
     // to a lost turn. See validateLiveViewerContextSnapshot.
     const liveViewerContext = validateLiveViewerContextSnapshot(input.liveViewerContext, ctx?.log);

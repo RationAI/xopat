@@ -195,3 +195,19 @@ test("@unit a short answer with real voice behind it is kept", () => {
     expect(looksLikeSegmentNoise("Not UIP.", { metrics: { tracked: true, voicedMs: 700, audioMs: 3000, speechSpanMs: 800 } })).toBe(false);
     expect(looksLikeSegmentNoise("Grade 2", { metrics: { tracked: true, voicedMs: 300, audioMs: 2000, speechSpanMs: 400 } })).toBe(false);
 });
+
+// ---- scripts without spaces --------------------------------------------------------
+
+test("@unit a Japanese sentence over seconds of voice is speech, not a lone word", () => {
+    // A whitespace split saw one token and rejected every sentence longer than 1.5 s.
+    const text = "間質性肺炎です。蜂巣肺はありません。肉芽腫はありません。";
+    expect(looksLikeSegmentNoise(text, {
+        metrics: { tracked: true, voicedMs: 6000, audioMs: 8000, speechSpanMs: 6500, silenceMs: 1500 },
+    })).toBe(false);
+});
+
+test("@unit a lone Japanese word still follows the lone-word rules", () => {
+    expect(looksLikeSegmentNoise("はい", {
+        metrics: { tracked: true, voicedMs: LONE_WORD_MAX_VOICED_MS + 1000, audioMs: 9000, speechSpanMs: 7000 },
+    })).toBe(true);
+});

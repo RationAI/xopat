@@ -1,3 +1,4 @@
+import {_t} from "../shared/i18n";
 const van = (globalThis as any).van;
 const { div, span } = van.tags;
 
@@ -100,14 +101,14 @@ export class ChatProgress {
                     if (!entries.length && !earlier) return span({ class: "hidden" });
                     return div(
                         { class: "flex flex-col gap-0.5 pl-5 opacity-60 text-[11px]" },
-                        earlier ? div({}, $.t('chat.progressEarlierSteps', { count: earlier })) : null,
+                        earlier ? div({}, _t('progressEarlierSteps', { count: earlier })) : null,
                         ...entries.map((entry) => div(
                             { class: "flex items-center gap-1" },
                             span({ class: `shrink-0 ${this._trailIconClass(entry)}` }),
                             span({ class: "truncate" }, entry.label),
                             entry.seconds != null
                                 ? span({ class: "opacity-70 shrink-0" },
-                                    $.t('chat.progressElapsedSeconds', { seconds: entry.seconds }))
+                                    _t('progressElapsedSeconds', { seconds: entry.seconds }))
                                 : null,
                         )),
                     );
@@ -187,7 +188,7 @@ export class ChatProgress {
      * made. Hidden on the first step, where the spinner already says everything the count would.
      */
     setStep(index: number): void {
-        this._stepLabel.val = index > 1 ? $.t('chat.progressStep', { index }) : "";
+        this._stepLabel.val = index > 1 ? _t('progressStep', { index }) : "";
     }
 
     beginStep(label: string): void {
@@ -216,10 +217,10 @@ export class ChatProgress {
         const seconds = Math.round((Date.now() - this._startedAt) / 1000);
         const waited = Date.now() - this._activitySince;
         const elapsed = seconds >= 60
-            ? $.t('chat.progressElapsedMinutes', { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
-            : $.t('chat.progressElapsedSeconds', { seconds });
+            ? _t('progressElapsedMinutes', { minutes: Math.floor(seconds / 60), seconds: seconds % 60 })
+            : _t('progressElapsedSeconds', { seconds });
         this._elapsed.val = waited >= STILL_WORKING_AFTER_MS
-            ? `${elapsed} · ${$.t('chat.progressStillWorking')}`
+            ? `${elapsed} · ${_t('progressStillWorking')}`
             : elapsed;
     }
 }

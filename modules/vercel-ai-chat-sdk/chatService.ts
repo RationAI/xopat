@@ -233,7 +233,7 @@ export class ChatService {
     }
 
     _server(): RpcScope {
-        const scope = this._serverFactory?.() || (window as any)?.xserver?.module?.["vercel-ai-chat-sdk"];
+        const scope = this._serverFactory?.();
         if (!scope) throw new Error('ChatService: server RPC scope for module "chat" is not available.');
         return scope;
     }

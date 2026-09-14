@@ -1,3 +1,4 @@
+import {_t} from "../shared/i18n";
 import type { ChatService } from "../chatService";
 import { cacheHitRatio, type UsageTotals } from "../shared/usage-stats";
 
@@ -40,14 +41,14 @@ export class UsagePanel extends BaseComponent {
         this._bodyEl = div({ class: "flex flex-col gap-4" }) as HTMLElement;
 
         const content = [
-            span({ class: "text-[11px] text-base-content/70" }, $.t('chat.usageDescription')),
+            span({ class: "text-[11px] text-base-content/70" }, _t('usageDescription')),
             this._bodyEl,
         ];
 
         const root = (fs?.layout && fs?.card
-            ? fs.layout($.t('chat.usageTitle'), fs.card(null, ...content))
+            ? fs.layout(_t('usageTitle'), fs.card(null, ...content))
             : div({ class: "flex flex-col gap-2 p-2" },
-                span({ class: "text-2xl font-semibold" }, $.t('chat.usageTitle')),
+                span({ class: "text-2xl font-semibold" }, _t('usageTitle')),
                 ...content)) as HTMLElement;
 
         // The fullscreen menu mounts tab bodies EAGERLY at init and merely reveals them
@@ -71,13 +72,13 @@ export class UsagePanel extends BaseComponent {
         const stats = this.chatService.getUsageStats?.(sessionId) || null;
 
         if (!stats || !stats.session.calls) {
-            body.appendChild(span({ class: "text-xs opacity-70" }, $.t('chat.usageNone')));
+            body.appendChild(span({ class: "text-xs opacity-70" }, _t('usageNone')));
             return;
         }
 
-        body.appendChild(this._block($.t('chat.usageLastMessage'), stats.lastMessage));
+        body.appendChild(this._block(_t('usageLastMessage'), stats.lastMessage));
         body.appendChild(this._block(
-            $.t('chat.usageSession', { messages: stats.messages }),
+            _t('usageSession', { messages: stats.messages }),
             stats.session
         ));
 
@@ -87,13 +88,13 @@ export class UsagePanel extends BaseComponent {
         if (!stats.session.hasTokenDetail) {
             body.appendChild(span(
                 { class: "text-[11px] text-warning" },
-                $.t('chat.usageNotReported')
+                _t('usageNotReported')
             ));
         }
 
         body.appendChild(span(
             { class: "text-[11px] text-base-content/60" },
-            $.t('chat.usageDisclaimer')
+            _t('usageDisclaimer')
         ));
     }
 
@@ -106,12 +107,12 @@ export class UsagePanel extends BaseComponent {
         // what makes a fully-unreported panel legible instead of blank.
         const tokens = (value: number) => totals.hasTokenDetail ? this._n(value) : "—";
         const rows: [string, string][] = [
-            [$.t('chat.usageInput'), tokens(totals.inputTokens)],
-            [$.t('chat.usageOutput'), tokens(totals.outputTokens)],
-            [$.t('chat.usageTotal'), tokens(totals.totalTokens)],
-            [$.t('chat.usageCached'), totals.hasCacheDetail ? this._n(totals.cacheReadTokens) : "—"],
-            [$.t('chat.usageCacheHit'), ratio === null ? "—" : `${Math.round(ratio * 100)}%`],
-            [$.t('chat.usageCalls'), this._n(totals.calls)],
+            [_t('usageInput'), tokens(totals.inputTokens)],
+            [_t('usageOutput'), tokens(totals.outputTokens)],
+            [_t('usageTotal'), tokens(totals.totalTokens)],
+            [_t('usageCached'), totals.hasCacheDetail ? this._n(totals.cacheReadTokens) : "—"],
+            [_t('usageCacheHit'), ratio === null ? "—" : `${Math.round(ratio * 100)}%`],
+            [_t('usageCalls'), this._n(totals.calls)],
         ];
 
         return div(

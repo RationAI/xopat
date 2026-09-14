@@ -16,37 +16,16 @@
  */
 
 import {classifyCapture} from "./captureHealth";
+import {SpeechGate, pickVadEngine} from "./speechGate";
+import type {GateInput, VadEngine} from "./speechGate";
+import {wavBlob} from "./wavEncode";
+import {SileroVadEngine} from "./sileroVad";
+import type {SileroFrame, SileroOptions} from "./sileroVad";
 
-export type CaptureErrorCode =
-    | "permission-denied"
-    | "no-microphone"
-    | "unsupported"
-    /** Page is not a secure context, so getUserMedia is unavailable (needs https or localhost). */
-    | "insecure-context"
-    /**
-     * The Web Audio device/renderer failed — Chrome's "The AudioContext encountered an
-     * error from the audio device or the WebAudio renderer." Causes: the input/output
-     * device is busy, was unplugged, or a sample-rate mismatch. NOT a secure-context
-     * problem. Non-fatal to MediaRecorder, so it is reported as a warning, not thrown.
-     */
-    | "audio-device"
-    /**
-     * The VAD gate repeatedly discarded segments that then transcribed to real
-     * text — its speech threshold is misjudging this session (noise, AGC, quiet
-     * speaker). The session switched to fail-open: everything is transcribed and
-     * the VAD only labels. Reported as a warning, capture keeps running.
-     */
-    | "vad-degraded"
-    | "capture-failed";
-
-export class CaptureError extends Error {
-    code: CaptureErrorCode;
-    constructor(code: CaptureErrorCode, message?: string) {
-        super(message || code);
-        this.name = "CaptureError";
-        this.code = code;
-    }
-}
+import {CaptureError} from "./captureError";
+import type {CaptureErrorCode} from "./captureError";
+export {CaptureError};
+export type {CaptureErrorCode, VadEngine, SileroOptions};
 
 /**
  * Result of a one-shot {@link AudioCapture.record} capture. Besides the audio
@@ -95,9 +74,16 @@ export interface SegmentMeta {
     /** False when Web Audio was unavailable and no VAD evidence exists. */
     tracked: boolean;
     /**
-     * Emitted despite a discard verdict, to test whether the VAD gate is
+     * Which detector judged this segment. `silero` segments are WAV built from the
+     * VAD's own 16 kHz frames; `amplitude` segments are MediaRecorder containers
+     * judged by the peak gate; `none` means no evidence was tracked.
+     */
+    vad: VadEngine;
+    /**
+     * Emitted despite a discard verdict, to test whether the amplitude VAD gate is
      * misbehaving (after repeated consecutive discards). Consumers should
-     * transcribe it and report real text back via `enterFailOpen`.
+     * transcribe it and report real text back via `enterFailOpen`. Never set on a
+     * Silero-judged segment.
      */
     probe?: boolean;
     /** Session is in fail-open mode: VAD only labels, every segment is emitted. */
@@ -118,7 +104,7 @@ export interface CaptureHealth {
     recording: boolean;
     segmenting: boolean;
     /** Which clock currently drives the VAD/level callbacks. */
-    clock: "worklet" | "raf" | "none";
+    clock: "silero" | "worklet" | "raf" | "none";
     contextState: AudioContextState | "none";
     /** `AudioContext.currentTime`; frozen across two reads = dead render thread. */
     contextTime: number;
@@ -184,11 +170,12 @@ export interface CaptureOptions {
      */
     minSpeechMs?: number;
     /**
-     * Live input level callback (0..1), invoked each animation frame while
-     * capturing. Drives the UI recording meter. Best-effort; only fires when
-     * silence detection is active.
+     * Live input level callback (0..1), invoked per VAD frame while capturing.
+     * Drives the UI recording meter; `speaking` is the gate's verdict for that
+     * frame (a "speaking" indicator, as opposed to a loudness meter). Best-effort;
+     * only fires when speech evidence is tracked.
      */
-    onLevel?: (level: number) => void;
+    onLevel?: (level: number, speaking?: boolean) => void;
     /**
      * Called when the Web Audio device/renderer fails (see {@link CaptureErrorCode}
      * `audio-device`). Non-fatal — MediaRecorder keeps recording, but VAD/metering
@@ -411,8 +398,13 @@ const WINDOW_HARD_FACTOR = 1.5;
  * otherwise a recorder still flushing would read its successor's counters.
  */
 interface SegmentRecording {
-    rec: MediaRecorder;
+    /** The MediaRecorder of an amplitude-judged segment; null for a PCM (Silero) segment. */
+    rec: MediaRecorder | null;
     chunks: Blob[];
+    /** The 16 kHz frames of a Silero-judged segment (its WAV upload); null otherwise. */
+    pcm: Float32Array[] | null;
+    /** The engine that judged this segment (fixed at creation; a live switch never rewrites it). */
+    vad: VadEngine;
     startedAt: number;
     /** What happens once this recorder's `onstop` has been handled. */
     action: "restart" | "restart-discard" | "end";
@@ -445,15 +437,41 @@ export class AudioCapture {
     /** Muted gain keeping the worklet node in the rendering graph (see _attachWorkletMeter). */
     private _workletSink: GainNode | null = null;
 
+    /** The module-lifetime Silero engine, when the deployment asks for one. */
+    private readonly _silero: SileroVadEngine | null;
+    private readonly _sileroOpts: SileroOptions | null;
+    /** Engine judging the running session; `none` between sessions. */
+    private _vad: VadEngine = "none";
+    /** The session's speech verdict (see speechGate.ts). */
+    private _gate: SpeechGate | null = null;
+    /** The running session's frame consumer, kept so a live engine switch can re-feed it. */
+    private _segProcessInput: ((input: GateInput) => void) | null = null;
+    /** Silero frames stand in for recorder timeslices in the liveness beat. */
+    private _lastSileroBeatAt = 0;
+    private _sileroBytes = 0;
+    /** One `vad-fallback` warning per session. */
+    private _vadFallbackReported = false;
+
     /**
      * @param opts.workletUrl URL of the AudioWorklet peak-meter module. When set
-     *   and loadable, VAD ticks are driven from the audio render thread — which
-     *   hidden tabs do NOT throttle — instead of requestAnimationFrame (which
+     *   and loadable, amplitude VAD ticks are driven from the audio render thread —
+     *   which hidden tabs do NOT throttle — instead of requestAnimationFrame (which
      *   they pause, silently freezing all speech evidence). Optional: without it
      *   (or when addModule fails, e.g. CSP) the rAF loop remains the driver.
+     * @param opts.silero Silero VAD configuration. When set, sessions run on the
+     *   Silero engine (see sileroVad.ts) and fall back to the amplitude gate when it
+     *   cannot load or stalls; without it the amplitude gate is the only engine.
      */
-    constructor(opts: { workletUrl?: string } = {}) {
+    constructor(opts: { workletUrl?: string; silero?: SileroOptions } = {}) {
         this._workletUrl = opts.workletUrl;
+        this._sileroOpts = opts.silero ?? null;
+        this._silero = opts.silero ? new SileroVadEngine(opts.silero) : null;
+    }
+
+    /** Release the Silero engine (model, worklet, context). Module lifetime only. */
+    dispose(): void {
+        this._teardown();
+        this._silero?.dispose();
     }
 
     /** Consumer sink for a non-fatal Web Audio device failure (set per capture). */
@@ -726,6 +744,8 @@ export class AudioCapture {
         this._voicedMs = 0;
         this._evidenceTracked = false;
         this._lastVadTickAt = 0;
+        this._vad = "none";
+        this._vadFallbackReported = false;
 
         const done = new Promise<CaptureResult>((resolve, reject) => {
             const rec = this._recorder!;
@@ -837,7 +857,7 @@ export class AudioCapture {
      * metering. Returns null if Web Audio is unavailable (silence detection is
      * best-effort; recording via MediaRecorder still works without it).
      */
-    private _createAnalyser(): { analyser: AnalyserNode; buf: Float32Array } | null {
+    private _createAnalyser(): { analyser: AnalyserNode; buf: Float32Array<ArrayBuffer> } | null {
         try {
             const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
             if (!AC) return null; // no Web Audio: VAD/metering off, recording still works
@@ -933,128 +953,244 @@ export class AudioCapture {
      * evidence (heardSpeech/voicedMs) and emits `onLevel`; the auto-stop cut
      * conditions (trailing silence, onset timeout) only apply when `silenceMs`
      * is positive — `silenceMs` 0 means "record until an explicit stop".
+     *
+     * The amplitude clock is armed immediately (the one-shot blob is a MediaRecorder
+     * container either way); when the Silero engine is already loaded its frames take
+     * over the verdict from the first one that lands — the same "first message proves
+     * the clock" rule the worklet upgrade follows. A one-shot never WAITS for the
+     * model; the load is kicked so the next capture has it.
      */
-    private _armSilenceDetection(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
+    private _armSilenceDetection(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number, speaking?: boolean) => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
         try {
-            const setup = this._createAnalyser();
-            if (!setup) return;
-            const {analyser, buf} = setup;
-            this._evidenceTracked = true;
+            const gate = this._newGate(threshold, speechFloorMult, minSpeechMs, false);
             const autoStop = silenceMs > 0;
-
             const startedAt = performance.now();
-            let lastTickAt = 0;
             let silentSince = 0;
-            // Only arm the trailing-silence timer AFTER speech is first heard, so the
-            // leading pause before the user starts talking doesn't instantly end the
-            // round (the multi-round hands-free bug).
-            let heardSpeech = false;
-            // Start of the current above-gate run; speech must be sustained for
-            // minSpeechMs before it counts, so brief noise blips don't register.
-            let speechRunStart = 0;
-            // Running-minimum noise floor: the quietest recent frame ≈ true ambient
-            // level, tracked continuously (with a very slow upward drift). This does
-            // NOT get polluted by the user's voice the way a fixed calibration window
-            // does, so the speech threshold stays tied to the room, not the speaker —
-            // which is what prevents normal-volume words from being read as silence
-            // and cutting a sentence mid-pause.
-            let noiseFloor = Infinity;
-            let maxPeak = 0;
+            let stopped = false;
             // Diagnostics live on the `module.speech-to-text:vad` channel at `debug`.
             const dbgStop = (reason: string) => {
                 const vad = APPLICATION_CONTEXT.log("module.speech-to-text:vad");
                 if (!vad.isEnabled("debug")) return;
-                vad.debug({reason, noiseFloor: isFinite(noiseFloor) ? noiseFloor : 0, maxPeak, heardSpeech}, "one-shot stop");
+                vad.debug({reason, ...gate.snapshot(), voicedMs: this._voicedMs, heardSpeech: this._heardSpeech}, "one-shot stop");
             };
 
-            // The VAD logic, driven per peak sample by either the rAF tick below
-            // or (preferred) the AudioWorklet meter — hidden tabs pause rAF, and
-            // with it all speech evidence, while the worklet keeps ticking.
-            // Returns false once the capture was auto-stopped.
-            const processPeak = (peak: number): boolean => {
-                if (peak > maxPeak) maxPeak = peak;
+            // The VAD logic, driven per frame by the amplitude clock (rAF, then the
+            // worklet meter) or by the Silero engine once it has taken over.
+            const processInput = (input: GateInput): void => {
+                if (stopped) return;
+                const v = gate.process(input);
+                const now = input.t;
 
                 // Emit a normalized level for the UI meter (0.25 peak ≈ full scale).
                 if (onLevel) {
-                    try { onLevel(Math.max(0, Math.min(1, peak / 0.25))); }
+                    try { onLevel(v.level, v.isSpeech); }
                     catch (_e) { /* consumer callback error is theirs */ }
                 }
 
-                // Track ambient as the running minimum; it drifts up very slowly on
-                // NON-speech frames only (see below) so it can recover if the
-                // environment gets louder — drifting during speech would drag the
-                // floor toward the speaker's own level and push the gate above
-                // their voice (false-silence runaway).
-                if (peak < noiseFloor) noiseFloor = peak;
-                const nf = isFinite(noiseFloor) ? noiseFloor : 0;
-
-                const now = performance.now();
-                const elapsed = now - startedAt;
-
-                // Speech must clearly exceed ambient, but never fall below a small
-                // absolute floor (so true silence never counts as speech).
-                const speechPeak = Math.max(threshold, nf * speechFloorMult);
-                if (peak >= speechPeak) {
-                    if (!speechRunStart) speechRunStart = now;
-                } else {
-                    speechRunStart = 0;
-                }
-                // A blip only becomes speech ONSET after staying above the gate for
-                // minSpeechMs continuously (rejects transient noise). Once speech is
-                // established, any above-gate peak keeps it alive so rapid short words
-                // aren't clipped.
-                const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
-                const isSpeech = heardSpeech ? (peak >= speechPeak) : sustainedOnset;
-                if (!isSpeech && peak >= noiseFloor && isFinite(noiseFloor)) {
-                    noiseFloor += (peak - noiseFloor) * 0.0005;
-                }
-
                 // Accumulate speech evidence for the capture result; the consumer
-                // uses it to refuse transcribing speech-less audio. The onset
-                // run-up (the minSpeechMs the gate withheld) is credited on the
-                // transition frame so short words aren't undercounted.
-                const dt = lastTickAt ? now - lastTickAt : 0;
-                lastTickAt = now;
+                // uses it to refuse transcribing speech-less audio.
                 this._lastVadTickAt = now;
-                if (isSpeech) this._voicedMs += (!heardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
+                if (v.isSpeech) this._voicedMs += v.voicedDeltaMs;
 
-                if (isSpeech) {
-                    heardSpeech = true;
+                if (v.isSpeech) {
                     this._heardSpeech = true;
                     silentSince = 0;
                 } else if (!autoStop) {
                     // Push-to-talk: evidence + metering only, no auto-stop cuts.
-                } else if (heardSpeech) {
+                } else if (this._heardSpeech) {
+                    // The trailing-silence timer arms only AFTER speech is first heard,
+                    // so the leading pause before the user starts talking doesn't
+                    // instantly end the round (the multi-round hands-free bug).
                     if (!silentSince) silentSince = now;
-                    else if (now - silentSince >= silenceMs) { dbgStop("trailing-silence"); this.stop(); return false; }
-                } else if (elapsed >= onsetTimeoutMs) {
-                    dbgStop("no-speech-onset"); this.stop(); // user never started speaking
-                    return false;
+                    else if (now - silentSince >= silenceMs) { dbgStop("trailing-silence"); stopped = true; this.stop(); }
+                } else if (now - startedAt >= onsetTimeoutMs) {
+                    dbgStop("no-speech-onset"); stopped = true; this.stop(); // user never started speaking
                 }
-                return true;
             };
 
-            const tick = () => {
-                if (!this._recording) return;
-                analyser.getFloatTimeDomainData(buf);
-                // Peak amplitude tracks voice far more reliably than RMS — speech
-                // has high transient peaks even when its RMS is low.
-                let peak = 0;
-                for (let i = 0; i < buf.length; i++) {
-                    const v = buf[i] < 0 ? -buf[i] : buf[i];
-                    if (v > peak) peak = v;
-                }
-                if (!processPeak(peak)) return;
-                this._rafId = requestAnimationFrame(tick);
-            };
-            this._rafId = requestAnimationFrame(tick);
-            // Upgrade to the worklet clock. The rAF loop is cancelled by the worklet's
-            // FIRST message, not here: a node that loads but is never rendered would
-            // otherwise leave the capture with no level clock at all.
-            void this._attachWorkletMeter(processPeak);
+            if (!this._armAmplitudeVad(processInput)) return; // no Web Audio: recording still works
+            this._evidenceTracked = true;
+            this._vad = "amplitude";
+            this._upgradeToSilero(processInput);
         } catch (_e) {
             // Silence detection is best-effort; recording still works without it.
         }
+    }
+
+    /**
+     * The session's speech gate (see speechGate.ts). Silero thresholds come from the
+     * engine configuration; the amplitude parameters from the capture options.
+     */
+    private _newGate(threshold: number, speechFloorMult: number, minSpeechMs: number, capGate: boolean): SpeechGate {
+        const gate = new SpeechGate({
+            threshold,
+            speechFloorMult,
+            minSpeechMs,
+            positiveSpeechThreshold: this._sileroOpts?.positiveSpeechThreshold ?? 0.5,
+            negativeSpeechThreshold: this._sileroOpts?.negativeSpeechThreshold ?? 0.35,
+            capGate,
+        });
+        this._gate = gate;
+        return gate;
+    }
+
+    /**
+     * Arm the amplitude clock: analyser + rAF tick, upgraded to the worklet meter
+     * once it proves it runs. Feeds `processInput` with peak-only frames. False when
+     * Web Audio is unavailable (recording still works; evidence is untracked).
+     */
+    private _armAmplitudeVad(processInput: (input: GateInput) => void): boolean {
+        const setup = this._createAnalyser();
+        if (!setup) return false;
+        const {analyser, buf} = setup;
+        const tick = () => {
+            if (!this._recording) return;
+            analyser.getFloatTimeDomainData(buf);
+            // Peak amplitude tracks voice far more reliably than RMS — speech
+            // has high transient peaks even when its RMS is low.
+            let peak = 0;
+            for (let i = 0; i < buf.length; i++) {
+                const sample = buf[i] ?? 0;
+                const v = sample < 0 ? -sample : sample;
+                if (v > peak) peak = v;
+            }
+            processInput({t: performance.now(), peak});
+            this._rafId = requestAnimationFrame(tick);
+        };
+        this._rafId = requestAnimationFrame(tick);
+        // Lets the health poll bring the level clock back after a worklet stall
+        // without knowing anything about how the tick works.
+        this._restartLevelClock = () => {
+            if (this._recording && !this._rafId) this._rafId = requestAnimationFrame(tick);
+        };
+        // Upgrade to the worklet clock. The rAF loop is cancelled by the worklet's
+        // FIRST message, not here: a node that loads but is never rendered would
+        // otherwise leave the capture with no level clock at all.
+        void this._attachWorkletMeter((peak) => processInput({t: performance.now(), peak}));
+        return true;
+    }
+
+    /**
+     * One-shot only: hand the verdict to the Silero engine if it is already loaded.
+     * Its first frame retires the amplitude clock; until then (and if it never
+     * comes) the amplitude gate judges. A not-yet-loaded engine starts loading for
+     * the next capture instead of delaying this one.
+     */
+    private _upgradeToSilero(processInput: (input: GateInput) => void): void {
+        const eng = this._silero;
+        if (!eng) return;
+        if (eng.state !== "ready") {
+            if (eng.state !== "loading") void eng.load().catch(() => { /* reported by load() */ });
+            return;
+        }
+        const stream = this._stream;
+        if (!stream) return;
+        let first = true;
+        void eng.attach(stream, (f) => {
+            if (!this._recording || this._stream !== stream) return;
+            if (first) {
+                first = false;
+                this._dropAmplitudeClock();
+                this._vad = "silero";
+            }
+            this._lastPortMsgAt = f.t;
+            processInput({t: f.t, peak: f.peak, prob: f.prob});
+        }).catch((e: any) => {
+            APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug(e, "silero unavailable for this one-shot, staying on amplitude");
+        });
+    }
+
+    /** Retire the amplitude clock (rAF + worklet meter) once Silero frames flow. */
+    private _dropAmplitudeClock(): void {
+        if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+        if (this._workletNode) {
+            try { this._workletNode.port.onmessage = null; this._workletNode.disconnect(); }
+            catch (_e) { /* ignore */ }
+            this._workletNode = null;
+        }
+        if (this._workletSink) {
+            try { this._workletSink.disconnect(); } catch (_e) { /* ignore */ }
+            this._workletSink = null;
+        }
+        this._restartLevelClock = null;
+    }
+
+    /**
+     * Which engine a continuous session runs on. Awaits the Silero load (memoized:
+     * only the first session ever waits, bounded by `loadTimeoutMs`) so the session
+     * starts with the engine that will judge it — the PCM segments need frames from
+     * the very first one. Any failure is reported once and answered with amplitude.
+     */
+    private async _selectVad(): Promise<VadEngine> {
+        const eng = this._silero;
+        if (!eng) return "amplitude";
+        if (!SileroVadEngine.isSupported()) {
+            this._noteVadFallback("silero unsupported in this browser");
+            return "amplitude";
+        }
+        try {
+            await eng.load();
+        } catch (e) {
+            this._noteVadFallback((e as any)?.message || "silero load failed");
+            return "amplitude";
+        }
+        return pickVadEngine({requested: "silero", supported: true, load: eng.state});
+    }
+
+    /** Report, once per session, that the Silero engine is not judging this session. */
+    private _noteVadFallback(reason: string): void {
+        if (this._vadFallbackReported) return;
+        this._vadFallbackReported = true;
+        APPLICATION_CONTEXT.log("module.speech-to-text:vad").warn({reason}, "silero VAD not in use, amplitude gate judges this session");
+        try { this._onDeviceError?.(new CaptureError("vad-fallback", reason)); }
+        catch (_e) { /* consumer callback error is theirs */ }
+    }
+
+    /** The AudioContext whose clock drives the running session's VAD. */
+    private _vadCtx(): AudioContext | null {
+        return this._audioCtx ?? (this._vad === "silero" ? (this._silero?.context ?? null) : null);
+    }
+
+    /** A Silero frame of the running continuous session: PCM sink, liveness, verdict. */
+    private _onSileroFrame(f: SileroFrame, processInput: (input: GateInput) => void): void {
+        this._lastPortMsgAt = f.t;
+        if (!this._recording) return;
+        // The frame is the library's buffer: copy it, it is reused for the next one.
+        const rec = this._segRec;
+        if (rec?.pcm) rec.pcm.push(f.frame.slice());
+        // No segment recorder ticks under Silero — the frames ARE the audio flowing,
+        // so they carry the liveness beat the recorder timeslices used to.
+        this._lastRecorderDataAt = f.t;
+        this._sileroBytes += f.frame.length * 2;
+        if (f.t - this._lastSileroBeatAt >= SEGMENT_TIMESLICE_MS) {
+            this._lastSileroBeatAt = f.t;
+            const bytes = this._sileroBytes;
+            this._sileroBytes = 0;
+            this._beat("recorder", bytes);
+        }
+        processInput({t: f.t, peak: f.peak, prob: f.prob});
+    }
+
+    /**
+     * Silero stopped delivering frames mid-session while the track is live: hand the
+     * rest of the session to the amplitude gate. The open PCM segment is cut (its
+     * frames flush as WAV, its evidence marked stalled so it degrades open) and the
+     * successor records through MediaRecorder. Never switches back within a session.
+     */
+    private _switchToAmplitude(reason: string): void {
+        if (this._vad !== "silero" || !this._recording || !this._segmented) return;
+        const processInput = this._segProcessInput;
+        APPLICATION_CONTEXT.log("module.speech-to-text:vad").warn({reason}, "silero VAD stalled, switching to the amplitude gate");
+        this._noteVadFallback(reason);
+        try { this._silero?.detach(); } catch (_e) { /* ignore */ }
+        this._vad = "amplitude";
+        this._segVadStalled = true;
+        // The successor starts a fresh clock: the gap that got us here belongs to the
+        // segment being cut, not to the one the amplitude engine is about to judge.
+        this._lastVadTickAt = 0;
+        if (processInput && this._armAmplitudeVad(processInput)) this._segEvidenceTracked = true;
+        else this._segEvidenceTracked = false;
+        this._cutSegment(false);
     }
 
     // ---- continuous (segmented) capture ----
@@ -1097,7 +1233,13 @@ export class AudioCapture {
         // transcript that still looks complete. The consumer clears it explicitly
         // (clearArchive) when a new dictation begins or the audio has been used.
 
-        navigator.mediaDevices.getUserMedia(this._audioConstraints(opts)).then((stream) => {
+        this._vadFallbackReported = false;
+        // The engine choice overlaps the permission prompt: the first session ever
+        // waits for the Silero model, every later one finds it loaded.
+        Promise.all([
+            navigator.mediaDevices.getUserMedia(this._audioConstraints(opts)),
+            this._selectVad(),
+        ]).then(async ([stream, engine]) => {
             // The session may have been stopped/replaced before permission resolved.
             if (sessionToken !== this._segSessionToken || !this._segmented) {
                 try { stream.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
@@ -1106,13 +1248,14 @@ export class AudioCapture {
             this._stream = stream;
             this._watchTrack(stream);
             this._recording = true;
+            this._vad = engine;
             if (opts.archive && !this._archiveStartedAt) this._archiveStartedAt = performance.now();
             this._armHealthPoll();
             // Segments need a silence boundary to be cut; fall back to a sensible
             // window if the caller left it unset (0 = "manual only" makes no sense
             // for continuous mode).
             const segSilence = opts.silenceMs && opts.silenceMs > 0 ? opts.silenceMs : 1500;
-            this._armSegmentedVad(
+            await this._armSegmentedVad(
                 segSilence,
                 opts.silenceThreshold ?? 0.04,
                 opts.speechOnsetTimeoutMs ?? 15000,
@@ -1122,6 +1265,7 @@ export class AudioCapture {
                 opts.speechFloorMult ?? 3.0,
                 opts.minSpeechMs ?? 200,
             );
+            if (sessionToken !== this._segSessionToken || !this._segmented) return;
             if (opts.archive) this._startArchiveRecorder(opts);
             this._startSegmentRecorder();
             // Only now is anything being recorded.
@@ -1154,12 +1298,13 @@ export class AudioCapture {
         const track = this._stream?.getAudioTracks?.()[0];
         const now = performance.now();
         const since = (at: number) => (at ? Math.round(now - at) : -1);
+        const ctx = this._vadCtx();
         return {
             recording: this._recording,
             segmenting: this._segmented,
-            clock: this._workletNode ? "worklet" : (this._rafId ? "raf" : "none"),
-            contextState: (this._audioCtx?.state as AudioContextState) ?? "none",
-            contextTime: this._audioCtx?.currentTime ?? -1,
+            clock: this._vad === "silero" ? "silero" : this._workletNode ? "worklet" : (this._rafId ? "raf" : "none"),
+            contextState: (ctx?.state as AudioContextState) ?? "none",
+            contextTime: ctx?.currentTime ?? -1,
             trackState: (track?.readyState as MediaStreamTrackState) ?? "none",
             trackMuted: track ? track.muted : null,
             segRecState: (this._segRec?.rec?.state as RecordingState) ?? "none",
@@ -1185,7 +1330,7 @@ export class AudioCapture {
             this._onAlive({
                 source,
                 bytes,
-                contextState: (this._audioCtx?.state as AudioContextState) ?? "none",
+                contextState: (this._vadCtx()?.state as AudioContextState) ?? "none",
                 trackState: (track?.readyState as MediaStreamTrackState) ?? "none",
                 vadIdleMs,
                 vadStalled: vadIdleMs > VAD_STALL_MS,
@@ -1215,7 +1360,7 @@ export class AudioCapture {
 
     private _pollHealth(): void {
         if (!this._recording) return;
-        const ctx: any = this._audioCtx;
+        const ctx: any = this._vadCtx();
         const track = this._stream?.getAudioTracks?.()[0];
         const now = performance.now();
         const ctxTime = ctx?.currentTime ?? -1;
@@ -1244,7 +1389,8 @@ export class AudioCapture {
             // trusted to discard audio — but the microphone is fine and the session
             // keeps running. Beat, so nobody upstream mistakes this for a dead mic.
             this._segVadStalled = true;
-            this._recoverVadClock();
+            if (this._vad === "silero") this._switchToAmplitude("silero frames stalled");
+            else this._recoverVadClock();
             this._beat("poll", 0);
             return;
         }
@@ -1269,6 +1415,7 @@ export class AudioCapture {
      */
     private _recoverVadClock(): void {
         if (!this._recording) return;
+        if (this._vad === "silero") return; // Silero has its own recovery (_switchToAmplitude)
         if (this._rafId) return; // rAF is already the clock; nothing to re-arm
         const restart = this._restartLevelClock;
         if (!restart) return;
@@ -1562,7 +1709,10 @@ export class AudioCapture {
      * silence hallucinations.
      */
     enterFailOpen(): void {
-        if (!this._segmented) return;
+        // The ladder exists because the amplitude gate is untrusted; a Silero verdict
+        // is not overridden by a transcript (that is how silence hallucinations used
+        // to flip whole sessions into uploading everything).
+        if (!this._segmented || this._vad === "silero") return;
         this._segFailOpen = true;
         this._segConsecDiscards = 0;
     }
@@ -1572,9 +1722,49 @@ export class AudioCapture {
         return this._segSessionToken;
     }
 
-    /** Spin up a fresh recorder on the persistent stream for the next segment. */
+    /** Reset the per-segment evidence counters for a segment that starts now. */
+    private _resetSegmentEvidence(startedAt: number): void {
+        this._segStartAt = startedAt;
+        this._segHeardSpeech = false;
+        this._segSilentSince = 0;
+        this._segVoicedMs = 0;
+        this._segMaxPeak = 0;
+        this._segFirstSpeechAt = 0;
+        this._segLastSpeechAt = 0;
+        this._segVadStalled = false;
+        this._segWantCut = false;
+        this._gate?.beginSegment();
+    }
+
+    /**
+     * Open the next segment on the persistent stream: a PCM buffer fed by the Silero
+     * frames, or (amplitude) a fresh MediaRecorder.
+     */
     private _startSegmentRecorder(): void {
         if (!this._segmented || !this._stream) return;
+        if (this._vad === "silero") {
+            // The frames the engine scores ARE the segment audio; no recorder, no
+            // onstop, no flush latency — the cut is exact and synchronous.
+            const recording: SegmentRecording = {
+                rec: null,
+                chunks: [],
+                pcm: [],
+                vad: "silero",
+                startedAt: performance.now(),
+                action: "restart",
+                evidence: null,
+                successorStartedAt: 0,
+                finished: false,
+                token: this._segSessionToken,
+                onSegment: this._segOpts!.onSegment,
+                onDiscard: this._segOpts!.onDiscard,
+            };
+            this._segRec = recording;
+            this._recorder = null;
+            this._resetSegmentEvidence(recording.startedAt);
+            this._armSegmentMaxDuration();
+            return;
+        }
         const fail = (e: unknown) => {
             const err = new CaptureError("capture-failed", (e as any)?.message);
             const cb = this._segOpts?.onError;
@@ -1594,6 +1784,8 @@ export class AudioCapture {
         const recording: SegmentRecording = {
             rec,
             chunks: [],
+            pcm: null,
+            vad: this._vad,
             startedAt: performance.now(),
             action: "restart",
             evidence: null,
@@ -1605,15 +1797,7 @@ export class AudioCapture {
         };
         this._segRec = recording;
         this._recorder = rec;
-        this._segStartAt = recording.startedAt;
-        this._segHeardSpeech = false;
-        this._segSilentSince = 0;
-        this._segVoicedMs = 0;
-        this._segMaxPeak = 0;
-        this._segFirstSpeechAt = 0;
-        this._segLastSpeechAt = 0;
-        this._segVadStalled = false;
-        this._segWantCut = false;
+        this._resetSegmentEvidence(recording.startedAt);
 
         rec.ondataavailable = (ev: BlobEvent) => {
             if (!ev.data || ev.data.size <= 0) return;
@@ -1681,7 +1865,9 @@ export class AudioCapture {
         recording.finished = true;
         if (this._segRec === recording) this._segRec = null;
         const type = this._segMime || (recording.chunks[0]?.type) || "audio/webm";
-        const blob = new Blob(recording.chunks, {type});
+        // A Silero segment uploads exactly the frames the VAD judged, as WAV.
+        const blob = recording.pcm ? wavBlob(recording.pcm) : new Blob(recording.chunks, {type});
+        recording.pcm = null;
         const action = recording.action;
         // A recorder torn down or errored mid-segment carries no snapshot; judge it by
         // its own counters only while they are still its own (its successor resets them).
@@ -1698,6 +1884,7 @@ export class AudioCapture {
             maxPeak,
             overlapMs: recording.successorStartedAt ? Math.max(0, Math.round(performance.now() - recording.successorStartedAt)) : 0,
             tracked,
+            vad: tracked ? recording.vad : "none",
             ...(this._segFailOpen ? {failOpen: true} : {}),
             ...(isFinal ? {flush: true} : {}),
         };
@@ -1717,11 +1904,14 @@ export class AudioCapture {
             discard("silent");
         } else if (emit && !isFinal && !this._segFailOpen) {
             if (action === "restart-discard" || !heard) {
-                if (this._segConsecDiscards >= 2) {
+                // The probe ladder exists because the amplitude gate is untrusted. A
+                // Silero verdict is final: probing silence is how hallucinated "Thank
+                // you." turns used to flip whole sessions into uploading everything.
+                if (recording.vad !== "silero" && this._segConsecDiscards >= 2) {
                     probe = true;
                     this._segConsecDiscards = 0;
                 } else {
-                    this._segConsecDiscards++;
+                    if (recording.vad !== "silero") this._segConsecDiscards++;
                     emit = false;
                     discard("no-speech");
                 }
@@ -1732,7 +1922,7 @@ export class AudioCapture {
             discard("session-ended");
         }
         if (probe) meta.probe = true;
-        if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({action, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, speechSpanMs, probe, failOpen: this._segFailOpen, emit, stale}, "segment onstop");
+        if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({action, vad: meta.vad, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, speechSpanMs, probe, failOpen: this._segFailOpen, emit, stale}, "segment finished");
         if (emit) {
             // The index is consumed only by an EMITTED segment: the consumer's ordered
             // drain waits for every index in sequence, so a discarded segment must not
@@ -1767,14 +1957,22 @@ export class AudioCapture {
         current.action = discard ? "restart-discard" : "restart";
         current.evidence = this._snapshotSegmentEvidence();
         this._startSegmentRecorder();
-        // From here until the predecessor's `onstop`, both recorders capture the same
-        // audio — measured and reported so the seam can be trimmed after transcription.
-        if (this._segRec && this._segRec !== current) current.successorStartedAt = this._segRec.startedAt;
-        try {
-            if (current.rec.state !== "inactive") current.rec.stop();
-            else this._finishSegmentRecording(current);
-        } catch (_e) {
+        if (current.rec) {
+            // From here until the predecessor's `onstop`, both recorders capture the same
+            // audio — measured and reported so the seam can be trimmed after transcription.
+            if (this._segRec && this._segRec !== current) current.successorStartedAt = this._segRec.startedAt;
+            try {
+                if (current.rec.state !== "inactive") current.rec.stop();
+                else this._finishSegmentRecording(current);
+            } catch (_e) {
+                this._finishSegmentRecording(current);
+            }
+        } else {
+            // PCM segment: the boundary is the frame that triggered the cut, already in
+            // the predecessor's buffer; nothing overlaps and nothing waits for a flush.
+            // The consumer runs synchronously here and may stop() the session.
             this._finishSegmentRecording(current);
+            if (!this._segmented) return;
         }
         // A cut is a trailing-silence boundary, which is exactly where an archive
         // window may close without splitting a word. The window length only REQUESTS
@@ -1786,158 +1984,110 @@ export class AudioCapture {
         if (this._segmented) this._cutting = false;
     }
 
-    /** Persistent VAD/level loop for a continuous session (survives segment cuts). */
-    private _armSegmentedVad(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number) => void, turnSilenceMs = 0, onTurnIdle?: () => void, speechFloorMult = 3.0, minSpeechMs = 200): void {
+    /**
+     * Persistent VAD/level loop for a continuous session (survives segment cuts).
+     *
+     * Under Silero the engine's frames drive it (and are the segment audio); under
+     * amplitude the analyser clock does. Either way the verdict is the session's
+     * {@link SpeechGate}, and everything below it — turn idle, stall detection, the
+     * cut ladder — reads that verdict and nothing else.
+     */
+    private async _armSegmentedVad(silenceMs: number, threshold: number, onsetTimeoutMs: number, onLevel?: (level: number, speaking?: boolean) => void, turnSilenceMs = 0, onTurnIdle?: () => void, speechFloorMult = 3.0, minSpeechMs = 200): Promise<void> {
         this._segEvidenceTracked = false;
-        const setup = this._createAnalyser();
-        if (!setup) {
-            // No analyser ⇒ no speech evidence for the whole session: every segment
-            // degrades open and is uploaded, silence included. Worth a warning.
-            this._reportDeviceError(new Error("no audio analyser: speech evidence untracked"));
-            return;
-        }
-        const {analyser, buf} = setup;
-        this._segEvidenceTracked = true;
         this._lastVadTickAt = 0;
-        let lastTickAt = 0;
-
-        // Noise floor persists across segments so the room-relative speech
-        // threshold keeps stabilizing instead of resetting each segment.
-        let noiseFloor = Infinity;
-        let maxPeak = 0;
-        // Start of the current above-gate run (acoustic, persists across cuts) for
-        // sustained-onset gating; rejects brief blips that aren't real speech.
-        let speechRunStart = 0;
-        // Decaying maximum of speech-frame peaks. Caps the gate so an adaptive
-        // floor polluted by long speech (or AGC swings) can never climb above the
-        // level the speaker is demonstrably talking at — the runaway that made
-        // every post-first segment read as silence and get discarded.
-        let recentSpeechPeak = 0;
+        const gate = this._newGate(threshold, speechFloorMult, minSpeechMs, true);
+        const vad = APPLICATION_CONTEXT.log("module.speech-to-text:vad");
         // Session-level (cross-segment) speech tracking for the turn-idle signal.
-        let heardAnySpeech = false;
         let lastSpeechAt = 0;
         let turnIdleFired = false;
 
-        // The VAD logic, driven per peak sample by either the rAF tick below or
-        // (preferred) the AudioWorklet meter. Hidden tabs pause rAF entirely —
-        // which used to freeze all evidence so every backgrounded segment was
-        // judged speechless and discarded; the worklet clock keeps ticking.
-        const processPeak = (peak: number): void => {
-            if (peak > maxPeak) maxPeak = peak;
+        const processInput = (input: GateInput): void => {
+            const v = gate.process(input);
+            const {isSpeech, peak} = v;
+            const now = input.t;
             if (peak > this._segMaxPeak) this._segMaxPeak = peak;
-            if (onLevel) onLevel(Math.max(0, Math.min(1, peak / 0.25)));
-
-            if (peak < noiseFloor) noiseFloor = peak;
-            const nf = isFinite(noiseFloor) ? noiseFloor : 0;
-            let speechPeak = Math.max(threshold, nf * speechFloorMult);
-            // Gate cap: once the session heard speech, the gate may never exceed
-            // half the demonstrated speech level (absolute threshold still floors it).
-            if (heardAnySpeech && recentSpeechPeak > 0) {
-                speechPeak = Math.max(threshold, Math.min(speechPeak, recentSpeechPeak * 0.5));
-            }
-
-            const now = performance.now();
-            if (peak >= speechPeak) {
-                if (!speechRunStart) speechRunStart = now;
-            } else {
-                speechRunStart = 0;
-            }
-            // Sustained-onset gate for the session's FIRST speech only (blip
-            // rejection while nothing is known about the speaker). Once the session
-            // has heard speech, per-segment re-arm uses the plain gate — requiring a
-            // fresh 200ms sustained run after every cut is what clipped/discarded
-            // segment onsets mid-dictation.
-            const sustainedOnset = speechRunStart > 0 && (now - speechRunStart) >= minSpeechMs;
-            const isSpeech = this._segHeardSpeech ? (peak >= speechPeak)
-                : heardAnySpeech ? (peak >= speechPeak)
-                : sustainedOnset;
-
-            // Adaptive floor drifts up only on NON-speech frames: drifting during
-            // speech drags the floor toward the speaker's own level and (×mult)
-            // pushes the gate above their voice — the silent-discard runaway.
-            if (!isSpeech && peak >= noiseFloor && isFinite(noiseFloor)) {
-                noiseFloor += (peak - noiseFloor) * 0.0005;
-            }
-            if (isSpeech) {
-                recentSpeechPeak = Math.max(recentSpeechPeak, peak);
-            } else if (recentSpeechPeak > 0) {
-                recentSpeechPeak *= 0.9998; // slow decay so the cap tracks real level changes
+            if (onLevel) {
+                try { onLevel(v.level, isSpeech); }
+                catch (_e) { /* consumer callback error is theirs */ }
             }
 
             // Session-level turn tracking (independent of segment cuts, so a long
             // continuous monologue never trips the turn-idle timer between words).
-            if (isSpeech) { heardAnySpeech = true; lastSpeechAt = now; turnIdleFired = false; }
-            if (onTurnIdle && turnSilenceMs > 0 && heardAnySpeech && !turnIdleFired
+            if (isSpeech) { lastSpeechAt = now; turnIdleFired = false; }
+            if (onTurnIdle && turnSilenceMs > 0 && gate.heardAnySpeech && !turnIdleFired
                 && (now - lastSpeechAt) >= turnSilenceMs) {
                 turnIdleFired = true;
-                APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug("turn idle");
+                vad.debug("turn idle");
                 try { onTurnIdle(); } catch (_e) { /* consumer error is theirs */ }
             }
 
-            // Don't evaluate cut conditions while a cut/restart is mid-flight.
-            const dt = lastTickAt ? now - lastTickAt : 0;
-            lastTickAt = now;
-            // Stall watchdog: a long tick gap means the evidence for this segment
-            // has a hole — its silence verdict must not be trusted (onstop then
-            // reports it untracked so the audio is transcribed, not discarded).
+            // Stall watchdog: a long frame gap means the evidence for this segment
+            // has a hole — its silence verdict must not be trusted (the finish then
+            // reports it untracked so the audio is transcribed, not discarded). Read
+            // from the instance field so an engine switch can start the clock afresh.
+            const dt = this._lastVadTickAt ? now - this._lastVadTickAt : 0;
             if (dt > VAD_STALL_MS) this._segVadStalled = true;
             this._lastVadTickAt = now;
-            if (!this._cutting) {
-                const segElapsed = now - this._segStartAt;
-                if (isSpeech) {
-                    // Credit the withheld onset run-up on the transition frame so
-                    // a short word ("okay") isn't undercounted below minVoicedMs.
-                    this._segVoicedMs += (!this._segHeardSpeech && speechRunStart) ? (now - speechRunStart) : dt;
-                    if (!this._segFirstSpeechAt) this._segFirstSpeechAt = speechRunStart || now;
-                    this._segLastSpeechAt = now;
-                    this._segHeardSpeech = true;
-                    this._segSilentSince = 0;
-                } else if (this._segHeardSpeech) {
-                    if (!this._segSilentSince) this._segSilentSince = now;
-                    else {
-                        const silentFor = now - this._segSilentSince;
-                        if (silentFor >= silenceMs) {
-                            if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: trailing-silence");
-                            this._cutSegment(false);
-                        } else if (this._segWantCut && silentFor >= SOFT_CUT_SILENCE_MS) {
-                            // Duration cap elapsed mid-monologue: take the first real
-                            // word gap rather than slicing through a word.
-                            if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({silentFor, voicedMs: this._segVoicedMs}, "cut: duration cap at word gap");
-                            this._cutSegment(false);
-                        }
+            // Don't evaluate cut conditions while a cut/restart is mid-flight.
+            if (this._cutting) return;
+            const segElapsed = now - this._segStartAt;
+            if (isSpeech) {
+                this._segVoicedMs += v.voicedDeltaMs;
+                if (!this._segFirstSpeechAt) this._segFirstSpeechAt = v.onsetAt;
+                this._segLastSpeechAt = now;
+                this._segHeardSpeech = true;
+                this._segSilentSince = 0;
+            } else if (this._segHeardSpeech) {
+                if (!this._segSilentSince) this._segSilentSince = now;
+                else {
+                    const silentFor = now - this._segSilentSince;
+                    if (silentFor >= silenceMs) {
+                        if (vad.isEnabled("debug")) vad.debug({...gate.snapshot(), segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: trailing-silence");
+                        this._cutSegment(false);
+                    } else if (this._segWantCut && silentFor >= SOFT_CUT_SILENCE_MS) {
+                        // Duration cap elapsed mid-monologue: take the first real
+                        // word gap rather than slicing through a word.
+                        if (vad.isEnabled("debug")) vad.debug({silentFor, voicedMs: this._segVoicedMs}, "cut: duration cap at word gap");
+                        this._cutSegment(false);
                     }
-                } else if (segElapsed >= onsetTimeoutMs) {
-                    // Prolonged leading silence: re-arm so the session never grows
-                    // an unbounded silent blob. In fail-open mode the blob is
-                    // emitted (VAD only labels); otherwise it enters the
-                    // discard/probe policy in onstop.
-                    if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({noiseFloor: nf, speechPeak, recentSpeechPeak, segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: onset-timeout");
-                    this._cutSegment(this._segFailOpen ? false : true);
                 }
+            } else if (segElapsed >= onsetTimeoutMs) {
+                // Prolonged leading silence: re-arm so the session never grows an
+                // unbounded silent blob. In fail-open mode the blob is emitted (VAD
+                // only labels); otherwise it enters the discard policy at finish.
+                if (vad.isEnabled("debug")) vad.debug({...gate.snapshot(), segMaxPeak: this._segMaxPeak, voicedMs: this._segVoicedMs, failOpen: this._segFailOpen}, "cut: onset-timeout");
+                this._cutSegment(this._segFailOpen ? false : true);
             }
         };
+        this._segProcessInput = processInput;
 
-        const tick = () => {
-            if (!this._recording) return;
-            analyser.getFloatTimeDomainData(buf);
-            let peak = 0;
-            for (let i = 0; i < buf.length; i++) {
-                const v = buf[i] < 0 ? -buf[i] : buf[i];
-                if (v > peak) peak = v;
+        if (this._vad === "silero" && this._silero) {
+            const stream = this._stream!;
+            const token = this._segSessionToken;
+            try {
+                await this._silero.attach(stream, (f) => this._onSileroFrame(f, processInput));
+                // The session may have ended while the engine attached.
+                if (token !== this._segSessionToken || !this._segmented || this._stream !== stream) {
+                    this._silero.detach();
+                    return;
+                }
+                this._segEvidenceTracked = true;
+                this._restartLevelClock = null;
+                return;
+            } catch (e) {
+                if (token !== this._segSessionToken || !this._segmented) return;
+                this._noteVadFallback((e as any)?.message || "silero attach failed");
+                this._vad = "amplitude";
             }
-            processPeak(peak);
-            this._rafId = requestAnimationFrame(tick);
-        };
-        this._rafId = requestAnimationFrame(tick);
-        // Lets the health poll bring the level clock back after a worklet stall
-        // without knowing anything about how the tick works.
-        this._restartLevelClock = () => {
-            if (this._recording && !this._rafId) this._rafId = requestAnimationFrame(tick);
-        };
-        // Upgrade to the worklet clock. The rAF loop is cancelled by the worklet's
-        // FIRST message, not here: a node that loads but is never rendered would
-        // otherwise leave the capture with no level clock at all.
-        void this._attachWorkletMeter(processPeak);
+        }
+        if (this._armAmplitudeVad(processInput)) {
+            this._segEvidenceTracked = true;
+        } else {
+            // No analyser ⇒ no speech evidence for the whole session: every segment
+            // degrades open and is uploaded, silence included. Worth a warning.
+            this._vad = "none";
+            this._reportDeviceError(new Error("no audio analyser: speech evidence untracked"));
+        }
     }
 
     /** End a continuous session: flush the final segment, then tear down. */
@@ -1955,8 +2105,10 @@ export class AudioCapture {
             current.evidence = this._snapshotSegmentEvidence();
         }
         try {
-            if (current && current.rec.state !== "inactive") {
+            if (current && current.rec && current.rec.state !== "inactive") {
                 current.rec.stop(); // final onstop emits the flush segment
+            } else if (current && !current.rec) {
+                this._finishSegmentRecording(current); // PCM: the flush is synchronous
             } else {
                 this._finishSegmented(); // never started (or already inactive): finish now
             }
@@ -1994,16 +2146,15 @@ export class AudioCapture {
         this._onAlive = null;
         this._restartLevelClock = null;
         this._clearSegmentTimers();
-        if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
-        if (this._workletNode) {
-            try { this._workletNode.port.onmessage = null; this._workletNode.disconnect(); }
-            catch (_e) { /* ignore */ }
-            this._workletNode = null;
-        }
-        if (this._workletSink) {
-            try { this._workletSink.disconnect(); } catch (_e) { /* ignore */ }
-            this._workletSink = null;
-        }
+        this._dropAmplitudeClock();
+        // The engine outlives the session (model and worklet stay warm); only its
+        // attachment to this stream ends here.
+        try { this._silero?.detach(); } catch (_e) { /* ignore */ }
+        this._gate = null;
+        this._segProcessInput = null;
+        this._vad = "none";
+        this._lastSileroBeatAt = 0;
+        this._sileroBytes = 0;
         try { this._audioCtx?.close(); } catch (_e) { /* ignore */ }
         this._audioCtx = null;
         this._detachTrack?.();

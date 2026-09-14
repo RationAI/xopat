@@ -1,7 +1,7 @@
 {
-  "name": "AI Chat",
+  "name": "%meta.name%",
   "icon": "ph-chats-circle",
-  "description": "Integration hub for AI chat models",
+  "description": "%meta.description%",
   "requires": [
     "markdown",
     "speech-to-text"
@@ -46,7 +46,10 @@
   ],
   "voice": {
     // See ChatVoiceControllerOptions (and the config table in
-    // modules/speech-to-text/README.md). Notable: `busyHoldMs` (default 4000)
+    // modules/speech-to-text/README.md). `language`: "auto" (default — the
+    // speech-to-text module detects the dictation's language and pins the session
+    // once two segments agree; never the UI locale) or a BCP-47 code to pin it.
+    // Notable: `busyHoldMs` (default 4000)
     // is how long the assistant may compute before hands-free speech is held as
     // an editable composer draft instead of being auto-submitted; 0 disables.
     // Also `staleSessionMs` (default 8000) — how long capture may go without a

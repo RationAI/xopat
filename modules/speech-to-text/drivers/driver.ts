@@ -8,6 +8,8 @@
  * or DOM — they only see audio in, text out.
  */
 
+import {hasCJK, words as segmentWords} from "../textWords";
+
 export interface TranscriptionOptions {
     /** BCP-47 hint (e.g. "en", "cs"); drivers may ignore it. */
     language?: string;
@@ -153,6 +155,47 @@ const HALLUCINATION_PHRASES = [
     "thank you", "thank you very much", "thanks", "thank you so much",
     "hello", "hi", "bye", "goodbye", "you", "the", "so", "um", "uh", "hmm", "mm-hmm",
     "silence", "[silence]", "(silence)",
+    // The same fillers in Japanese — Whisper's subtitle training shows through in every
+    // language it decodes. Compared after NFKC folding with the Japanese full stop and
+    // comma stripped, so 「ご視聴ありがとうございました。」 matches.
+    "ご視聴ありがとうございました", "ご視聴ありがとうございます", "ありがとうございました",
+    "ありがとうございます", "お疲れ様でした", "チャンネル登録お願いします", "字幕",
+];
+
+/** Punctuation that may trail a stock phrase: ASCII, and the Japanese full stop / comma / marks. */
+const TRAILING_PUNCT_RE = /[.!?,\s。、！？]+$/gu;
+
+/**
+ * Subtitle and translation CREDITS, in the languages Whisper learned them from — a Czech
+ * dictation ended with "Titulky vytvořil JohnyX." over 0 ms of voice. Matched against the
+ * WHOLE segment (NFKC-folded, lower-cased, trailing punctuation stripped), so a sentence
+ * that merely mentions subtitles is untouched: only a bare credit is nothing but a credit.
+ */
+const HALLUCINATION_PATTERNS: RegExp[] = [
+    // cs: "Titulky vytvořil X", "Titulky: X", "Překlad: X", "Přeložil X"
+    /^titulky(\s+(vytvořil|vytvořila|vytvořili|přeložil|přeložila|od|by)\b.*|\s*[:\-–]\s*\S.*|\s+\S+)$/u,
+    /^(překlad|přeložil|přeložila)\b.*$/u,
+    // sk
+    /^titulky\s+(vytvoril|vytvorila|preložil|preložila)\b.*$/u,
+    // de / nl
+    /^untertitel(ung)?\b.*$/u,
+    /^ondertitel(s|ing|d)?\b.*$/u,
+    // fr / es / pt / it / pl
+    /^sous-titr(es|age)\b.*$/u,
+    /^subt[ií]tulos\b.*$/u,
+    /^legendas?\b.*$/u,
+    /^sottotitoli\b.*$/u,
+    /^napisy\b.*$/u,
+    // ja / ko / zh
+    /^字幕.*$/u,
+    /^자막.*$/u,
+    // en credits: "subtitles by X", "transcribed by X", "translated by X", "captions by X"
+    /^(subtitles?|transcription|transcribed|translated|translation|captions?|captioned)\s+by\b.*$/u,
+    // A bare web credit: "www.example.org", "www.zeoranger.co.uk", "amara.org". A lone
+    // domain-shaped token — labels of letters/digits/hyphens, a letters-only TLD of two or
+    // more, so "2.5" or "e.g" never match.
+    /^(www\.)?[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)*\.\p{L}{2,}$/u,
+    /amara\.org/u,
 ];
 
 /**
@@ -166,8 +209,11 @@ const HALLUCINATION_PHRASES = [
  */
 export function stripNonSpeech(text: string): string {
     let t = String(text || "");
-    // Drop (…), […], {…} caption segments and musical note glyphs + their content.
+    // Drop (…), […], {…} caption segments and musical note glyphs + their content —
+    // and their full-width Japanese counterparts, which a Japanese decode uses.
     t = t.replace(/[([{][^)\]}]*[)\]}]/g, " ");
+    t = t.replace(/[（【〔][^）】〕]*[）】〕]/gu, " ");
+    t = t.replace(/[「『][^」』]*[」』]/gu, " ");
     // Asterisk-wrapped stage directions some models emit for non-speech audio
     // (*Buzzing*, *sips*, *sounds of a plane*). Speech ASR never contains literal
     // asterisks, so this is safe; a real sentence around one keeps its words.
@@ -178,8 +224,9 @@ export function stripNonSpeech(text: string): string {
 
     if (!t) return "";
     // If the entire remainder is just a stock caption phrase, treat as no-speech.
-    const bare = t.toLowerCase().replace(/[.!?,\s]+$/g, "").trim();
+    const bare = t.normalize("NFKC").toLowerCase().replace(TRAILING_PUNCT_RE, "").trim();
     if (HALLUCINATION_PHRASES.includes(bare)) return "";
+    if (HALLUCINATION_PATTERNS.some((re) => re.test(bare))) return "";
     return t;
 }
 
@@ -225,7 +272,10 @@ export function looksRepetitive(text: string): boolean {
     // ratio to 0.44, so a real 60-token loop scored as clean speech and was appended to a
     // pathology transcript. A token built from one or two distinct letters is not a word,
     // so it is split back into its parts before counting.
-    const words = (String(text || "").toLowerCase().match(/[\p{L}\p{N}'’-]+/gu) || [])
+    // Words by the segmenter, so a Japanese loop (written without spaces) is as many
+    // words as it has; hyphenated runs stay whole here for the mega-token rule below.
+    const words = (hasCJK(text) ? segmentWords(text).map((w) => w.toLowerCase())
+        : (String(text || "").toLowerCase().match(/[\p{L}\p{N}'’-]+/gu) || []))
         .flatMap((w) => (isSpelledOut(w) ? w.split(/-+/).filter(Boolean) : [w]));
     const n = words.length;
     if (n < 12) return false; // too short to be a runaway loop; protect real speech
@@ -270,6 +320,9 @@ export function looksRepetitive(text: string): boolean {
 export function collapseRepetition(text: string): { text: string; collapsed: boolean } {
     const raw = String(text || "").replace(/\s+/g, " ").trim();
     if (!raw) return {text: raw, collapsed: false};
+    // Rebuilding text by joining tokens with spaces would rewrite a script written
+    // without them; a CJK loop is still caught (and blanked) by looksRepetitive.
+    if (hasCJK(raw)) return {text: raw, collapsed: false};
     const tokens = raw.split(" ");
     const key = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}'’-]+/gu, "");
     // Drop spelled-out mega-tokens outright: they are not words in any language.

@@ -12,6 +12,8 @@
  * not drift.
  */
 
+import {wordSpans, words} from "./textWords";
+
 const WORD_RE = /[\p{L}\p{N}]+/gu;
 
 /** Lower-cased alphanumeric core of a token; "" for punctuation-only tokens. */
@@ -41,9 +43,13 @@ const ONE_WORD_MIN_CHARS = 4;
  * the removed words goes with them; the remainder is trimmed of leading separators.
  */
 export function trimOverlap(prev: string, next: string, overlapMs: number = 0): TrimResult {
-    const nextTokens = String(next || "").trim().split(/\s+/).filter(Boolean);
-    const prevTokens = String(prev || "").trim().split(/\s+/).filter(Boolean);
-    if (!nextTokens.length || !prevTokens.length) return {text: String(next || "").trim(), trimmedWords: 0};
+    const nextText = String(next || "").trim();
+    // Words by the segmenter (offsets kept), so a script without spaces is compared word
+    // by word and cut at a word — a whitespace split made a Japanese segment one token.
+    const nextSpans = wordSpans(nextText);
+    const prevTokens = words(String(prev || "").trim());
+    const nextTokens = nextSpans.map((w) => w.text);
+    if (!nextTokens.length || !prevTokens.length) return {text: nextText, trimmedWords: 0};
 
     const tail = prevTokens.slice(-MAX_SEAM_WORDS).map(key);
     const head = nextTokens.slice(0, MAX_SEAM_WORDS).map(key);
@@ -61,7 +67,10 @@ export function trimOverlap(prev: string, next: string, overlapMs: number = 0): 
         const word = head[0] || "";
         if (overlapMs < ONE_WORD_MIN_OVERLAP_MS || word.length < ONE_WORD_MIN_CHARS) best = 0;
     }
-    if (!best) return {text: nextTokens.join(" "), trimmedWords: 0};
-    const rest = nextTokens.slice(best).join(" ").replace(/^[\s,;:.\-–—]+/u, "").trim();
+    const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
+    if (!best) return {text: collapse(nextText), trimmedWords: 0};
+    // Cut the ORIGINAL text at the first kept word, so spacing and script survive.
+    const cutAt = best < nextSpans.length ? nextSpans[best]!.index : nextText.length;
+    const rest = collapse(nextText.slice(cutAt).replace(/^[\s,;:.\-–—、。]+/u, ""));
     return {text: rest, trimmedWords: best};
 }

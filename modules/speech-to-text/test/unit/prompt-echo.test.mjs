@@ -29,7 +29,7 @@ await esbuild.build({
 const { stripPromptEcho, isPurePromptEcho } = await import(pathToFileURL(outfile).href);
 test.afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-// The shipped base glossary (src/locales/en.json, chat.voice.transcriptionPrompt) plus a
+// The shipped base glossary (modules/vercel-ai-chat-sdk/locales/en.json, voice.transcriptionPrompt) plus a
 // report-term tail like the one mixture-report-assist appends.
 const GLOSSARY = "Histology and pathology dictation. Common terms: histology, histopathology, " +
     "immunohistochemistry, hematoxylin and eosin, H&E stain, mitosis, mitotic figures, stroma, " +
@@ -70,4 +70,20 @@ test("@unit pieces match whole words only", () => {
 test("@unit no prompt, nothing stripped", () => {
     expect(stripPromptEcho("fibrosis, necrosis.", undefined)).toBe("fibrosis, necrosis.");
     expect(stripPromptEcho("", GLOSSARY)).toBe("");
+});
+
+// ---- scripts without spaces or Latin letters ------------------------------------
+
+test("@unit a Japanese segment under an English glossary is speech, not echo", () => {
+    const glossary = "Histology and pathology dictation. Common terms: histology, histopathology, "
+        + "immunohistochemistry, hematoxylin and eosin, fibrosis, granuloma, honeycombing.";
+    const said = "間質性肺炎です。蜂巣肺はありません。";
+    // A Latin-only liveness test blanked this as "nothing but punctuation".
+    expect(stripPromptEcho(said, glossary)).toBe(said);
+});
+
+test("@unit an English pure echo is still blanked", () => {
+    const glossary = "Histology and pathology dictation. Common terms: histology, histopathology, "
+        + "immunohistochemistry, hematoxylin and eosin, fibrosis, granuloma, honeycombing.";
+    expect(stripPromptEcho("Common terms: histology, histopathology, immunohistochemistry, hematoxylin and eosin, fibrosis, granuloma, honeycombing.", glossary)).toBe("");
 });

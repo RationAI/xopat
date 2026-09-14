@@ -225,3 +225,50 @@ test("@unit Whisper's short silence fillers are blanked as whole transcripts onl
     expect(normalizeResult({ text: "yes" }).text).toBe("yes");
     expect(normalizeResult({ text: "No." }).text).toBe("No.");
 });
+
+// ---- scripts without spaces --------------------------------------------------------
+
+test("@unit Whisper's Japanese subtitle filler is blanked like its English one", () => {
+    expect(normalizeResult({ text: "ご視聴ありがとうございました。" }).text).toBe("");
+    expect(normalizeResult({ text: "（拍手）" }).text).toBe("");
+});
+
+test("@unit a Japanese repetition loop is caught; a normal sentence is not", () => {
+    const loop = Array.from({ length: 30 }, () => "間質性肺炎です").join("");
+    expect(looksRepetitive(loop)).toBe(true);
+    expect(looksRepetitive("間質性肺炎です。蜂巣肺はありません。肉芽腫はありません。線維化は軽度です。")).toBe(false);
+    // collapseRepetition leaves scripts without spaces alone (it would re-space them).
+    const kept = "間質性肺炎です。蜂巣肺はありません。";
+    expect(collapseRepetition(kept)).toEqual({ text: kept, collapsed: false });
+});
+
+// ---- subtitle / translation credits ---------------------------------------------
+
+test("@unit a bare subtitle credit in any language is non-speech", () => {
+    for (const s of [
+        "Titulky vytvořil JohnyX.",
+        "Titulky: JohnyX",
+        "Překlad: Karel Novák.",
+        "Untertitel im Auftrag des ZDF, 2020",
+        "Sous-titres réalisés par la communauté d'Amara.org",
+        "Subtítulos realizados por la comunidad de Amara.org",
+        "Legendas pela comunidade Amara.org",
+        "Napisy stworzone przez społeczność Amara.org",
+        "Subtitles by the Amara.org community",
+        "Transcribed by ESO, translated by —",
+        "字幕 by Amara.org",
+        "www.zeoranger.co.uk",
+    ]) {
+        expect(normalizeResult({ text: s }).text).toBe("");
+    }
+});
+
+test("@unit a sentence that merely mentions subtitles is kept", () => {
+    for (const s of [
+        "Titulky nejsou součástí nálezu, pokračujeme s popisem.",
+        "The subtitles of the slide scan were unreadable, but the tissue is adequate.",
+        "Překladová tabulka kódů byla doplněna do zprávy včera odpoledne.",
+    ]) {
+        expect(normalizeResult({ text: s }).text).toBe(s);
+    }
+});

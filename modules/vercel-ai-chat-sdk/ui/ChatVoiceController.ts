@@ -85,7 +85,7 @@ const DEFAULT_STALE_RESTARTS = 2;
 
 /** A segment the pipeline did not append, and why (see `ChatVoiceControllerOptions.onGate`). */
 export interface ChatVoiceGatePayload {
-    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed" | "window-empty";
+    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed" | "window-empty" | "abandoned";
     [field: string]: unknown;
 }
 
@@ -114,7 +114,7 @@ export interface ChatVoiceControllerOptions {
      * readable then); `paused` while hands-free is armed but the microphone is
      * released because the user is editing the draft; `idle` when done/hidden.
      */
-    onVoiceUI?: (state: "listening" | "processing" | "held" | "idle" | "paused", level?: number) => void;
+    onVoiceUI?: (state: "listening" | "processing" | "held" | "idle" | "paused", level?: number, speaking?: boolean) => void;
     /**
      * Notified when a held draft is opened (`active: true`, with the text captured
      * so far) and when it is released or discarded (`active: false`). Lets an
@@ -138,6 +138,12 @@ export interface ChatVoiceControllerOptions {
      * once. Must not throw.
      */
     onStateChange?: (state: { listening: boolean; auto: boolean; paused: boolean }) => void;
+    /**
+     * The speech-to-text module pinned the session's language (under `language: "auto"`,
+     * once two segments agreed on it). Fires once per dictation; a fixed `language`
+     * never fires it.
+     */
+    onLanguage?: (info: { language: string }) => void;
     /**
      * Notified when transcription of a captured segment begins (`active:true`) and
      * ends (`active:false`, success or failure). Lets an external observer show a
@@ -365,6 +371,8 @@ export class ChatVoiceController {
     private _archiveAudio = false;
     /** Archive window length override; null = the module default. */
     private _windowOverride: number | null = null;
+    /** Archive window decode policy; null = the module default (eager). */
+    private _windowMode: "eager" | "lazy" | null = null;
     /** Last transcribing state emitted, so observers only see transitions (and teardown can force-clear). */
     private _transcribingActive = false;
     /** Transcriptions this controller started without a live capture (session re-transcribe). */
@@ -491,6 +499,16 @@ export class ChatVoiceController {
     }
 
     /**
+     * Whether archive windows are transcribed as they seal (`eager`, the module default)
+     * or only banked and decoded when the consumer asks for the whole recording
+     * (`lazy`; see the speech-to-text module's `windowMode`). A consumer whose review
+     * starts from the live transcript wants `lazy`. Takes effect from the next session.
+     */
+    setWindowMode(mode: "eager" | "lazy" | null): void {
+        this._windowMode = mode;
+    }
+
+    /**
      * Every window transcribed so far, in seal order. A pull counterpart to the
      * `onWindow` push, for a consumer that attached late or wants to re-read the set
      * without having buffered the events.
@@ -592,7 +610,7 @@ export class ChatVoiceController {
      * the very text the user has to read, edit and send. The hold owns that surface
      * until it is released.
      */
-    private _voiceUi(state: "listening" | "processing" | "held" | "idle" | "paused", level?: number): void {
+    private _voiceUi(state: "listening" | "processing" | "held" | "idle" | "paused", level?: number, speaking?: boolean): void {
         // While paused NOTHING else may paint: the trailing segment of the finished
         // session still reports "processing", and that overlay covers the input the
         // user is editing. The pause ends through resume/stop, which set their own UI.
@@ -600,7 +618,7 @@ export class ChatVoiceController {
         // `paused` passes a hold: both hide the overlay, and "you are editing, the
         // mic is off" is the more urgent of the two states to show.
         if (this._held && state !== "held" && state !== "paused") return;
-        this._opts.onVoiceUI?.(state, level);
+        this._opts.onVoiceUI?.(state, level, speaking);
     }
 
     /** Report the current listening/auto state to an external observer. Never throws. */
@@ -681,6 +699,7 @@ export class ChatVoiceController {
             this._stt.addHandler("capture-warning", this._onCaptureWarning);
             this._stt.addHandler("model-loading", this._onModelLoading);
             this._stt.addHandler("capture-started", this._onCaptureStarted);
+            this._stt.addHandler("language-pinned", this._onLanguagePinned);
             const gates: Array<[string, ChatVoiceGatePayload["kind"]]> = [
                 ["segment-empty", "empty"], ["segment-gated", "gated"], ["segment-discarded", "discarded"],
                 ["segment-filtered", "filtered"], ["segment-trimmed", "trimmed"],
@@ -688,6 +707,11 @@ export class ChatVoiceController {
                 // length beside the backend's — the verdict that separates "our bytes" from
                 // "their model".
                 ["window-empty", "window-empty"],
+                // Segments captured but never transcribed (the queue was abandoned at stop):
+                // speech the live transcript is missing for good — `{indices, bytes, audioMs,
+                // reason}`. The one loss a consumer judging the live text's completeness
+                // must hear about.
+                ["segments-abandoned", "abandoned"],
             ];
             for (const [type, kind] of gates) this._stt.addHandler(type, (e: any) => this._onGate(kind, e));
         } catch (_e) { /* events are best-effort */ }
@@ -782,12 +806,22 @@ export class ChatVoiceController {
         const key = code === "audio-device" ? "audioDevice"
             : code === "insecure-context" ? "insecureContext"
             : code === "vad-degraded" ? "vadDegraded"
+            : code === "vad-fallback" ? "vadFallback"
             : "captureFailed";
         const message = $.t(key, {ns: "speech-to-text"});
         try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
         try {
             (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
         } catch (_e) { /* toast is best-effort */ }
+    };
+
+    /** The module settled on the dictation's language — tell the observer which one. */
+    private _onLanguagePinned = (e: any): void => {
+        if (!this._ownsCapture()) return;
+        const language = String(e?.language || "").trim();
+        if (!language) return;
+        try { this._opts.onLanguage?.({language}); }
+        catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onLanguage handler failed"); }
     };
 
     /** Recording actually began: the microphone is open and the encoder is running. */
@@ -816,8 +850,8 @@ export class ChatVoiceController {
      * pulsed "listening" indefinitely while recording nothing. Liveness comes from
      * recorder bytes and confirmed-healthy polls (`onAlive`), and from text landing.
      */
-    private _onLevel = (level: number): void => {
-        this._voiceUi("listening", level);
+    private _onLevel = (level: number, speaking?: boolean): void => {
+        this._voiceUi("listening", level, speaking);
     };
 
     /**
@@ -851,13 +885,6 @@ export class ChatVoiceController {
         return looksLikeSegmentNoise(text, {minCaptureChars: this._opts.minCaptureChars, metrics});
     }
 
-    /**
-     * True when a language lock is configured and the driver detected a different
-     * language for this utterance — i.e. Whisper free-detected a wrong language on
-     * noise/cross-talk that should not be sent
-     * to the assistant. Compares only the primary subtag (`en` vs `en-US`). No
-     * lock configured, or no detected language reported => never drops.
-     */
     /** Resolve the biasing prompt (static string or lazy builder). Never throws. */
     private _resolvePrompt(): string | undefined {
         const p = this._opts.prompt;
@@ -870,10 +897,19 @@ export class ChatVoiceController {
         }
     }
 
+    /**
+     * True when a FIXED language is configured and the driver detected a different
+     * language for this utterance — i.e. Whisper free-detected a wrong language on
+     * noise/cross-talk that should not be sent to the assistant. Compares only the
+     * primary subtag (`en` vs `en-US`). `auto`, no lock, or no detected language
+     * reported => never drops.
+     */
     private _wrongLanguage(result: any): boolean {
         const want = this._opts.language;
         const got = result?.language;
-        if (!want || !got) return false;
+        // `auto`: the module's own pin is a hint, not a lock — the detected language IS
+        // the language, whatever it turns out to be.
+        if (!want || String(want).toLowerCase() === "auto" || !got) return false;
         const base = (s: string) => String(s).toLowerCase().split(/[-_]/)[0];
         return base(want) !== base(got);
     }
@@ -1380,6 +1416,7 @@ export class ChatVoiceController {
                 finishTimeoutMs: FINISH_TIMEOUT_MS,
                 archive: this._archiveAudio,
                 ...(this._windowOverride === null ? {} : {windowMs: this._windowOverride}),
+                ...(this._windowMode ? {windowMode: this._windowMode} : {}),
                 // Background window transcripts: the same speech decoded with a minute
                 // and a half of context instead of a few seconds of it.
                 onWindow: (w: any) => {
@@ -1814,6 +1851,7 @@ export class ChatVoiceController {
             this._stt?.removeHandler("transcription", this._onTranscribeEnd);
             this._stt?.removeHandler("transcription-error", this._onTranscribeError);
             this._stt?.removeHandler("capture-warning", this._onCaptureWarning);
+            this._stt?.removeHandler("language-pinned", this._onLanguagePinned);
             this._stt?.removeHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* best-effort */ }
     }

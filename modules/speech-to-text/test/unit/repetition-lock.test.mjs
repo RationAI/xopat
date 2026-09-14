@@ -113,3 +113,13 @@ test("@unit the echo test needs both a tail and text", () => {
     expect(isContextEcho("", TAIL)).toBe(false);
     expect(isContextEcho("a finding never said before", TAIL)).toBe(false);
 });
+
+// ---- scripts without spaces or Latin letters ------------------------------------
+
+test("@unit a Japanese sentence has a comparison key, so a verbatim repeat is seen", () => {
+    // A Latin-only key made this "" — and an empty key never repeats.
+    expect(repetitionKey("間質性肺炎です。")).toBe("間質性肺炎です");
+    expect(repetitionKey("間質性肺炎です。")).toBe(repetitionKey("間質性肺炎です"));
+    expect(repetitionKey("間質性肺炎です。")).not.toBe(repetitionKey("蜂巣肺はありません。"));
+    expect(isContextEcho("蜂巣肺", "間質性肺炎です。蜂巣肺はありません。")).toBe(true);
+});

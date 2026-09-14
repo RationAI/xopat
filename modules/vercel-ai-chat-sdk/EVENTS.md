@@ -151,6 +151,24 @@ pause is parked and queued with the resume, so the pause never costs an utteranc
 API is `pauseForEdit()` / `resumeAuto()` (`isPaused` to read it); an external driver that fills the
 composer itself should call them around its edits.
 
+## `voice-ui`
+
+Raised when the composer's voice surface changes state — `listening`, `processing`, `held`,
+`paused`, `idle` — and, while listening, whenever the speech detector's verdict flips. Payload:
+`{ state, speaking }`, where `speaking` is true only for `listening` frames the VAD judged as
+voice. Never fires per level tick (the meter repaints ~30×/s; an indicator changes a few times a
+sentence), so it is safe to render straight into a "Listening / Speaking" label. `voice-state` is
+the on/off transition; this is what the capture hears in between.
+
+## `voice-language`
+
+Raised once per dictation, when the speech-to-text module has pinned the language it is
+transcribing in (under `voice.language: "auto"`, after two consecutive segments agreed).
+Payload: `{ language }` — a BCP-47 primary subtag (`ja`, `en`, `cs`). A deployment that pins
+`voice.language` to a code never raises it. Each `voice-segment`'s `metrics` also carry
+`language` (what the recognizer reported for that segment) and `languageHint` (what the request
+said; undefined = detected).
+
 ## `voice-hold`
 
 Raised when hands-free speech stops being auto-submitted and starts collecting as a draft, and
@@ -244,15 +262,18 @@ says it heard silence.
 
 Raised for every recorded segment that did **not** reach the transcript, with why — the
 speech-to-text module's `segment-empty` / `segment-gated` / `segment-discarded` /
-`segment-filtered` / `segment-trimmed` events forwarded for the capture the composer owns.
-Beside `voice-segment` these make a session dump complete: ten uploads with no outcome used
-to be indistinguishable from a quiet room, when in fact the endpoint had answered 200 with an
-empty body for two minutes.
+`segment-filtered` / `segment-trimmed` / `segments-abandoned` events forwarded for the
+capture the composer owns. Beside `voice-segment` these make a session dump complete: ten
+uploads with no outcome used to be indistinguishable from a quiet room, when in fact the
+endpoint had answered 200 with an empty body for two minutes. `abandoned` is the one loss a
+consumer judging the live transcript's completeness must hear about: segments captured but
+never transcribed because the queue was dropped at stop (`{indices, bytes, audioMs, reason}`).
 
 ```ts
 interface ChatVoiceGatePayload {
-    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed";
+    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed" | "window-empty" | "abandoned";
     index?: number;
+    indices?: number[];      // abandoned: every segment the drop took
     // kind-specific: reason ("no-speech" | "silent" | "session-ended"), filters, emptied,
     // words, dropped, minVoicedMs, probe, overlapMs, rawText …
     // plus the audio facts of the segment: audioMs, voicedMs, speechSpanMs, maxPeak,

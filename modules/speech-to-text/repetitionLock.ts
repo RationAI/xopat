@@ -39,9 +39,13 @@ export interface RepetitionVerdict {
     muteContext: boolean;
 }
 
-/** Comparison key: case, punctuation and spacing say nothing about whether text repeats. */
+/**
+ * Comparison key: case, punctuation and spacing say nothing about whether text repeats.
+ * Any script — a Latin-only key made every Japanese segment the empty string, and an
+ * empty key never repeats, so the lock could not engage.
+ */
 export function repetitionKey(text: string): string {
-    return String(text || "").toLowerCase().replace(/[^a-z0-9 ]+/gi, " ").replace(/\s+/g, " ").trim();
+    return String(text || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
 
 /** Is `text` wholly contained in the context tail it was decoded with? */

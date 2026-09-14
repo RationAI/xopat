@@ -1,3 +1,4 @@
+import {_t} from "../shared/i18n";
 import type {ChatService} from "../chatService";
 
 const { BaseComponent, Button } = (globalThis as any).UI;
@@ -37,7 +38,7 @@ export class ProviderKeysPanel extends BaseComponent {
         this._statusEl = span({ class: "text-[11px] opacity-70", "aria-live": "polite" }) as HTMLElement;
 
         const content = [
-            span({ class: "text-[11px] text-base-content/70" }, $.t('chat.providerKeysDescription')),
+            span({ class: "text-[11px] text-base-content/70" }, _t('providerKeysDescription')),
             this._listEl,
             this._statusEl,
         ];
@@ -45,9 +46,9 @@ export class ProviderKeysPanel extends BaseComponent {
         // Page title goes to fs.layout (plain 2xl header above the card grid,
         // like the core Settings/Plugins tabs) — NOT inside the card.
         const root = (fs?.layout && fs?.card
-            ? fs.layout($.t('chat.providerKeysLegend'), fs.card(null, ...content))
+            ? fs.layout(_t('providerKeysLegend'), fs.card(null, ...content))
             : div({ class: "flex flex-col gap-2 p-2" },
-                span({ class: "text-2xl font-semibold" }, $.t('chat.providerKeysLegend')),
+                span({ class: "text-2xl font-semibold" }, _t('providerKeysLegend')),
                 ...content)) as HTMLElement;
 
         // The fullscreen menu mounts the tab body eagerly but shows it on
@@ -75,7 +76,7 @@ export class ProviderKeysPanel extends BaseComponent {
             .filter((row: any) => row.secretFields.length > 0);
 
         if (!rows.length) {
-            list.appendChild(span({ class: "text-xs opacity-70" }, $.t('chat.providerKeysNone')));
+            list.appendChild(span({ class: "text-xs opacity-70" }, _t('providerKeysNone')));
             return;
         }
 
@@ -100,10 +101,10 @@ export class ProviderKeysPanel extends BaseComponent {
             // An unclaimed context cannot be logged into: tell the user the key
             // cannot be managed rather than "log in first", which is impossible.
             const hint = !needsLogin
-                ? $.t('chat.providerKeyFailed')
+                ? _t('providerKeyFailed')
                 : (loginState.configured
-                    ? $.t('chat.providerKeyLoginFirst')
-                    : $.t('chat.loginUnavailable', { context: loginState.contextId || $.t('chat.loginContextUnnamed') }));
+                    ? _t('providerKeyLoginFirst')
+                    : _t('loginUnavailable', { context: loginState.contextId || _t('loginContextUnnamed') }));
             list.appendChild(div(
                 { class: "flex items-center gap-2 border border-base-200 rounded p-2" },
                 span({ class: "text-xs font-medium" }, row.provider.label),
@@ -135,10 +136,10 @@ export class ProviderKeysPanel extends BaseComponent {
         const badge = status.hasUserSecrets
             ? span({ class: "badge badge-success badge-xs gap-1" },
                 i({ class: "ph-light ph-check" }),
-                $.t('chat.providerKeyStatusUser'))
+                _t('providerKeyStatusUser'))
             : status.hasAdminSecrets
-                ? span({ class: "badge badge-info badge-xs" }, $.t('chat.providerKeyStatusAdmin'))
-                : span({ class: "badge badge-warning badge-xs" }, $.t('chat.providerKeyStatusRequired'));
+                ? span({ class: "badge badge-info badge-xs" }, _t('providerKeyStatusAdmin'))
+                : span({ class: "badge badge-warning badge-xs" }, _t('providerKeyStatusRequired'));
 
         const inputs = new Map<string, HTMLInputElement>();
         const fieldEls = secretFields.map((field: any) => {
@@ -151,8 +152,8 @@ export class ProviderKeysPanel extends BaseComponent {
                 class: "input input-bordered input-xs w-full",
                 disabled: status.hasAdminSecrets,
                 placeholder: stored || status.hasAdminSecrets
-                    ? $.t('chat.providerKeyPlaceholderStored')
-                    : $.t('chat.providerKeyPlaceholder', { field: field.label || field.key }),
+                    ? _t('providerKeyPlaceholderStored')
+                    : _t('providerKeyPlaceholder', { field: field.label || field.key }),
             }) as HTMLInputElement;
             inputs.set(String(field.key), el);
             return el;
@@ -166,7 +167,7 @@ export class ProviderKeysPanel extends BaseComponent {
                 ok = false;
                 console.error("Provider key update failed:", error);
             }
-            this._notify($.t(ok ? successKey : 'chat.providerKeyFailed'), ok);
+            this._notify(_t(ok ? successKey : 'providerKeyFailed'), ok);
             for (const el of inputs.values()) el.value = "";
             await this.refresh();
             try {
@@ -192,11 +193,11 @@ export class ProviderKeysPanel extends BaseComponent {
                     if (!Object.keys(patch).length) return;
                     void applyResult(
                         this.chatService.setProviderUserSecrets(provider.id, patch),
-                        'chat.providerKeySaved'
+                        'providerKeySaved'
                     );
                 },
             },
-            span($.t('chat.providerKeySave'))
+            span(_t('providerKeySave'))
         ).create();
 
         const actions: any[] = [saveBtn];
@@ -205,16 +206,16 @@ export class ProviderKeysPanel extends BaseComponent {
                 {
                     size: Button.SIZE.SMALL,
                     extraClasses: { base: "btn btn-xs btn-outline btn-error gap-1" },
-                    extraProperties: { title: $.t('chat.providerKeyClear') },
+                    extraProperties: { title: _t('providerKeyClear') },
                     onClick: () => {
                         void applyResult(
                             this.chatService.clearProviderUserSecrets(provider.id),
-                            'chat.providerKeyCleared'
+                            'providerKeyCleared'
                         );
                     },
                 },
                 i({ class: "ph-light ph-trash" }),
-                span($.t('chat.providerKeyClear'))
+                span(_t('providerKeyClear'))
             ).create());
         }
 

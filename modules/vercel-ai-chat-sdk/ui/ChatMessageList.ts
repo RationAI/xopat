@@ -1,3 +1,4 @@
+import {_t} from "../shared/i18n";
 import {ChatProgress} from "./ChatProgress";
 
 const { div, span, img, a, code, pre, button } = (globalThis as any).van.tags;
@@ -141,7 +142,7 @@ export class ChatMessageList {
         return div(
             { class: "h-full flex items-center justify-center px-4 py-4" },
             span({ class: "text-[12px] text-base-content/60 italic text-center" },
-                $.t(this._hiddenByConsumer ? 'chat.emptyTranscriptDictation' : 'chat.emptyTranscriptHint')),
+                _t(this._hiddenByConsumer ? 'emptyTranscriptDictation' : 'emptyTranscriptHint')),
         ) as HTMLElement;
     }
 
@@ -249,7 +250,7 @@ export class ChatMessageList {
                 this._root?.appendChild(this._progress.node());
             }
         }
-        this._progress.setActivity(text || $.t('chat.workingOnIt'));
+        this._progress.setActivity(text || _t('workingOnIt'));
         this._progress.start();
         this.scrollToEnd();
     }
@@ -500,9 +501,9 @@ export class ChatMessageList {
                                 event.preventDefault();
                                 expanded = !expanded;
                                 textEl.replaceChildren(code(expanded ? fullText : previewText));
-                                (toggle as HTMLElement).textContent = expanded ? $.t('chat.showLess') : $.t('chat.showDetails');
+                                (toggle as HTMLElement).textContent = expanded ? _t('showLess') : _t('showDetails');
                             },
-                        }, $.t('chat.showDetails')) as HTMLElement;
+                        }, _t('showDetails')) as HTMLElement;
                         block.appendChild(toggle);
                     }
                     el.appendChild(block);
@@ -514,7 +515,7 @@ export class ChatMessageList {
                     if (src) {
                         wrapper.appendChild(img({
                             src,
-                            alt: part.name || part.mimeType || $.t('chat.imageAttachment'),
+                            alt: part.name || part.mimeType || _t('imageAttachment'),
                             class: "max-w-full max-h-72 rounded-lg border border-base-300 object-contain bg-base-100",
                         }) as HTMLElement);
                     }

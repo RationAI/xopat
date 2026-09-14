@@ -48,6 +48,8 @@ export const LONE_WORD_MAX_VOICED_MS = 1500;
 export const LONE_WORD_MIN_VOICED_RATIO = 0.1;
 
 /** Default floor for the near-empty check, when the caller configures none. */
+import {words} from "./text-words";
+
 export const DEFAULT_MIN_CAPTURE_CHARS = 2;
 
 /**
@@ -128,7 +130,9 @@ export function looksLikeSegmentNoise(text: string, opts: SegmentNoiseOptions = 
     // No VAD evidence ⇒ no basis to call a short word anything. Keep it.
     if (!metrics?.tracked) return false;
 
-    const tokens = t.split(/\s+/).filter(Boolean);
+    // Words by the segmenter: a Japanese sentence is written without spaces, and a
+    // whitespace split made every one of them a "lone word" over too much voice.
+    const tokens = words(t);
     // A few words over (almost) no voice: the segment never carried enough speech for them.
     // A digit is exempt below for the same reason as the lone-word rule.
     const voicedForFew = Number(metrics.voicedMs);

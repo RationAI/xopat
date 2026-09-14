@@ -25,6 +25,13 @@ export interface VisionCallOutcome {
     model: string;
     text: string;
     durationMs: number;
+    /** Why the model stopped (`stop`, `length`, …), when the provider said. */
+    finishReason?: string | null;
+    usage?: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
+    /** Characters of reasoning text the model emitted (0 when none/unreported). */
+    reasoningChars?: number;
+    /** Provider calls made for this request (1 = no self-heal retry). */
+    attempts?: number;
 }
 
 export interface VisionCallInput {

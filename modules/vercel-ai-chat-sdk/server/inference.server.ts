@@ -55,6 +55,13 @@ function safeUserScope(ctx: any): string | null {
 // JSON. 4096 is generous by default and env-tunable for models/prompts that need
 // more headroom. (`readPositiveEnvInt` is a hoisted function declaration.)
 const VISION_MAX_OUTPUT_TOKENS = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS', 4096);
+/**
+ * How far the output cap may be raised, once, when a reply came back EMPTY with the cap
+ * exhausted: a reasoning model spends the budget thinking and returns no text at all —
+ * observed as two 65 s corrector calls with 0 characters on glm-5.2. The caller-facing
+ * cap above stays the normal budget; this is the ceiling of the one self-heal retry.
+ */
+const VISION_MAX_OUTPUT_TOKENS_CEILING = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS_CEILING', 16384);
 
 function readPositiveEnvInt(name: string, fallback: number): number {
     const raw = Number((globalThis as any)?.process?.env?.[name]);
@@ -144,7 +151,19 @@ export interface RunVisionInferenceInput {
     jsonMode?: boolean | null;
 }
 
-export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
+/** What a vision/text inference returns, beside the text: why it stopped, what it cost, how many tries. */
+export interface RunVisionInferenceResult {
+    text: string;
+    /** The provider's finish reason (`stop`, `length`, …) or null when it reported none. */
+    finishReason: string | null;
+    usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
+    /** Characters of reasoning text the model emitted (0 when none/unreported). */
+    reasoningChars: number;
+    /** Calls made to the provider for this request (1 = no self-heal retry). */
+    attempts: number;
+}
+
+export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<RunVisionInferenceResult> {
     const startedAt = Date.now();
     if (!input?.providerId) {
         throw new Error("runVisionInference requires a providerId (a dedicated pathology provider instance).");
@@ -221,8 +240,16 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     // honest test is to ask — a caller must never lose an extraction because it wanted
     // stricter output than the endpoint offers.
     let wantJson = !!input.jsonMode;
+    // An EMPTY reply is a failure the SDK does not raise. A reasoning model that spends the
+    // whole output budget thinking returns `finishReason: "length"` and no text; some also
+    // answer nothing under `json_object`. Each condition gets exactly one bounded retry —
+    // first more room, then the plain format — so a review is not silently unchecked.
+    let raisedCap = false;
+    let droppedJson = false;
+    let attempts = 0;
     for (let attempt = 0; ; attempt++) {
         try {
+            attempts++;
             result = await generateText({
                 model,
                 instructions,
@@ -232,6 +259,24 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
                 maxRetries: VISION_MAX_RETRIES,
                 ...(wantJson ? { providerOptions: { openai: { response_format: { type: 'json_object' } } } } : {}),
             });
+            const replyText = typeof result?.text === 'string' ? result.text.trim() : '';
+            if (!replyText && attempt < 6) {
+                const finish = String((result as any)?.finishReason || '');
+                const reasoned = reasoningChars(result) > 0;
+                if (!raisedCap && (finish === 'length' || reasoned) && maxOutputTokens < VISION_MAX_OUTPUT_TOKENS_CEILING) {
+                    raisedCap = true;
+                    const next = Math.min(VISION_MAX_OUTPUT_TOKENS_CEILING, maxOutputTokens * 4);
+                    vision.warn({ modelId, finishReason: finish || null, maxOutputTokens, next, reasoned }, 'empty reply with the output cap spent; retrying with a larger cap');
+                    maxOutputTokens = next;
+                    continue;
+                }
+                if (!droppedJson && wantJson) {
+                    droppedJson = true;
+                    vision.warn({ modelId, finishReason: finish || null, maxOutputTokens }, 'empty reply under json_object; retrying with the plain format');
+                    wantJson = false;
+                    continue;
+                }
+            }
             break;
         } catch (e: any) {
             // Flattened: the provider states the cap violation in `responseBody` or under
@@ -254,6 +299,17 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     }
 
     const text = typeof result?.text === 'string' ? result.text : '';
+    // Why the reply looks the way it does — what the client's trace needs to tell a cut-off
+    // answer from a model that had nothing to say.
+    const finishReason = typeof (result as any)?.finishReason === 'string' ? (result as any).finishReason : null;
+    const u: any = (result as any)?.usage || {};
+    const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : null);
+    const usage = {
+        inputTokens: num(u.inputTokens ?? u.promptTokens),
+        outputTokens: num(u.outputTokens ?? u.completionTokens),
+        reasoningTokens: num(u.reasoningTokens ?? u.outputTokenDetails?.reasoningTokens),
+    };
+    const reasoning = reasoningChars(result);
     // The audit trail: this image and this question, kept where they can be
     // reviewed. `input.context` says which slide and box it is; it is logged and
     // never added to the model's message, so enabling logging cannot change what
@@ -262,9 +318,18 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
         ctx?.requestId && typeof vision.with === 'function' ? vision.with({ requestId: ctx.requestId }) : vision,
         String(ctx?.requestId || `vc${++visionCallSeq}`),
         input,
-        { providerId: runtime.instance.id, model: modelId, text, durationMs: Date.now() - startedAt },
+        { providerId: runtime.instance.id, model: modelId, text, durationMs: Date.now() - startedAt, finishReason, usage, reasoningChars: reasoning, attempts },
     );
-    return { text };
+    return { text, finishReason, usage, reasoningChars: reasoning, attempts };
+}
+
+/** Length of the model's reasoning text, across the AI SDK's names for it (0 when absent). */
+function reasoningChars(result: any): number {
+    if (!result) return 0;
+    const r = result.reasoningText ?? result.reasoning;
+    if (typeof r === 'string') return r.length;
+    if (Array.isArray(r)) return r.reduce((n: number, part: any) => n + (typeof part?.text === 'string' ? part.text.length : 0), 0);
+    return 0;
 }
 
 /** Monotonic fallback when a call arrives without a request id. */

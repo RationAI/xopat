@@ -64,3 +64,20 @@ test("@unit a piece that was nothing but seam empties", () => {
 test("@unit no previous piece, nothing trimmed", () => {
     expect(trimOverlap("", "Transbronchial biopsies, adequate.", 900)).toEqual({ text: "Transbronchial biopsies, adequate.", trimmedWords: 0 });
 });
+
+// ---- scripts without spaces --------------------------------------------------------
+
+test("@unit a Japanese seam repeat is trimmed at a word, without inserting spaces", () => {
+    // The previous segment ended with 「蜂巣肺はありません」; the next repeats those words
+    // and continues. A whitespace split saw one token on each side and either kept the
+    // duplicate or deleted the whole segment.
+    const r = trimOverlap("間質性肺炎です。蜂巣肺はありません", "蜂巣肺はありません。肉芽腫はありません。", 800);
+    expect(r.trimmedWords).toBeGreaterThan(0);
+    expect(r.text).toBe("肉芽腫はありません。");
+});
+
+test("@unit an unrelated Japanese segment is kept whole", () => {
+    const r = trimOverlap("間質性肺炎です。", "肉芽腫はありません。", 800);
+    expect(r.trimmedWords).toBe(0);
+    expect(r.text).toBe("肉芽腫はありません。");
+});

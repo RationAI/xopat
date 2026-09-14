@@ -1,3 +1,4 @@
+import {_t, bindTranslator} from "./shared/i18n";
 import { ChatPanel } from './ui/ChatPanel';
 import { ProviderKeysPanel } from './ui/ProviderKeysPanel';
 import { UsagePanel } from './ui/UsagePanel';
@@ -141,6 +142,8 @@ class ChatModule extends XOpatModuleSingleton {
     _consentAutoApproved = false;
     /** Expiry (ms epoch) of the remembered consent currently applied, or null. Drives the pill tooltip. */
     _consentExpiresAt: number | null = null;
+    /** Resolves once this element's locale bundle is registered (or failed to load). */
+    _localeReady: Promise<void>;
     _layoutAttached?: boolean;
     _settingsMenuAttached?: boolean;
     _catalogPromise: Promise<void> | null = null;
@@ -265,6 +268,18 @@ class ChatModule extends XOpatModuleSingleton {
     constructor() {
         super();
 
+        // This element owns its strings (`locales/en.json`, registered under the
+        // element id). The bundle is fetched, so anything captured during boot —
+        // the layout tab title below is exactly that — must wait for it or it
+        // freezes as a raw key. Same pattern as `modules/speech-to-text` and
+        // `modules/annotation-measurements`.
+        bindTranslator(this);
+        this._localeReady = this.loadLocale().catch(() =>
+            // Only `en` ships; register it so i18next's fallbackLng resolves our
+            // keys instead of printing the dotted key under another language.
+            this.loadLocale('en')).catch((e: any) =>
+                console.warn('[vercel-ai-chat-sdk] locale load failed:', e));
+
         const cfg = this._getChatConfig();
         this._scriptConsent = {};
         // Prefer the local user's remembered choice (cached in localStorage with an expiry);
@@ -338,8 +353,12 @@ class ChatModule extends XOpatModuleSingleton {
         this.refreshScriptConsentFromManager();
         this._subscribeToScriptingNamespaceChanges();
         this._armScriptBaselineGate();
-        this._attachToLayout();
-        this._attachSettingsMenu();
+        // Both build labelled UI, so they wait for the locale bundle; each is
+        // idempotent (`_layoutAttached` / `_settingsMenuAttached`).
+        void this._localeReady.then(() => {
+            this._attachToLayout();
+            this._attachSettingsMenu();
+        });
     }
 
     /**
@@ -519,16 +538,16 @@ class ChatModule extends XOpatModuleSingleton {
         const single = namespaces.length === 1;
         const label = single
             ? `"${this._namespaceTitle(namespaces[0]!)}"`
-            : $.t('chat.newCapabilitiesCount', { count: namespaces.length });
-        const message = $.t('chat.newCapabilityPrompt', {
+            : _t('newCapabilitiesCount', { count: namespaces.length });
+        const message = _t('newCapabilityPrompt', {
             label,
-            pronoun: single ? $.t('chat.pronounIt') : $.t('chat.pronounThem'),
+            pronoun: single ? _t('pronounIt') : _t('pronounThem'),
         });
 
         Dialogs.show(escapeHtml(message), 0, Dialogs.MSG_WARN, {
             buttons: [
                 {
-                    label: $.t('chat.allow'),
+                    label: _t('allow'),
                     class: 'btn-primary',
                     onClick: (_ev: Event, d: any) => {
                         namespaces.forEach((ns) => this.setScriptNamespaceConsent(ns, true));
@@ -537,7 +556,7 @@ class ChatModule extends XOpatModuleSingleton {
                     },
                 },
                 {
-                    label: $.t('chat.notNow'),
+                    label: _t('notNow'),
                     onClick: (_ev: Event, d: any) => d?.hide?.(),
                 },
             ],
@@ -717,7 +736,7 @@ class ChatModule extends XOpatModuleSingleton {
 
         if (!this._scriptConsent[namespace]) {
             this._scriptConsent[namespace] = {
-                title: $.t('chat.allowScriptingNamespaceTitle', { namespace }),
+                title: _t('allowScriptingNamespaceTitle', { namespace }),
                 granted,
             };
         } else {
@@ -729,6 +748,62 @@ class ChatModule extends XOpatModuleSingleton {
         // Grant-state change only: update checkboxes in place (preserves scroll).
         // syncScriptConsentState falls back to a full rebuild if membership changed.
         this.chatPanel?.syncScriptConsentState?.();
+    }
+
+    /**
+     * Widen the scripting grant for ONE operation, then put the posture back.
+     *
+     * Consent lives on this singleton and is remembered: `setScriptNamespaceConsent`
+     * flips the mode to `custom`, writes the grant to `CONSENT_CACHE_KEY` with an expiry,
+     * and `syncNamespaceConsent` pushes it into the process-wide `ScriptingManager`. A
+     * caller that needs a wider surface for a single run must therefore not go through
+     * it — the grant would outlive the run in the normal Chat tab and in local scripting.
+     * The dev harness (`chat-based-tester`) is the caller this exists for.
+     *
+     * `sensitive` namespaces stay denied unless `includeSensitive` is passed explicitly:
+     * un-gating `patient` is a decision, never a side effect of "grant everything".
+     *
+     * Returns the manifest to send with the turn plus an idempotent `restore()`. Nothing
+     * here touches the consent cache, so a crashed caller costs at most the current page.
+     */
+    beginTemporaryScriptConsent(options: {
+        namespaces?: string[] | null;
+        includeSensitive?: boolean;
+    } = {}): { manifest: AllowedScriptApiManifest; restore: () => void } {
+        const previousMode = this._scriptConsentMode;
+        const previousGrants = { ...this._customGrants };
+
+        const entries: Record<string, { sensitive?: boolean }> =
+            APPLICATION_CONTEXT?.Scripting?.getNamespaceConsentEntries?.() || {};
+        const wanted = options.namespaces?.length ? options.namespaces : Object.keys(entries);
+
+        // Seed from the EFFECTIVE grants, not from `_customGrants`: under mode `all` the raw
+        // map is empty, so switching to `custom` from it would *narrow* the surface — a
+        // widening call must never take something away.
+        const widened: Record<string, boolean> = {};
+        for (const [namespace, entry] of Object.entries(this._scriptConsent || {})) {
+            widened[namespace] = (entry as { granted?: boolean })?.granted === true;
+        }
+        for (const namespace of wanted) {
+            if (entries[namespace]?.sensitive && options.includeSensitive !== true) continue;
+            widened[namespace] = true;
+        }
+
+        this._scriptConsentMode = 'custom';
+        this._customGrants = widened;
+        this.refreshScriptConsentFromManager();
+
+        let restored = false;
+        return {
+            manifest: this.getAllowedScriptApiManifest(),
+            restore: () => {
+                if (restored) return;
+                restored = true;
+                this._scriptConsentMode = previousMode;
+                this._customGrants = previousGrants;
+                this.refreshScriptConsentFromManager();
+            },
+        };
     }
 
     // ── Remembered consent (local, expiring) ────────────────────────────────
@@ -801,9 +876,9 @@ class ChatModule extends XOpatModuleSingleton {
     /** i18n key describing the currently-applied posture (for the pill tooltip). */
     getConsentModeLabelKey(): string {
         switch (this._scriptConsentMode) {
-            case 'all': return 'chat.consentModeAll';
-            case 'custom': return 'chat.consentModeCustom';
-            default: return 'chat.consentModeAllButPatient';
+            case 'all': return 'consentModeAll';
+            case 'custom': return 'consentModeCustom';
+            default: return 'consentModeAllButPatient';
         }
     }
 
@@ -1995,7 +2070,7 @@ class ChatModule extends XOpatModuleSingleton {
         if (!personalities.length) {
             personalities.push({
                 id: 'default',
-                label: $.t('chat.defaultPersonalityLabel'),
+                label: _t('defaultPersonalityLabel'),
                 systemPrompt:`
 Be helpful and accurate. When the allowed scripting API can do the work, prefer using it silently instead of describing technical steps.
 Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
@@ -2027,7 +2102,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         if (this._layoutAttached) return;
         const wrapper = (window as any).LAYOUT.addTab({
             id: 'chat',
-            title: $.t('chat.tabTitle'),
+            title: _t('tabTitle'),
             icon: 'ph-chats',
             body: [this.chatPanel],
         });
@@ -2078,7 +2153,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         ui.AppBar.Plugins.setMenu(
             'vercel-ai-chat-sdk',
             'provider-keys',
-            $.t('chat.providerKeysLegend'),
+            _t('providerKeysLegend'),
             container,
             'ph-key',
             { chrome: 'plain' }
@@ -2096,7 +2171,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         ui.AppBar.Plugins.setMenu(
             'vercel-ai-chat-sdk',
             'usage',
-            $.t('chat.usageTitle'),
+            _t('usageTitle'),
             usageContainer,
             'ph-chart-bar',
             { chrome: 'plain' }
@@ -2618,7 +2693,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         // plain status is erased by the next state recompute, so the retries used to run invisibly.
         const busyKey = `provider-registration:${label}`;
         try {
-            this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRegistering', 'provider', { label });
+            this.chatPanel?.setExternalBusy?.(busyKey, 'providerRegistering', 'provider', { label });
             // Wait for the verdict on this provider's auth context BEFORE the first attempt.
             // Not for success — for the answer. Plugins load during `before-app-init`, which
             // runs before core awaits the boot login, and the registration RPC rides the core
@@ -2660,7 +2735,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                     if (last) {
                         const reason = this._describeRegistrationError(e);
                         this.chatPanel?.setExternalBusy?.(busyKey, null);
-                        this.chatPanel?._setStatus?.($.t('chat.providerUnavailable'));
+                        this.chatPanel?._setStatus?.(_t('providerUnavailable'));
                         console.error(
                             `chat: provider '${opts.label || ''}' registration failed after ${attempts} attempts`,
                             e
@@ -2672,7 +2747,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                         this.raiseEvent('provider-registration-failed', { label: opts.label || null, reason });
                         return null;
                     }
-                    this.chatPanel?.setExternalBusy?.(busyKey, 'chat.providerRetrying');
+                    this.chatPanel?.setExternalBusy?.(busyKey, 'providerRetrying');
                     await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** i));
                 }
             }
@@ -2771,7 +2846,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             return;
         }
         const text = entries
-            .map((entry) => $.t('chat.providerNeedsLogin', { label: entry.opts.label || 'provider' }))
+            .map((entry) => _t('providerNeedsLogin', { label: entry.opts.label || 'provider' }))
             .join(' ');
         const contextId = entries.find((entry) => entry.opts.contextId)?.opts.contextId;
         panel.setPanelNotice({
@@ -2817,7 +2892,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             return;
         }
         const text = entries
-            .map((entry) => $.t('chat.providerRegistrationFailed', {
+            .map((entry) => _t('providerRegistrationFailed', {
                 label: entry.opts.label || 'provider',
                 reason: entry.reason,
                 // The notice renders through textContent (van span), so i18next's HTML
@@ -2910,12 +2985,12 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
         const panel = this.chatPanel;
         const providerId = input.providerId || panel?._providerId;
-        if (!providerId) throw new Error($.t('chat.selectProviderFirst'));
+        if (!providerId) throw new Error(_t('selectProviderFirst'));
 
         const modelId = input.modelId
             || (providerId === panel?._providerId ? panel?._modelId : null)
             || (await this.chatService.listModels(providerId))[0]?.id;
-        if (!modelId) throw new Error($.t('chat.providerReturnedNoModels', { provider: providerId }));
+        if (!modelId) throw new Error(_t('providerReturnedNoModels', { provider: providerId }));
 
         const session = await this.chatService.createSession({
             ...input,
@@ -3050,8 +3125,10 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * See `ChatPanel.setTranscriptOnly`. Pass `{hideEcho:true}` for "summaries
      * only": raw transcript echoes are still recorded/persisted/extracted but not
      * rendered, so the consumer's own summary bubbles are all the chat shows.
+     * `windowMode: "lazy"` banks the dictation's archive windows without transcribing
+     * them until `transcribeSessionAudio()` is called (see the speech-to-text module).
      */
-    setTranscriptOnlyMode(on: boolean, options: { hideEcho?: boolean } = {}): void {
+    setTranscriptOnlyMode(on: boolean, options: { hideEcho?: boolean; windowMode?: "eager" | "lazy" } = {}): void {
         this.chatPanel?.setTranscriptOnly(!!on, options);
     }
 

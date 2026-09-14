@@ -134,6 +134,42 @@ only, the generic fallback is kept but reported back to the model as a mislabel 
 and the technical mode renders `js` fences as prose. Do not simply delete the fallback — measure
 how often it is load-bearing first.
 
+## Scripting consent is module-global and remembered — borrow it, do not set it
+
+`setScriptNamespaceConsent(ns, granted)` is a **curation**, not a scratch value. It flips the
+posture to `custom`, persists mode + grants to the module cache with an expiry, and pushes the
+result into the process-wide `ScriptingManager` (so it also affects local scripting, not just
+chat). A cached posture is read back in the constructor, where it outranks the operator's
+`defaultScriptConsentMode`. Meaning: whatever you grant, you have granted for every chat surface
+on that browser profile until the entry expires.
+
+Callers that need a wider surface for a single operation — a test harness, a one-off automated
+run — use `beginTemporaryScriptConsent({ namespaces?, includeSensitive? })` instead:
+
+```js
+const consent = chatModule.beginTemporaryScriptConsent();
+try {
+    await service.sendTurn({ sessionId, allowedScriptApi: consent.manifest, /* … */ });
+} finally {
+    consent.restore();   // idempotent; nothing was written to the consent cache
+}
+```
+
+`sensitive` namespaces (`patient`) are not added unless `includeSensitive: true` is passed, so
+"grant everything" never silently un-gates identifying data. The call only ever widens: it seeds
+from the effective grants, so a user already on mode `all` keeps everything they had.
+
+## `executionMode: 'host'` is dev-only, and enforced server-side
+
+`'host'` replaces the whole scripting system block with a dev-harness prompt: unrestricted async
+JavaScript in the page context, every injected global named, an explicit consent-bypass idiom, and
+the `run_viewer_script` tool turned off. Both sources of the flag are caller-controlled —
+`input.executionMode` directly, and `session.metadata.testMode` because a harness session can be
+replayed — so `resolveExecutionMode` (`server/chat.server.ts`) honours it only when
+`XOPAT_SERVER.isDevMode(ctx)` is true and otherwise logs a `warn` and falls back to the normal
+prompt. This module never executes host code itself; the executor belongs to the dev harness
+(`modules/chat-based-tester`), which is `devOnly` and refused outside dev mode by the loader.
+
 ## AI SDK version line — every `@ai-sdk/*` package must match core `ai`
 
 This module depends on core `ai`; every provider plugin depends on its own
@@ -714,6 +750,27 @@ BYOK keys (`kv:secrets`) likewise stay in memory — persisting them requires
 A logged-in `user:<id>` principal does not depend on the browser session at all and is the robust
 answer where long-lived history matters.
 
+### A session names its provider by reference, not by instance id
+
+The second half of surviving a restart, and it is not a storage binding. Provider **instances**
+are minted with `uid('prov')` into a map on `globalThis`, so the id is re-minted on every boot
+(`shared/providerRef.ts`) — while the session record that stores it is durable. The panel lists
+sessions *for the current provider*, so with the storage bound correctly and nothing else done,
+every pre-restart conversation was still filtered out.
+
+So `createSession` stamps `metadata.providerRef` — the provider's durable identity
+(`managedKey` / `managedByPlugin` / `typeId`), read from the registry and never from caller
+metadata — `listSessions` matches through it, and `requireSessionAccess` rewrites the stale
+`providerId` to the live instance on first access. Records written before the stamp existed fall
+back to `providerTypeId`, so old transcripts come back too.
+
+What it deliberately does **not** do is re-bind a session created against a user's own BYOK
+instance: that instance has no durable identity, and the only same-type candidate is the
+operator's provider — somebody else's endpoint on somebody else's key. Such a session is listed
+with `providerUnavailable: true`, its transcript readable, and sending waits for an explicit
+provider choice. Alias resolution is operator-records-only for the same reason (see the trust
+rule in `shared/providerRef.ts`).
+
 Runnable example: [`env/env.storage-persistent.json`](../../env/env.storage-persistent.json).
 Full reference and a verification recipe:
 [`server/STORAGE.md` → *Making state survive a restart*](../../server/STORAGE.md).
@@ -914,6 +971,8 @@ Still an environment variable (a different module owns it):
 | Variable | Purpose | Default | Source |
 | --- | --- | --- | --- |
 | `XOPAT_PATHOLOGY_VISION_TIMEOUT_MS` | `runVisionInference` policy timeout in ms (floored at `30000`). Consumed by the pathology `analyze` path; requires a server restart to apply | `300000` (5 min) | `server/inference.server.ts:49` |
+| `XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS` | `runVisionInference` output-token cap per call (a caller may only clamp it DOWN). A provider that rejects it as too large is retried at half, bounded | `4096` | `server/inference.server.ts` |
+| `XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS_CEILING` | Ceiling of the one self-heal retry when a reply came back **empty** with the cap spent (`finishReason: "length"` or reasoning text present) — a reasoning model that thinks through the whole budget returns no text. The retry uses `min(ceiling, cap × 4)`; a reply still empty under `json_object` is retried once more with the plain format. The result carries `finishReason`, `usage` and `attempts` so the client trace can say which | `16384` | `server/inference.server.ts` |
 
 ## Server logging
 

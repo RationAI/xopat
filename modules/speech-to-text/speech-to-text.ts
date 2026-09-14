@@ -2,7 +2,7 @@
 /// <reference path="../../src/types/loader.d.ts" />
 
 import {AudioCapture, CaptureError, CaptureResult, SegmentMeta} from "./audioCapture";
-import type {CaptureAliveBeat, CaptureErrorCode, CaptureHealth} from "./audioCapture";
+import type {CaptureAliveBeat, CaptureErrorCode, CaptureHealth, SileroOptions, VadEngine} from "./audioCapture";
 import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
 import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
 import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
@@ -10,6 +10,7 @@ import {VercelTranscribeConfig, VercelTranscribeDriver} from "./drivers/vercelTr
 import {createRepetitionLock} from "./repetitionLock";
 import {stripPromptEcho} from "./promptEcho";
 import {trimOverlap} from "./joinSegments";
+import {LanguagePin, primaryLanguage} from "./languagePin";
 import {MicButton, MicButtonOptions} from "./ui/MicButton";
 import {CaptionOverlay} from "./ui/CaptionOverlay";
 
@@ -122,7 +123,13 @@ export interface SegmentMetrics {
     compressionRatio?: number;
     /** Text filters that altered the driver's raw output (see TranscriptionResult.filtered). */
     filtered?: string[];
-    /** Emitted despite a VAD discard verdict, to test the gate. */
+    /** Which detector judged the segment: `silero` (WAV from its frames), `amplitude`, or `none`. */
+    vad?: VadEngine;
+    /** The language the recognizer reported for this segment (BCP-47 primary subtag), when it did. */
+    language?: string;
+    /** The language hint the request carried; undefined = the recognizer detected it (see `language`). */
+    languageHint?: string;
+    /** Emitted despite a VAD discard verdict, to test the (amplitude) gate. */
     probe?: boolean;
     /** The whole session bypasses the voiced-ms gate. */
     failOpen?: boolean;
@@ -141,8 +148,11 @@ export interface ContinuousTurn {
 export interface ContinuousDictationOptions extends TranscriptionOptions {
     /** Silence window (ms) that cuts one segment. Falls back to the module default. */
     silenceMs?: number;
-    /** Live 0..1 input level, fired continuously for a recording meter. */
-    onLevel?: (level: number) => void;
+    /**
+     * Live 0..1 input level, fired per VAD frame for a recording meter; `speaking`
+     * is the detector's verdict for that frame (drives a "speaking" indicator).
+     */
+    onLevel?: (level: number, speaking?: boolean) => void;
     /**
      * Capture heartbeat (see {@link CaptureAliveBeat}) — recorder bytes landing, or a
      * confirmed-healthy poll. A consumer watching for a dead session must measure
@@ -243,7 +253,17 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
      * pass. See {@link SpeechToTextModule.transcribeSessionAudio}.
      */
     windowMs?: number;
-    /** Called with each window's transcript as it lands (in seal order, best-effort). */
+    /**
+     * `eager` (default): each window is transcribed in the background as it seals and
+     * reported through `onWindow`. `lazy`: the sealed audio is only BANKED — no upload,
+     * no `onWindow` — and {@link SpeechToTextModule.transcribeSessionAudio} decodes the
+     * windows serially when (and only if) a consumer asks for the whole recording. For a
+     * consumer whose review starts from the live transcript and re-reads the recording
+     * only when that looks incomplete, eager decoding is an upload per window for text
+     * that is usually never read.
+     */
+    windowMode?: "eager" | "lazy";
+    /** Called with each window's transcript as it lands (in seal order, best-effort; eager mode only). */
     onWindow?: (window: TranscribedWindow) => void;
     /**
      * This start CONTINUES the dictation the previous session belonged to — a resume after
@@ -346,6 +366,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     private _activeDriverId: string | null;
     private _capture: AudioCapture;
     private _defaults: { language?: string; silenceMs?: number; prompt?: string };
+    /** The language hint policy of the current dictation (see languagePin.ts). */
+    private _langPin: LanguagePin = new LanguagePin("auto");
+    private _langPinMode = "auto";
     /**
      * Ceiling on the biasing prompt a deployment may enable. The effective cap is
      * `promptMaxChars` static meta, default **0 — no prompt is sent at all**.
@@ -445,9 +468,27 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // the capture drives speech evidence from the audio render thread, so a
         // hidden/unfocused tab keeps capturing (rAF-only VAD froze there).
         let workletUrl: string | undefined;
-        try { workletUrl = `${this.MODULE_ROOT}/vad-worklet.js`; }
+        let moduleRoot: string | undefined;
+        try { moduleRoot = this.MODULE_ROOT; workletUrl = `${moduleRoot}/vad-worklet.js`; }
         catch (_e) { workletUrl = undefined; /* uninitialized module: rAF fallback */ }
-        this._capture = new AudioCapture({workletUrl});
+        // Silero VAD (default engine). Deployment knob, hence static meta (§7); the
+        // assets are copied out of node_modules into dist/silero/ by the module build.
+        const vadCfg = (this.getStaticMeta("vad", {}) || {}) as Record<string, any>;
+        let silero: SileroOptions | undefined;
+        if (vadCfg.engine !== "amplitude" && moduleRoot) {
+            // ABSOLUTE: onnxruntime-web resolves its wasm glue with `new URL(file, wasmPaths)`,
+            // which throws on a relative base, and then falls back to `import(wasmPaths + file)`
+            // — a bare module specifier the browser refuses. The page-relative form fetches
+            // the model fine (plain fetch), so the failure only showed at the WASM backend.
+            const assetsUrl = new URL(String(vadCfg.assetsUrl || `${moduleRoot}/dist/silero/`), document.baseURI).href.replace(/\/?$/, "/");
+            silero = {
+                assetsUrl,
+                positiveSpeechThreshold: Number(vadCfg.positiveSpeechThreshold) || 0.5,
+                negativeSpeechThreshold: Number(vadCfg.negativeSpeechThreshold) || 0.35,
+                loadTimeoutMs: Number(vadCfg.loadTimeoutMs) || 15000,
+            };
+        }
+        this._capture = new AudioCapture({workletUrl, silero});
         this._localeReady = this.loadLocale().catch((e: any) =>
             APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "locale load failed"));
 
@@ -503,20 +544,38 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Effective BCP-47 language: explicit call value, else the module default,
-     * else the live UI locale. Inheriting the locale keeps transcription pinned to
-     * the app's language instead of letting the model free-detect it (stabilizing
-     * language level). Read live so a runtime locale switch is reflected; falls
-     * through to `undefined` (driver free-detects) when i18n isn't ready.
+     * The language MODE a caller asked for: an explicit BCP-47 code, else the module
+     * default, else `"auto"`. Never the UI locale — the viewer's locale says what
+     * language the buttons are in, not what the pathologist speaks, and pinning
+     * transcription to it turned Japanese dictation into English filler.
+     */
+    private _languageMode(language?: string): string {
+        const s = String(language ?? this._defaults.language ?? "").trim();
+        return s || "auto";
+    }
+
+    /**
+     * The language hint for one request: a fixed code as given; under `auto` the
+     * session's pin once two segments have agreed, else nothing (the recognizer
+     * detects). See {@link LanguagePin}.
      */
     private _resolveLanguage(language?: string): string | undefined {
-        if (language) return language;
-        if (this._defaults.language) return this._defaults.language;
-        try {
-            const lng = ($ as any)?.i18n?.language;
-            if (typeof lng === "string" && lng.trim()) return lng.trim();
-        } catch (_e) { /* i18n not ready — let the driver free-detect */ }
-        return undefined;
+        return this._pinFor(this._languageMode(language)).hint();
+    }
+
+    /** The pin for a language mode — the module-level one when it already matches. */
+    private _pinFor(mode: string): LanguagePin {
+        if (this._langPinMode !== mode) {
+            this._langPin = new LanguagePin(mode);
+            this._langPinMode = mode;
+        }
+        return this._langPin;
+    }
+
+    /** True when the session's language is known and is not English. */
+    private _nonEnglishSession(): boolean {
+        const lang = primaryLanguage(this._langPin.language);
+        return !!lang && lang !== "en";
     }
 
     /** Effective biasing prompt (call override, else module default), length-capped. */
@@ -524,6 +583,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         const p = (prompt ?? this._defaults.prompt);
         const s = String(p ?? "").trim();
         if (!s || this._promptMaxChars <= 0) return undefined;
+        // The glossary is English. Handed to a recognizer decoding another language it
+        // is a pull toward English output, not vocabulary help.
+        if (this._nonEnglishSession()) return undefined;
         return SpeechToTextModule._cutAtWord(s, this._promptMaxChars);
     }
 
@@ -543,7 +605,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * stripping treats the two parts differently (see {@link _stripPromptEcho}).
      */
     private _composePrompt(glossary: string | undefined, transcript: string, contextChars: number): { prompt?: string; context?: string } {
-        const base = String(glossary || "").trim();
+        // See _resolvePrompt: no English glossary into a non-English decode. The context
+        // tail is the transcript's own language and still goes when enabled.
+        const base = this._nonEnglishSession() ? "" : String(glossary || "").trim();
         const cap = this._promptMaxChars;
         if (cap <= 0) return {};
         const cut = SpeechToTextModule._cutAtWord;
@@ -756,7 +820,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * detected speech resolves `{text: "", noSpeech: true}` without ever sending
      * the audio to a driver.
      */
-    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; minVoicedMs?: number; onLevel?: (level: number) => void } = {}): Promise<TranscriptionResult> {
+    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; minVoicedMs?: number; onLevel?: (level: number, speaking?: boolean) => void } = {}): Promise<TranscriptionResult> {
         const driver = this._activeDriver();
         if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
 
@@ -944,7 +1008,10 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         // Warm the model so the first segment's inference isn't stalled by download.
         try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
 
-        const language = this._resolveLanguage(opts.language);
+        // The language policy for this dictation: a fixed code, or auto-detect with a
+        // soft pin. Read per request (`langPin.hint()`), never captured — the pin lands
+        // mid-session, once two segments agree.
+        const langPin = this._pinFor(this._languageMode(opts.language));
         const glossary = this._resolvePrompt(opts.prompt);
         // Rolling context: each segment is biased with the tail of what has already
         // been transcribed, so the model decodes it with the surrounding dictation in
@@ -1051,7 +1118,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             settled = true;
             releaseAbort();
             this.raiseEvent("recording-stopped");
-            resolveDone({text: fullText.trim(), language});
+            resolveDone({text: fullText.trim(), language: langPin.language});
         };
 
         const drain = (): void => {
@@ -1189,7 +1256,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     const m = metricsOf.get(index);
                     if (m) m.latencyMs = Date.now() - startedAt;
                 };
-                this._transcribeBlob(blob, {language, prompt, context, signal, allowFallback: this._liveFallback})
+                const languageHint = langPin.hint();
+                this._transcribeBlob(blob, {language: languageHint, prompt, context, signal, allowFallback: this._liveFallback})
                     .then((r) => {
                         stampLatency();
                         const m = metricsOf.get(index);
@@ -1201,6 +1269,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                             // The driver that ANSWERED, not the one configured.
                             if (r.driverId) m.driverId = r.driverId;
                             if (r.model) m.model = r.model;
+                            // What the recognizer heard the language as, beside what it was told.
+                            if (languageHint) m.languageHint = languageHint;
+                            if (r.language) m.language = primaryLanguage(r.language) || r.language;
                             if (Number.isFinite(r.noSpeechProb as number)) m.noSpeechProb = r.noSpeechProb;
                             if (Number.isFinite(r.avgLogprob as number)) m.avgLogprob = r.avgLogprob;
                             if (Number.isFinite(r.compressionRatio as number)) m.compressionRatio = r.compressionRatio;
@@ -1225,6 +1296,12 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                                 noSpeechProb: r.noSpeechProb, avgLogprob: r.avgLogprob,
                                 reportedDurationMs: m?.reportedDurationMs, filtered: r.filtered, probe: !!probe,
                             });
+                        }
+                        // A segment with text is a vote on the session's language; the
+                        // vote that pins it is announced so the UI can say which language
+                        // is being transcribed.
+                        if (text && langPin.vote(r.language)) {
+                            this.raiseEvent("language-pinned", {language: langPin.language});
                         }
                         let speech = !!text;
                         if (probe && speech && opts.validateSegment) {
@@ -1292,7 +1369,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     // 15 s segment truncates a 90 s window too — and the whole-audio
                     // transcript is built from these. They get the PLAIN setting, never the
                     // A/B arm: the archive transcript is authoritative, not an experiment.
-                    ? (w) => this._enqueueWindow(w, {language, glossary, contextChars, onWindow: opts.onWindow, session: windowSession})
+                    ? (w) => this._enqueueWindow(w, {language: () => langPin.hint(), glossary, contextChars, onWindow: opts.onWindow, session: windowSession, lazy: opts.windowMode === "lazy"})
                     : undefined,
                 // A capture-side discard is the one loss no layer above could see.
                 onDiscard: (meta, reason) => {
@@ -1327,6 +1404,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                         silenceMs: silenceMs && silenceMs > 0 ? silenceMs : 1500,
                         overlapMs: meta?.overlapMs,
                         tracked: meta?.tracked,
+                        vad: meta?.vad,
                         bytes: blob?.size,
                         // Provisional: overwritten by the driver that actually answers.
                         driverId: driver?.id,
@@ -1341,8 +1419,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                         // quiet speaker's every short answer falls under it, so — like the
                         // capture's own discard ladder — the third gated segment in a row
                         // goes through as a probe, and the gate is reported either way.
+                        // Only for the amplitude gate: a Silero verdict is not second-guessed
+                        // by a transcript (probing silence is how hallucinations flipped
+                        // whole sessions fail-open).
                         gatedInARow++;
-                        const asProbe = gatedInARow >= 3;
+                        const asProbe = meta.vad !== "silero" && gatedInARow >= 3;
                         this.raiseEvent("segment-gated", {
                             index, voicedMs: meta.voicedMs, minVoicedMs, audioMs: meta.durationMs,
                             speechSpanMs: meta.speechSpanMs, maxPeak: meta.maxPeak, probe: asProbe,
@@ -1469,11 +1550,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * few seconds at a time. See {@link transcribeAudio} for why that beats the live
      * per-segment text.
      *
-     * With windowing on (the default for archived dictation) most of this has ALREADY
-     * happened: each ~90 s window was transcribed in the background while the
-     * pathologist kept talking, so this joins the retained texts and only decodes
-     * whatever tail has not been sealed yet. That is the difference between a
-     * multi-minute wait at review time and a couple of seconds.
+     * With eager windowing most of this has ALREADY happened: each ~90 s window was
+     * transcribed in the background while the pathologist kept talking, so this joins
+     * the retained texts and only decodes whatever tail has not been sealed yet. With
+     * `windowMode: "lazy"` this is where the windows are decoded — serially, in seal
+     * order — so a consumer that rarely needs the recording pays for it only when it does.
      *
      * Returns "" when nothing was recorded; rejects if a pass fails. Any window whose
      * background pass failed is retried here.
@@ -1540,7 +1621,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      */
     private _enqueueWindow(
         w: { blob: Blob; index: number; fromSegment: number; toSegment: number; final: boolean },
-        ctx: { language?: string; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; session: number },
+        ctx: { language?: () => string | undefined; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; session: number; lazy?: boolean },
     ): void {
         // Sealed after the recording it belongs to was cleared: the consumer has already
         // discarded that dictation, and its audio must not be uploaded now.
@@ -1550,6 +1631,9 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             blob: w.blob as Blob | null, state: "pending", session: ctx.session,
         };
         this._windows.push(record);
+        // Lazy: banked, not decoded. `transcribeSessionAudio` picks it up by `!text && blob`
+        // if the consumer ever asks for the recording; until then nothing leaves the browser.
+        if (ctx.lazy) return;
         if (!this._windowAbort) this._windowAbort = new AbortController();
         const signal = this._windowAbort.signal;
         const run = async () => {
@@ -1570,7 +1654,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                 const {prompt, context} = this._composePrompt(ctx.glossary, prior, ctx.contextChars);
                 this.raiseEvent("window-transcription-started", {index: record.index, bytes: record.blob.size});
                 res = await this._transcribeBlob(record.blob, {
-                    language: ctx.language,
+                    // Read at decode time: a lazy window decodes at review, when the pin is final.
+                    language: ctx.language?.(),
                     prompt,
                     context,
                     signal,
@@ -1739,9 +1824,10 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Windows whose background transcription has not finished — text not in yet, a
-     * decode in flight or queued. Worth waiting for. Reaches 0 once
-     * {@link whenSessionAudioSettled} resolves.
+     * Windows not decoded yet — text not in, a decode in flight or queued. In eager mode
+     * this reaches 0 once {@link whenSessionAudioSettled} resolves; in lazy mode it stays
+     * above 0 until {@link transcribeSessionAudio} decodes them (nothing arrives on its
+     * own, and that is the point).
      */
     get pendingWindowCount(): number {
         return this._currentWindows().filter((w) => w.state === "pending").length;
@@ -1788,6 +1874,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     clearSessionAudio(): void {
         this._capture.clearArchive();
         this._windowSession++;
+        // A new dictation may be in another language; the pin starts over with it.
+        this._langPin.reset();
         for (const w of this._windows) w.blob = null;
         this._windows = [];
         try { this._windowAbort?.abort(new DOMException("session audio cleared", "AbortError")); } catch (_e) { /* ignore */ }

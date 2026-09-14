@@ -1,6 +1,8 @@
+import {_t} from "../shared/i18n";
 const { div, button, span } = (globalThis as any).van.tags;
 
-export type SessionPickerSession = Pick<ChatSession, "id" | "title" | "updatedAt"> & { summary?: string };
+export type SessionPickerSession = Pick<ChatSession, "id" | "title" | "updatedAt">
+    & { summary?: string; providerUnavailable?: boolean };
 
 export interface ChatSessionPickerOptions {
     onSelect?: (sessionId: string | null) => void;
@@ -12,10 +14,10 @@ export interface ChatSessionPickerOptions {
 type SessionGroupKey = "today" | "yesterday" | "previous7Days" | "older";
 
 const GROUP_LABEL_KEYS: Record<SessionGroupKey, string> = {
-    today: "chat.groupToday",
-    yesterday: "chat.groupYesterday",
-    previous7Days: "chat.groupPrevious7Days",
-    older: "chat.groupOlder",
+    today: "groupToday",
+    yesterday: "groupYesterday",
+    previous7Days: "groupPrevious7Days",
+    older: "groupOlder",
 };
 
 export class ChatSessionPicker {
@@ -50,7 +52,7 @@ export class ChatSessionPicker {
         this._listEl = div({
             class: "flex flex-col w-full gap-1",
             role: "listbox",
-            "aria-label": $.t('chat.sessions'),
+            "aria-label": _t('sessions'),
         }) as HTMLElement;
 
         this._root = div(
@@ -189,8 +191,8 @@ export class ChatSessionPicker {
 
         if (!visible.length) {
             const message = this._loading
-                ? $.t('chat.loadingSessions')
-                : (this._query && this._sessions.length ? $.t('chat.noSessionsMatch') : $.t('chat.noSessionsYet'));
+                ? _t('loadingSessions')
+                : (this._query && this._sessions.length ? _t('noSessionsMatch') : _t('noSessionsYet'));
             this._listEl.appendChild(
                 div({ class: "px-3 py-2 text-sm text-base-content/60 italic" }, message)
             );
@@ -203,7 +205,7 @@ export class ChatSessionPicker {
                 div(
                     { class: "flex items-center gap-2 px-3 py-1 text-xs text-base-content/60 italic" },
                     span({ class: "loading loading-spinner loading-xs shrink-0" }),
-                    span($.t('chat.refreshingSessions')),
+                    span(_t('refreshingSessions')),
                 )
             );
         }
@@ -214,7 +216,12 @@ export class ChatSessionPicker {
             const isActive = session.id === this._activeSessionId;
             const isBusy = session.id === this._busySessionId;
             const updated = this._updatedAt(session);
-            const title = session.title || $.t('chat.untitledChat');
+            const title = session.title || _t('untitledChat');
+            // The provider this session was held with is not in the registry any more
+            // (a bring-your-own-key instance, or a provider plugin since disabled). The
+            // transcript is still readable — only sending needs a provider — so the row
+            // stays selectable and says so rather than disappearing.
+            const orphaned = session.providerUnavailable === true;
 
             // Sessions arrive newest-first, so a group header is due whenever the bucket changes.
             const group = this._groupOf(updated);
@@ -223,7 +230,7 @@ export class ChatSessionPicker {
                 this._listEl.appendChild(
                     div(
                         { class: "px-1 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-base-content/50" },
-                        $.t(GROUP_LABEL_KEYS[group])
+                        _t(GROUP_LABEL_KEYS[group])
                     )
                 );
             }
@@ -240,7 +247,7 @@ export class ChatSessionPicker {
                     role: "option",
                     tabindex: 0,
                     "aria-selected": isActive ? "true" : "false",
-                    title,
+                    title: orphaned ? `${title} — ${_t('sessionProviderUnavailable')}` : title,
                     onclick: () => {
                         if (this._disabled) return;
                         this._activeSessionId = session.id;
@@ -275,14 +282,20 @@ export class ChatSessionPicker {
                             { class: "block text-xs text-base-content/60 truncate", title: updated.toLocaleString() },
                             this._relativeTime(updated)
                         )
+                        : null,
+                    orphaned
+                        ? span(
+                            { class: "block text-xs text-warning/80 truncate" },
+                            _t('sessionProviderUnavailable')
+                        )
                         : null
                 ),
                 this.options.onRename
-                    ? this._actionButton("ph-pencil-simple", $.t('chat.renameSessionNamed', { name: title }),
+                    ? this._actionButton("ph-pencil-simple", _t('renameSessionNamed', { name: title }),
                         "hover:text-base-content", () => this.options.onRename?.(session.id))
                     : null,
                 this.options.onDelete
-                    ? this._actionButton("ph-trash", $.t('chat.deleteSessionNamed', { name: title }),
+                    ? this._actionButton("ph-trash", _t('deleteSessionNamed', { name: title }),
                         "hover:text-error", () => this.options.onDelete?.(session.id))
                     : null,
             ) as HTMLElement;

@@ -52,8 +52,9 @@ export function stripPromptEcho(text: string, prompt?: string, context?: string)
     t = t.replace(/\b(?:context|prompt)\s*:/gi, " ").replace(/#{2,}/g, " ");
     t = t.replace(/\s+/g, " ").trim();
 
-    // Nothing but stray punctuation left ⇒ it was pure echo ⇒ no speech.
-    if (!/[a-z0-9]/i.test(t)) return "";
+    // Nothing but stray punctuation left ⇒ it was pure echo ⇒ no speech. Any script
+    // counts as speech: a Latin-only test here blanked every Japanese segment.
+    if (!/[\p{L}\p{N}]/u.test(t)) return "";
     return isPurePromptEcho(t, promptNorm) ? "" : t;
 }
 
