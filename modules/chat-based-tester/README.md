@@ -31,13 +31,36 @@ xOpat's page template installs `window.console.appTrace` — the export buffer t
   host and scripting mode.
 
 ## Dev-only gating
-This module is intentionally disabled unless the server reports dev mode.
+This module is intentionally disabled unless the server reports dev mode. Three walls, in
+the order they are hit:
 
-The current implementation treats server-reported dev mode as the main source of truth:
+1. **`"devOnly": true` in `include.json`** — the loader refuses to register the module when
+   `APPLICATION_CONTEXT.env.server.devMode !== true` (`src/loader.ts`,
+   `incompatibilityReason`). A plugin that `requires` it refuses up front for the same
+   reason. Nothing session-supplied can clear the marker.
+2. **The constructor** — a console/test instantiation that bypasses the loader still exits
+   immediately, mounting no tab, patching no console and registering no personality.
+3. **`xopat-host-script` execution** — refused by `isUnsafeHostExecutionAllowed()`.
+
+Server-reported dev mode is the source of truth throughout:
 - `window.XOPAT_DEV_MODE === true`
 - `CORE.server.devMode === true`
 
-If dev mode is not enabled, the tester panel stays disabled and `xopat-host-script` execution is refused.
+The server side agrees independently: every RPC in `server/chat-dev.server.js` calls
+`requireDevMode(ctx)`, and `vercel-ai-chat-sdk` honours `executionMode: 'host'` only when
+`XOPAT_SERVER.isDevMode(ctx)` is true — so a harness session replayed against a production
+server gets the ordinary chat prompt, not the host-execution one.
+
+## Scripting consent is borrowed, not taken
+In `Scripting API` mode the harness needs a wider grant than the user's posture. It takes
+one through `chatModule.beginTemporaryScriptConsent()` and restores it in a `finally`.
+
+This matters because consent lives on the single `vercel-ai-chat-sdk` instance and is
+remembered: `setScriptNamespaceConsent` flips the mode to `custom`, persists the grant with
+an expiry, and a cached posture outranks the operator's `defaultScriptConsentMode` on the
+next construction. The harness must never leave a grant behind for the normal Chat tab.
+`sensitive` namespaces (`patient`) are **not** added by the temporary grant; a grant the user
+made themselves is preserved.
 
 ## RPC routes
 Built-in dev core RPC:

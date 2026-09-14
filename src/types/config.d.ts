@@ -550,6 +550,16 @@ type XOpatElementItem = {
      * A deployment can override it via ENV `plugins[id]` / `modules[id]`.
      */
     stability?: "stable" | "experimental" | "deprecated";
+    /**
+     * Development harness marker. Unlike `stability`, this DOES gate loading: the
+     * element is refused unless the server reports dev mode (`--dev` /
+     * `XOPAT_DEV_MODE`). Declare it on anything that exists to give a developer —
+     * or a model driving one — access the application would not otherwise grant.
+     * Nothing session-supplied reaches this: the record is the deployment-merged
+     * `include.json`, so only an operator can clear the marker, and only dev mode
+     * lets the element through with it.
+     */
+    devOnly?: boolean;
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */

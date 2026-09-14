@@ -65,9 +65,17 @@ class ChatBasedTester extends XOpatModuleSingleton {
         this._bootstrappedSessions = new Set();
         this._testMode = this._getConfig().defaultTestMode;
 
-        if (this.isServerDevMode()) {
-            this._installConsoleCapture();
+        // `devOnly` in include.json already refuses this module outside dev mode, so
+        // reaching the constructor at all means dev mode — except for a console/test
+        // instantiation that bypasses the loader. Keep the runtime check as the second
+        // wall and mount nothing without it: a disabled harness should leave no tab, no
+        // patched console and no registered personality behind.
+        if (!this.isServerDevMode()) {
+            console.warn("[chat-based-tester] inert: the server is not in dev mode.");
+            return;
         }
+
+        this._installConsoleCapture();
         this._attachToLayout();
         void this._boot();
     }
@@ -83,11 +91,7 @@ class ChatBasedTester extends XOpatModuleSingleton {
 
     async _boot() {
         try {
-            if (!this.isServerDevMode()) {
-                this._panel.setStatus("Disabled: chat-based-tester is available only when the server runs in dev mode.");
-                return;
-            }
-
+            // Dev mode is established by the constructor; _boot is not reached without it.
             this._panel.setStatus("Waiting for vercel-ai-chat-sdk...");
             this._chatModule = await this._waitForChatModule();
             this._registerDevPersonality();
@@ -349,16 +353,21 @@ class ChatBasedTester extends XOpatModuleSingleton {
         this._bootstrappedSessions.clear();
     }
 
-    grantAllScriptConsent() {
-        const chat = this.requireChatModule();
-        const entries = globalThis.APPLICATION_CONTEXT?.Scripting?.getNamespaceConsentEntries?.() || {};
-
-        for (const namespace of Object.keys(entries)) {
-            chat.setScriptNamespaceConsent?.(namespace, true);
-        }
-
-        chat.refreshScriptConsentFromManager?.();
-        return chat.getAllowedScriptApiManifest?.() || { namespaces: [] };
+    /**
+     * Widen the scripting grant for the duration of one test run.
+     *
+     * The harness used to call `setScriptNamespaceConsent` per namespace, which remembers
+     * the grant: the chat module persists it (expiring cache) and a cached posture outranks
+     * the operator's `defaultScriptConsentMode` on the next construction. One scripting-mode
+     * run therefore left this browser profile at "custom, everything granted" — sensitive
+     * namespaces included — in the normal Chat tab too. Grants taken here are neither
+     * persisted nor allowed to outlive the run, and `sensitive` namespaces are not added by it
+     * (a grant the user made themselves is preserved, never widened away).
+     *
+     * @return the manifest for the turn plus an idempotent `restore()`; call it in a `finally`.
+     */
+    _beginTemporaryScriptConsent() {
+        return this.requireChatModule().beginTemporaryScriptConsent();
     }
 
     getTestMode(): TestMode {
@@ -568,9 +577,8 @@ class ChatBasedTester extends XOpatModuleSingleton {
         const service = this.getChatService();
         const sessionId = await this.ensureSession();
         const controller = new AbortController();
-        const allowedScriptApi = this._testMode === "scripting"
-            ? this.grantAllScriptConsent()
-            : undefined;
+        const consent = this._testMode === "scripting" ? this._beginTemporaryScriptConsent() : null;
+        const allowedScriptApi = consent?.manifest;
         this._abortController = controller;
         this._running = true;
         service.setActiveSessionId?.(sessionId);
@@ -694,6 +702,9 @@ class ChatBasedTester extends XOpatModuleSingleton {
             }
             throw error;
         } finally {
+            // Before the flags, so an unexpected throw above can never leave the
+            // application-wide consent posture widened by this run.
+            consent?.restore();
             this._running = false;
             this._abortController = null;
         }

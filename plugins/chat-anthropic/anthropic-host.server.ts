@@ -335,6 +335,10 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                     apiKey: apiKeyValue,
                     baseURL: resolvedBaseUrl,
                     headers,
+                    // Route the SDK's own transport through the core SSRF guard; vetting
+                    // `resolvedBaseUrl` alone leaves every request the SDK derives from it
+                    // on the global `fetch`. See the same wiring in chat-openai.
+                    fetch: safeFetch,
                 })(modelId);
             },
         },

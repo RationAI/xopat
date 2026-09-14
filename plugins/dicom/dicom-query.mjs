@@ -19,6 +19,36 @@ import {
 import { parseOrientation } from './slide-orientation.mjs';
 
 /**
+ * How much of an upstream error body survives into an `Error.message`.
+ *
+ * Two reasons the whole body must not: a DICOM server's error body can carry
+ * PHI (a patient name or study description echoed back in a validation
+ * message), and it is authored by the upstream, not by us — an `Error` has a
+ * way of reaching a dialog eventually. An excerpt is what a developer reads
+ * when triaging; the full body goes to the log channel behind the operator's
+ * `sensitive` gate, which is where PHI-bearing payloads belong. (AGENTS.md §7)
+ */
+const UPSTREAM_EXCERPT_CHARS = 200;
+
+/**
+ * Log the full upstream body, return a short one-line excerpt for the message.
+ * @param {string} body raw response body from the DICOM server
+ * @param {string} context what was being requested, for the log record
+ * @return {string} excerpt, possibly empty
+ */
+function upstreamExcerpt(body, context) {
+    const text = typeof body === "string" ? body : String(body ?? "");
+    if (!text) return "";
+    try {
+        APPLICATION_CONTEXT.log("plugin.dicom").sensitive("upstream error body", { context, body: text });
+    } catch (_) { /* logging must never mask the error being reported */ }
+    const oneLine = text.replace(/\s+/g, " ").trim();
+    return oneLine.length > UPSTREAM_EXCERPT_CHARS
+        ? `${oneLine.slice(0, UPSTREAM_EXCERPT_CHARS)}…`
+        : oneLine;
+}
+
+/**
  * Cap on memoized WADO metadata responses per client. A slide open touches a
  * handful of instances; this only exists so a long browsing session cannot grow
  * the map without bound.
@@ -213,13 +243,13 @@ export default class DicomTools {
             });
             if (res.status === 204) return undefined;
             const text = await res.text();
-            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${upstreamExcerpt(text, `QIDO ${path}`)}`); }
         } catch (e) {
             if (e instanceof HTTPError) {
                 const body = e.textData || '';
                 if (e.statusCode === 404 && /Unknown resource/i.test(body)) throw new Error(`QIDO endpoint missing at ${path}`);
                 if (e.statusCode === 404) return undefined;
-                throw new Error(`QIDO ${path} failed: ${e.statusCode} ${body}`);
+                throw new Error(`QIDO ${path} failed: ${e.statusCode} ${upstreamExcerpt(body, `QIDO ${path}`)}`);
             }
             throw e;
         }
@@ -288,7 +318,7 @@ export default class DicomTools {
                 url = make(false);
                 res = await tryFetch(url);
             } else {
-                throw new Error(`QIDO ${url} failed: ${e.statusCode} ${msg}`);
+                throw new Error(`QIDO ${url} failed: ${e.statusCode} ${upstreamExcerpt(msg, `QIDO ${url}`)}`);
             }
         }
 
@@ -302,7 +332,7 @@ export default class DicomTools {
         if (!text || !text.trim()) return { rows: [], total: total ?? 0 };
 
         let rows;
-        try { rows = JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        try { rows = JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${upstreamExcerpt(text, `QIDO ${url}`)}`); }
         return { rows: Array.isArray(rows) ? rows : [], total };
     }
 
@@ -354,9 +384,9 @@ export default class DicomTools {
                 priority: options.priority,
             });
             const text = await res.text();
-            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${upstreamExcerpt(text, `WADO ${path}`)}`); }
         } catch (e) {
-            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${upstreamExcerpt(e.textData, `WADO ${path}`)}`);
             throw e;
         }
     }
@@ -522,7 +552,7 @@ export default class DicomTools {
                 body
             });
         } catch (e) {
-            if (e instanceof HTTPError) throw new Error(`STOW-RS failed (${e.statusCode}): ${e.textData || ''}`);
+            if (e instanceof HTTPError) throw new Error(`STOW-RS failed (${e.statusCode}): ${upstreamExcerpt(e.textData, "STOW-RS")}`);
             throw e;
         }
 

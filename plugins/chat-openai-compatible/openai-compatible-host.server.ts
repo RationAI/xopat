@@ -25,7 +25,8 @@ function providerFactoryFor(
     baseURL: string,
     apiKey: string | undefined,
     headers: Record<string, string>,
-    includeUsage: boolean
+    includeUsage: boolean,
+    fetchImpl: any
 ): (modelId: string) => any {
     // `includeUsage` belongs in the digest like every other connection-shaping input:
     // it is baked into the factory, so a cache keyed without it would keep serving the
@@ -35,7 +36,11 @@ function providerFactoryFor(
         .digest("hex");
     let factory = providerFactoryCache.get(digest);
     if (!factory) {
-        factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers, includeUsage }) as any;
+        // Route the SDK's own transport through the core SSRF guard: `@ai-sdk/openai-compatible`
+        // otherwise fetches with the global `fetch`, so only the baseURL was ever vetted and
+        // everything the SDK derived from it afterwards egressed unguarded. `safeFetch` vets the
+        // destination (private/metadata IP rejection, no-redirect) on every request it makes.
+        factory = createOpenAICompatible({ name: instanceId, baseURL, apiKey, headers, includeUsage, fetch: fetchImpl }) as any;
         providerFactoryCache.set(digest, factory!);
     }
     return factory!;
@@ -433,7 +438,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                 // their backend accepts `stream_options` turns this on. Anything other than
                 // an explicit true stays false, so a stray string can never enable it.
                 const includeUsage = config.includeUsage === true || config.includeUsage === "true";
-                return providerFactoryFor(instance.id, baseURL, apiKey, headers, includeUsage)(modelId);
+                return providerFactoryFor(instance.id, baseURL, apiKey, headers, includeUsage, safeFetch)(modelId);
             },
             // OPTIONAL transcription capability: `@ai-sdk/openai-compatible`
             // ships no transcription model, so the module's reusable shim

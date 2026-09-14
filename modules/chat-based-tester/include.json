@@ -4,6 +4,7 @@
   "description": "Developer chat harness for viewer testing using vercel-ai-chat-sdk",
   "requires": ["vercel-ai-chat-sdk"],
   "stability": "experimental",
+  "devOnly": true,
   "defaultTestMode": "host",
   "defaultAttachScreenshot": false,
   "defaultIncludeServerLogs": true,
