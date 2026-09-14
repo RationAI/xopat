@@ -1,4 +1,66 @@
 /**
+ * Make an object permanently non-interactive: not a hit-test target, not
+ * selectable, not transformable, no controls to render.
+ *
+ * This is the single description of what "helper annotation" means for the
+ * user's mouse. It is applied centrally by
+ * {@link OSDAnnotations.AnnotationCanvas#addHelperAnnotation} rather than by
+ * each factory, because a factory's own flags do not survive the object's
+ * construction: `create()` ends with `renderAllControls()` (which force-sets
+ * `hasControls`), and `initCreate()` merges the preset options - which carry
+ * `PresetManager.commonAnnotationVisuals`, i.e. `selectable: true` - over the
+ * helper properties.
+ *
+ * `controls` is emptied rather than only `hasControls` being cleared: that way
+ * even a stray `hasControls = true` written later has nothing to draw, so the
+ * scale corners and the rotation handle cannot appear over a drawing in
+ * progress.
+ *
+ * Every property written here is restored on promotion, and nothing else is
+ * written: `renderAllControls` puts the controls back,
+ * `_applyAnnotationVisibilityState` the flags and locks, and
+ * `_promoteHelperAnnotation` the caching. That is the bound on what may join
+ * this list - `hoverCursor`, for one, stays out, since a non-evented object is
+ * never a hover target anyway.
+ *
+ * Factories therefore pass no interactivity properties at all: they own
+ * geometry and preset visuals, the canvas owns this.
+ *
+ * @param {fabric.Object} object
+ * @return {fabric.Object} the same object, for chaining
+ */
+OSDAnnotations.freezeHelperInteractivity = function (object) {
+    if (!object) return object;
+
+    object.selectable = false;
+    object.evented = false;
+    object.hasControls = false;
+    object.hasBorders = false;
+    object.controls = {};
+    // Not interactivity, but it belongs to the same contract: a helper is
+    // mutated outside fabric setters (a polygon under construction has points
+    // pushed onto it), so fabric never marks the cache dirty and a cached
+    // helper renders stale. `_promoteHelperAnnotation` puts it back.
+    object.objectCaching = false;
+
+    object.lockMovementX = true;
+    object.lockMovementY = true;
+    object.lockRotation = true;
+    object.lockScalingFlip = true;
+    object.lockScalingX = true;
+    object.lockScalingY = true;
+    object.lockSkewingX = true;
+    object.lockSkewingY = true;
+    object.lockUniScaling = true;
+
+    // Group helpers (ruler / angle / arrow) must not leak an interactive child.
+    if (Array.isArray(object._objects)) {
+        for (const child of object._objects) OSDAnnotations.freezeHelperInteractivity(child);
+    }
+    return object;
+};
+
+/**
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
@@ -629,6 +691,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         ofObject.hasControls = true;
         ofObject.hasBorders = false;
     }
+
 
     /**
      * Single combined toolbar pill: comment-with-plus + lock + ellipsis.

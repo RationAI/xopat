@@ -203,12 +203,7 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
             points: [this._first, this._vertex, this._second],
             angleMode: this._step3Dragged ? 'clockwise' : 'smaller',
         }, this._opts);
-        next.set({
-            hasBorders: false,
-            hasControls: false,
-            selectable: false,
-            evented: false,
-        });
+        // Interactivity flags are not set here: addHelperAnnotation freezes them.
         if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
         this._context.fabric.addHelperAnnotation(next);
         this._current = next;

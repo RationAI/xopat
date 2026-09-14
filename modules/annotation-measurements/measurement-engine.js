@@ -135,14 +135,20 @@
             const lengthPx = factory && typeof factory.getLength === 'function'
                 ? asFinite(factory.getLength(object)) : NaN;
             const conv = NS.geometry.unitConverter(viewer);
+            const hasArea = Number.isFinite(areaPx);
             return {
                 areaImagePx: areaPx,
                 lengthImagePx: lengthPx,
                 hasPhysical: conv.hasPhysical,
+                // Open shapes (line, polyline, arrow) have a length but no area; the
+                // factory says so by returning no area. Their length is a length,
+                // not a perimeter — the label depends on this.
+                isClosed: hasArea && areaPx > 0,
                 areaUm2: conv.areaImagePxToUm2(areaPx),
                 areaMm2: conv.areaImagePxToMm2(areaPx),
                 lengthUm: conv.lengthImagePxToUm(lengthPx),
-                areaLabel: conv.formatArea(areaPx),
+                // Never format NaN: the unit ladder happily prints "NaN km²".
+                areaLabel: hasArea ? conv.formatArea(areaPx) : null,
                 lengthLabel: Number.isFinite(lengthPx) ? conv.formatLength(lengthPx) : null,
             };
         }

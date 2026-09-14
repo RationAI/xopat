@@ -795,10 +795,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean} on
 	 */
     enableInteraction(on) {
+        //return to the default state, always - and when disabling, do it BEFORE
+        //the flag: setMode() refuses while disabledInteraction is set, so the
+        //reset was a no-op and the previous mode (plus its toolbar highlight)
+        //stayed live with interaction already gone.
+        if (!on) this.setMode(this.Modes.AUTO);
         this.disabledInteraction = !on;
         this.raiseEvent('enabled', {isEnabled: on});
-        //return to the default state, always
-        this.setMode(this.Modes.AUTO);
+        if (on) this.setMode(this.Modes.AUTO);
     }
 
     enableAnnotations(on) {
@@ -2115,7 +2119,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			return true;
 		}
 
-		// The mode refused to activate (nothing to detect from, no preset, ...).
+		// The mode refused to activate (nothing to detect from, no preset,
+		// a non-editable or read-only annotation selected, ...).
 		// On a mode -> mode switch the previous mode was already torn down by
 		// _setModeToAuto(true), which deliberately skips the AUTO restore because
 		// the incoming mode was expected to take over. Finish that restore here,
@@ -2124,8 +2129,13 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			this.mode = this.Modes.AUTO;
 			this.setOSDTracking(true);
 			this.setCursors("grab", "pointer");
-			this.raiseEvent('mode-changed', {mode: this.mode});
 		}
+
+		// Announce the mode that is in effect even when it did not change. A UI
+		// that paints its selection on click - ToolbarGroup does, optimistically -
+		// has no other way to learn the switch was refused, and used to keep the
+		// highlight forever while this.mode stayed AUTO.
+		this.raiseEvent('mode-changed', {mode: this.mode});
 		return false;
 	}
 
@@ -2135,10 +2145,11 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
 
 		if (this.mode.setToAuto(switching)) {
-			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
-
+			// Assign first: a handler reading `context.mode` must not see the mode
+			// that is going away.
 			this.mode = this.Modes.AUTO;
 			this.setCursors("grab", "pointer");
+			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
 		}
 	}
 

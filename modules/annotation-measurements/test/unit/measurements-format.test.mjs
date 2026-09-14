@@ -195,3 +195,20 @@ test("the tissue ratio is a geometry row and a table column, empty until derived
     expect(tr.tissueRatio).toBe("12.3%");
     expect(fmt.rowsToCsv([tr], t).split("\n")[0]).toContain('"col.tissueRatio"');
 });
+
+test("an open shape shows a Length, not a Perimeter, and no dimmed Area row", () => {
+    const object = { incrementId: 1 };
+    const ruler = makeEngine({ geometric: { 1: { areaLabel: null, lengthLabel: "412 µm", isClosed: false } } });
+    const keys = fmt.statRows(ruler, null, object, {}, t).map((r) => [r.key, r.label]);
+    expect(keys.find(([k]) => k === "area")).toBe(undefined);
+    expect(keys.find(([k]) => k === "length")[1]).toBe("metrics.length");
+
+    const polygon = makeEngine({ geometric: { 1: { areaLabel: "1 mm²", lengthLabel: "4 mm", isClosed: true } } });
+    const byKey = Object.fromEntries(fmt.statRows(polygon, null, object, {}, t).map((r) => [r.key, r]));
+    expect(byKey.area.value).toBe("1 mm²");
+    expect(byKey.length.label).toBe("metrics.perimeter");
+
+    // Nothing measurable at all (a point): the Area placeholder stays so the panel is not blank.
+    const point = makeEngine({ geometric: { 1: {} } });
+    expect(fmt.statRows(point, null, object, {}, t).find((r) => r.key === "area").value).toBe(EMPTY);
+});

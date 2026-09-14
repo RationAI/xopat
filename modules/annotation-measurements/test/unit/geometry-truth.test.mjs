@@ -197,3 +197,20 @@ test("a zero denominator yields NaN, not Infinity @unit", () => {
     expect(Number.isNaN(NS().geometry.areaRatio(annotations, small, empty).ratio)).toBe(true);
     expect(Number.isNaN(NS().geometry.areaRatioAgainstSet(annotations, small, []).ratio)).toBe(true);
 });
+
+test("getGeometric never formats a missing area — an open shape has a length only @unit", async () => {
+    await import("../../measurement-engine.js");
+    const engine = new globalThis.AnnotationMeasurements.MeasurementEngine({
+        annotations: {
+            getAnnotationObjectFactory: () => ({
+                getArea: () => undefined,
+                getLength: () => 300,
+            }),
+        },
+    });
+    const geo = engine.getGeometric(null, { factoryID: "line" });
+    expect(geo.areaLabel).toBe(null);
+    expect(geo.isClosed).toBe(false);
+    expect(geo.lengthLabel).toBe("300 px");
+    expect(Number.isNaN(geo.areaImagePx)).toBe(true);
+});

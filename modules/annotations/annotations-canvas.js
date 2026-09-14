@@ -2117,11 +2117,25 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     /**
      * Add annotation to the canvas without registering it with with available features (history, events...)
+     *
+     * A helper annotation is drawing scaffolding - the creation-mode control
+     * points, the shape in progress, the free-form-tool working polygon, the
+     * selection highlight. It must NEVER be interactive: not a hit-test target,
+     * not selectable, not transformable. This is the one place that enforces it,
+     * since the flags a factory passes to `create()` do not survive
+     * construction (`renderAllControls()`, preset `commonAnnotationVisuals`).
+     *
+     * So the split is: a factory passes geometry and preset visuals and nothing
+     * else; this method owns interactivity and render caching (see
+     * {@link OSDAnnotations.freezeHelperInteractivity}), and
+     * `_promoteHelperAnnotation` puts both back when the drawing becomes real.
+     *
      * @param {fabric.Object} annotation
      */
     addHelperAnnotation(annotation) {
         annotation.excludeFromExport = true;
         annotation.isHelperAnnotation = true;
+        OSDAnnotations.freezeHelperInteractivity(annotation);
         this.canvas.add(annotation);
     }
 
@@ -2231,6 +2245,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
 
         object.visible = !!shouldShow;
+
+        // A helper annotation follows the visibility of the rest (so disabling
+        // annotations mid-draw hides the scaffolding too) but its interactivity
+        // is decided once, by `addHelperAnnotation`. This method is reached for
+        // helpers from several object walks - the interaction toggle, the
+        // spatial index's lazy `ensureFresh`, the layer loops - and each one
+        // used to hand the user a selectable, rotatable control point.
+        if (object.isHelperAnnotation) return;
+
         object.evented = !!shouldShow;
         object.selectable = !!shouldShow;
 
@@ -2457,6 +2480,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // import and edit paths already call this, the create path did not.
         this.module.getAnnotationObjectFactory(annotation.factoryID)?.renderAllControls?.(annotation);
         this._applyAnnotationVisibilityState(annotation);
+        // The other half of the helper freeze: a real annotation is mutated
+        // through fabric setters, so it may cache its render again. Paths that
+        // promote the very object they had added as a helper (free-form tool,
+        // magic wand, viewport segmentation) would otherwise keep caching off
+        // for the rest of its life.
+        annotation.objectCaching = true;
+        if (Array.isArray(annotation._objects)) {
+            for (const child of annotation._objects) child.objectCaching = true;
+        }
 
         // todo needed?
         annotation.setCoords?.();
@@ -2486,7 +2518,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     _addAnnotation(annotation, _raise = true) {
-        this.addHelperAnnotation(annotation);
+        this.canvas.add(annotation);
         const promoted = this._promoteHelperAnnotation(annotation, _raise, false);
         if (!promoted) this.deleteHelperAnnotation(annotation);
         else if (annotation && annotation.incrementId !== undefined && annotation.incrementId !== null) {
@@ -3367,6 +3399,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     _applySelection(annotations) {
         const canvas = this.canvas;
+        // Scaffolding is never a selection. Dropping helpers here rather than
+        // trusting the callers keeps a stale reference (a mode that hands us its
+        // in-progress object) from becoming the fabric active object.
+        if (annotations) annotations = annotations.filter(a => a && !a.isHelperAnnotation);
         if (!annotations || annotations.length === 0) {
             this.removeHighlight();
             this.clearSelectionSnapshot();
@@ -3378,10 +3414,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         // Force the toolbar pill (controls.toolbar) on for the selected
-        // annotation(s).
-        for (const a of annotations) {
-            if (a && !a.isHighlight) a.hasControls = true;
-        }
+        // annotation(s). Helpers (the highlight included) are already gone.
+        for (const a of annotations) a.hasControls = true;
 
         if (annotations.length === 1) {
             const obj = annotations[0];
@@ -3618,7 +3652,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {boolean} true if visuals were updated
      */
     updateSingleAnnotationVisuals(object, selection=null) {
-        if (object.isHighlight) return false;
+        // Helper objects are visual scaffolding, not real annotations. Checking
+        // the flag rather than "has no factory" matters for the shape in
+        // progress, which DOES carry a factoryID: `updateRendering` applies
+        // `commonAnnotationVisuals`, and those say `selectable: true`.
+        if (object.isHighlight || object.isHelperAnnotation) return false;
 
         let preset = this.module.presets.get(object.presetID);
         if (!preset) {
@@ -3627,9 +3665,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return false;
         }
 
-        // Helper objects (e.g. polygon control-point circles) inherit a presetID
-        // from the in-progress factory's options but have no factoryID. Skip
-        // them — they are visual scaffolding, not real annotations.
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         if (!factory) return false;
 

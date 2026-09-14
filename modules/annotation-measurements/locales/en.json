@@ -28,6 +28,7 @@
   "metrics": {
     "area": "Area",
     "perimeter": "Perimeter",
+    "length": "Length",
     "mean": "Mean intensity",
     "median": "Median intensity",
     "percentPositive": "% positive",
@@ -43,6 +44,7 @@
   "metricHelp": {
     "area": "Area enclosed by the annotation, in slide units. Exact geometry — no sampling involved.",
     "perimeter": "Length of the annotation outline, in slide units.",
+    "length": "Length of the path from its first to its last point, in slide units. An open shape has no area.",
     "tissueRatio": "Annotation area ÷ area of the tissue mask derived around it, as of the last derivation. The mask polygons remain on the slide.",
     "mean": "Mean intensity (0–255) of the sampled channel over the pixels inside the annotation.",
     "percentPositive": "Share of the sampled pixels at or above the threshold.",

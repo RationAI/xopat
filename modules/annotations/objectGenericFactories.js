@@ -1374,18 +1374,6 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return -1; //always allow
     }
 
-    _getCommonHelperProps() {
-        return  {
-            selectable: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-            hasBorders: false,
-            lockMovementX: true,
-            lockMovementY: true
-        };
-    }
-
     initCreate(x, y, isLeftClick = true) {
         if (!this._polygonBeingCreated) {
             this._initialize();
@@ -1394,15 +1382,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         // far enough for updateCreate() to append, it is a plain click.
         if (!this._appendingFromDrag) this._dragAppended = false;
 
-        const properties = this._getCommonHelperProps();
-
         //create circle representation of the point
         let polygon = this._current,
             index = polygon && polygon.points ? polygon.points.length : -1;
 
         if (this.withHelperPoints) {
             if (index < 1) {
-                this._initPoint = this._createControlPoint(x, y, properties);
+                this._initPoint = this._createControlPoint(x, y);
                 this._initPoint.set({fill: '#d93442', radius: this._initPoint.radius*2});
                 this._context.fabric.addHelperAnnotation(this._initPoint);
             } else {
@@ -1415,15 +1401,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         if (!polygon) {
-            polygon = this.create([{ x: x, y: y }],
-                OpenSeadragon.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
-            );
+            polygon = this.create([{ x: x, y: y }], this._presets.getAnnotationOptions(isLeftClick));
             this._context.fabric.addHelperAnnotation(polygon);
             this._current = polygon;
         } else {
             if (this.withHelperPoints) {
                 if (!this._followPoint) {
-                    this._followPoint = this._createControlPoint(x, y, properties);
+                    this._followPoint = this._createControlPoint(x, y);
                     this._context.fabric.addHelperAnnotation(this._followPoint);
                 } else {
                     // setCoords() so the moved point's spatial-index bbox tracks its
@@ -1543,8 +1527,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     //todo replace with the control API (as with edit)
-    _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle(OpenSeadragon.extend(commonProperties, {
+    //
+    // No shared props bag: this used to extend the caller's object in place, so
+    // the dot's own geometry (radius, centred origins, the first click's
+    // left/top, factory "__private") rode along into the polygon created from
+    // the same bag on the next line. Interactivity is not set here either -
+    // addHelperAnnotation owns that.
+    _createControlPoint(x, y) {
+        return new fabric.Circle({
             radius: 5 / this._context.viewer.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
@@ -1552,7 +1542,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             originX: 'center',
             originY: 'center',
             factory: "__private",
-        }));
+        });
     }
 
     //todo add to factory as some general functions
@@ -1748,20 +1738,8 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             this._initialize();
         }
 
-        let properties = {
-            selectable: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-            hasBorders: false,
-            lockMovementX: true,
-            lockMovementY: true
-        };
-
         if (!this._current) {
-            this._current = this.create([x, y, x, y],
-                OpenSeadragon.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
-            );
+            this._current = this.create([x, y, x, y], this._presets.getAnnotationOptions(isLeftClick));
             this._context.fabric.addHelperAnnotation(this._current);
         } else {
             this._current.set({x2: x, y2: y});
@@ -1855,18 +1833,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current = null;
         this._followPoint = null;
         this._isDragging = false;
-    }
-
-    _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle(OpenSeadragon.extend(commonProperties, {
-            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
-            fill: '#fbb802',
-            left: x,
-            top: y,
-            originX: 'center',
-            originY: 'center',
-            factory: "__private",
-        }));
     }
 };
 

@@ -83,11 +83,19 @@
         // `group` says which rows are free geometry and which need pixel sampling;
         // `help` is the one-line explanation a surface shows as a tooltip, so the
         // reader can tell what a number IS without leaving the panel.
-        const rows = [
-            { key: 'area', group: 'geometry', label: t('metrics.area'), help: t('metricHelp.area'), value: geo.areaLabel || EMPTY, computed: !!geo.areaLabel },
-        ];
+        const rows = [];
+        // An open shape (ruler, polyline, arrow) has no area at all — a dimmed "Area —"
+        // row on a ruler is noise, not a pending measurement. It keeps the row only
+        // when there is nothing else to show, so the panel never reads as empty.
+        const isClosed = geo.isClosed ?? !!geo.areaLabel;
+        if (geo.areaLabel || !geo.lengthLabel) {
+            rows.push({ key: 'area', group: 'geometry', label: t('metrics.area'), help: t('metricHelp.area'), value: geo.areaLabel || EMPTY, computed: !!geo.areaLabel });
+        }
         if (geo.lengthLabel) {
-            rows.push({ key: 'length', group: 'geometry', label: t('metrics.perimeter'), help: t('metricHelp.perimeter'), value: geo.lengthLabel, computed: true });
+            // The outline of a closed shape is its perimeter; an open path just has a length.
+            rows.push(isClosed
+                ? { key: 'length', group: 'geometry', label: t('metrics.perimeter'), help: t('metricHelp.perimeter'), value: geo.lengthLabel, computed: true }
+                : { key: 'length', group: 'geometry', label: t('metrics.length'), help: t('metricHelp.length'), value: geo.lengthLabel, computed: true });
         }
         // Geometry against a derived mask — exact once derived, but it needs the
         // derivation, so it reads as a placeholder until someone asked for it.
