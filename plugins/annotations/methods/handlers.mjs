@@ -105,7 +105,8 @@ export const handlerMethods = {
                     this.freeFormToolControls.bind(this);
 
         this.context.addHandler('free-form-tool-radius', (e) => {
-            $('#fft-size').val(e.radius);
+            const fftSize = document.getElementById('fft-size');
+            if (fftSize) fftSize.value = e.radius;
         });
     },
 
@@ -136,8 +137,22 @@ export const handlerMethods = {
         if (toolBar) toolBar.classList.toggle('disabled', !enabled);
     },
 
+    /**
+     * Mode-options panel content for the three brush modes. Raw HTML string
+     * (the `customHtml()` contract), injected via `UI.RawHtml`; laid out as a
+     * label-over-control column because the panel is narrow and vertical.
+     * Widths are inline — the purged `tailwind.min.css` drops many utilities.
+     */
     freeFormToolControls() {
-        return `<span class="position-absolute top-0" style="font-size: xx-small" title="Size of a brush (scroll to change).">Brush radius:</span>
-<input class="form-control" title="Size of a brush (scroll to change)." type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.freeFormTool.screenRadius}" style="height: 22px; width: 60px; margin-top: 6px;" onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">`;
+        const label = this.t('annotations.modeOptions.brushRadius');
+        const hint = this.t('annotations.modeOptions.brushRadiusHint');
+        return `
+<div style="display:flex;flex-direction:column;gap:0.25rem;width:14rem;max-width:100%;padding:0.25rem;">
+    <label class="text-xs font-medium opacity-70" for="fft-size" title="${hint}">${label}</label>
+    <input class="input input-sm input-bordered" style="width:100%;" title="${hint}"
+        type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off"
+        value="${this.context.freeFormTool.screenRadius}"
+        onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">
+</div>`;
     }
 };

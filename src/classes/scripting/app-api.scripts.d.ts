@@ -22,7 +22,6 @@ export interface GlobalContextInfo {
     visualization?: {
         index?: number | null;
         name?: string | null;
-        goalIndex?: number | null;
         shaders?: Record<string, VisualizationShaderGroupOrLayer>;
     } | null;
 

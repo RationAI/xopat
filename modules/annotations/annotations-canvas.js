@@ -144,7 +144,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   objects: [(string|any)] serialized or un
      */
     async exportPartial(options={}, withAnnotations=true, withPresets=true) {
-        options = $.extend(true, {}, this.module.getExportOptions(), options);
+        options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
         const result = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
         this.module.raiseEvent('export-partial', {
             owner: this,
@@ -181,7 +181,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     async export(options={}, withAnnotations=true, withPresets=true) {
         this.requestEndSelectionEdit();
 
-        options = $.extend(true, {}, this.module.getExportOptions(), options);
+        options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
         options.serialize = false;
         let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -205,7 +205,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     _serializeAnnotationForImport(annotation, position = undefined) {
         const data = annotation instanceof fabric.Object
             ? annotation.toObject(this.module._importSerializationProps())
-            : $.extend(true, Array.isArray(annotation) ? [] : {}, annotation);
+            : OpenSeadragon.extend(true, Array.isArray(annotation) ? [] : {}, annotation);
 
         if (position !== undefined) {
             data._position = position;
@@ -225,7 +225,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 .map(layerData => {
                     if (!layerData?.id) return null;
 
-                    const cloned = $.extend(true, {}, layerData);
+                    const cloned = OpenSeadragon.extend(true, {}, layerData);
                     cloned.id = String(cloned.id);
 
                     const layerObjects = Array.isArray(layerData._objects) ? layerData._objects : [];
@@ -246,7 +246,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         };
 
         if (includePresets && Object.prototype.hasOwnProperty.call(input ?? {}, "presets")) {
-            state.presets = $.extend(
+            state.presets = OpenSeadragon.extend(
                 true,
                 Array.isArray(input.presets) ? [] : {},
                 input.presets
@@ -2117,11 +2117,25 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     /**
      * Add annotation to the canvas without registering it with with available features (history, events...)
+     *
+     * A helper annotation is drawing scaffolding - the creation-mode control
+     * points, the shape in progress, the free-form-tool working polygon, the
+     * selection highlight. It must NEVER be interactive: not a hit-test target,
+     * not selectable, not transformable. This is the one place that enforces it,
+     * since the flags a factory passes to `create()` do not survive
+     * construction (`renderAllControls()`, preset `commonAnnotationVisuals`).
+     *
+     * So the split is: a factory passes geometry and preset visuals and nothing
+     * else; this method owns interactivity and render caching (see
+     * {@link OSDAnnotations.freezeHelperInteractivity}), and
+     * `_promoteHelperAnnotation` puts both back when the drawing becomes real.
+     *
      * @param {fabric.Object} annotation
      */
     addHelperAnnotation(annotation) {
         annotation.excludeFromExport = true;
         annotation.isHelperAnnotation = true;
+        OSDAnnotations.freezeHelperInteractivity(annotation);
         this.canvas.add(annotation);
     }
 
@@ -2231,6 +2245,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
 
         object.visible = !!shouldShow;
+
+        // A helper annotation follows the visibility of the rest (so disabling
+        // annotations mid-draw hides the scaffolding too) but its interactivity
+        // is decided once, by `addHelperAnnotation`. This method is reached for
+        // helpers from several object walks - the interaction toggle, the
+        // spatial index's lazy `ensureFresh`, the layer loops - and each one
+        // used to hand the user a selectable, rotatable control point.
+        if (object.isHelperAnnotation) return;
+
         object.evented = !!shouldShow;
         object.selectable = !!shouldShow;
 
@@ -2273,10 +2296,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         // Selection stays available on a locked object — the user still inspects
-        // it, focuses it from the board and comments on it. Only the cursor
-        // announces that dragging is not on offer.
-        if (object.readOnly) object.hoverCursor = 'not-allowed';
-        else if (object.hoverCursor === 'not-allowed') delete object.hoverCursor;
+        // it, reads its measurements, focuses it from the board and comments on
+        // it. The cursor has to say that: `not-allowed` is the browser's idiom
+        // for "this element does not respond", so painting it over an annotation
+        // that *does* respond told users a job's output could not be selected at
+        // all, and they stopped trying. What is refused is a MUTATION, and the
+        // IO read-only guard already says so, with a reason, at the moment one
+        // is attempted.
+        if (object.readOnly) object.hoverCursor = 'pointer';
+        else if (object.hoverCursor === 'pointer' || object.hoverCursor === 'not-allowed') {
+            delete object.hoverCursor;
+        }
     }
 
     /**
@@ -2450,6 +2480,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // import and edit paths already call this, the create path did not.
         this.module.getAnnotationObjectFactory(annotation.factoryID)?.renderAllControls?.(annotation);
         this._applyAnnotationVisibilityState(annotation);
+        // The other half of the helper freeze: a real annotation is mutated
+        // through fabric setters, so it may cache its render again. Paths that
+        // promote the very object they had added as a helper (free-form tool,
+        // magic wand, viewport segmentation) would otherwise keep caching off
+        // for the rest of its life.
+        annotation.objectCaching = true;
+        if (Array.isArray(annotation._objects)) {
+            for (const child of annotation._objects) child.objectCaching = true;
+        }
 
         // todo needed?
         annotation.setCoords?.();
@@ -2479,7 +2518,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     _addAnnotation(annotation, _raise = true) {
-        this.addHelperAnnotation(annotation);
+        this.canvas.add(annotation);
         const promoted = this._promoteHelperAnnotation(annotation, _raise, false);
         if (!promoted) this.deleteHelperAnnotation(annotation);
         else if (annotation && annotation.incrementId !== undefined && annotation.incrementId !== null) {
@@ -3360,6 +3399,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     _applySelection(annotations) {
         const canvas = this.canvas;
+        // Scaffolding is never a selection. Dropping helpers here rather than
+        // trusting the callers keeps a stale reference (a mode that hands us its
+        // in-progress object) from becoming the fabric active object.
+        if (annotations) annotations = annotations.filter(a => a && !a.isHelperAnnotation);
         if (!annotations || annotations.length === 0) {
             this.removeHighlight();
             this.clearSelectionSnapshot();
@@ -3371,10 +3414,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         // Force the toolbar pill (controls.toolbar) on for the selected
-        // annotation(s).
-        for (const a of annotations) {
-            if (a && !a.isHighlight) a.hasControls = true;
-        }
+        // annotation(s). Helpers (the highlight included) are already gone.
+        for (const a of annotations) a.hasControls = true;
 
         if (annotations.length === 1) {
             const obj = annotations[0];
@@ -3611,7 +3652,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {boolean} true if visuals were updated
      */
     updateSingleAnnotationVisuals(object, selection=null) {
-        if (object.isHighlight) return false;
+        // Helper objects are visual scaffolding, not real annotations. Checking
+        // the flag rather than "has no factory" matters for the shape in
+        // progress, which DOES carry a factoryID: `updateRendering` applies
+        // `commonAnnotationVisuals`, and those say `selectable: true`.
+        if (object.isHighlight || object.isHelperAnnotation) return false;
 
         let preset = this.module.presets.get(object.presetID);
         if (!preset) {
@@ -3620,9 +3665,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return false;
         }
 
-        // Helper objects (e.g. polygon control-point circles) inherit a presetID
-        // from the in-progress factory's options but have no factoryID. Skip
-        // them — they are visual scaffolding, not real annotations.
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         if (!factory) return false;
 
@@ -3779,8 +3821,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 event.preventDefault();
             } else /*if (!_this.isModeAuto())*/ {
                 // left click up handles selection for all modes if mode did not handle the event
-                if (fabricEvent.target) {
-                    _this._objectClicked(fabricEvent, point);
+                // (a creation mode that discarded its gesture reports CLICK_NOT_CONSUMED, so a
+                // too-short click on an existing annotation selects it instead of doing nothing)
+                const releaseTarget = _this._resolveReleaseTarget(fabricEvent);
+                if (releaseTarget) {
+                    _this._objectClicked(fabricEvent, point, releaseTarget);
                 } else {
                     _this.clearAnnotationSelection(true);
                 }
@@ -4073,10 +4118,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
     }
 
-    _objectClicked(event, point) {
+    /**
+     * @param {object} event fabric event-like object
+     * @param {Point} point mouse position in image coordinates
+     * @param {fabric.Object} [target] the object to act on; defaults to `event.target`.
+     *   The release path passes an explicitly resolved target - see {@link _resolveReleaseTarget}.
+     * @private
+     */
+    _objectClicked(event, point, target = event.target) {
 
         try {
-            let clickedObject = event.target;
+            let clickedObject = target;
             const originalEvent = event.e;
             // non-user event, selection fired by the system (e.g. annotation added to canvas)
             if (!originalEvent || !clickedObject) return;
@@ -4243,8 +4295,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!input.objects) throw "Annotation objects must have 'objects' key with the annotation data.";
         if (!Array.isArray(input.objects)) throw "Annotation objects must be an array.";
 
-        const zoom = this.canvas.computeGraphicZoom(this.viewer.viewport);
-        const graphicZoom = this.canvas.computeGraphicZoom(this.viewer.viewport) / zoom;
+        // The pair `zooming(graphicZoom, realZoom)` expects, exactly as the
+        // overlay's own zoom pass produces it (openseadragon-fabricjs-overlay.js:
+        // `list[i].zooming(smallZoom, zoom)`, with `smallZoom = sqrt(zoom)/2`).
+        //
+        // This used to read `computeGraphicZoom(viewport) / computeGraphicZoom(viewport)`,
+        // which is identically 1 — and `computeGraphicZoom` ignores its argument
+        // whenever the overlay has stamped `__osdViewportScale`, so the viewport
+        // object being passed where a number belongs was never noticed. Every
+        // imported annotation was therefore zoomed as if the graphic zoom were 1:
+        // a `point` came out with a 7-IMAGE-pixel radius (`Point.onZoom`), i.e.
+        // invisible at slide zoom, while a drawn one is sized off the real zoom.
+        const zoom = this.canvas.__osdViewportScale ?? this.canvas.getZoom();
+        const graphicZoom = this.canvas.computeGraphicZoom();
 
         // Per-factory pre-enliven reconstruction. The native exporter trims
         // each annotation down to the geometric primitives the factory owns
@@ -4292,7 +4355,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                             if (self.getLayer(id)) return;
 
                             self._createLayer({
-                                ...$.extend(true, {}, layerData),
+                                ...OpenSeadragon.extend(true, {}, layerData),
                                 id,
                                 _objects: []
                             });
@@ -4426,6 +4489,31 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             console.log("DISCARD", e, self.canvas.__eventListeners);
             return disc(e, t);
         };
+    }
+
+    /**
+     * The annotation a primary release should act on.
+     *
+     * fabric resolves `mouse:up`'s `target` inside `__onMouseUp` -> `_cacheTransformEventData`,
+     * i.e. BEFORE this module's `mouse:up` handler runs and therefore before
+     * `mode.handleClickUp()` gets a chance to delete its in-progress helper. A creation mode
+     * that discards a too-short click would otherwise hand us the detached helper to "select".
+     *
+     * The cached target is kept when it is a real annotation - fabric deliberately pins it to
+     * `_currentTransform.target`, which is what keeps a drag that ends off the shape selecting
+     * that shape. Only when it is a helper/highlight do we ask fabric again; by then the helper
+     * is off the canvas and the spatial index cache has been invalidated (`SpatialIndex.remove`).
+     *
+     * @param {object} fabricEvent the fabric `mouse:up` options object
+     * @return {fabric.Object|null}
+     * @private
+     */
+    _resolveReleaseTarget(fabricEvent) {
+        const cached = fabricEvent?.target;
+        if (!cached) return null;
+        if (!cached.isHelperAnnotation && !cached.isHighlight) return cached;
+        const fresh = this.canvas.findTarget?.(fabricEvent.e, false) || null;
+        return (fresh && !fresh.isHelperAnnotation && !fresh.isHighlight) ? fresh : null;
     }
 
     _isFabricControlInteraction(fabricEvent) {

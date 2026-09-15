@@ -115,6 +115,12 @@ export function registerEmpaiaPixelmapTileSource(): void {
                 if (level && Number.isInteger(level.slide_level)) this._levelBounds.set(level.slide_level, level);
             }
 
+            // Why a tile produced nothing, counted rather than logged. An overlay
+            // that paints nothing looks identical whether the analysis wrote no
+            // level for this zoom or every request is failing, and telling those
+            // apart from the outside used to mean reading server logs.
+            this._tileHealth = { served: 0, failed: 0, blanked: 0, lastError: "" };
+
             this._nominalLut = this._buildNominalLut();
             // Bumped whenever the rendering choice changes, so OSD's cache key
             // changes with it and already-drawn tiles are re-decoded.
@@ -208,6 +214,23 @@ export function registerEmpaiaPixelmapTileSource(): void {
             };
         }
 
+        /**
+         * What this overlay's tiles have actually done, for a UI that would
+         * otherwise have to guess why nothing is painted.
+         *
+         * `served` drew something. `blanked` is "no data here" — outside the
+         * declared bounds, or a level this map does not have — and is normal.
+         * `failed` is a request that errored, and is the one worth reporting:
+         * an analysis whose store the backend cannot read paints exactly like an
+         * empty one, which is a diagnosis that used to require server logs.
+         *
+         * `levels` is what the map declares, so a caller can say "only at higher
+         * magnification" rather than "no data" when the two look the same.
+         */
+        getTileHealth(): { served: number; failed: number; blanked: number; lastError: string; levels: number[] } {
+            return { ...this._tileHealth, levels: [...this._levelBounds.keys()].sort((a, b) => a - b) };
+        }
+
         getDisplayMetadata() {
             const t = (key: string) => $.t(`pixelmapInfo.${key}`, { ns: "empaia-workbench" });
             const p = this._pixelmap;
@@ -237,6 +260,10 @@ export function registerEmpaiaPixelmapTileSource(): void {
                     const serverLevel = this._serverLevel(level);
 
                     if (!this._hasTile(serverLevel, x, y)) {
+                        // Not a failure: the map declares no data here. Counted
+                        // apart from `failed` so a legitimately sparse map — or one
+                        // viewed at a zoom it has no level for — never reads as broken.
+                        this._tileHealth.blanked++;
                         context.finish(this._blankTile(), null, "context2d");
                         return;
                     }
@@ -244,18 +271,23 @@ export function registerEmpaiaPixelmapTileSource(): void {
                     const buffer = await this._fetchTile(context.src, controller.signal);
                     if (controller.signal.aborted) return;
                     if (!buffer || buffer.byteLength === 0) {
+                        this._tileHealth.blanked++;
                         context.finish(this._blankTile(), null, "context2d");
                         return;
                     }
 
                     const rendered = this._render(buffer);
                     if (controller.signal.aborted) return;
+                    this._tileHealth.served++;
                     // OSD's `"context2d"` data type is the 2D *context*, not the
                     // canvas element (see its own plain-image source).
                     context.finish(rendered, null, "context2d");
                 } catch (e: any) {
                     if (controller.signal.aborted) return;
-                    context.fail(e?.message ?? String(e), null);
+                    const message = e?.message ?? String(e);
+                    this._tileHealth.failed++;
+                    this._tileHealth.lastError = message;
+                    context.fail(message, null);
                 }
             })();
         }

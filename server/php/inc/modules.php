@@ -429,10 +429,16 @@ function scanDependencies(&$itemList, $id, $contextName) {
 
 //make sure all modules required by other modules are loaded, goes in acyclic deps list - everything gets loaded
 function resolveDependencies(&$itemList) {
-    foreach ($itemList as $_ => $mod){
-        if ($mod["loaded"]) {
+    // Reverse `_xoi` order (dependents before dependencies) so one pass closes the whole
+    // transitive closure: a module flipped `loaded` here still gets to flip its own
+    // requirements. Iterating forward stopped at the first level.
+    foreach (array_reverse(array_keys($itemList)) as $id){
+        $mod = $itemList[$id];
+        if (!empty($mod["loaded"])) {
             foreach ($mod["requires"] as $__ => $requirement) {
-                $itemList[$requirement]["loaded"] = true;
+                if (isset($itemList[$requirement])) {
+                    $itemList[$requirement]["loaded"] = true;
+                }
             }
         }
     }
@@ -508,8 +514,10 @@ foreach ($MODULES as $id=>$mod) {
 }
 
 uasort($MODULES, function($a, $b) {
-    //ascending
-    return $a["_priority"] - $b["_priority"];
+    // Ascending by `_xoi`, the DFS post-order `scanDependencies` assigns. This used to read
+    // `_priority`, a key nothing ever writes, so the comparator was inert and the resulting
+    // "dependency order" was really directory-scan order.
+    return $a["_xoi"] - $b["_xoi"];
 });
 
 ?>

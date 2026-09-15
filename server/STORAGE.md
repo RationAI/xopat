@@ -343,6 +343,12 @@ the **identity half** (`kv:sessions` — id, CSRF token, timestamps,
 `sensitivity: "normal"`) is involved here. Module-attached credentials live in
 `kv:sessions-secure` (`sensitivity: "secret"`) and stay put.
 
+One thing bindings cannot fix, worth knowing before you debug the next one: a
+durable record must not name a **runtime instance id**. If your state survives 
+the restart and is still unreachable,
+ask what identifier it is keyed by; see `modules/vercel-ai-chat-sdk/README.md`
+→ *A session names its provider by reference, not by instance id*.
+
 ### What deliberately does not survive
 
 | State | Namespace | Why | What the user sees |

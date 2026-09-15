@@ -135,6 +135,19 @@ A capability bound to multiple drivers mirror-writes; reads consult them in orde
 
 `this.cache` and `this.cookies` are sync. If an admin binds them to an async driver, handle construction throws `IOError` listing the offending drivers. Use `kv:data` (async by contract) for asynchronous backends.
 
+## Values, and what is NOT scoped
+
+`set(key, value)` keeps strings verbatim, stringifies numbers/booleans as before,
+JSON-encodes everything else behind a U+0001 sentinel, and deletes the key for
+`undefined`; `get` reverses that. `getItem`/`setItem` stay raw strings.
+Pre-existing `"[object Object]"` entries (what `String(value)` used to write for
+objects) are unrecoverable — `get` reports them absent and removes them.
+
+Keys are scoped by **owner only** (`<ownerUid>::<key>`). The deployment cache key
+(`src/classes/app/deployment-key.ts`) does not apply here: it scopes the boot
+session caches and the plugin-autoload cookie. Two deployments on one origin
+share these stores; bind `kv:*` to `memory` if that is unacceptable.
+
 ## Direct driver inheritance — base classes
 
 Custom drivers may extend the base classes for type compatibility, but it is not required (any localStorage-shaped object works):
@@ -148,8 +161,16 @@ class MyCookieDriver extends XOpatStorage.CookieStorage { /* with .with(opts) */
 
 ## Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`) are the **storage flows not routed through the pipeline** — they must be readable before `initXOpatLoader` runs. Both are probe-gated and `try/catch`-wrapped. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` or the `XOpatStorage.Session` façade instead.
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`) are the **storage flows not routed through the pipeline**. Both are probe-gated and `try/catch`-wrapped.
+
+They cannot use it, for structural reasons: `__xopat_session__` carries the ENV that configures the pipeline, and the pipeline captures `POST_DATA` by reference while the session parser may *replace* that object — so `bootstrapIOPipeline` has to run after parsing, which is precisely when the boot cache has already been read. Full reasoning in [`IO_PIPELINE.md`](IO_PIPELINE.md) → *Bootstrap exception*, along with the rule for adding new boot-time state (deployment-key stamp + `bypassCache` + an audit allowlist entry with a reason).
+
+One invariant worth repeating: `bypassCache` suppresses restoring and saving, **never** eviction of another deployment's entry.
+
+Plugins/modules wanting admin-routable session-scoped storage use `IO_PIPELINE.kv(uid, "kv:session")` or the `XOpatStorage.Session` façade instead.
 
 ## Known wart
 
 `XOpatStorage.Cookies.with(options)` reaches for the driver registered under the literal id `cookies`, not the driver(s) actually bound to `kv:cookies`. If an admin rebinds `kv:cookies` elsewhere, the per-call cookie attributes never reach the real backend. The memory substitute keeps the id and carries a no-op `with()`, so the sandboxed case stays harmless.
+
+Same shape, second instance: **operator binding policy does not reach the boot path.** `bindings.core["kv:cache"] = ["memory"]` is the documented way to opt a deployment out of browser storage, but the two bootstrap flows above resolve no bindings at all — they still write `localStorage`. Resolving a binding requires the pipeline, which by construction does not exist yet. `setup.bypassCache: true` is the knob that reaches them.

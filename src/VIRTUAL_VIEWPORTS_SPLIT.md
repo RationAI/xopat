@@ -1,5 +1,7 @@
 # Virtual-region slide split
 
+> !! THIS IS AN EXPERIMENTAL FEATURE !!
+
 A single slide (one `background`) often carries **multiple distinct tissue areas** on one glass
 mount. xOpat can treat those areas as **virtual sub-sources** — cropped sub-regions of the
 parent slide, each with its own local origin — and render them in one of three modes. This lets
@@ -45,6 +47,57 @@ into one **child** background per region, **appended** to `config.background[]` 
   (`src/classes/virtual-region-protocol.ts`): interior tiles **pass through** to the parent's
   real tile (shared OSD cache, no recompositing); only **border** tiles are cropped/composited.
 
+## Portability — what "composited" costs
+
+A border tile is not a cheap clip of data already in hand. `_composeTile` **re-fetches** the
+overlapping parent tiles from `parent.getTileUrl(...)`, decodes them with the **browser**
+(`createImageBitmap` / `<img>`), blits them onto a 2D canvas and publishes the result as cache
+type `context2d`. So the split carries three constraints that the pass-through path does not:
+
+- the parent's tiles must be a format the **browser image decoder** understands;
+- `getTileUrl()` must return a **plainly fetchable** URL needing no request shaping
+  (no `Accept: multipart/related`, no synthetic ids, no zip multiplexing);
+- a border tile does **not** go through the parent's own decode, so ICC correction, window/level,
+  channel selection and preview-level substitution do not apply to it, and `HttpClient` is used
+  only if the parent exposes `__xopatHttpClient`.
+
+Interior tiles have none of these constraints — they are literally the parent's tiles. The border
+ring is the entire portability problem.
+
+| parent / overlay | tile payload | split |
+|---|---|---|
+| xOpat default, DZI | `rasterBlob` from a plain URL | works |
+| webtiff multi-channel TIFF | `gpuTextureSet`, synthetic tile ids | refused |
+| DICOM WSI / derived SEG, PMAP / radiology | WADO-RS, `gpuTextureSet` | refused |
+| MVT vector tiles (`rationai-wsi-tile-source`, `demo-vector-layers`) | `vector-mesh` from `.pbf` | refused |
+| WSI-Service `image_format=tiff` (`_dataFormat: "rawTiff"`) | worker-decoded TIFF | refused |
+| EMPAIA pixelmap | `context2d`, non-URL | refused |
+
+The crop is threaded through **every** data layer of a stack, not just the background, so one
+non-raster overlay is enough to refuse the split. The refusal is
+`canCompositeRegions(source)` (`src/classes/virtual-region-protocol.ts`), derived from whether
+the source still uses the base `downloadTileStart` rather than from a list of ids; it is enforced
+both when the parent source is instantiated (covers a session authored straight into a split) and
+up front in `setVirtualizationMode` (covers the runtime toggle, while the un-split slide is still
+on screen). A source that overrides the download path but does serve plain image URLs opts in
+with `supportsRegionCompositing = true`.
+
+### Follow-ups that remove the constraint
+
+- **Drawer clipping.** A region is an axis-aligned sub-rect of the parent at the same pyramid
+  level, which is exactly `TiledImage._clip` — honoured by the canvas drawer and by **FlexDrawer**
+  (`flex-renderer.js`, where `_clip` becomes a stencil clip polygon in the same payload that
+  carries `tiles` *and* `vectors`). Rendering a region as the **real parent source plus a clip**
+  needs no synthetic tile source, no recompositing and no per-payload knowledge, and
+  `getClippedBounds` / `fitBounds` / `World.getHomeBounds` are already clip-aware, so `sidebyside`
+  home framing and `overlaid` placement come for free. `addTiledImage`
+  (`src/classes/app/viewer-open-pipeline.ts`) simply never passes `clip` today. The two library
+  optimisations this route wants — tile selection and payload build culled against the clip — are
+  filed in [`UPSTREAM.md`](../UPSTREAM.md).
+- **Tile-grid-snapped regions.** A region snapped outward to the parent's tile grid has no border
+  ring at all, so every tile is a pass-through and any payload works — at the cost of up to one
+  tile of extra tissue per edge.
+
 ---
 
 ## Render modes & their identity / IO semantics
@@ -84,6 +137,38 @@ the **identity transform stacks all cuts at the common origin**. A future image-
 just writes each region's `transform` to align the tissue pieces; the open pipeline already
 consumes it. Per-region opacity (the identity-shader opacity control) lets you compare overlapping
 cuts.
+
+**A data entry may bring its own scale.** `DataSpecification.pixelScale` says how many pixels of the
+stack's background one pixel of that entry covers — the knob that lets a coarser overlay (a
+prediction map on a 512-px grid, say) sit on its slide instead of being normalized to the slide's
+width. It **multiplies** the region width rather than replacing it: a cropped stack scales its
+overlay by the crop too, or the overlay would ignore the crop entirely. The region says how much of
+the slide this stack shows; `pixelScale` says how big the overlay's pixels are; they are
+independent questions. Unlike `width`, which is stack-wide by construction, `pixelScale` is
+**per data entry** — that is the whole point, since a stack-wide value could not express "the
+overlay is coarser than the background". See `src/classes/app/overlay-pixel-scale.ts`.
+
+**A source may bring its own placement.** `TileSource.getIntrinsicPlacement()` reports placement the
+*file* asks for rather than the session — DICOM `ImageOrientationSlide` is the canonical case for
+the rotation, and a derived object whose raster covers only part of the matrix it declares is the
+case for the rect. Neither overrides the other, because they answer different questions: the session
+says which region of the viewport this image's **frame** occupies, the file says where the image sits
+**inside** that frame.
+
+```
+x       = transform.dx + region.w * intrinsic.x
+y       = transform.dy + region.w * intrinsic.y
+width   = region.w     * intrinsic.width
+degrees = transform.rotation + intrinsic.degrees
+```
+
+Omitted intrinsic fields default to `(0, 0, 1, 0)` — the whole frame, unrotated — so a source that
+reports only a rotation composes exactly as it always did. A source returning both a rotation and a
+sub-region must rotate that rect's centre about the frame's centre itself: OSD rotates each tiled
+image about *its own* bounds centre, so two images sharing an angle but not a bounding rect drift
+apart by `(R - I)·dc`. A source must still never ask for a flip, since OSD honours a flip when
+drawing but not when converting coordinates, which would leave annotations unmirrored on mirrored
+pixels (`src/tile-source.ts`).
 
 ### `sidebyside`
 Each region opens as a **separate viewer**, but all of them resolve identity to the **parent**

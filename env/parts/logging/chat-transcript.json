@@ -1,0 +1,101 @@
+{
+  "$meta": {
+    "description": "Full chat transcript + vision logging to env/logs/*.ndjson, with client records forwarded",
+    "dimension": "logging"
+  },
+  /**
+   * Reading a whole session back afterwards — what was said, what the model
+   * looked at, what the browser did — from one NDJSON file.
+   *
+   * Three questions, three channels, each with its own cost:
+   *   :transcript  what was said            — one record per message
+   *   :vision      what the model LOOKED at — one record + one PNG per call
+   *   client:*     what the browser did     — the session timeline
+   *
+   * `:llm` stays at "warn" on purpose: it describes turn assembly and is not
+   * needed to read a session back. `:llm:full` (the whole prompt, every turn —
+   * O(N²) over a session) is left off entirely; name it only when debugging a
+   * prompt-assembly bug.
+   *
+   * TWO opt-ins are required for payload-bearing records, and both are here:
+   * `allowSensitive` lets one be emitted at all, `sinks.stream[].includeSensitive`
+   * lets it leave the process. That split is deliberate — see server/LOGGING.md.
+   *
+   * `env/` is gitignored, so the transcripts stay out of git. They are still
+   * clinical content on disk: treat `env/logs/` as sensitive.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        /* Its own cache key: this deployment's boot state must not be picked up
+           by (or leak into) another localhost configuration. */
+        "cacheKey": "chat-logging",
+        /* CLIENT half (src/LOGGING.md). `forward.minLevel: "info"` is the line
+           that matters: the default "warn" forwards only problems, and the
+           session TIMELINE (boot, slides opened, auth, analyses) is emitted at
+           info — it would otherwise stay in the tab. */
+        "logging": {
+          "level": "warn",
+          "channels": {
+            "session": "info"
+          },
+          "forward": {
+            "enabled": true,
+            "minLevel": "info",
+            /* The browser has no payload records to send today; keep it false so
+               that stays a deliberate decision if it ever does. */
+            "includeSensitive": false,
+            "batchSize": 50,
+            "intervalMs": 5000
+          }
+        }
+      }
+    },
+    "server": {
+      "logging": {
+        "level": "info",
+        "channels": {
+          "rpc": "warn",
+          "module.vercel-ai-chat-sdk": "warn",
+          "module.vercel-ai-chat-sdk:transcript": "trace",
+          "module.vercel-ai-chat-sdk:vision": "trace",
+          "client:session": "info",
+          "client:console": "warn"
+        },
+        "allowSensitive": true,
+        /* The default 8000 truncates exactly the long script results and model
+           replies worth reading. Secret-key redaction is unaffected and is not
+           configurable: an API key inside a message body is still [redacted]. */
+        "redact": { "maxStringLength": 200000, "maxItems": 500, "maxDepth": 12 },
+        /* Accept the browser's records. Off by default everywhere else — this is
+           the only inbound path into the logs, and the server re-stamps identity
+           rather than trusting the body. */
+        "client": { "ingest": true },
+        "sinks": {
+          "console": "pretty",
+          "buffer": 20000,
+          "stream": [
+            {
+              /* Relative to the server's working directory (the repo root). */
+              "file": "env/logs/session.ndjson",
+              "channels": [
+                "module.vercel-ai-chat-sdk:transcript",
+                "module.vercel-ai-chat-sdk:vision",
+                "client"
+              ],
+              "minLevel": "trace",
+              "includeSensitive": true,
+              /* Attachments and reviewed regions as real files beside the NDJSON,
+                 never base64 inside it. A vision-heavy session is the expensive
+                 case: one buildOverview = up to 28 PNGs at 1-4 MB. Set false to
+                 keep every line and drop the pixels. */
+              "attachments": true,
+              "maxAttachmentBytes": 8388608,
+              "rotate": "daily"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

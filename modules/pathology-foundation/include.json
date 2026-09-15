@@ -69,6 +69,50 @@
   // bundle may change.
   // "scheduler": "best-first",
 
+  // When two region boxes stop being two regions. A region is the bounding box of a
+  // traced tissue contour, and a contour that is not a compact blob (a curved biopsy
+  // strip, a folded core, a ribbon of mucosa) yields a box holding much of its
+  // neighbour — so without this the same tissue is rendered, sent to a vision model
+  // and reported as several separate findings. Either test merges: `iou` (the boxes
+  // are largely the same box) or `containment` (one is almost entirely inside the
+  // other, at any size ratio).
+  //
+  // Set to false to keep every traced box as its own region. A DEPLOYMENT knob for the
+  // same reason `scheduler` is: it decides what a region IS, and the survey it shapes
+  // is cached and shared by later calls.
+  // "regionMerge": { "iou": 0.4, "containment": 0.9 },
+
+  // How regions are NUMBERED. "reading" (default) counts them the way a reviewer counts
+  // fragments off the glass — rows top to bottom, left to right within a row — so "region 3"
+  // is the third piece on the slide and a list of region links walks it in order. "area"
+  // restores the previous numbering, which was the tissue-size rank and had "region 1"
+  // landing on whichever island happened to be biggest.
+  //
+  // Naming only: what gets rendered, read and expanded is still decided by tissue area,
+  // fill and cellularity. A DEPLOYMENT knob, because a label is what a plan edit and a
+  // region link address, and the survey carrying them is cached and shared.
+  // "regionOrder": "reading",
+
+  // Render budgets, in ms. Clamped to 500..300000. DEPLOYMENT knobs: they decide how long
+  // the viewer waits on a tile backend, so a session bundle must not be able to set them.
+  //
+  // The defaults assume a tile server on the same network. A WAN-hosted store usually wants
+  // all three raised — the symptom of leaving them too low is every field coming back
+  // `reason: "unread"`, which looks like an unreadable slide but is a latency problem.
+  //
+  //   fieldLoadTimeoutMs   tile loading for ONE field, once its render is running. Spending
+  //                        it is not a failure: the partial raster is returned and reported
+  //                        as incomplete.
+  //   surveyLoadTimeoutMs  the same, for the whole-slide survey — one render whose coverage
+  //                        decides the entire walk, so it gets a generous budget.
+  //   renderQueueTimeoutMs the wait for a TURN. Off-screen passes are serialized per viewer
+  //                        and admitted through the background request scheduler; neither
+  //                        wait is bounded by the two above. Spending this one IS a failure,
+  //                        reported as a congested queue rather than an unreadable region.
+  // "fieldLoadTimeoutMs": 6000,
+  // "surveyLoadTimeoutMs": 15000,
+  // "renderQueueTimeoutMs": 20000,
+
   // Absorbance vectors of the stain basis used to unmix the NUCLEAR stain, which is
   // how the module derives its free "where are the nuclei" prior (feature
   // "cellularity"). A COLOUR BASIS, not a clinical vocabulary: `nuclear` is the

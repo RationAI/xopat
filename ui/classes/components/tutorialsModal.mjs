@@ -348,8 +348,7 @@ export class TutorialsModal extends BaseComponent {
             }, entry.pluginName));
         }
 
-        const _isPh = String(iconClass ?? '').trim().startsWith('ph-');
-        children.push(iTag({ class: `${_isPh ? 'ph-light' : 'fa-auto'} ${iconClass} text-3xl my-2 text-primary` }));
+        children.push(iTag({ class: `ph-light ${iconClass} text-3xl my-2 text-primary` }));
         children.push(div({ class: "card-title text-lg font-light justify-center" }, entry.name || ""));
         if (entry.description) {
             children.push(p({ class: "text-sm opacity-80" }, entry.description));

@@ -99,17 +99,15 @@ ScriptingManager.registerExternalApi(
         }
 
         async tissueRatio(annotationRef, options = {}) {
-            const engine = this._module();
-            const viewer = this.activeViewer;
+            const module = (typeof singletonModule === "function") ? singletonModule("annotation-measurements") : null;
+            if (!module?.deriveTissueMask) throw new Error("The annotation-measurements module is not available.");
             const object = this._requireAnnotation(annotationRef);
-            const pathology = this._pathology();
-            if (!pathology) throw new Error("Tissue derivation needs the pathology-foundation module, which is not loaded.");
-
-            const before = new Set(this._list().map((o) => o.incrementId));
-            await pathology.annotateTissue(viewer, { driver: options.driver });
-            const tissue = this._list().filter((o) => !before.has(o.incrementId));
-            const r = engine.areaRatioAgainstSet(viewer, object, tissue);
-            return { ratio: r.ratio, annotationAreaPx: r.numeratorAreaPx, tissueAreaPx: r.denominatorAreaPx, tissueRegions: tissue.length };
+            // The shared derivation: keeps the island(s) around the annotation, prunes
+            // the rest, sends the mask back and caches the ratio on the annotation.
+            const res = await module.deriveTissueMask(this.activeViewer, { subject: object, driver: options.driver });
+            if (res.reason === "no-pathology") throw new Error("Tissue derivation needs the pathology-foundation module, which is not loaded.");
+            if (res.reason) throw new Error(`Tissue derivation failed: ${res.reason}`);
+            return { ratio: res.ratio, annotationAreaPx: res.annotationAreaPx, tissueAreaPx: res.tissueAreaPx, tissueRegions: res.islands.length };
         }
 
         composition(parentRef) {

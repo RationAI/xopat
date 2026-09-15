@@ -33,6 +33,19 @@ const CONSOLE_LEVELS = Object.freeze(["debug", "info", "log", "warn", "error"]);
 const DEFAULT_BUFFER_ENTRIES = 10_000;
 const DEFAULT_MAX_STRING = 8_000;
 const DEFAULT_STORE_ENTRIES_PER_DAY = 50_000;
+/**
+ * Stream-sink defaults. The queue bound is the important one: a collector that
+ * stops answering must cost bounded memory and counted drops, never backpressure
+ * on a request thread.
+ */
+const DEFAULT_STREAM_BATCH = 100;
+const DEFAULT_STREAM_FLUSH_MS = 2_000;
+const DEFAULT_STREAM_QUEUE = 5_000;
+const DEFAULT_STREAM_TIMEOUT_MS = 5_000;
+/** Gap between repeated "this destination is failing" console warnings. */
+const STREAM_WARN_INTERVAL_MS = 60_000;
+/** One attachment file's ceiling. Above it the line records a skip. */
+const DEFAULT_MAX_ATTACHMENT_BYTES = 8 << 20;
 /** Breadth caps — a log record is a diagnostic, never a data export. */
 const MAX_ARRAY_ITEMS = 50;
 const MAX_OBJECT_KEYS = 50;
@@ -228,6 +241,417 @@ class LogRingBuffer {
     }
 }
 
+/**
+ * One streaming destination: an HTTP collector, a plain file, or both.
+ *
+ * The sink that takes records OFF the box. Everything else a record can reach —
+ * stdout, the ring, the storage log — requires someone to already be on the
+ * machine (or scraping its stdout) to read it, which is not a monitoring story.
+ *
+ * Three properties are non-negotiable, and they are why this is a queue rather
+ * than a write:
+ *
+ * - **Never backpressure.** `write` only appends and returns. A collector that
+ *   hangs must cost a bounded queue and a counter, never a stalled request.
+ * - **Never throw.** A logging failure that propagates turns an observability
+ *   problem into an outage.
+ * - **Never lose silently.** Drops are counted and reported through `stats()`;
+ *   a stream whose `dropped` is climbing is a visible fact, not a mystery.
+ *
+ * Batching is per destination, so a slow collector does not delay the local file.
+ */
+class LogStreamDestination {
+    constructor(config, deps = {}) {
+        this.config = config;
+        this.queue = [];
+        this.flushing = false;
+        this.timer = null;
+        this.stats = {
+            queued: 0, sent: 0, dropped: 0, failures: 0, lastError: null,
+            attachmentsStored: 0, attachmentsSkipped: 0, attachmentsRefused: 0, attachmentsFailed: 0,
+        };
+        // Injectable for tests: the real transports open sockets and touch the
+        // filesystem, and neither belongs in a unit test of the batching rules.
+        this.transports = {
+            http: deps.http || ((url, body, opts) => defaultHttpTransport(url, body, opts)),
+            file: deps.file || ((path, body) => defaultFileTransport(path, body)),
+            attachment: deps.attachment || ((dir, relative, bytes) => defaultAttachmentTransport(dir, relative, bytes)),
+        };
+        this.warn = deps.warn || (() => {});
+        this.now = deps.now || (() => Date.now());
+        this.lastWarnAt = 0;
+    }
+
+    /** Should this record leave the process at all? */
+    accepts(record) {
+        if (normalizeLevel(record.level, 0) < this.config.minLevel) return false;
+        // A `sensitive` record already passed the operator gate to be EMITTED.
+        // Leaving the deployment is a second, larger decision — on real data that
+        // is PHI crossing a network boundary — so it needs its own opt-in (§7).
+        if (record.sensitive && !this.config.includeSensitive) return false;
+        if (!channelMatches(record.channel, this.config.channels)) return false;
+        return true;
+    }
+
+    /**
+     * Queue a record; `payload` is out-of-band bytes that must never be in the line.
+     *
+     * The line is copied before it is annotated — the same record object is in
+     * the ring and in every other destination, and one destination's verdict
+     * ("stored", "too-large") is not a fact about the others.
+     */
+    write(record, payload) {
+        if (!this.accepts(record)) return;
+        if (payload) {
+            const line = { ...record, fields: { ...(record.fields || {}) } };
+            this.writeAttachment(payload, line);
+            record = line;
+        }
+        this.queue.push(record);
+        this.stats.queued++;
+        const overflow = this.queue.length - this.config.queueLimit;
+        if (overflow > 0) {
+            // Drop the OLDEST: when a destination is behind, the recent records
+            // are the ones describing why.
+            this.queue.splice(0, overflow);
+            this.stats.dropped += overflow;
+        }
+        if (this.queue.length >= this.config.batchSize) {
+            this.flush();
+            return;
+        }
+        this.arm();
+    }
+
+    /** Start the idle timer, if one is not already pending. */
+    arm() {
+        if (this.timer || !this.queue.length) return;
+        this.timer = setTimeout(() => { this.timer = null; this.flush(); }, this.config.flushIntervalMs);
+        // A logging timer must never be the reason a process stays alive.
+        this.timer.unref?.();
+    }
+
+    /**
+     * Send what is queued. Serialized: a second flush while one is in flight
+     * would reorder the stream, and a log whose lines are shuffled is not a log.
+     */
+    flush() {
+        if (this.flushing || !this.queue.length) return this.pending || Promise.resolve();
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        const batch = this.queue;
+        this.queue = [];
+        this.flushing = true;
+        const body = `${batch.map(record => safeJsonLine(record)).join("\n")}\n`;
+
+        const targets = [];
+        if (this.config.url) targets.push(this.transports.http(this.config.url, body, this.config));
+        if (this.config.file) targets.push(this.transports.file(this.filePath(), body));
+
+        this.pending = Promise.allSettled(targets)
+            .then(results => {
+                const failed = results.filter(r => r.status === "rejected");
+                if (failed.length) {
+                    this.stats.failures += failed.length;
+                    this.stats.dropped += batch.length;
+                    this.stats.lastError = String(failed[0].reason?.message || failed[0].reason);
+                    const at = this.now();
+                    if (at - this.lastWarnAt > STREAM_WARN_INTERVAL_MS) {
+                        this.lastWarnAt = at;
+                        this.warn(`[logging] stream destination ${this.describe()} failing: ${this.stats.lastError}`);
+                    }
+                } else {
+                    this.stats.sent += batch.length;
+                }
+            })
+            .finally(() => {
+                this.flushing = false;
+                // Records that arrived during the flight: keep draining rather
+                // than waiting for the next timer tick.
+                if (this.queue.length >= this.config.batchSize) this.flush();
+                else this.arm();
+            });
+        return this.pending;
+    }
+
+    /**
+     * Write one attachment beside the transcript, or refuse it and say so.
+     *
+     * The artifact this produces is `<transcript>.ndjson` + `<transcript>.files/`,
+     * which a person can open in a file browser — that is the whole point of
+     * "so we can see the attachments too". Inlining the bytes in the line would
+     * technically work and is exactly what must not happen: one base64 screenshot
+     * per line is the repetition problem in another costume.
+     *
+     * Refusal is normal and is REPORTED on the line (`stored: false` plus a
+     * reason), never silent — a transcript that quietly lost its images is worse
+     * than one that says it did.
+     */
+    writeAttachment(attachment, line) {
+        const note = (stored, reason) => {
+            const described = line.fields?.attachment;
+            if (described && typeof described === "object") {
+                line.fields.attachment = { ...described, stored, ...(reason ? { reason } : {}) };
+            }
+        };
+        if (!this.config.file) {
+            // An HTTP collector has no sidecar to write into. Counted rather than
+            // dropped quietly, so a deployment streaming to a collector can see
+            // that its attachments are not being kept anywhere.
+            this.stats.attachmentsRefused++;
+            note(false, "no-file-destination");
+            return;
+        }
+        if (!this.config.attachments) {
+            this.stats.attachmentsRefused++;
+            note(false, "destination-opted-out");
+            return;
+        }
+        const bytes = attachment.bytes;
+        const size = bytes ? (bytes.byteLength ?? bytes.length ?? 0) : 0;
+        if (!size) { this.stats.attachmentsRefused++; note(false, "empty"); return; }
+        if (size > this.config.maxAttachmentBytes) {
+            this.stats.attachmentsSkipped++;
+            note(false, "too-large");
+            return;
+        }
+
+        const relative = safeRelativePath(attachment.file);
+        if (!relative) { this.stats.attachmentsRefused++; note(false, "bad-path"); return; }
+
+        // Fire-and-forget, like every other write here: an attachment must not
+        // delay the turn that produced it.
+        Promise.resolve(this.transports.attachment(this.attachmentDir(), relative, bytes))
+            .then(() => { this.stats.attachmentsStored++; })
+            .catch(e => {
+                this.stats.attachmentsFailed++;
+                this.stats.lastError = String(e?.message || e);
+            });
+        note(true);
+    }
+
+    /** `…/chat-transcript.ndjson` → `…/chat-transcript.files`. */
+    attachmentDir() {
+        const path = this.filePath();
+        const cut = path.lastIndexOf(".");
+        const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        return `${cut > slash ? path.slice(0, cut) : path}.files`;
+    }
+
+    /**
+     * The file this batch appends to.
+     *
+     * Daily rotation is the default because an unbounded single file is a
+     * deployment footgun, and `perProcess` exists for the cluster case: with
+     * several workers appending large `sensitive` payload records, one file
+     * cannot promise that a record stays on one line.
+     */
+    filePath() {
+        const path = this.config.file;
+        if (!path) return path;
+        const suffixes = [];
+        if (this.config.rotate === "daily") suffixes.push(new Date().toISOString().slice(0, 10));
+        if (this.config.perProcess) suffixes.push(String(process.pid));
+        if (!suffixes.length) return path;
+        const cut = path.lastIndexOf(".");
+        const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        const stem = cut > slash ? path.slice(0, cut) : path;
+        const ext = cut > slash ? path.slice(cut) : "";
+        return `${stem}.${suffixes.join(".")}${ext}`;
+    }
+
+    describe() {
+        return this.config.url || this.config.file || "(empty)";
+    }
+
+    snapshot() {
+        return {
+            ...(this.config.url ? { url: this.config.url } : {}),
+            ...(this.config.file ? { file: this.config.file, resolvedFile: this.filePath() } : {}),
+            ...(this.config.channels.length ? { channels: this.config.channels } : {}),
+            ...(this.config.attachments ? { attachmentDir: this.attachmentDir() } : {}),
+            minLevel: levelName(this.config.minLevel),
+            includeSensitive: this.config.includeSensitive,
+            batchSize: this.config.batchSize,
+            queued: this.queue.length,
+            ...this.stats,
+        };
+    }
+
+    close() {
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        return this.flush();
+    }
+}
+
+/**
+ * Does `channel` belong to one of `wanted`?
+ *
+ * The same rule the ring's `getEntries` filter uses — a name matches itself and
+ * everything under it (`a` matches `a:b`) — deliberately shared rather than
+ * re-derived, so "give me this subsystem" means one thing across the whole
+ * broker. No filter means everything, which is what a destination without a
+ * `channels` list has always done.
+ */
+function channelMatches(channel, wanted) {
+    if (!wanted || !wanted.length) return true;
+    const name = String(channel || "");
+    return wanted.some(prefix => name === prefix || name.startsWith(`${prefix}:`));
+}
+
+/** A record that cannot be serialized must not take the whole batch down. */
+function safeJsonLine(record) {
+    try {
+        return JSON.stringify(record);
+    } catch (e) {
+        return JSON.stringify({
+            ts: record?.ts || new Date().toISOString(),
+            level: record?.level || "error",
+            channel: record?.channel || "logging",
+            message: `[unserializable log record: ${e?.message || e}]`,
+        });
+    }
+}
+
+/**
+ * HTTP transport: batched NDJSON through the core SSRF guard.
+ *
+ * The guard is required lazily — logging is loaded on every server-module load,
+ * and the guard pulls in DNS and a bounded cache that a deployment with no HTTP
+ * destination should never pay for. A collector on a private address is reachable
+ * only through the operator allowlist (`XOPAT_SSRF_ALLOWED_HOSTS`/`_CIDRS`), the
+ * same as any other upstream: a log destination is not a reason to open a hole
+ * (AGENTS.md §4).
+ */
+async function defaultHttpTransport(url, body, config) {
+    const { safeRequest } = require("./ssrf-guard");
+    const res = await safeRequest(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-ndjson", ...(config.headers || {}) },
+        body,
+        timeoutMs: config.timeoutMs,
+    });
+    const status = res?.status ?? 0;
+    if (status < 200 || status >= 300) throw new Error(`collector answered ${status}`);
+    return status;
+}
+
+/**
+ * File transport: ONE append per batch, so a record never interleaves mid-line.
+ *
+ * The parent directory is created on first use. Without it, a path whose
+ * directory does not exist yet fails on every batch forever — counted as drops,
+ * which is honest but useless: the operator configured a destination and got
+ * silence. Creating it is what they meant.
+ */
+let fileDirsEnsured = new Set();
+async function defaultFileTransport(path, body) {
+    const fs = require("node:fs/promises");
+    const nodePath = require("node:path");
+    const dir = nodePath.dirname(path);
+    if (!fileDirsEnsured.has(dir)) {
+        await fs.mkdir(dir, { recursive: true });
+        fileDirsEnsured.add(dir);
+    }
+    await fs.appendFile(path, body, "utf8");
+}
+
+/**
+ * Attachment transport: the bytes as a file under the transcript's sidecar dir.
+ *
+ * Written once and never rewritten — the same attachment re-referenced by a later
+ * message resolves to the same path, so an existing file is left alone rather
+ * than re-serialized (`wx` fails with EEXIST, which is a success here).
+ */
+async function defaultAttachmentTransport(dir, relative, bytes) {
+    const fs = require("node:fs/promises");
+    const nodePath = require("node:path");
+    const target = nodePath.join(dir, relative);
+    await fs.mkdir(nodePath.dirname(target), { recursive: true });
+    try {
+        await fs.writeFile(target, bytes, { flag: "wx" });
+    } catch (e) {
+        if (e?.code !== "EEXIST") throw e;
+    }
+}
+
+/**
+ * A caller-supplied relative path, forced to stay inside the sidecar directory.
+ *
+ * The ids that build these paths are server-generated today, which is exactly
+ * the argument that stops being true the first time an attachment name comes
+ * from somewhere else. Traversal, absolute paths and Windows drive letters are
+ * rejected outright rather than sanitized into something surprising; the rest is
+ * reduced to a conservative character set.
+ */
+function safeRelativePath(value) {
+    const raw = String(value || "").replace(/\\/g, "/").trim();
+    if (!raw || raw.startsWith("/") || /^[a-zA-Z]:/.test(raw)) return null;
+    const parts = [];
+    for (const segment of raw.split("/")) {
+        if (!segment || segment === ".") continue;
+        if (segment === "..") return null;
+        const clean = segment.replace(/[^A-Za-z0-9._-]/g, "_");
+        if (!clean || clean === "." || clean === "..") return null;
+        parts.push(clean.slice(0, 120));
+    }
+    return parts.length && parts.length <= 8 ? parts.join("/") : null;
+}
+
+/**
+ * `sinks.stream` → a list of destination configs.
+ *
+ * Accepts one object or an array of them, because "ship to the collector AND
+ * keep a local file" is the normal shape rather than an exotic one. A config
+ * naming neither a `url` nor a `file` is dropped: it would otherwise queue
+ * records forever against nothing.
+ */
+function normalizeStreamConfigs(value) {
+    if (!value) return [];
+    const list = Array.isArray(value) ? value : [value];
+    const out = [];
+    for (const raw of list) {
+        if (!raw || typeof raw !== "object") continue;
+        const url = typeof raw.url === "string" && raw.url.trim() ? raw.url.trim() : null;
+        const file = typeof raw.file === "string" && raw.file.trim() ? raw.file.trim() : null;
+        if (!url && !file) continue;
+        out.push({
+            url,
+            file,
+            headers: raw.headers && typeof raw.headers === "object" ? { ...raw.headers } : null,
+            rotate: String(raw.rotate ?? "daily").toLowerCase() === "none" ? "none" : "daily",
+            perProcess: raw.perProcess === true,
+            minLevel: normalizeLevel(raw.minLevel, LEVELS.info),
+            // Never defaults to true, and never reads a request-supplied value.
+            includeSensitive: raw.includeSensitive === true,
+            // Empty = every channel, which is what a destination without a filter
+            // has always meant. A named list makes a purpose-built file possible
+            // (one destination for the chat transcript, another for everything).
+            channels: Array.isArray(raw.channels)
+                ? raw.channels.map(c => normalizeChannel(c)).filter(Boolean)
+                : [],
+            // Bytes beside the transcript. Off unless asked for, and impossible
+            // for a `url` destination, which has no sidecar to write into.
+            attachments: raw.attachments === true,
+            maxAttachmentBytes: Math.max(1024, Number(raw.maxAttachmentBytes) || DEFAULT_MAX_ATTACHMENT_BYTES),
+            batchSize: Math.max(1, Number(raw.batchSize) || DEFAULT_STREAM_BATCH),
+            flushIntervalMs: Math.max(100, Number(raw.flushIntervalMs) || DEFAULT_STREAM_FLUSH_MS),
+            queueLimit: Math.max(10, Number(raw.queueLimit) || DEFAULT_STREAM_QUEUE),
+            timeoutMs: Math.max(250, Number(raw.timeoutMs) || DEFAULT_STREAM_TIMEOUT_MS),
+        });
+    }
+    return out;
+}
+
+/** Two stream configs are the same destination when every knob matches. */
+function sameStreamConfig(a, b) {
+    if (!a || !b) return false;
+    const keys = ["url", "file", "rotate", "perProcess", "minLevel", "includeSensitive",
+        "batchSize", "flushIntervalMs", "queueLimit", "timeoutMs", "attachments", "maxAttachmentBytes"];
+    if (keys.some(key => a[key] !== b[key])) return false;
+    if ((a.channels || []).join("|") !== (b.channels || []).join("|")) return false;
+    return JSON.stringify(a.headers || null) === JSON.stringify(b.headers || null);
+}
+
 function normalizeFilterSet(value) {
     if (value === undefined || value === null || value === "") return null;
     const values = Array.isArray(value) ? value : [value];
@@ -257,9 +681,12 @@ function normalizeChannel(channel) {
  * moves levels without a restart, while the resolved-level cache is invalidated
  * by config identity rather than on a timer.
  */
-function createLogging({ getConfig, getStorage, devMode = false, baseConsole = console } = {}) {
+function createLogging({ getConfig, getStorage, devMode = false, baseConsole = console, streamTransports } = {}) {
     const readConfig = typeof getConfig === "function" ? getConfig : () => ({});
     const pid = process.pid;
+    /** Live streaming destinations, reconciled from config on every reload. */
+    let streams = [];
+    const streamDeps = streamTransports || {};
 
     let configSnapshot = null;
     let resolved = null;                 // normalized config
@@ -296,6 +723,7 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
         else consoleMode = String(consoleMode).toLowerCase() === "pretty" ? "pretty" : "json";
 
         const store = sinks.store === true ? {} : (sinks.store && typeof sinks.store === "object" ? sinks.store : null);
+        const stream = normalizeStreamConfigs(sinks.stream);
 
         resolved = {
             level: normalizeLevel(raw.level, devMode ? LEVELS.debug : LEVELS.info),
@@ -306,6 +734,15 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                 minLevel: normalizeLevel(store.minLevel, LEVELS.info),
                 maxEntriesPerDay: Math.max(100, Number(store.maxEntriesPerDay) || DEFAULT_STORE_ENTRIES_PER_DAY),
                 namespace: typeof store.namespace === "string" && store.namespace ? store.namespace : "logs",
+            },
+            stream,
+            // Browser-supplied records. Off by default: this is the one INBOUND
+            // path into the logs, so it stays a deliberate operator decision.
+            client: {
+                ingest: raw.client?.ingest === true,
+                maxRecordsPerBatch: Math.max(1, Number(raw.client?.maxRecordsPerBatch) || 200),
+                maxRecordBytes: Math.max(256, Number(raw.client?.maxRecordBytes) || 32_768),
+                maxRecordsPerMinute: Math.max(10, Number(raw.client?.maxRecordsPerMinute) || 2_000),
             },
             // Serialization caps. Raising these is how you get a full conversation
             // dump out of a `sensitive` record instead of a truncated one.
@@ -327,7 +764,36 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
         if (ring) ring.resize(resolved.buffer || DEFAULT_BUFFER_ENTRIES);
         // A store rebind must be picked up; the handle is re-resolved lazily.
         storeHandle = undefined;
+        syncStreamDestinations(resolved.stream);
         return resolved;
+    }
+
+    /**
+     * Reconcile the live destinations with the configured ones.
+     *
+     * Matched by VALUE, not by index: a config reload that only touched an
+     * unrelated block must not tear down a working destination and lose what it
+     * had queued. A destination that disappeared is closed, which flushes it.
+     */
+    function syncStreamDestinations(configs) {
+        const kept = [];
+        const survivors = new Set();
+        for (const config of configs) {
+            const existing = streams.find(d => !survivors.has(d) && sameStreamConfig(d.config, config));
+            if (existing) { survivors.add(existing); kept.push(existing); continue; }
+            kept.push(new LogStreamDestination(config, {
+                ...streamDeps,
+                warn: message => baseConsole.warn?.(message),
+            }));
+        }
+        for (const destination of streams) {
+            if (!kept.includes(destination)) destination.close();
+        }
+        streams = kept;
+    }
+
+    function writeStream(record, payload) {
+        for (const destination of streams) destination.write(record, payload);
     }
 
     const ring = new LogRingBuffer(DEFAULT_BUFFER_ENTRIES);
@@ -423,7 +889,13 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
         appendSerialized(handle, key, record, cfg);
     }
 
-    function emit(channel, level, sensitive, args, bound) {
+    /**
+     * `payload` is out-of-band BYTES (an attachment) that belong with this record
+     * but must never be serialized into it. It reaches the stream sink only: the
+     * ring would pin megabytes of buffers for the life of the buffer, and the
+     * console and the store have nowhere to put them.
+     */
+    function emit(channel, level, sensitive, args, bound, payload) {
         const threshold = levelFor(channel);
         const numeric = LEVELS[level];
         seenChannels.set(channel, levelName(threshold));
@@ -458,12 +930,17 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
         if (bound?.requestId) record.requestId = bound.requestId;
         if (bound?.principal) record.principal = bound.principal;
         if (bound?.source) record.source = bound.source;
+        // One browser sitting. Pseudonymous by construction — it is a token the
+        // client minted, not anything derived from the person — and it is what
+        // makes a session reconstructible from a file full of interleaved records.
+        if (bound?.clientSession) record.clientSession = bound.clientSession;
         if (sensitive) record.sensitive = true;
 
         stats.emitted++;
         const entry = cfg.buffer ? ring.push(record) : record;
         writeConsole(cfg, entry);
         if (cfg.store) writeStore(cfg, entry);
+        if (streams.length) writeStream(entry, payload);
         return entry;
     }
 
@@ -497,6 +974,24 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
              * `logging.allowSensitive`. Use it instead of a bespoke debug flag.
              */
             sensitive: (...args) => emit(name, "trace", true, args, bound),
+            /**
+             * A record whose payload is BYTES — an attachment, a screenshot, an
+             * uploaded file — carried out-of-band.
+             *
+             * The line gets a description (`file`, size, mime, whatever else is
+             * passed); the bytes ride on the record under a symbol and never
+             * reach `JSON.stringify`, so a destination that can hold them writes
+             * a real file beside the transcript and one that cannot says so on
+             * the line. Base64 in a log line is the thing this exists to avoid.
+             *
+             * Sensitive by definition: an attachment is user content.
+             */
+            attachment: ({ bytes, file, ...meta }, message = "ATTACHMENT") => {
+                const size = bytes ? (bytes.byteLength ?? bytes.length ?? 0) : 0;
+                return emit(name, "trace", true,
+                    [{ attachment: { file, size, ...meta } }, message], bound,
+                    bytes ? { bytes, file } : undefined);
+            },
         };
         for (const level of ["trace", "debug", "info", "warn", "error"]) {
             logger[level] = (...args) => emit(name, level, false, args, bound);
@@ -612,7 +1107,12 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                     store: cfg.store
                         ? { ...cfg.store, minLevel: levelName(cfg.store.minLevel), bound: !!storeFor(cfg), writes: storeWrites, dropped: storeDropped }
                         : false,
+                    // Reported per destination: a stream that is silently failing
+                    // (rising `failures`/`dropped`) is the thing an operator needs
+                    // to see, and it is invisible from the record side.
+                    stream: streams.length ? streams.map(d => d.snapshot()) : false,
                 },
+                clientIngest: cfg.client.ingest,
                 counters: { ...stats },
             };
         },
@@ -644,6 +1144,38 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
             return false;
         },
         getEntries: (query) => ring.getEntries(query),
+        /**
+         * Push every stream destination now instead of at its next tick.
+         *
+         * For shutdown and for tests. Deliberately NOT called per record: the
+         * whole point of the queue is that a request never waits on a collector.
+         */
+        flushStreams: () => Promise.all(streams.map(d => d.flush())).then(() => undefined),
+        /**
+         * The browser-ingest policy, resolved. Read by the RPC builtin — the
+         * gate and its caps are config, so they live with the rest of the config
+         * rather than being re-derived at the call site.
+         */
+        clientIngestPolicy: () => ({ ...resolveConfig().client }),
+        /**
+         * Accept records the BROWSER produced.
+         *
+         * Everything identifying is re-stamped from the verified context here,
+         * because the body is attacker-controlled: a client says what happened,
+         * never who it was or when the server saw it. The record then goes
+         * through the ordinary `emit`, so channel levels, redaction and every
+         * sink treat it exactly like a server record — which is the point of
+         * accepting it at all.
+         */
+        ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}) {
+            const cfg = resolveConfig();
+            if (!cfg.client.ingest) return null;
+            if (sensitive && !cfg.allowSensitive) return null;
+            const name = `client:${normalizeChannel(channel || "app")}`;
+            const args = fields && typeof fields === "object" ? [fields, String(message ?? "")] : [String(message ?? "")];
+            return emit(name, normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info)),
+                sensitive === true, args, { ...bound, source: "client" });
+        },
     };
     return api;
 }
@@ -683,6 +1215,8 @@ module.exports = {
     LEVELS,
     LEVEL_NAMES,
     LogRingBuffer,
+    LogStreamDestination,
+    normalizeStreamConfigs,
     createLogging,
     getServerLogging,
     setLoggingConfig,

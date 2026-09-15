@@ -32,8 +32,9 @@
 
 import {matchHoldCommand, parsePhraseList, shouldHoldNow, type HoldPhrases} from "../shared/voice-hold";
 import {decideLiveness} from "../shared/voice-liveness";
+import {looksLikeSegmentNoise, type SegmentNoiseEvidence} from "../shared/segment-noise";
 
-const {Button, FAIcon, PhIcon} = (globalThis as any).UI;
+const {Button, PhIcon} = (globalThis as any).UI;
 const {span} = (globalThis as any).van.tags;
 
 /**
@@ -44,6 +45,20 @@ const {span} = (globalThis as any).van.tags;
  * whose upload queued behind tile traffic.
  */
 const FINISH_TIMEOUT_MS = 20000;
+/**
+ * How long a freshly opened session may take to report that recording actually began
+ * (`capture-started`) before it is treated as a failed open and reopened.
+ */
+const OPEN_TIMEOUT_MS = 5000;
+/**
+ * While hands-free is on, a session declared lost is retried at this cadence, forever.
+ * Dictation must never stop itself: the pathologist reading a slide sees the error and
+ * keeps talking, and the microphone comes back the moment the device does.
+ */
+const LOST_RETRY_MS = 5000;
+/** At most one transcription-failure toast per this window; the status line updates regardless. */
+const ERROR_TOAST_THROTTLE_MS = 30000;
+
 
 /**
  * How long the assistant may compute before hands-free speech stops being treated
@@ -67,6 +82,12 @@ const DEFAULT_STALE_SESSION_MS = 8000;
 
 /** In-place microphone restarts before a stalled session is declared lost. */
 const DEFAULT_STALE_RESTARTS = 2;
+
+/** A segment the pipeline did not append, and why (see `ChatVoiceControllerOptions.onGate`). */
+export interface ChatVoiceGatePayload {
+    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed" | "window-empty" | "abandoned";
+    [field: string]: unknown;
+}
 
 export interface ChatVoiceControllerOptions {
     /** Append recognized text to the composer input (for review). */
@@ -93,7 +114,7 @@ export interface ChatVoiceControllerOptions {
      * readable then); `paused` while hands-free is armed but the microphone is
      * released because the user is editing the draft; `idle` when done/hidden.
      */
-    onVoiceUI?: (state: "listening" | "processing" | "held" | "idle" | "paused", level?: number) => void;
+    onVoiceUI?: (state: "listening" | "processing" | "held" | "idle" | "paused", level?: number, speaking?: boolean) => void;
     /**
      * Notified when a held draft is opened (`active: true`, with the text captured
      * so far) and when it is released or discarded (`active: false`). Lets an
@@ -118,6 +139,12 @@ export interface ChatVoiceControllerOptions {
      */
     onStateChange?: (state: { listening: boolean; auto: boolean; paused: boolean }) => void;
     /**
+     * The speech-to-text module pinned the session's language (under `language: "auto"`,
+     * once two segments agreed on it). Fires once per dictation; a fixed `language`
+     * never fires it.
+     */
+    onLanguage?: (info: { language: string }) => void;
+    /**
      * Notified when transcription of a captured segment begins (`active:true`) and
      * ends (`active:false`, success or failure). Lets an external observer show a
      * "transcribing…" indicator away from the composer. Must not throw.
@@ -137,6 +164,13 @@ export interface ChatVoiceControllerOptions {
      * transcript should prefer it. Must not throw.
      */
     onWindow?: (window: { index: number; text: string; fromSegment: number; toSegment: number; final: boolean }) => void;
+    /**
+     * Every recorded segment that did NOT reach the transcript, with why — the module's
+     * `segment-empty` / `-gated` / `-discarded` / `-filtered` / `-trimmed` events,
+     * forwarded for the capture this controller owns. A trace without these cannot tell
+     * an endpoint answering empty for two minutes from a quiet room.
+     */
+    onGate?: (gate: ChatVoiceGatePayload) => void;
     /** BCP-47 language hint forwarded to the transcription driver. */
     language?: string;
     /**
@@ -179,6 +213,14 @@ export interface ChatVoiceControllerOptions {
      */
     minSpeechMs?: number;
     /**
+     * Browser microphone DSP (getUserMedia constraints). Unset = browser default. Noise
+     * suppression and automatic gain alter what both the VAD and the recognizer hear;
+     * a deployment sets them from measurement on its own microphones.
+     */
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+    /**
      * @deprecated No longer used: a silent user simply keeps the session waiting
      * (nothing is transcribed, nothing is submitted). Superseded by
      * `idleAutoOffMs`, the only remaining hands-free safety timer.
@@ -194,7 +236,7 @@ export interface ChatVoiceControllerOptions {
     /**
      * Minimum voiced milliseconds a segment must contain before it is transcribed
      * at all (forwarded to the speech-to-text module; falls back to the module's
-     * own `minVoicedMs`, default 250).
+     * own `minVoicedMs`, default 400).
      */
     minVoicedMs?: number;
     /**
@@ -310,6 +352,15 @@ export class ChatVoiceController {
     private _watchdog: number | null = null;
     /** Monotonic segment counter within the current continuous session (for onSegment). */
     private _segmentIndex = 0;
+    /**
+     * Offset added to the capture's own segment index in reports. A capture restarts its
+     * numbering at 0 (an in-place stall restart, a resume after an edit pause), while the
+     * dictation the observer is tracing is one sequence — without this a trace showed a
+     * second "segment 0, 1, 2" and a buffer keyed on index overwrote the first.
+     */
+    private _indexBase = 0;
+    /** Highest capture index reported so far (plus base), to rebase a continuation. */
+    private _lastReportedIndex = -1;
     /** Panel-set re-arm override (e.g. 0 in transcript-only mode); null = use configured value. */
     private _reArmOverride: number | null = null;
     /** Panel-set segment-cap override (shorter in transcript-only mode); null = use configured value. */
@@ -320,6 +371,8 @@ export class ChatVoiceController {
     private _archiveAudio = false;
     /** Archive window length override; null = the module default. */
     private _windowOverride: number | null = null;
+    /** Archive window decode policy; null = the module default (eager). */
+    private _windowMode: "eager" | "lazy" | null = null;
     /** Last transcribing state emitted, so observers only see transitions (and teardown can force-clear). */
     private _transcribingActive = false;
     /** Transcriptions this controller started without a live capture (session re-transcribe). */
@@ -340,6 +393,12 @@ export class ChatVoiceController {
     private _restarting = false;
     /** Ring of the last 10 watchdog ticks; logged when a stall is acted on. */
     private _tickLog: any[] = [];
+    /** When the last transcription-failure toast was shown (throttled per outage). */
+    private _lastErrorToastAt = 0;
+    /** Pending "did the microphone actually open" check for the session being armed. */
+    private _openTimer: number | null = null;
+    /** Retry of a session declared lost; cleared by stopAuto. */
+    private _lostRetryTimer: number | null = null;
     /** `_submitPerSegment` as captured at startAuto — the running session's mode. */
     private _sessionPerSegment = false;
     /** When the assistant became busy (epoch ms), 0 while idle. Drives the hold grace. */
@@ -440,6 +499,16 @@ export class ChatVoiceController {
     }
 
     /**
+     * Whether archive windows are transcribed as they seal (`eager`, the module default)
+     * or only banked and decoded when the consumer asks for the whole recording
+     * (`lazy`; see the speech-to-text module's `windowMode`). A consumer whose review
+     * starts from the live transcript wants `lazy`. Takes effect from the next session.
+     */
+    setWindowMode(mode: "eager" | "lazy" | null): void {
+        this._windowMode = mode;
+    }
+
+    /**
      * Every window transcribed so far, in seal order. A pull counterpart to the
      * `onWindow` push, for a consumer that attached late or wants to re-read the set
      * without having buffered the events.
@@ -447,6 +516,35 @@ export class ChatVoiceController {
     getSessionWindows(): Array<{ index: number; text: string; fromSegment: number; toSegment: number; final: boolean }> {
         try { return this._stt?.getSessionWindows?.() || []; }
         catch (_e) { return []; }
+    }
+
+    /**
+     * Wait until the recorded audio exists and has been decoded — see the module's
+     * `whenSessionAudioSettled`. Read the session state AFTER this, never before: the
+     * final window is sealed by a browser event and decoded in the background, so an
+     * immediate post-stop read reports "nothing recorded" for audio that is moments away.
+     *
+     * `signal` cancels the wait only; the decode continues, so a second attempt is fast.
+     */
+    async whenSessionAudioSettled(opts: { signal?: AbortSignal } = {}): Promise<void> {
+        try { await this._stt?.whenSessionAudioSettled?.(opts); }
+        catch (_e) { /* a settle point must never reject */ }
+    }
+
+    /**
+     * Archive windows that exist, split by decoded / still decoding / retryable / lost.
+     * `retryable` windows produced no text but still hold their audio — the review's
+     * `transcribeSessionAudio()` retries them; `failed` ones are gone for good.
+     */
+    sessionWindowCounts(): { total: number; pending: number; retryable: number; failed: number } {
+        try {
+            return {
+                total: this._stt?.sessionWindowCount ?? 0,
+                pending: this._stt?.pendingWindowCount ?? 0,
+                retryable: this._stt?.retryableWindowCount ?? 0,
+                failed: this._stt?.failedWindowCount ?? 0,
+            };
+        } catch (_e) { return {total: 0, pending: 0, retryable: 0, failed: 0}; }
     }
 
     /** True when the archive hit its cap, so any transcript from it is incomplete. */
@@ -512,7 +610,7 @@ export class ChatVoiceController {
      * the very text the user has to read, edit and send. The hold owns that surface
      * until it is released.
      */
-    private _voiceUi(state: "listening" | "processing" | "held" | "idle" | "paused", level?: number): void {
+    private _voiceUi(state: "listening" | "processing" | "held" | "idle" | "paused", level?: number, speaking?: boolean): void {
         // While paused NOTHING else may paint: the trailing segment of the finished
         // session still reports "processing", and that overlay covers the input the
         // user is editing. The pause ends through resume/stop, which set their own UI.
@@ -520,7 +618,7 @@ export class ChatVoiceController {
         // `paused` passes a hold: both hide the overlay, and "you are editing, the
         // mic is off" is the more urgent of the two states to show.
         if (this._held && state !== "held" && state !== "paused") return;
-        this._opts.onVoiceUI?.(state, level);
+        this._opts.onVoiceUI?.(state, level, speaking);
     }
 
     /** Report the current listening/auto state to an external observer. Never throws. */
@@ -528,7 +626,7 @@ export class ChatVoiceController {
         try {
             this._opts.onStateChange?.({listening: this._listening, auto: this._auto, paused: this._paused});
         } catch (error) {
-            console.error("[ChatVoiceController] onStateChange handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onStateChange handler failed");
         }
     }
 
@@ -586,7 +684,7 @@ export class ChatVoiceController {
                 extraProperties: {title: this._t("autoModeTooltipOff"), "aria-label": this._t("autoModeTooltipOff")},
                 onClick: () => { this._onAutoClick(); },
             },
-            new FAIcon({name: "fa-headset"})
+            new PhIcon({name: "ph-headset"})
         ).create();
 
         this._root.appendChild(this._micBtnEl);
@@ -600,6 +698,22 @@ export class ChatVoiceController {
             this._stt.addHandler("transcription-error", this._onTranscribeError);
             this._stt.addHandler("capture-warning", this._onCaptureWarning);
             this._stt.addHandler("model-loading", this._onModelLoading);
+            this._stt.addHandler("capture-started", this._onCaptureStarted);
+            this._stt.addHandler("language-pinned", this._onLanguagePinned);
+            const gates: Array<[string, ChatVoiceGatePayload["kind"]]> = [
+                ["segment-empty", "empty"], ["segment-gated", "gated"], ["segment-discarded", "discarded"],
+                ["segment-filtered", "filtered"], ["segment-trimmed", "trimmed"],
+                // An archive window that decoded to nothing, with the browser's own decode
+                // length beside the backend's — the verdict that separates "our bytes" from
+                // "their model".
+                ["window-empty", "window-empty"],
+                // Segments captured but never transcribed (the queue was abandoned at stop):
+                // speech the live transcript is missing for good — `{indices, bytes, audioMs,
+                // reason}`. The one loss a consumer judging the live text's completeness
+                // must hear about.
+                ["segments-abandoned", "abandoned"],
+            ];
+            for (const [type, kind] of gates) this._stt.addHandler(type, (e: any) => this._onGate(kind, e));
         } catch (_e) { /* events are best-effort */ }
 
         void this._probeAvailability();
@@ -652,13 +766,19 @@ export class ChatVoiceController {
         const key = permanent ? "transcriptionConfigError" : "transcriptionFailed";
         const message = this._t(key);
         try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
-        try {
-            (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
-        } catch (_e) { /* toast is best-effort */ }
+        // With no silent fallback, an endpoint outage fails EVERY segment while it lasts;
+        // one toast per outage window is information, one per segment is noise.
+        const now = Date.now();
+        if (now - this._lastErrorToastAt > ERROR_TOAST_THROTTLE_MS) {
+            this._lastErrorToastAt = now;
+            try {
+                (window as any).Dialogs?.show(message, 6000, (window as any).Dialogs?.MSG_WARN);
+            } catch (_e) { /* toast is best-effort */ }
+        }
         try {
             this._opts.onVoiceError?.({message, permanent, code: err?.code});
         } catch (error) {
-            console.error("[ChatVoiceController] onVoiceError handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onVoiceError handler failed");
         }
     };
     /**
@@ -675,7 +795,7 @@ export class ChatVoiceController {
         try {
             this._opts.onTranscribing?.({active});
         } catch (error) {
-            console.error("[ChatVoiceController] onTranscribing handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onTranscribing handler failed");
         }
     }
     // A non-fatal audio-device / Web Audio failure during capture. Voice detection is
@@ -686,6 +806,7 @@ export class ChatVoiceController {
         const key = code === "audio-device" ? "audioDevice"
             : code === "insecure-context" ? "insecureContext"
             : code === "vad-degraded" ? "vadDegraded"
+            : code === "vad-fallback" ? "vadFallback"
             : "captureFailed";
         const message = $.t(key, {ns: "speech-to-text"});
         try { this._opts.setStatus(message); } catch (_e) { /* ignore */ }
@@ -694,10 +815,43 @@ export class ChatVoiceController {
         } catch (_e) { /* toast is best-effort */ }
     };
 
-    /** Forwarded live input level while capturing → drives the recording meter. */
-    private _onLevel = (level: number): void => {
+    /** The module settled on the dictation's language — tell the observer which one. */
+    private _onLanguagePinned = (e: any): void => {
+        if (!this._ownsCapture()) return;
+        const language = String(e?.language || "").trim();
+        if (!language) return;
+        try { this._opts.onLanguage?.({language}); }
+        catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onLanguage handler failed"); }
+    };
+
+    /** Recording actually began: the microphone is open and the encoder is running. */
+    private _onCaptureStarted = (): void => {
+        if (this._openTimer) { clearTimeout(this._openTimer); this._openTimer = null; }
+        if (!this._ownsCapture()) return;
         this._noteAlive();
-        this._voiceUi("listening", level);
+        // Clear the "opening microphone…" note; the listening UI has been up since the
+        // start call (it must never drop while hands-free is on), only the caveat goes.
+        try { this._opts.setStatus(""); } catch (_e) { /* ignore */ }
+    };
+
+    /** A segment the module did not append — forwarded to observers with its reason. */
+    private _onGate(kind: ChatVoiceGatePayload["kind"], e: any): void {
+        if (!this._ownsCapture()) return;
+        try { this._opts.onGate?.({...(e && typeof e === "object" ? e : {}), kind}); }
+        catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onGate handler failed"); }
+    }
+
+    /**
+     * Forwarded live input level while capturing → drives the recording meter.
+     *
+     * Deliberately NOT a liveness beat. The meter ticks ~60×/s off the analyser
+     * whether or not the track carries audio, so a muted or dead microphone kept
+     * stamping `_lastAliveAt` and the stall watchdog never fired — the session
+     * pulsed "listening" indefinitely while recording nothing. Liveness comes from
+     * recorder bytes and confirmed-healthy polls (`onAlive`), and from text landing.
+     */
+    private _onLevel = (level: number, speaking?: boolean): void => {
+        this._voiceUi("listening", level, speaking);
     };
 
     /**
@@ -706,6 +860,13 @@ export class ChatVoiceController {
      * a healthy beat also closes any recovery episode in progress, so two unrelated
      * stalls minutes apart don't add up to a lost session.
      */
+    /** Rebase a capture-local segment index onto the dictation's sequence and remember it. */
+    private _reportIndex(captureIndex: number): number {
+        const index = captureIndex + this._indexBase;
+        if (index > this._lastReportedIndex) this._lastReportedIndex = index;
+        return index;
+    }
+
     private _noteAlive(): void {
         this._lastAliveAt = Date.now();
         this._sawAlive = true;
@@ -716,21 +877,14 @@ export class ChatVoiceController {
      * True when a transcript is too short to be real speech (a lone token or a
      * single character, e.g. Whisper turning a cough or click into "어"). Counts
      * Unicode letters/digits across any script so CJK is handled fairly.
+     *
+     * A whole segment that decoded to ONE short word is the second shape of the same
+     * thing. The rule lives in `shared/segment-noise.ts`, with the reasoning.
      */
-    private _looksLikeNoise(text: string): boolean {
-        const t = String(text || "").trim();
-        if (!t) return true;
-        const letters = (t.match(/[\p{L}\p{N}]/gu) || []).length;
-        return letters < (this._opts.minCaptureChars ?? 2);
+    private _looksLikeNoise(text: string, metrics?: SegmentNoiseEvidence): boolean {
+        return looksLikeSegmentNoise(text, {minCaptureChars: this._opts.minCaptureChars, metrics});
     }
 
-    /**
-     * True when a language lock is configured and the driver detected a different
-     * language for this utterance — i.e. Whisper free-detected a wrong language on
-     * noise/cross-talk that should not be sent
-     * to the assistant. Compares only the primary subtag (`en` vs `en-US`). No
-     * lock configured, or no detected language reported => never drops.
-     */
     /** Resolve the biasing prompt (static string or lazy builder). Never throws. */
     private _resolvePrompt(): string | undefined {
         const p = this._opts.prompt;
@@ -743,10 +897,19 @@ export class ChatVoiceController {
         }
     }
 
+    /**
+     * True when a FIXED language is configured and the driver detected a different
+     * language for this utterance — i.e. Whisper free-detected a wrong language on
+     * noise/cross-talk that should not be sent to the assistant. Compares only the
+     * primary subtag (`en` vs `en-US`). `auto`, no lock, or no detected language
+     * reported => never drops.
+     */
     private _wrongLanguage(result: any): boolean {
         const want = this._opts.language;
         const got = result?.language;
-        if (!want || !got) return false;
+        // `auto`: the module's own pin is a hint, not a lock — the detected language IS
+        // the language, whatever it turns out to be.
+        if (!want || String(want).toLowerCase() === "auto" || !got) return false;
         const base = (s: string) => String(s).toLowerCase().split(/[-_]/)[0];
         return base(want) !== base(got);
     }
@@ -932,7 +1095,7 @@ export class ChatVoiceController {
         if (!this.clearHold()) return false;
         if (text) {
             try { this._opts.clearDraft?.(text); }
-            catch (error) { console.error("[ChatVoiceController] clearDraft handler failed:", error); }
+            catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "clearDraft handler failed"); }
         }
         // The microphone was released for editing; the draft is gone, so there is
         // nothing left to edit — put it back to work rather than leaving hands-free
@@ -940,7 +1103,7 @@ export class ChatVoiceController {
         if (this._paused) this.resumeAuto();
         if (text) {
             try { this._opts.onDiscardedText?.(text, pieces); }
-            catch (error) { console.error("[ChatVoiceController] onDiscardedText handler failed:", error); }
+            catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onDiscardedText handler failed"); }
         }
         if (this._auto) this._opts.setStatus(this._t("autoModeHeldCleared"));
         return true;
@@ -965,7 +1128,7 @@ export class ChatVoiceController {
         try {
             this._opts.onHold?.({active, text: this._heldPieces.join(" ").trim()});
         } catch (error) {
-            console.error("[ChatVoiceController] onHold handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onHold handler failed");
         }
     }
 
@@ -1014,12 +1177,12 @@ export class ChatVoiceController {
      */
     resumeAuto(): void {
         if (!this._auto || !this._paused) return;
-        const handle = this._openSession(this._sessionPerSegment);
+        const handle = this._openSession(this._sessionPerSegment, true);
         if (!handle) {
             const message = this._t("captureFailed");
             this._opts.setStatus(message);
             try { this._opts.onVoiceError?.({message, permanent: false, code: "resume-failed"}); }
-            catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
+            catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onVoiceError handler failed"); }
             this.stopAuto();
             return;
         }
@@ -1053,7 +1216,7 @@ export class ChatVoiceController {
         try {
             this._opts.onSegment?.(segment);
         } catch (error) {
-            console.error("[ChatVoiceController] onSegment handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onSegment handler failed");
         }
     }
 
@@ -1070,7 +1233,7 @@ export class ChatVoiceController {
         try {
             this._opts.onLostText?.(text, pieces.map((p) => String(p || "").trim()).filter(Boolean));
         } catch (error) {
-            console.error("[ChatVoiceController] onLostText handler failed:", error);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onLostText handler failed");
         }
     }
 
@@ -1150,7 +1313,9 @@ export class ChatVoiceController {
     async finishAndFlush(): Promise<void> {
         if (this._paused) { this.clearHold(); this.resumeAuto(); return; }
         if (this._held) { this.clearHold(); return; }
-        if (this._auto) { this.stopAuto(); return; }
+        // Graceful, not hard: `stopAuto` aborts the in-flight segment and the last thing
+        // said before pressing Send was gone. `finishAuto` drains it first.
+        if (this._auto) { await this.finishAuto(); return; }
         if (!this._listening) return;
         try { this._stt?.stop(); } catch (_e) { /* ignore */ }
         if (this._activeDictation) { try { await this._activeDictation; } catch (_e) { /* ignore */ } }
@@ -1182,6 +1347,8 @@ export class ChatVoiceController {
         this._auto = true;
         this._pendingTurns = [];
         this._segmentIndex = 0;
+        this._indexBase = 0;
+        this._lastReportedIndex = -1;
         this._sessionPerSegment = perSegment;
         this._held = false;
         this._heldPieces = [];
@@ -1202,7 +1369,10 @@ export class ChatVoiceController {
      * error toast). Shared by the initial start and by a resume after an edit pause,
      * so the two can never drift in what they ask the module for.
      */
-    private _openSession(perSegment: boolean): any {
+    private _openSession(perSegment: boolean, continues = false): any {
+        // A continuation's capture numbers its segments from 0 again; keep the
+        // dictation's sequence monotonic for observers.
+        if (continues) this._indexBase = this._lastReportedIndex + 1;
         try {
             // ONE persistent continuous session for the whole hands-free lifetime.
             // The mic keeps listening even while the assistant computes a reply —
@@ -1214,6 +1384,18 @@ export class ChatVoiceController {
                 language: this._opts.language,
                 prompt: this._resolvePrompt(),
                 silenceMs: this._opts.silenceMs,
+                // The CONSUMER owns the dictation boundary, not this controller: the archive
+                // is only ever on in transcript-only mode, where the report flow clears the
+                // recording at report start and after confirmation, and its review compares
+                // the whole-audio text against everything said since that confirmation. A
+                // start that dropped the recording here made the recording cover one capture
+                // while "live" still held the previous, unconfirmed round — the whole-audio
+                // pass then read as "too short" and was discarded. Always continue; direct
+                // module users keep the module's clean-start default.
+                continuesSession: true,
+                echoCancellation: this._opts.echoCancellation,
+                noiseSuppression: this._opts.noiseSuppression,
+                autoGainControl: this._opts.autoGainControl,
                 onLevel: this._onLevel,
                 // The watchdog's real evidence: recorder bytes landing, or a health
                 // poll that confirmed a running context on a live track. The level
@@ -1234,12 +1416,13 @@ export class ChatVoiceController {
                 finishTimeoutMs: FINISH_TIMEOUT_MS,
                 archive: this._archiveAudio,
                 ...(this._windowOverride === null ? {} : {windowMs: this._windowOverride}),
+                ...(this._windowMode ? {windowMode: this._windowMode} : {}),
                 // Background window transcripts: the same speech decoded with a minute
                 // and a half of context instead of a few seconds of it.
                 onWindow: (w: any) => {
                     this._noteAlive();
                     try { this._opts.onWindow?.(w); }
-                    catch (error) { console.error("[ChatVoiceController] onWindow handler failed:", error); }
+                    catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onWindow handler failed"); }
                 },
                 speechFloorMult: this._opts.speechFloorMult,
                 minSpeechMs: this._opts.minSpeechMs,
@@ -1248,13 +1431,19 @@ export class ChatVoiceController {
                 // they never enter a turn. Silence never even gets here — the
                 // module refuses to transcribe speech-less audio — so a quiet,
                 // thinking user simply keeps the session waiting.
-                validateSegment: (r: any) => {
-                    const accepted = !this._looksLikeNoise(r?.text) && !this._wrongLanguage(r);
+                validateSegment: (r: any, metrics?: any) => {
+                    const accepted = !this._looksLikeNoise(r?.text, metrics) && !this._wrongLanguage(r);
                     const text = String(r?.text || "").trim();
                     // Report rejections here — they never reach onPartial/onTurn, so
                     // this is the only place an observer can see what the gates dropped.
+                    // The capture's own index, not the accepted-segment counter: reusing
+                    // the counter made a rejected segment claim the index the next
+                    // ACCEPTED one would take, so a trace showed two "segment 2".
                     if (!accepted && text) {
-                        this._reportSegment({ text, index: this._segmentIndex, accepted: false, mode: "continuous" });
+                        this._reportSegment({
+                            text, index: this._reportIndex(metrics?.index ?? this._segmentIndex),
+                            accepted: false, mode: "continuous", metrics,
+                        });
                     }
                     return accepted;
                 },
@@ -1270,7 +1459,14 @@ export class ChatVoiceController {
                     this._noteAlive();
                     const piece = String(p?.appended || "").trim();
                     if (piece) {
-                        this._reportSegment({ text: piece, index: this._segmentIndex++, accepted: true, mode: "continuous" });
+                        this._segmentIndex++;
+                        this._reportSegment({
+                            text: piece, index: this._reportIndex(p?.metrics?.index ?? p?.index ?? (this._segmentIndex - 1)),
+                            accepted: true, mode: "continuous",
+                            // Forwarded verbatim: an observer needs the audio the text came
+                            // from to judge the text (see ChatVoiceSegmentPayload.metrics).
+                            metrics: p?.metrics,
+                        });
                         if (perSegment) this._onTurn(piece);
                     }
                 },
@@ -1296,6 +1492,17 @@ export class ChatVoiceController {
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         this._contHandle = handle;
         this._lastAliveAt = Date.now();
+        // Until the module reports `capture-started`, nothing is being recorded. Say so
+        // in the status line (the listening UI itself stays up — it never drops while
+        // hands-free is on), and reopen if the microphone does not come up in time.
+        if (this._openTimer) clearTimeout(this._openTimer);
+        try { this._opts.setStatus(this._t("micOpening")); } catch (_e) { /* ignore */ }
+        this._openTimer = window.setTimeout(() => {
+            this._openTimer = null;
+            if (!this._auto || this._contHandle !== handle) return;
+            try { this._opts.setStatus(this._t("captureFailed")); } catch (_e) { /* ignore */ }
+            void this._restartSession();
+        }, OPEN_TIMEOUT_MS);
         // A fresh capture has proven nothing yet; `_staleAttempts` deliberately
         // survives, so a restart that stalls again counts toward the same episode.
         this._sawAlive = false;
@@ -1313,7 +1520,7 @@ export class ChatVoiceController {
         // that was itself delayed past the staleness window is thrown away rather
         // than acted on, because that gap measures OUR outage, not the microphone's.
         this._lastTickAt = 0;
-        this._dbgRing = [];
+        this._tickLog = [];
         this._watchdog = window.setInterval(() => {
             const now = Date.now();
             const tickLagMs = this._lastTickAt ? (now - this._lastTickAt - WATCHDOG_PERIOD_MS) : 0;
@@ -1349,7 +1556,7 @@ export class ChatVoiceController {
                 this._lastAliveAt = now;
                 return;
             }
-            console.warn(`[ChatVoiceController] capture stalled → ${action}`, {staleMs, ticks: this._tickLog});
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").warn({action, staleMs, ticks: this._tickLog}, "capture stalled");
             if (action === "restart") { void this._restartSession(); return; }
             this._declareSessionLost();
         }, WATCHDOG_PERIOD_MS);
@@ -1369,8 +1576,17 @@ export class ChatVoiceController {
         const message = this._t("voiceSessionLost");
         this._opts.setStatus(message);
         try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session"}); }
-        catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
-        void this.finishAuto(); // graceful: flush pending turns, then release
+        catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onVoiceError handler failed"); }
+        // Never give up while hands-free is on. Dictation must not stop itself: the error
+        // stays on screen, everything captured so far stays queued, and the microphone is
+        // reopened every few seconds until it comes back or the user stops.
+        if (this._lostRetryTimer) clearTimeout(this._lostRetryTimer);
+        this._lostRetryTimer = window.setTimeout(() => {
+            this._lostRetryTimer = null;
+            if (!this._auto) return;
+            this._staleAttempts = 0;
+            void this._restartSession();
+        }, LOST_RETRY_MS);
     }
 
     /**
@@ -1398,7 +1614,7 @@ export class ChatVoiceController {
             const message = this._t("voiceSessionRecovering");
             this._opts.setStatus(message);
             try { this._opts.onVoiceError?.({message, permanent: false, code: "stale-session", recoverable: true}); }
-            catch (error) { console.error("[ChatVoiceController] onVoiceError handler failed:", error); }
+            catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onVoiceError handler failed"); }
 
             // Detach the handle BEFORE finishing it: `done` drives a teardown that
             // would read this stop as the session dying and wipe the pending queue.
@@ -1416,7 +1632,7 @@ export class ChatVoiceController {
 
             // Reuse the mode captured at startAuto: a restart must never silently
             // switch delivery modes mid-dictation.
-            const handle = this._openSession(this._sessionPerSegment);
+            const handle = this._openSession(this._sessionPerSegment, true);
             if (!handle) { this._declareSessionLost(); return; }
             this._armSession(handle);
         } finally {
@@ -1520,9 +1736,15 @@ export class ChatVoiceController {
         }
     }
 
-    /** (Re)arm the inactivity auto-off so the microphone can never stay hot forever. */
+    /**
+     * (Re)arm the inactivity auto-off so a forgotten chat microphone cannot stay hot
+     * forever. NOT in dictation (archive) mode: a pathologist reading a slide is quiet
+     * for as long as the slide takes, and a dictation that switches itself off is speech
+     * lost — the one thing that mode exists to prevent. There the user stops it.
+     */
     private _armIdleOff(): void {
-        if (this._idleTimer) clearTimeout(this._idleTimer);
+        if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
+        if (this._archiveAudio) return;
         this._idleTimer = window.setTimeout(() => {
             if (!this._auto) return;
             this._opts.setStatus(this._t("autoModeIdleOff"));
@@ -1533,6 +1755,8 @@ export class ChatVoiceController {
     /** Stop hands-free capture and release the microphone. Idempotent. */
     stopAuto(): void {
         if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
+        if (this._openTimer) { clearTimeout(this._openTimer); this._openTimer = null; }
+        if (this._lostRetryTimer) { clearTimeout(this._lostRetryTimer); this._lostRetryTimer = null; }
         if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
         this._releaseHoldState();
         this._paused = false;
@@ -1601,7 +1825,7 @@ export class ChatVoiceController {
         } catch (_e) { /* ignore */ }
 
         if (this._pendingTurns.length) {
-            console.warn("[ChatVoiceController] finishAuto drain timed out — flushing pending turns to the lost-text sink", this._pendingTurns.length);
+            APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").warn({pending: this._pendingTurns.length}, "finishAuto drain timed out — flushing pending turns to the lost-text sink");
             this._flushLostText();
         }
         // Now tear down for real. A held draft stays in the composer for review —
@@ -1627,6 +1851,7 @@ export class ChatVoiceController {
             this._stt?.removeHandler("transcription", this._onTranscribeEnd);
             this._stt?.removeHandler("transcription-error", this._onTranscribeError);
             this._stt?.removeHandler("capture-warning", this._onCaptureWarning);
+            this._stt?.removeHandler("language-pinned", this._onLanguagePinned);
             this._stt?.removeHandler("model-loading", this._onModelLoading);
         } catch (_e) { /* best-effort */ }
     }

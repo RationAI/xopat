@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "name": "Vector layers (demo)",
+    "description": "Opens Mapbox Vector Tiles as a slide layer aligned to the slide's own pixel grid, for the visualization-flexibility showcase.",
+    "longDescription": "Registers the `demo-mvt` slide protocol. flex-renderer's MVT tile source derives a square world from the zoom range, which cannot describe a non-square slide; this module constructs the source directly from a descriptor that states the real width and height, so the vector layer aligns with the slide one-to-one. GeoJSON needs no such help and is opened by OpenSeadragon's ordinary autodetection."
+  }
+}

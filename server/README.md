@@ -295,6 +295,42 @@ Support proxying to services:
  - the session must be secured: use CSRF protection - you must set ``window.XOPAT_CSRF_TOKEN`` when user visits the viewer page
  - the resource must be secured: if configured, the server must verify a desired authentication method (so called verifier) - see ``config.json`` for more details
 
+#### Session + CSRF is not authorization
+
+Both backends check that the caller has a session and a matching
+`X-XOPAT-CSRF` header before proxying. That pair proves the request came from
+**this origin** — nothing more. A session is minted to any anonymous page load,
+and the CSRF token is rendered into that same page (`window.XOPAT_CSRF_TOKEN`),
+so "has a session and a token" means "loaded the viewer once". It stops
+cross-site request forgery. It does not stop the visitor.
+
+Two gates therefore run *before* the verifier set, and both backends implement
+them (`proxyAliasAllowedForSession` / `checkProxyCredentialGate` in
+`server/node/auth.js`, the same names in `server/php/inc/auth.php`):
+
+- **Per-session alias allowlist — `session.allowedProxies`.** `'ALL'` (what a
+  fresh session is minted with) or absent means unrestricted; an array restricts
+  to those aliases; `'NONE'` denies everything. An unrecognised value denies — a
+  restriction that cannot be read is still a restriction. Auth modules narrow it
+  on a completed login with
+  `XOPAT_SERVER.setSessionAllowedProxies(ctx.session, ["cerit"])`; the field is in
+  the session's shared half, so it persists and every cluster worker sees it. PHP
+  reads `$_SESSION['allowed_proxies']`. A denied alias answers exactly like an
+  unknown one — which aliases exist is not a restricted session's business.
+- **Credential-bearing aliases must enforce auth.** An alias that declares
+  `headers` (an operator API key) and no working `auth.verifiers` is refused with
+  `500`, because it is otherwise an open relay to its upstream, on the operator's
+  credential, for every visitor. Opt out explicitly per alias with
+  `"auth": {"enabled": false}` — a *present* block saying so, never a missing one
+  — or deployment-wide with `server.secure.proxyCredentialsRequireAuth: false`.
+  The refusal is logged once per alias with the three remedies; the response body
+  never names the alias.
+
+Note for PHP: `auth.enabled` defaults to **true** when an `auth` block exists.
+It used to default to false there, so an alias configured with verifiers but no
+explicit `"enabled": true` silently proxied unauthenticated on PHP while Node
+enforced it.
+
 > !IMPORTANT!: The server, when delivering CORE configuration to the front-end *MUST DELETE* the secure object 
 > of the server configuration, which MUST NOT be available on the client - it can contain secrets that are explicitly left
 > hidden on the server.
@@ -310,6 +346,15 @@ Support proxying to services:
 
 Upstream request hygiene the proxy must implement:
 
+- **Rebuild the remainder, do not forward it.** `/proxy/<alias>/<rest>` splits the
+  path and drops empty segments, so `/proxy/<alias>//evil.com/x` and a pasted
+  absolute URL both collapse into ordinary path segments instead of
+  reconstructing an origin. The one thing that collapse must put back is a
+  **trailing slash**: upstreams distinguish `/v3/cases/` from `/v3/cases`, and
+  the latter is typically answered with a redirect to the former — which a proxy
+  that refuses redirect hops then turns into a 502. A lone slash cannot carry an
+  origin. Both backends do this; `test/suites/integration/proxy-path.test.mjs`
+  pins both halves against Node.
 - **Forward request headers by ALLOWLIST, not denylist.** The browser's `Cookie`
   (which carries the xOpat session id), its `Authorization`, and `X-XOPAT-CSRF`
   are not the upstream's business. A verifier that wants the caller's bearer
@@ -358,11 +403,63 @@ dotfiles/dirs, `*.server.*` and `server.json`. Normalize `\` to `/` before
 resolving (it is not a URL separator but *is* a filesystem one on Windows) and
 check containment against the **realpath**, so a symlink cannot lead out.
 
+Apply the deny-list to the **realpath too**, not only to the requested path.
+Containment asks whether the target lands inside *some* allowed root, which a
+symlink `src/x.js → src/.git/config` satisfies — so a deny-list checked only
+against the URL is chosen by the caller rather than by the file being served.
+Where `realpath` is unavailable (a `pkg` snapshot fs), refuse symlinks instead:
+a link that cannot be resolved cannot be judged.
+
+#### Bulk media (`core.server.media`) — a separate opt-in, off by default
+
+The asset path answers every request with one buffered read and a `200`. That is
+right for a bundle and wrong for a slide: a client-side decoder reads a pyramid
+by byte range, and a `200` carrying the whole 683 MB file is not an answer to
+`Range: bytes=…`.
+
+Serving media is more capability than serving assets — streams held open for the
+life of a response, concurrent partial reads, an amplification lever a directory
+of bundles does not have — so it is **its own allowlist**, and a deployment that
+declares nothing behaves exactly as before: no root becomes reachable, no
+response advertises `Accept-Ranges`, no code path changes.
+
+```jsonc
+"core": { "server": {
+  "media": {
+    "roots": ["test/fixtures/data"],                 // separate from staticRoots
+    "extensions": [".tif", ".tiff", ".json", ".pbf"], // optional; omit = any
+    "maxRangeBytes": 33554432,                        // default 32 MiB, clamps
+    "maxConcurrentStreams": 32                        // default 32, then 503
+  }
+}}
+```
+
+- A media root is not an asset root and an asset root is not a media root:
+  declaring one never implies the other, and a path inside both is served the
+  **asset** way, so existing behaviour cannot change by accident.
+- `extensions` is a *reachability* rule, not a delivery rule. A root declared for
+  `.tif` must not become a way to read the README, keys or notes sitting beside
+  the slides, so a non-matching extension is a 404.
+- Containment is the static rule, unchanged: resolved under the application root
+  or refused with a warning, realpath re-checked, deny-list applied to the file
+  actually served. Data outside the repository is therefore **not** expressible
+  here — that is what `server/utils/node/slide-fileserver.mjs`
+  (`npm run fixtures:serve`, `XOPAT_SLIDE_ROOT`) remains for.
+- Ranged responses carry a **strong** ETag; RFC 7233 requires one for `If-Range`,
+  and a weak validator would silently turn every resumed read into a full
+  transfer.
+- This is a development convenience. In production, put bulk media behind a
+  reverse proxy and leave `media` undeclared.
+
 ### Other `core.server` knobs (Node)
 
 | Key | Purpose | Default |
 |---|---|---|
-| `staticRoots` | Extra directories the static handler may serve | `[]` |
+| `staticRoots` | Extra directories the static handler may serve (buffered, no ranges) | `[]` |
+| `media.roots` | Directories served **streamed and `Range`-aware**. Absent = the feature is off | unset |
+| `media.extensions` | Extensions reachable inside a media root; omit for any | unset |
+| `media.maxRangeBytes` | Ceiling on one ranged read; a longer request is clamped | `33554432` |
+| `media.maxConcurrentStreams` | Media streams open at once, process-wide; excess answers `503` | `32` |
 | `security.frameAncestors` | Pages allowed to frame the viewer, as CSP source expressions (array or space/comma string; `true`/`"*"` = anyone). Emitted as an **enforced** `Content-Security-Policy: frame-ancestors …` of its own | unset (framing denied) |
 | `security.frameOptions` | `X-Frame-Options` value; falsy disables the header | `SAMEORIGIN`; auto-off when `frameAncestors` is set, or in cross-site cookie mode |
 | `security.crossSiteCookies` | Session cookie becomes `SameSite=None; Secure` | on when `frameAncestors` is set or `XOPAT_CROSS_SITE_COOKIES=true` |

@@ -9,52 +9,14 @@
  * The budget must also not become a trap: a credential landing is proof the
  * provider works again and re-arms everything.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, freshXOpatUser } from "@xopat/test-harness";
 
-globalThis.window = globalThis.window ?? globalThis;
-
+// This suite is the one that *writes* the budget statics, and they live on a class
+// the whole worker shares — see `freshXOpatUser`, which restores them per test so
+// the thresholds asserted here cannot decide a neighbour's.
 async function freshUser({ cooldownMs = 60_000, maxFailures = 2 } = {}) {
-    // XOpatUser extends window.OpenSeadragon.EventSource and touches a few globals
-    // at import time; supply the smallest surface that satisfies it.
-    installOpenSeadragonEventSource();
-    globalThis.window.HttpClient = { knowsSecretType: () => true };
-    globalThis.$ = globalThis.$ ?? { t: (k) => k };
-    globalThis.HttpClient = globalThis.window.HttpClient;
-    // The constructor looks for its app-bar panel; there is no DOM here.
-    globalThis.document = globalThis.document ?? { getElementById: () => null };
-
-    const mod = await import(`../../../src/classes/user.ts?t=${Math.random()}`);
-    mod.XOpatUser.REFRESH_COOLDOWN_MS = cooldownMs;
-    mod.XOpatUser.MAX_REFRESH_FAILURES = maxFailures;
-    // XOpatUser is a singleton and the loader may hand back a module instance a
-    // previous test already constructed — release the claim so each vector starts
-    // from clean per-secret state.
-    mod.XOpatUser.__self = undefined;
-    return new mod.XOpatUser();
-}
-
-/** The slice of OpenSeadragon.EventSource XOpatUser actually uses. */
-function installOpenSeadragonEventSource() {
-    class EventSource {
-        constructor() { this.__handlers = new Map(); }
-        addHandler(event, cb) {
-            if (!this.__handlers.has(event)) this.__handlers.set(event, []);
-            this.__handlers.get(event).push(cb);
-        }
-        removeHandler(event, cb) {
-            const list = this.__handlers.get(event) || [];
-            const i = list.indexOf(cb);
-            if (i >= 0) list.splice(i, 1);
-        }
-        numberOfHandlers(event) { return (this.__handlers.get(event) || []).length; }
-        raiseEvent(event, payload) {
-            for (const cb of [...(this.__handlers.get(event) || [])]) cb(payload || {});
-        }
-        async raiseEventAwaiting(event, payload) {
-            for (const cb of [...(this.__handlers.get(event) || [])]) await cb(payload || {});
-        }
-    }
-    globalThis.window.OpenSeadragon = { ...(globalThis.window.OpenSeadragon || {}), EventSource };
+    const { user } = await freshXOpatUser({ cooldownMs, maxFailures });
+    return user;
 }
 
 test("a burst of failing requests produces ONE refresh attempt", async () => {

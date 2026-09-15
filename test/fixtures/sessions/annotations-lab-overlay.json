@@ -1,0 +1,30 @@
+{
+  "params": {
+    "sessionName": "Annotations lab — H&E with a prediction overlay",
+    "customBlending": true
+  },
+  "data": ["slides/slide.tif", "slides/cancer-inference.tif"],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E",
+      "microns": 0.6
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Cancer prediction",
+      "shaders": {
+        "prediction": {
+          "name": "Cancer prediction",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

@@ -2,7 +2,16 @@ export { }; // This line forces TS to treat this as a module
 
 declare global {
     // Runtime-provided globals available throughout the application
-    var $: any;
+    /**
+     * The translation namespace — NOT jQuery. jQuery is no longer shipped;
+     * `$` is a plain object installed by `classes/app/i18n-dom.ts` and is not
+     * callable. `$.t('key')` stays the way every call site reads a locale
+     * string (AGENTS.md §3); `$.i18n` is the raw i18next instance.
+     */
+    var $: {
+        t(key: string, options?: Record<string, any>): string;
+        i18n?: any;
+    };
     var APPLICATION_CONTEXT: ApplicationContext;
     var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton, eager?: boolean) => void;
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
@@ -38,9 +47,6 @@ declare global {
 
     // Third-party globals loaded at runtime
     var i18next: any;
-    var jqueryI18next: any;
-    /** js-cookie library */
-    var Cookies: any;
     var Dialogs: any;
     var HttpClient: any;
     var XOpatStorage: any;
@@ -66,6 +72,13 @@ declare global {
 
     interface Window {
         XOPAT_CSRF_TOKEN?: string;
+        /**
+         * Identity of the deployment being served, computed once in `initXOpat`
+         * from the served ENV + element registries. Scopes the boot session
+         * caches and the plugin-autoload cookie, and stamps every session this
+         * viewer serializes. See `src/classes/app/deployment-key.ts`.
+         */
+        XOPAT_DEPLOYMENT_KEY?: string;
         /**
          * Present only under `core.server.security.cookielessSessions` — the
          * embedded-viewer fallback for a frame with no usable cookie jar.
@@ -123,6 +136,31 @@ declare global {
         raiseEvent(eventName: string, eventArgs?: object): void;
     }
 
+    /**
+     * Minimal shape of the `APPLICATION_CONTEXT.tutorials` singleton
+     * (`classes/app/tutorial/`). Step authoring is documented in
+     * `src/TUTORIALS.md`; a step is `{"<next|click|…> <css-selector>": "html",
+     * runIf?: () => boolean}` plus the optional per-step knobs.
+     */
+    interface TourEngineLike {
+        /** True while a tour is on screen. */
+        readonly isRunning: boolean;
+        /** Start a tour. `hooks` mirror the former EnjoyHint constructor options. */
+        run(steps: Record<string, any>[], hooks?: {
+            onStart?: () => void;
+            onEnd?: () => void;
+            onSkip?: () => void;
+            onNext?: () => void;
+            backgroundColor?: string;
+        }): void;
+        /** Abort the running tour without firing `onEnd`. */
+        stop(): void;
+        /** Fire a `custom`-event step's trigger, or `"next"` / `"skip"`. */
+        trigger(eventName: string): void;
+        getCurrentStep(): number;
+        setCurrentStep(step: number): void;
+    }
+
     /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
     interface RequestSchedulerLike {
         /**
@@ -132,6 +170,48 @@ declare global {
         acquire(origin: string, opts?: { signal?: AbortSignal; jumpQueue?: boolean }): Promise<() => void>;
         /** Per-origin background occupancy snapshot (debug/verify). */
         stats(): Record<string, { inFlight: number; queued: number; bgLimit: number; busy: boolean }>;
+    }
+
+    /**
+     * One channel of the client logging broker (`classes/app/logging.ts`).
+     * Same shape as the server's `XOPAT_SERVER.log(channel)`. See src/LOGGING.md.
+     */
+    interface ClientLoggerLike {
+        readonly channel: string;
+        trace(...args: any[]): any;
+        debug(...args: any[]): any;
+        info(...args: any[]): any;
+        warn(...args: any[]): any;
+        error(...args: any[]): any;
+        /**
+         * Payload-bearing record (prompts, message bodies, script results).
+         * Emitted only when the deployment allowed it AND the channel is at
+         * `trace` — on real data these are PHI.
+         */
+        sensitive(...args: any[]): any;
+        /** Returns a stop function that emits `durationMs`. */
+        time(label: string, level?: "trace" | "debug" | "info" | "warn" | "error"): (fields?: Record<string, any>) => any;
+        child(sub: string): ClientLoggerLike;
+        isEnabled(level: "trace" | "debug" | "info" | "warn" | "error"): boolean;
+        level(): string;
+    }
+
+    /** The client logging broker itself (`classes/app/logging.ts`). */
+    interface ClientLoggingLike {
+        /**
+         * This browser sitting (`cs_…`), minted at boot. A correlation token, not
+         * an identity: it groups one page-load's records so a session can be
+         * reconstructed without logging who the person is.
+         */
+        readonly sessionId: string;
+        log(channel: string): ClientLoggerLike;
+        /** Re-read `env.client.logging`. */
+        configure(rawConfig: any): void;
+        /** Buffered records, newest last. */
+        getEntries(query?: { afterId?: number; limit?: number; minLevel?: string; channel?: string; search?: string }): any[];
+        /** Push queued records to the server now (also runs on page hide). */
+        flush(): Promise<void>;
+        stats(): Record<string, any>;
     }
 
     /** Rectangle in full-resolution (level-0) image pixels of a reference world item. */
@@ -396,6 +476,17 @@ declare global {
              * user-relevant to show. See `src/tile-source.ts` for the default.
              */
             getDisplayMetadata?(): TileSourceDisplayMetadata;
+            /**
+             * Can the original slide file be downloaded? Synchronous and I/O-free —
+             * menus consult it while building. Default `false`. See `src/tile-source.ts`.
+             */
+            canDownloadSlideFile?(): boolean;
+            /**
+             * Where the original slide file lives. Called only after
+             * `canDownloadSlideFile()` returned true. Resolves a location, never
+             * the bytes. See `src/tile-source.ts`.
+             */
+            getSlideFileDownload?(): Promise<SlideFileDownload | undefined>;
         }
 
         // ── MouseTracker event ───────────────────────────────────────────────
@@ -436,6 +527,14 @@ declare global {
 
         class Tools {
             constructor(viewer: Viewer);
+            /**
+             * Resolve a background's TileSource without opening it, through the
+             * per-viewer descriptor cache (an already-open slide is reused).
+             * Lets UI reach per-source capabilities — label, thumbnail,
+             * `canDownloadSlideFile()` — for slides that are only listed.
+             */
+            static resolveSource(viewer: Viewer, bgConfig: any): Promise<TileSource>;
+            static retrieveLabel(viewer: Viewer, bgConfig: any): Promise<any>;
         }
 
         const SUBPIXEL_ROUNDING_OCCURRENCES: {

@@ -1,27 +1,7 @@
 {
   "meta": {
-    "name": "DICOM Integration",
-    "description": "Open and browse DICOMweb studies — patients, studies and series — and view DICOM whole-slide images directly in the viewer."
-  },
-  "browser": {
-    "patients": "Patients",
-    "studies": "Studies",
-    "images": "Images",
-    "noStudies": "No studies available for this patient.",
-    "noPatients": "No patients found (server may not support patient listing).",
-    "openMissingIds": "Could not open the image: missing study identification!",
-    "searchHint": "Name, study UID, acc:<number> or YYYYMMDD-YYYYMMDD",
-    "noMatches": "Nothing matched \"{{query}}\".",
-    "listingFailed": "Could not load the list: {{error}}",
-    "chipAccession": "Acc# {{value}}",
-    "chipStudyId": "ID {{value}}",
-    "chipCounts": "{{series}} S | {{instances}} I",
-    "tooltipReferring": "Referring: {{value}}",
-    "tooltipPerforming": "Performing: {{value}}",
-    "tooltipBodyPart": "Body Part: {{value}}",
-    "tooltipRequested": "Requested: {{value}}",
-    "tooltipReason": "Reason: {{value}}",
-    "tooltipComments": "Comments: {{value}}"
+    "name": "DICOMweb Protocol",
+    "description": "Renders DICOMweb whole-slide images, CT/MR/PET series and derived Segmentation / Parametric Map objects. Opens only what the session asks for; install the DICOM Browser plugin to browse a store."
   },
   "series": {
     "fallbackTail": "Series …{{tail}}",
@@ -40,5 +20,40 @@
     "transparentBelow": "Transparent below: ",
     "windowCenter": "Window centre: ",
     "windowWidth": "Window width: "
+  },
+  "radiology": {
+    "series": "Series",
+    "unavailable": "Series unavailable",
+    "metadataMissing": "Metadata missing",
+    "unknown": "unknown",
+    "modality": "Modality",
+    "dimensions": "Dimensions",
+    "slices": "Slices",
+    "sliceSpacing": "Slice spacing",
+    "spacingIrregular": "{{mm}} mm (irregular, median)",
+    "pixelSize": "Pixel size",
+    "valueRange": "Value range",
+    "window": "Window",
+    "planeOrdering": "Plane ordering",
+    "excluded": "Excluded",
+    "interleaved": "Interleaved volumes",
+    "interleavedHint": "This series holds {{count}} volumes; \"{{key}}\" is shown. Select another with dataID.subVolume."
+  },
+  "window": {
+    "presetTitle": "Window preset: ",
+    "presetFallback": "C {{center}} / W {{width}}",
+    "invert": "Invert (MONOCHROME1): ",
+    "useColormap": "Colour map instead of grayscale: ",
+    "colormap": "Colour map: ",
+    "preset": {
+      "custom": "Custom",
+      "softTissue": "Soft tissue",
+      "lung": "Lung",
+      "bone": "Bone",
+      "brain": "Brain",
+      "liver": "Liver",
+      "mediastinum": "Mediastinum",
+      "angio": "Angio"
+    }
   }
 }

@@ -38,7 +38,7 @@ The pipeline is exposed at runtime as **`window.IO_PIPELINE`** and aliased on **
 Three concepts:
 
 - **Capability** — what an owner advertises. `{ id: 'bundle-export', kind: 'bundle' }`, `{ id: 'crud:annotation', kind: 'crud' }`, `{ id: 'kv:cache', kind: 'kv' }`.
-- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships four built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`).
+- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships five built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`, `session-memory`). To write your own, see [`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md).
 - **Binding** — the admin's choice of which sinks/drivers serve a given (owner, capability) pair. Multiple sinks can serve the same capability (e.g. file download AND a remote upload; localStorage AND a server mirror).
 - **Owner** — who the namespace belongs to: `core`, or `<module|plugin>.<id>` exactly as `XOpatElement` builds its uid. Elements register in their constructor; everyone else is registered by `IO_PIPELINE.kv(uid, cap)` on first call, deriving `ownerId`/`xoType` from the uid shape. So a core service (`src/classes/playground`) or a plain-script module with no `XOpatModule` subclass (`modules/oidc-client-ts`) gets a working namespace without declaring anything, and `ENV.client.io.bindings["<uid>"]` applies to it either way. An owner registered implicitly is upserted — not replaced — if the real element appears later.
 
@@ -72,7 +72,12 @@ Three concepts:
 
 #### Rights integration (auto-derived)
 
-For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and — for CRUD — installs `pre-create` / `pre-update` / `pre-delete` guards that refuse with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and installs a guard on the matching pre-phase — `pre-create` / `pre-read` / `pre-update` / `pre-delete` for CRUD, `pre-export` / `pre-import` for bundles — refusing with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+
+Because those gates live in the pipeline rather than in each owner or sink, an
+operator denying a capability stops the traffic at every destination at once —
+and **a sink must never implement its own permission check**. See
+[`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md) §0.
 
 Opt out on a per-capability basis:
 
@@ -513,16 +518,80 @@ Default (no `accepts` filter) is the safe choice for most server-backed sinks: u
 
 **Coexistence with the existing `XOpatHistoryProvider` registry** (`src/classes/history.ts`): the Provider chain keeps gating "can we undo right now?" via `canUndo / canRedo` (annotations' free-form tool, e.g., uses this to handle micro-undo of a brush stroke without unwinding a full IO entry). IO-pushed entries live in the same stack the providers fall back to. No change to the public history API.
 
-### Abortable CRUD via guards
+### Abortable operations via guards
 
-A **guard** is a registered handler that runs in the `pre-create` / `pre-update` / `pre-delete` phase. It can abort the operation before any local commit or sink call. Any code may register a guard against any resource — including resources owned by other modules. This is the duplication-killer: plugin authors declare a resource and get external-vetoable CRUD for free, instead of inventing their own `*-before-*` event protocol.
+A **guard** is a registered handler that runs in a `pre-*` phase and can abort
+the operation before any local commit or sink call. Any code may register a
+guard against any resource — including resources owned by other modules. This is
+the duplication-killer: plugin authors declare a resource and get
+external-vetoable IO for free, instead of inventing their own `*-before-*` event
+protocol.
+
+There are six phases:
+
+| Phase | Runs before | `resource` matches |
+| --- | --- | --- |
+| `pre-create` / `pre-update` / `pre-delete` | the owner's local commit (`IOResource`) | `ctx.resourceName` |
+| `pre-read` | any sink read (`dispatch`) and `queryStream` | `ctx.resourceName` |
+| `pre-export` | the owner's `exportBundle` hook; once per route | only `"*"` — bundle contexts have no `resourceName` |
+| `pre-import` | the owner's `importBundle` hook, on both the sink-restore and caller-supplied paths; once per route | only `"*"` |
+
+`direction: "*"` covers the three **CRUD write** phases and nothing else. It
+predates `pre-export` / `pre-import` / `pre-read`; widening it would turn every
+existing domain guard into a veto over exports and reads it was never written to
+judge. Name the newer phases explicitly.
+
+A refused `pre-read` yields an empty stream rather than throwing, because every
+caller is a hydration loop that treats "nothing" as a valid answer.
+
+**`pre-export` / `pre-import` run once per route.** Every bundle dispatch carries
+`ctx.route`, and a guard sees each value separately:
+
+| `ctx.route` | The destination | Typically judged by |
+| --- | --- | --- |
+| `"sink"` (default) | anything bound in `ENV.client.io.bindings` | the owner's capability |
+| `"local"` | the `file-download` last resort, the `file-upload` sink, `IO_PIPELINE.importBundle` with a user-picked payload | the core `core.io.local-file` capability |
+
+A guard that ignores `route` sees every dispatch and therefore denies both —
+which is what guards written before the field existed do, unchanged. A sink
+states which route it *is* with `IOSink.route`, and that wins over the batch's,
+so an explicitly bound `file-download` is still judged as local.
+
+The local fallback runs only when nothing was stored, the local route is open,
+and **no sink declined on policy grounds** (`{accept: false, policy: true}` from
+`accepts()`). Before that condition existed it keyed off how many sinks were
+*bound* rather than how many ran, so a sink refusing on policy handed the user
+the same bytes as a download. A shape decline still triggers the fallback: that
+means no suitable destination was configured, and a local copy is the rescue.
+
+See `src/USER_ROLES.md` → "Two routes".
+
+**A refusal for work the user did not request is an event, not a dialog.** The
+dispatch context carries `trigger: "user" | "system"`, defaulting to `"user"`.
+`surfaceRefusal` always raises `io:refused`; it only reaches the notifier when
+the trigger is `"user"`. A `"system"` refusal is logged through
+`APPLICATION_CONTEXT.log("core.io")` instead — silencing must not lose the fact.
+
+Automatic means the pipeline's own bookkeeping: boot hydration, the restore
+after a slide opens, the flush of the slide being vacated. Those four call sites
+pass `trigger: "system"` explicitly. The default stays loud so a new automatic
+caller over-warns rather than swallowing a real refusal:
+
+```ts
+await IO_PIPELINE.tryRestoreImport({ viewerId, trigger: "system" });
+await IO_PIPELINE.flushBundleExport({ viewerId, backgroundId, trigger: "system" });
+```
+
+This is the mechanism the roles layer uses (`src/USER_ROLES.md`), which is why
+**sinks contain no authorization code**: the veto has already run by the time
+any destination is contacted.
 
 ```ts
 // e.g. inside a permission-check plugin:
 const dispose = IO_PIPELINE.registerGuard({
   ownerId: "permission-check",
   resource: "annotation",          // matches ctx.resourceName, "*" = any
-  direction: "pre-delete",          // "pre-create" | "pre-update" | "pre-delete" | "*"
+  direction: "pre-delete",          // one phase from the table above, or "*"
   priority: 100,                    // higher runs first; default 0
   // SYNC. A handler that returns a Promise is refused with `W_IO_GUARD_ASYNC`
   // and named in the console — see "Sync guards only" above.
@@ -618,26 +687,20 @@ IO_PIPELINE.registerSink({
     // The owning module is responsible for assembling baseURL etc.; this
     // is just the runtime read.
     const opts = composeLiveSyncOptions();   // defaults + IO_PIPELINE.sinkOverrides("live-sync")
-    const url = `${opts.baseURL}/${ctx.resourceName}?` + new URLSearchParams({
-      backgroundId: String(params.backgroundId),
-      bbox: JSON.stringify(params.bbox),
-      zoom: String(params.zoom),
-    });
     const signal = (ctx.meta as any).signal as AbortSignal | undefined;
-    const res = await fetch(url, { signal });
-    if (!res.ok) return;
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) if (line) yield JSON.parse(line);
-    }
-    if (buffer) yield JSON.parse(buffer);
+    // HttpClient — never native fetch: it carries JWT/CSRF, proxy aliases and
+    // secureMode policy, and `stream()` parses NDJSON line by line for us.
+    const client = new HttpClient({ baseURL: opts.baseURL });
+    const stream = await client.stream(ctx.resourceName, {
+      method: "POST",
+      body: {
+        backgroundId: params.backgroundId,
+        bbox: params.bbox,
+        zoom: params.zoom,
+      },
+      signal,
+    });
+    for await (const item of stream.lines()) yield item;
   },
   // + create / read / update / delete for live per-item sync.
 });
@@ -652,10 +715,22 @@ IO_PIPELINE.registerSink({
 ### Triggering a programmatic flush
 
 ```ts
-await this.io.flush();                              // export this owner now
+await this.io.flush();                              // every outbound bundle capability
 await this.io.flush({ viewerId: someViewer });      // for one viewer
-await this.io.flush({ capabilityId: 'bundle-export' });
+await this.io.flush({ capabilityId: 'bundle-submit' });   // just this one
 ```
+
+An owner may declare more than one **outbound** bundle capability — say
+`bundle-export` for session state and `bundle-submit` for a user's completed
+form — and an operator can then route and gate them separately. `capabilityId`
+is how a button drives one without pushing the others. An unscoped flush covers
+all of them.
+
+"Outbound" means *any* bundle capability whose id does not contain `import`; the
+word `export` is not special. Getting that wrong is invisible in the worst way —
+a `bundle-submit` bound to a real destination reads as "nothing remote is
+configured", so `Save` degrades to a local file and the write silently never
+happens.
 
 `UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go.
 
@@ -893,7 +968,8 @@ Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legac
 | `post-data` | `bundle` | Writes into the global `POST_DATA` dict. Preserves the legacy HTML-form session export emitted by `serializeApp()`. Default fallback for unbound bundle capabilities. |
 | `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`. |
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
-| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW` and 5xx only). Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `session-memory` | `bundle` | In-memory, keyed by `ctx.key`. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
 
 ## Module-provided sinks
 
@@ -1016,13 +1092,16 @@ Beyond bundle export/import and per-element CRUD, every owner — including a sy
 A KV driver is **any object satisfying the localStorage interface** (`getItem/setItem/removeItem/key/length/clear`). `window.localStorage` plugs in unchanged; the host registers it at pipeline bootstrap. Drivers self-describe sync vs. async, "shared" vs. "owned" (shared drivers get automatic `<ownerUid>::<sanitizedKey>` prefixing to prevent collisions), and optional `contextAware` mode where the driver receives the active `IOContext` to route per-context itself.
 
 ```ts
+// Remote-backed drivers talk through HttpClient, never native fetch.
+const kvApi = new HttpClient({ baseURL: "/kv" });
+
 IO_PIPELINE.registerKVDriver({
   id: "redis-bridge",
   mode: "async",
   shared: true,
-  async getItem(k) { return await fetch(`/kv/${k}`).then(r => r.text()); },
-  async setItem(k, v) { await fetch(`/kv/${k}`, { method: "PUT", body: v }); },
-  async removeItem(k) { await fetch(`/kv/${k}`, { method: "DELETE" }); },
+  async getItem(k) { return await kvApi.request(encodeURIComponent(k), { expect: "text" }); },
+  async setItem(k, v) { await kvApi.request(encodeURIComponent(k), { method: "PUT", body: v }); },
+  async removeItem(k) { await kvApi.request(encodeURIComponent(k), { method: "DELETE" }); },
   // … key, length, clear
 });
 ```
@@ -1064,9 +1143,49 @@ A `kv` capability bound to **multiple drivers** mirror-writes to all of them on 
 
 User keys pass through `IO_PIPELINE.sanitizeKey(s)` — anything outside `[A-Za-z0-9._-]` is replaced with `_`. On shared drivers the result is then prefixed with `<ownerUid>::` to avoid cross-owner collisions. Owners with `shared: false` drivers see the raw sanitized key.
 
+Owner is the **only** namespace axis. KV keys are deliberately *not* scoped by the deployment cache key (`src/classes/app/deployment-key.ts`) — that key scopes the boot session caches and the plugin-autoload cookie only. Two deployments on one origin therefore share `AppCache` / `AppCookies` entries; a deployment that must not share them binds `kv:*` to the `memory` driver in `ENV.client.io.bindings.core`.
+
+### Value encoding
+
+Drivers are string-only (`localStorage`, `document.cookie`), so `handle.set(key, value)` encodes:
+
+| Value | Stored as |
+| --- | --- |
+| `string` | verbatim — every pre-existing entry keeps its exact bytes |
+| `number` / `boolean` | `String(value)`; `get` coerces `"true"`/`"false"` back to booleans |
+| anything else | `"json:" + JSON.stringify(value)`, decoded by `get` |
+| `undefined` | nothing — the key is deleted |
+
+The envelope is an explicit U+0001 sentinel rather than a `{`/`[` heuristic, so a user string that happens to look like JSON stays a string. `getItem`/`setItem` are the raw, unencoded pair — that is what `XOpatStorage.*.getStore()` hands to libraries requiring a real `Storage` (oidc-client-ts).
+
+Before the envelope existed, `set` did `String(value)`, which wrote the literal `"[object Object]"` for every object and silently destroyed it. Such values are unrecoverable: `get` reports them as absent and removes the key.
+
 ### Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They must be readable before `initXOpatLoader` runs (they carry the boot config the pipeline depends on), so they stay on raw `sessionStorage`/`localStorage` — but every one of those accesses is **probe-gated** (see below) and additionally wrapped in `try/catch`. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They stay on raw `sessionStorage`/`localStorage`, and every access is **probe-gated** (see below) and wrapped in `try/catch`.
+
+This is a structural exception, not an oversight. Three reasons, in the order they bite:
+
+1. **`__xopat_session__` carries the ENV that configures the pipeline.** It is read at `app.ts:80` and replaces `ENV` / `PLUGINS` / `MODULES` / `POST_DATA` wholesale. Anything ENV-configured must run after it, so it can never be one of its own consumers.
+2. **The pipeline needs the FINAL `POST_DATA` object.** `makePostDataKVDriver` captures it by reference (`io/kv-drivers.ts`), as do the `post-data` bundle sink and the pipeline itself — and `xOpatParseConfiguration` *replaces POST_DATA's identity* when it restores a cached session (`parse-input.js`, `postData = data`). A pipeline built before parsing would hold a detached bucket for every `kv:data` read/write and for bundle export. That is why `bootstrapIOPipeline` sits **after** the parse call in `app.ts`, and why the boot cache cannot wait for it.
+3. The cookie policy is snapshotted eagerly at bootstrap (`io/bootstrap.ts`), so the pipeline must also come after the `__ORIGIN__` domain resolution.
+
+What the boot path reproduces by hand instead: probe-gating (`XOpatStorageAvailability`), per-access `try/catch`, a mirror of the `bypassCache` semantics from `store.ts`, and deployment scoping via the key in `src/classes/app/deployment-key.ts`.
+
+**The transports that bypass storage entirely.** The address-bar hash
+(`UTILITIES.syncSessionToUrl`, written on every shader edit) and a self-POST body live in the
+*history entry*, so they survive an ENV swap, a server restart and any cache eviction — and
+`parse-input.js` reads them **before** the boot cache. `serializeAppConfig` therefore stamps
+`__envKey` on every session the viewer serializes: a foreign-stamped session still loads (with
+a warning), but is refused entry to `xoSessionCache`. That refusal is the load-bearing part —
+otherwise one stale hash is laundered into the cache under the *new* deployment's key and
+restored legitimately forever. An unstamped session (embedder, demo link) is accepted as before.
+
+**Invariant — `bypassCache` gates restore and save, never eviction.** A boot that opts out of the cache still drops an entry belonging to a *different* deployment. The flag is a preference about using one's own cache; it is not permission for another deployment's session to sit in this origin's storage waiting for the flag to flip. Folding the two together is what let a stale session survive an `XOPAT_ENV` switch untouched.
+
+**Known gap.** `ENV.client.io.bindings.core["kv:cache"]` does **not** reach these flows — bind `kv:cache` to `memory` and the boot path still writes localStorage. Nothing outside the pipeline instance can resolve a binding (`resolveBindings` is the only reader), and duplicating that into the boot path would be a second policy engine. The switch that does reach the boot cache is `setup.bypassCache: true`.
+
+**Adding boot-time state?** If it must be readable before `initXOpatLoader`, it belongs here — stamp it with the deployment key, honour `bypassCache`, probe-gate it, and add a `storage-audit` allowlist entry stating the reason. Everything else — including anything a plugin or module wants — uses `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
 
 ### Sandboxed / opaque-origin operation
 

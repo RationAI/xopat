@@ -49,11 +49,28 @@ class RecorderPlugin extends XOpatPlugin{
     private measureAbsoluteOffset=0;
     private measureRealtimeOffset=0;
     private measureDuration=0;
-    recorder!:RecorderModule; track!:HTMLDivElement; recordPathButton!:HTMLButtonElement; playButton!:HTMLButtonElement; defaultsButton!:HTMLButtonElement;
-    recordingsButton!:HTMLButtonElement;
+    recorder!:RecorderModule; track!:HTMLDivElement;
+    /** Inner <input> nodes of the two UI.Input controls (no document lookups). */
+    private _delayInput:HTMLInputElement|null=null;
+    private _durationInput:HTMLInputElement|null=null;
     private _recordingsModal:InstanceType<typeof UI.Modal>|null=null;
-    private _recordingsBodyHost:HTMLDivElement|null=null;
+    private _recordingsBody:HTMLElement|null=null;
+    /** Per-lane reactive chrome state, so lane repaints are state writes. */
+    private _laneStates:Map<UniqueViewerId,{current:any;armed:any}>=new Map();
+    private _states:{playing:any;pathRecording:any;activeName:any}|null=null;
     overlayRenderer!:OverlayRenderer;
+
+    /**
+     * Reactive toolbar state. Lazily built so `van` is only touched once the
+     * UI bundle is up (the constructor runs during early boot).
+     */
+    private get ui(){
+        return this._states ??= {
+            playing: van.state(false),
+            pathRecording: van.state(false),
+            activeName: van.state(this.t("recording")),
+        };
+    }
 
 
     constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1; this.smoothPath=!!this.getOption("smoothPath",false);}
@@ -63,7 +80,7 @@ class RecorderPlugin extends XOpatPlugin{
         this.recorder=OpenSeadragon.Recorder.instance();
         this.recorder.setCapturesVisualization(true);
         this.overlayRenderer=new OverlayRenderer(this.recorder);
-        USER_INTERFACE.Tools.setMenu(this.id,this._toolsMenuId,"Timeline",this._timelineComponent(),"play_circle",true);
+        USER_INTERFACE.Tools.setMenu(this.id,this._toolsMenuId,this.t("timeline"),this._timelineComponent(),"ph-play-circle",true);
         // Seed the explicit current viewer once from the active viewer, and arm it.
         const initId=this._currentViewerId(); if(initId) this.armed.add(initId);
         this._resetAllUISteps();
@@ -76,24 +93,39 @@ class RecorderPlugin extends XOpatPlugin{
 
     private _timelineComponent():any{
         const self=this; class Panel extends UI.BaseComponent{create(){
-            const {button,span,div}=van.tags;
-            const icon=(i:string)=>({play:"fa-auto fa-play",stop:"fa-auto fa-stop",trash:"fa-auto fa-trash-can",frame:"fa-auto fa-camera",path:"fa-auto fa-circle-dot",prev:"fa-auto fa-backward",next:"fa-auto fa-forward",defaults:"fa-auto fa-sliders",export:"fa-auto fa-download",recordings:"fa-auto fa-film"}[i]||"fa-auto fa-question");
-            const btn=(id:string,title:string,ic:string,click:()=>void,extra="")=>button({id,onclick:click,type:"button",class:`btn btn-ghost btn-square btn-sm ${extra}`,title},span({class:icon(ic)}));
-            self.recordPathButton=btn("recorder-path-toggle","Record path","path",()=>self.toggleNavigationRecording());
-            // Labeled entry point to the Recordings manager (switch / new / rename
-            // / duplicate / delete / export live in the modal, not the toolbar).
-            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"recorder-caret fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
+            const {span,div,button}=van.tags;
+            const st=self.ui;
+            const btn=(id:string,title:string,ic:string,click:()=>void,extra="")=>self._iconButton({id,title,icon:ic,onClick:click,extraClasses:`btn-square ${extra}`});
             const controls=div({class:"flex items-center gap-2 flex-wrap"},
-                self.recordingsButton,
-                btn("recorder-add-frame","Capture frame","frame",()=>self.addFrame(),"text-info"),
-                self.recordPathButton,
-                btn("presenter-prev-icon","Previous","prev",()=>self.recorder.previous()),
-                self.playButton=btn("presenter-play-icon","Play","play",()=>self.togglePlayback(),"text-success"),
-                btn("presenter-next-icon","Next","next",()=>self.recorder.next()),
-                btn("presenter-delete-icon","Delete","trash",()=>self.removeHighlightedRecord(),"text-warning"),
-                self.defaultsButton=btn("recorder-edit-defaults","Edit defaults for new captures","defaults",()=>self.openDefaultsModal(),"text-base-content/70"),
-                new UI.Input({legend:"Delay",suffix:"s",id:"point-delay",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("delay",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0",step:"0.1",value:self._capture.delay.toString(),style:"width:3.5rem;"}}).create(),
-                new UI.Input({legend:"Duration",suffix:"s",id:"point-duration",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("duration",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0.1",step:"0.1",value:self._capture.duration.toString(),style:"width:3.5rem;"}}).create(),
+                // Labeled entry point to the Recordings manager (switch / new / rename
+                // / duplicate / delete / export live in the modal, not the toolbar).
+                new UI.Button({
+                    id:"recorder-recordings",onClick:()=>self._openRecordingsModal(),
+                    extraClasses:{v:"btn-ghost btn-sm gap-1"},
+                    extraProperties:{type:"button",title:self.t("manageRecordings")},
+                },new UI.PhIcon("ph-film-strip"),
+                    span({id:"recorder-active-name"},()=>st.activeName.val),
+                    span({class:"recorder-caret ph-light ph-caret-down opacity-60"})).create(),
+                btn("recorder-add-frame",self.t("captureFrame"),"ph-camera",()=>self.addFrame(),"text-info"),
+                // Path toggle and Play carry recording/playing state, so their
+                // class and title are bound to van states instead of being
+                // re-poked through document lookups.
+                button({
+                    id:"recorder-path-toggle",type:"button",onclick:()=>self.toggleNavigationRecording(),
+                    class:()=>`btn btn-ghost btn-square btn-sm ${st.pathRecording.val?"btn-error text-error":""}`,
+                    title:()=>st.pathRecording.val?self.t("stopPathRecording",{count:self.navSessions.size}):self.t("recordPath"),
+                },span({class:"ph-light ph-record"})),
+                btn("presenter-prev-icon",self.t("previous"),"ph-rewind",()=>self.recorder.previous()),
+                button({
+                    id:"presenter-play-icon",type:"button",onclick:()=>self.togglePlayback(),
+                    class:"btn btn-ghost btn-square btn-sm text-success",
+                    title:()=>st.playing.val?self.t("stop"):self.t("play"),
+                },span({class:()=>`ph-light ${st.playing.val?"ph-stop timeline-play":"ph-play"}`})),
+                btn("presenter-next-icon",self.t("next"),"ph-fast-forward",()=>self.recorder.next()),
+                btn("presenter-delete-icon",self.t("deleteStep"),"ph-trash-simple",()=>self.removeHighlightedRecord(),"text-warning"),
+                btn("recorder-edit-defaults",self.t("editDefaults"),"ph-sliders-horizontal",()=>self.openDefaultsModal(),"text-base-content/70"),
+                self._numberInput("point-delay",self.t("delay"),self._capture.delay,"0",v=>self.setValue("delay",v),el=>self._delayInput=el),
+                self._numberInput("point-duration",self.t("duration"),self._capture.duration,"0.1",v=>self.setValue("duration",v),el=>self._durationInput=el),
             );
             // One lane (a block child) per viewer; each lane flows its steps
             // independently from x=0 so equal per-index timing column-aligns
@@ -101,6 +133,34 @@ class RecorderPlugin extends XOpatPlugin{
             self.track=div({id:"presenter-timeline-track",class:"relative flex-1 px-3 bg-base-200 rounded-sm w-full overflow-x-auto overflow-y-auto flex flex-col items-start gap-1",style:"min-height:48px;min-width:100px;"}) as HTMLDivElement;
             return div({class:"flex flex-col gap-2"},self.track,controls);
         }} return new Panel();
+    }
+
+    /**
+     * Ghost icon button built from the core UI atoms (UI.Button + UI.PhIcon) —
+     * the single place icon buttons are produced in this plugin.
+     */
+    private _iconButton(o:{title:string;icon:string;onClick:()=>void;id?:string;extraClasses?:string}):HTMLElement{
+        return new UI.Button({
+            ...(o.id?{id:o.id}:{}),
+            onClick:o.onClick,
+            extraClasses:{v:`btn-ghost btn-sm ${o.extraClasses??""}`},
+            extraProperties:{type:"button",title:o.title},
+        },new UI.PhIcon(o.icon)).create() as HTMLElement;
+    }
+
+    /**
+     * Delay / duration field. UI.Input owns the markup; we keep the inner
+     * <input> so the value can be synced without a document lookup.
+     */
+    private _numberInput(id:string,legend:string,value:number,min:string,onChange:(v:number)=>void,ref?:(el:HTMLInputElement)=>void,width="3.5rem"):HTMLElement{
+        const node=new UI.Input({
+            legend,suffix:"s",id,size:UI.Input.SIZE.SMALL,
+            onChange:(e:Event)=>onChange(parseFloat((e.target as HTMLInputElement).value)),
+            extraProperties:{type:"number",min,step:"0.1",value:String(value),style:`width:${width};`},
+        }).create() as HTMLElement;
+        const field=node.querySelector("input");
+        if(field&&ref) ref(field);
+        return node;
     }
 
     private _initSortableTimeline():void{
@@ -176,43 +236,49 @@ class RecorderPlugin extends XOpatPlugin{
 
     /** Reflect the active viewer's active recording name on the toolbar button. */
     private _syncRecordingsButton():void{
-        const nameEl=document.getElementById("recorder-active-name");
-        if(!nameEl) return;
         const viewerId=this._resolveActiveViewerId();
         const active=viewerId?this.recorder.getActiveRecording(viewerId):undefined;
-        nameEl.textContent=active?active.name:"Recording";
+        this.ui.activeName.val=active?active.name:this.t("recording");
     }
 
     /** Open (or focus) the Recordings manager modal for the active viewer. */
     private _openRecordingsModal():void{
-        const host=document.createElement("div");
-        host.className="flex flex-col gap-3 min-w-[22rem]";
-        this._recordingsBodyHost=host;
+        const {div}=van.tags;
+        const host=div({class:"flex flex-col gap-3 min-w-[22rem]"});
+        this._recordingsBody=host;
         this._refreshRecordingsModal();
 
         let modal:InstanceType<typeof UI.Modal>;
+        const footer=div({class:"flex w-full justify-between gap-2"},
+            div({class:"flex gap-2"},
+                this._labeledButton(this.t("exportAll"),"ph-download",()=>{void this.export();}),
+                this._labeledButton(this.t("import"),"ph-upload",()=>this._importRecordingsPrompt()),
+            ),
+            new UI.Button({
+                onClick:()=>modal.close(),
+                extraClasses:{v:"btn-primary btn-sm"},
+                extraProperties:{type:"button"},
+            },$.t("common.Close")).create(),
+        );
         modal=new UI.Modal({
             id:`${this.id}-recorder-recordings-modal`,
-            header:"Recordings",
+            header:this.t("recordings"),
             body:host,
-            footer:(()=>{
-                const f=document.createElement("div"); f.className="flex w-full justify-between gap-2";
-                const io=document.createElement("div"); io.className="flex gap-2";
-                const exportAll=document.createElement("button"); exportAll.type="button"; exportAll.className="btn btn-ghost btn-sm gap-1";
-                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> ${this.t("exportAll")}`;
-                exportAll.onclick=()=>{void this.export();};
-                const importBtn=document.createElement("button"); importBtn.type="button"; importBtn.className="btn btn-ghost btn-sm gap-1";
-                importBtn.innerHTML=`<span class="fa-auto fa-upload"></span> ${this.t("import")}`;
-                importBtn.onclick=()=>this._importRecordingsPrompt();
-                io.append(exportAll,importBtn);
-                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent=$.t("common.Close"); close.onclick=()=>modal.close();
-                f.append(io,close); return f;
-            })()
+            footer,
         }).mount();
         const origClose=modal.close.bind(modal);
-        modal.close=()=>{this._recordingsModal=null; this._recordingsBodyHost=null; return origClose();};
+        modal.close=()=>{this._recordingsModal=null; this._recordingsBody=null; return origClose();};
         this._recordingsModal=modal;
         modal.open();
+    }
+
+    /** Ghost button with an icon and a text label. */
+    private _labeledButton(label:string,icon:string,onClick:()=>void):HTMLElement{
+        return new UI.Button({
+            onClick,
+            extraClasses:{v:"btn-ghost btn-sm gap-1"},
+            extraProperties:{type:"button"},
+        },new UI.PhIcon(icon),label).create() as HTMLElement;
     }
 
     /**
@@ -222,59 +288,46 @@ class RecorderPlugin extends XOpatPlugin{
      * The current/editing viewer's section is highlighted.
      */
     private _refreshRecordingsModal():void{
-        const host=this._recordingsBodyHost; if(!host) return;
-        host.innerHTML="";
+        const host=this._recordingsBody; if(!host) return;
+        const {div}=van.tags;
         const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
-        if(!viewers.length){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:this.t("noViewer")})); return;}
+        if(!viewers.length){host.replaceChildren(div({class:"opacity-70 text-sm"},this.t("noViewer"))); return;}
         const currentId=this._currentViewerId();
-        viewers.forEach(viewer=>host.appendChild(this._renderViewerRecordingSection(viewer,viewer.uniqueId===currentId)));
+        host.replaceChildren(...viewers.map(viewer=>this._renderViewerRecordingSection(viewer,viewer.uniqueId===currentId)));
     }
 
     /** Render one viewer's recording collection as a labelled section. */
     private _renderViewerRecordingSection(viewer:Viewer,isCurrent:boolean):HTMLElement{
+        const {div,label,span,input}=van.tags;
         const viewerId=viewer.uniqueId;
-        const section=document.createElement("div");
-        section.className=`flex flex-col gap-1 rounded-md p-2 border-l-2 ${isCurrent?"bg-base-200 border-primary":"border-transparent"}`;
-
-        const header=document.createElement("div");
-        header.className="text-xs uppercase opacity-60 truncate cursor-pointer";
-        header.textContent=this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer)));
-        // Clicking a section header makes it the current/editing viewer (keeps the
-        // toolbar name, delay/duration inputs and lane highlight in sync).
-        header.onclick=()=>this._setCurrentViewer(viewerId);
-        section.appendChild(header);
-
         const recordings=this.recorder.listRecordings(viewerId);
         const activeId=this.recorder.getActiveRecording(viewerId)?.id;
-        const mkIconBtn=(title:string,faIcon:string,click:()=>void,extra=""):HTMLButtonElement=>{
-            const b=document.createElement("button"); b.type="button"; b.className=`btn btn-ghost btn-square btn-sm ${extra}`; b.title=title;
-            b.innerHTML=`<span class="fa-auto ${faIcon}"></span>`; b.onclick=click; return b;
-        };
-        recordings.forEach(rec=>{
-            const row=document.createElement("label");
-            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-300 cursor-pointer";
-            const radio=document.createElement("input");
-            // Per-viewer group name: each viewer has its own active recording, so
-            // their radios must NOT share one exclusive group.
-            radio.type="radio"; radio.name=`${this.id}-rec-active-${viewerId}`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
-            radio.onchange=()=>this.recorder.setActiveRecording(rec.id,viewerId);
-            const name=document.createElement("span"); name.className="flex-1 truncate"; name.textContent=rec.name;
-            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=this.t("stepCount",{count:rec.steps.length});
-            row.append(radio,name,count,
-                mkIconBtn(this.t("renameRecording"),"fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
-                mkIconBtn(this.t("duplicateRecording"),"fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
-                mkIconBtn(this.t("exportRecording"),"fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
-                mkIconBtn(this.t("deleteRecording"),"fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
-            );
-            section.appendChild(row);
-        });
+        const iconBtn=(title:string,icon:string,onClick:()=>void,extra="")=>
+            this._iconButton({title,icon,onClick,extraClasses:`btn-square ${extra}`});
 
-        const add=document.createElement("button");
-        add.type="button"; add.className="btn btn-ghost btn-sm gap-1 self-start";
-        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> ${this.t("newRecording")}`;
-        add.onclick=()=>this.recorder.createRecording(viewerId);
-        section.appendChild(add);
-        return section;
+        return div({class:`flex flex-col gap-1 rounded-md p-2 border-l-2 ${isCurrent?"bg-base-200 border-primary":"border-transparent"}`},
+            // Clicking a section header makes it the current/editing viewer (keeps
+            // the toolbar name, delay/duration inputs and lane highlight in sync).
+            div({class:"text-xs uppercase opacity-60 truncate cursor-pointer",onclick:()=>this._setCurrentViewer(viewerId)},
+                this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer)))),
+            ...recordings.map(rec=>label({class:"flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-300 cursor-pointer"},
+                // Per-viewer group name: each viewer has its own active recording,
+                // so their radios must NOT share one exclusive group.
+                input({type:"radio",name:`${this.id}-rec-active-${viewerId}`,class:"radio radio-sm",
+                    checked:rec.id===activeId,onchange:()=>this.recorder.setActiveRecording(rec.id,viewerId)}),
+                span({class:"flex-1 truncate"},rec.name),
+                span({class:"text-xs opacity-50"},this.t("stepCount",{count:rec.steps.length})),
+                iconBtn(this.t("renameRecording"),"ph-pencil-simple",()=>this._renameRecordingPrompt(viewerId,rec.id)),
+                iconBtn(this.t("duplicateRecording"),"ph-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
+                iconBtn(this.t("exportRecording"),"ph-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
+                iconBtn(this.t("deleteRecording"),"ph-trash-simple",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
+            )),
+            new UI.Button({
+                onClick:()=>this.recorder.createRecording(viewerId),
+                extraClasses:{v:"btn-ghost btn-sm gap-1 self-start"},
+                extraProperties:{type:"button"},
+            },new UI.PhIcon({name:"ph-plus",extraClasses:{c:"text-success"}}),this.t("newRecording")).create(),
+        ) as HTMLElement;
     }
 
     /**
@@ -301,28 +354,42 @@ class RecorderPlugin extends XOpatPlugin{
     private _renameRecordingPrompt(viewerId:UniqueViewerId,recordingId?:string):void{
         const target=recordingId?this.recorder.listRecordings(viewerId).find(r=>r.id===recordingId):this.recorder.getActiveRecording(viewerId);
         if(!target) return;
-        const body=document.createElement("div"); body.className="flex flex-col gap-3";
-        const input=document.createElement("input"); input.type="text"; input.className="input input-bordered input-sm w-full"; input.value=target.name;
-        body.appendChild(input);
+        const {div}=van.tags;
+        const nameInput=new UI.Input({
+            size:UI.Input.SIZE.SMALL,
+            extraClasses:{w:"w-full"},
+            extraProperties:{type:"text",value:target.name},
+        }).create() as HTMLInputElement;
         let modal:InstanceType<typeof UI.Modal>;
+        const footer=div({class:"flex w-full justify-end gap-2"},
+            this._modalButton($.t("common.cancel"),"btn-ghost",()=>modal.close()),
+            this._modalButton(this.t("save"),"btn-primary",()=>{
+                const v=nameInput.value.trim();
+                if(v) this.recorder.renameRecording(target.id,v,viewerId);
+                modal.close();
+            }),
+        );
         modal=new UI.Modal({
             id:`${this.id}-recorder-rename-modal`,
-            header:"Rename recording",
-            body,
-            footer:(()=>{
-                const f=document.createElement("div"); f.className="flex w-full justify-end gap-2";
-                const c=document.createElement("button"); c.type="button"; c.className="btn btn-ghost"; c.textContent="Cancel"; c.onclick=()=>modal.close();
-                const s=document.createElement("button"); s.type="button"; s.className="btn btn-primary"; s.textContent="Save";
-                s.onclick=()=>{const v=input.value.trim(); if(v) this.recorder.renameRecording(target.id,v,viewerId); modal.close();};
-                f.append(c,s); return f;
-            })()
+            header:this.t("renameRecordingTitle"),
+            body:div({class:"flex flex-col gap-3"},nameInput),
+            footer,
         }).mount();
         modal.open();
     }
 
+    /** Text-only modal action button. */
+    private _modalButton(label:string,style:string,onClick:()=>void):HTMLElement{
+        return new UI.Button({
+            onClick,
+            extraClasses:{v:style},
+            extraProperties:{type:"button"},
+        },label).create() as HTMLElement;
+    }
+
     addFrame():void{
         if(this.isPlaying) return;
-        const targets=this._recordTargets(); if(!targets.length) return void Dialogs.show("Arm a viewer (● on its lane) to record into.",2500,Dialogs.MSG_WARN);
+        const targets=this._recordTargets(); if(!targets.length) return void Dialogs.show(this.t("armToCapture"),2500,Dialogs.MSG_WARN);
         if(targets.length===1){
             // Single armed viewer: honour selection-based mid-insert.
             const only=targets[0]!;
@@ -368,7 +435,7 @@ class RecorderPlugin extends XOpatPlugin{
         const targets=this._recordTargets()
             .map(id=>VIEWER_MANAGER.getViewer(id,false) as Viewer|undefined)
             .filter((v):v is Viewer=>!!v?.viewport);
-        if(!targets.length) return void Dialogs.show("Arm a viewer (● on its lane) to record a path.",2500,Dialogs.MSG_WARN);
+        if(!targets.length) return void Dialogs.show(this.t("armToRecordPath"),2500,Dialogs.MSG_WARN);
         // All armed viewers share one start clock so their paths replay in sync,
         // preserving cross-viewer choreography (A moves while B holds, etc.).
         this._navStartedAt=performance.now();
@@ -420,7 +487,7 @@ class RecorderPlugin extends XOpatPlugin{
             this.recorder.createNavigation(s.viewerId,s.samples,s.visualizationSamples,this._capture.delay,this._capture.duration,this._capture.transition,multi?undefined:this._insertionIndex(s.viewerId));
             saved++;
         }
-        if(!saved&&!multi) Dialogs.show("Recorded path is too short.",2000,Dialogs.MSG_WARN);
+        if(!saved&&!multi) Dialogs.show(this.t("pathTooShort"),2000,Dialogs.MSG_WARN);
     }
 
     private _captureNavigationSample(s:NavSession):void{
@@ -464,8 +531,8 @@ class RecorderPlugin extends XOpatPlugin{
     }
 
     private _cloneRecorderValue<T>(value:T):T{
-        if(Array.isArray(value)) return $.extend(true, [], value) as T;
-        if(value&&typeof value==="object") return $.extend(true, {}, value) as T;
+        if(Array.isArray(value)) return OpenSeadragon.extend(true, [], value) as T;
+        if(value&&typeof value==="object") return OpenSeadragon.extend(true, {}, value) as T;
         return value;
     }
 
@@ -499,121 +566,77 @@ class RecorderPlugin extends XOpatPlugin{
     }
 
     private _syncRecordPathButton():void{
-        if(!this.recordPathButton) return;
-        const recording=this.navSessions.size>0;
-        this.recordPathButton.classList.toggle("btn-error",recording);
-        this.recordPathButton.classList.toggle("text-error",recording);
-        this.recordPathButton.title=recording?`Stop path recording (${this.navSessions.size} viewer${this.navSessions.size===1?"":"s"})`:"Record path";
+        this.ui.pathRecording.val=this.navSessions.size>0;
     }
 
     private _syncPlayButton():void{
-        if(!this.playButton) return;
-        const icon=this.playButton.querySelector("span");
-        if(icon) icon.className=this.isPlaying?"fa-auto fa-stop":"fa-auto fa-play";
-        this.playButton.title=this.isPlaying?"Stop":"Play";
+        this.ui.playing.val=this.isPlaying;
     }
 
     private _syncInputs(step?:RecorderSnapshotStep):void{
         const delay=step?.delay ?? this._capture.delay;
         const duration=step?.duration ?? this._capture.duration;
-        $("#point-delay").val(delay);
-        $("#point-duration").val(duration);
-        const delayInput=document.getElementById("point-delay") as HTMLInputElement|null;
-        const durationInput=document.getElementById("point-duration") as HTMLInputElement|null;
-        if(delayInput) delayInput.value=String(delay);
-        if(durationInput) durationInput.value=String(duration);
-        if(delayInput) delayInput.title=step?`Step delay. Default: ${this._capture.delay}s`:`Default delay for new captures`;
-        if(durationInput) durationInput.title=step?`Step duration. Default: ${this._capture.duration}s`:`Default duration for new captures`;
+        if(this._delayInput){
+            this._delayInput.value=String(delay);
+            this._delayInput.title=step?this.t("stepDelayHint",{value:this._capture.delay}):this.t("defaultDelayHint");
+        }
+        if(this._durationInput){
+            this._durationInput.value=String(duration);
+            this._durationInput.title=step?this.t("stepDurationHint",{value:this._capture.duration}):this.t("defaultDurationHint");
+        }
     }
 
     openDefaultsModal():void{
-        const body=document.createElement("div");
-        body.className="flex flex-col gap-4";
-
-        const createNumberField=(label:string,value:number,min:string,step:string)=>{
-            const wrapper=document.createElement("label");
-            wrapper.className="form-control w-full";
-            const caption=document.createElement("span");
-            caption.className="label-text text-sm";
-            caption.textContent=label;
-            const field=document.createElement("input");
-            field.type="number";
-            field.min=min;
-            field.step=step;
-            field.value=String(value);
-            field.className="input input-bordered input-sm w-full";
-            wrapper.append(caption,field);
-            return {wrapper,field};
-        };
-        const createToggle=(label:string,checked:boolean)=>{
-            const wrapper=document.createElement("label");
-            wrapper.className="label cursor-pointer justify-start gap-3";
-            const field=document.createElement("input");
-            field.type="checkbox";
-            field.checked=checked;
-            field.className="toggle toggle-primary toggle-sm";
-            const caption=document.createElement("span");
-            caption.className="label-text";
-            caption.textContent=label;
-            wrapper.append(field,caption);
-            return {wrapper,field};
+        const {div}=van.tags;
+        // Values are read back off the created nodes on Apply — the modal is a
+        // one-shot form, so there is no state worth keeping reactive here.
+        let delayField!:HTMLInputElement, durationField!:HTMLInputElement;
+        const numberField=(key:string,legend:string,value:number,min:string,ref:(el:HTMLInputElement)=>void)=>
+            this._numberInput(`${this.id}-defaults-${key}`,legend,value,min,()=>{},ref,"100%");
+        const toggle=(label:string,checked:boolean)=>{
+            const node=new UI.Checkbox({label,checked}).create() as HTMLElement;
+            return {node,field:node.querySelector("input") as HTMLInputElement};
         };
 
-        const delayField=createNumberField("Default delay",this._capture.delay,"0","0.1");
-        const durationField=createNumberField("Default duration",this._capture.duration,"0.1","0.1");
-        const visualizationToggle=createToggle("Capture visualization",!!this.recorder.capturesVisualization);
-        const annotationsToggle=createToggle("Capture annotations",this.captureAnnotations);
-        const smoothToggle=createToggle("Smooth path (fewer keyframes, less precise)",this.smoothPath);
-        body.append(delayField.wrapper,durationField.wrapper,visualizationToggle.wrapper,annotationsToggle.wrapper,smoothToggle.wrapper);
+        const delayNode=numberField("delay",this.t("defaultDelay"),this._capture.delay,"0",el=>delayField=el);
+        const durationNode=numberField("duration",this.t("defaultDuration"),this._capture.duration,"0.1",el=>durationField=el);
+        const visualizationToggle=toggle(this.t("captureVisualization"),!!this.recorder.capturesVisualization);
+        const annotationsToggle=toggle(this.t("captureAnnotations"),this.captureAnnotations);
+        const smoothToggle=toggle(this.t("smoothPathOption"),this.smoothPath);
 
         let modal:InstanceType<typeof UI.Modal>;
+        const footer=div({class:"flex w-full justify-end gap-2"},
+            this._modalButton($.t("common.cancel"),"btn-ghost",()=>modal.close()),
+            this._modalButton(this.t("apply"),"btn-primary",()=>{
+                const delay=Number(delayField?.value);
+                const duration=Number(durationField?.value);
+                if(Number.isFinite(delay)&&delay>=0) this._capture.delay=delay;
+                if(Number.isFinite(duration)&&duration>0) this._capture.duration=duration;
+                this.recorder.setCapturesVisualization(visualizationToggle.field.checked);
+                this.captureAnnotations=annotationsToggle.field.checked;
+                this.smoothPath=smoothToggle.field.checked;
+                this.setOption("smoothPath",this.smoothPath);
+                if(this.selectedIndex===null) this._syncInputs();
+                modal.close();
+            }),
+        );
         modal=new UI.Modal({
             id:`${this.id}-recorder-defaults-modal`,
-            header:"Recorder Defaults",
-            body,
-            footer:(()=>{
-                const footer=document.createElement("div");
-                footer.className="flex w-full justify-end gap-2";
-                const cancelBtn=document.createElement("button");
-                cancelBtn.type="button";
-                cancelBtn.className="btn btn-ghost";
-                cancelBtn.textContent="Cancel";
-                cancelBtn.onclick=()=>modal.close();
-                const saveBtn=document.createElement("button");
-                saveBtn.type="button";
-                saveBtn.className="btn btn-primary";
-                saveBtn.textContent="Apply";
-                saveBtn.onclick=()=>{
-                    const delay=Number(delayField.field.value);
-                    const duration=Number(durationField.field.value);
-                    if(Number.isFinite(delay)&&delay>=0) this._capture.delay=delay;
-                    if(Number.isFinite(duration)&&duration>0) this._capture.duration=duration;
-                    this.recorder.setCapturesVisualization(visualizationToggle.field.checked);
-                    this.captureAnnotations=annotationsToggle.field.checked;
-                    this.smoothPath=smoothToggle.field.checked;
-                    this.setOption("smoothPath",this.smoothPath);
-                    if(this.selectedIndex===null) this._syncInputs();
-                    modal.close();
-                };
-                footer.append(cancelBtn,saveBtn);
-                return footer;
-            })()
+            header:this.t("defaultsTitle"),
+            body:div({class:"flex flex-col gap-4"},delayNode,durationNode,
+                visualizationToggle.node,annotationsToggle.node,smoothToggle.node),
+            footer,
         }).mount();
         modal.open();
     }
 
     private _ensureMeasureNode():HTMLSpanElement{
         if(this.measureNode&&this.measureNode.isConnected) return this.measureNode;
-        const node=document.createElement("span");
-        node.id="playback-timeline-measure";
-        node.style.position="absolute";
-        node.style.top="0";
-        node.style.bottom="0";
-        node.style.left="0";
-        node.style.width="2px";
-        node.style.background="rgb(220 38 38)";
-        node.style.pointerEvents="none";
-        node.style.zIndex="2";
+        const {span}=van.tags;
+        // Playback cursor: the `left` offset is rewritten from a 20 Hz loop, so
+        // it stays a plain style write on a node van created once.
+        const node=span({id:"playback-timeline-measure",
+            style:"position:absolute;top:0;bottom:0;left:0;width:2px;background:rgb(220 38 38);pointer-events:none;z-index:2;"}) as HTMLSpanElement;
         this.track.appendChild(node);
         this.measureNode=node;
         return node;
@@ -710,7 +733,8 @@ class RecorderPlugin extends XOpatPlugin{
     private _resetAllUISteps():void{
         // Preserve the measure node (playback cursor) across rebuilds.
         const measure=this.measureNode; if(measure&&measure.parentElement===this.track) this.track.removeChild(measure);
-        this.track.innerHTML="";
+        this.track.replaceChildren();
+        this._laneStates.clear();
         if(measure) this.track.appendChild(measure);
         this._renderLanes();
         // One lane per viewer: render each viewer's active recording into its
@@ -739,18 +763,21 @@ class RecorderPlugin extends XOpatPlugin{
     private _addUIStepFrom(viewerId:UniqueViewerId,step:RecorderSnapshotStep,withNav=true,atIndex?:number):void{
         const viewer=this._resolveViewerForStep(step)||(VIEWER_MANAGER.getViewer(viewerId,false) as Viewer|undefined); if(!viewer) return;
         const lane=this._laneEl(viewer.uniqueId); if(!lane) return;
-        const node=(step.kind==="navigation"?document.createElement("canvas"):document.createElement("span")) as StepNode;
-        node.id=`step-timeline-${step.id}`; node.dataset.id=step.id; node.dataset.group=viewer.uniqueId; node.draggable=true; node.className="inline-block rounded-sm cursor-pointer align-top";
-        node.style.position="relative";
-        node.style.zIndex="1";
+        const {canvas,span}=van.tags;
+        // Step chips are measured and resized imperatively (width=duration,
+        // height=zoom, canvas repaint) on every timing edit, so van only builds
+        // them — their geometry stays a direct style write. See _refreshStepNode.
+        const props={id:`step-timeline-${step.id}`,draggable:true,class:"inline-block rounded-sm cursor-pointer align-top",
+            style:"position:relative;z-index:1;","data-id":step.id,"data-group":viewer.uniqueId,
+            onclick:(e:MouseEvent)=>this.selectPoint(e.currentTarget as HTMLElement),
+            oncontextmenu:(e:MouseEvent)=>{e.preventDefault(); this._openOverlayEditor(step);},
+            title:this.t("editOverlaysHint")};
+        const node=(step.kind==="navigation"?canvas(props):span(props)) as StepNode;
         this._refreshStepNode(node,step,viewer);
         // Append into the viewer's own lane; ordering within a lane is DOM order
         // and each lane flows independently from x=0.
         if(typeof atIndex==="number"){const children=this._groupNodes(viewer.uniqueId); const before=children[atIndex]; if(before) lane.insertBefore(node,before); else lane.appendChild(node);} else lane.appendChild(node);
         if(withNav&&typeof atIndex==="number"){this.recorder.goToIndex(atIndex,viewer.uniqueId); this._highlight(step,atIndex,viewer.uniqueId);}
-        node.addEventListener("click",(e)=>this.selectPoint(e.currentTarget as HTMLElement));
-        node.addEventListener("contextmenu",(e)=>{e.preventDefault(); this._openOverlayEditor(step);});
-        node.title=node.title?`${node.title} · Right-click to edit overlays`:"Right-click to edit overlays";
     }
 
     private _openOverlayEditor(step:RecorderSnapshotStep):void{
@@ -842,7 +869,7 @@ class RecorderPlugin extends XOpatPlugin{
             || (viewer as Viewer&{element?:HTMLElement}).element?.getAttribute("data-title")
             || (viewer as Viewer&{element?:HTMLElement}).element?.getAttribute("title")
             || (viewer as Viewer&{element?:HTMLElement}).element?.id;
-        return raw&&raw.trim()?raw.trim():`Slide ${index+1}`;
+        return raw&&raw.trim()?raw.trim():this.t("slideN",{index:index+1});
     }
 
     /**
@@ -852,46 +879,40 @@ class RecorderPlugin extends XOpatPlugin{
      * simultaneously-captured frames column-align. Does NOT add step nodes.
      */
     private _renderLanes():void{
+        const {div,span,button}=van.tags;
         const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
         const rowHeight=this._viewerRowHeight();
         this.track.style.minHeight=`${rowHeight*Math.max(1,viewers.length)}px`;
         const currentId=this._currentViewerId();
         viewers.forEach((viewer,index)=>{
-            const isCurrent=viewer.uniqueId===currentId;
-            const isArmed=this.armed.has(viewer.uniqueId);
-            const lane=document.createElement("div");
-            lane.dataset.lane=viewer.uniqueId;
-            lane.className=`relative rounded-sm border ${isCurrent?"border-info":"border-base-300"}`;
-            lane.style.height=`${rowHeight}px`;
-            lane.style.boxSizing="border-box";
-            lane.style.whiteSpace="nowrap";
-            lane.style.width="max-content";
-            lane.style.minWidth="100%";
-            lane.style.paddingLeft="30px"; // room for the arm toggle; equal across lanes → still aligned
-            lane.style.backgroundColor=isCurrent?"rgba(56,189,248,0.07)":"rgba(255,255,255,0.03)";
-            lane.style.boxShadow=isArmed?"inset 3px 0 0 rgb(220 38 38)":"none";
-
-            // Record-arm toggle (explicit capture target, independent of hover).
-            const arm=document.createElement("button");
-            arm.type="button";
-            arm.dataset.laneChrome="true";
-            arm.className=`btn btn-ghost btn-xs btn-square absolute ${isArmed?"text-error":"opacity-50"}`;
-            arm.style.left="2px"; arm.style.top="2px"; arm.style.zIndex="3"; arm.style.pointerEvents="auto";
-            arm.title=isArmed?"Armed for recording — click to disarm":"Arm this viewer for recording";
-            arm.innerHTML=`<span class="fa-auto ${isArmed?"fa-circle-dot":"fa-circle"}"></span>`;
-            arm.onclick=(event)=>{event.stopPropagation(); this._toggleArm(viewer.uniqueId);};
-            lane.appendChild(arm);
-
-            const label=document.createElement("span");
-            label.dataset.laneChrome="true";
-            label.className="absolute right-2 bottom-1 text-xs uppercase opacity-60 bg-base-100 px-1 rounded";
-            label.style.zIndex="3"; label.style.pointerEvents="auto"; label.style.cursor="pointer";
+            // Lane chrome (current tint, armed marker) is reactive: _refreshLaneChrome
+            // only writes these two states and van repaints the bound attributes.
+            const state={current:van.state(viewer.uniqueId===currentId),armed:van.state(this.armed.has(viewer.uniqueId))};
+            this._laneStates.set(viewer.uniqueId,state);
             const fullLabel=this._viewerLabel(viewer,index);
-            label.textContent=this._shortLabel(fullLabel);
-            label.title=`${fullLabel} — click to make current`;
-            label.onclick=(event)=>{event.stopPropagation(); this._setCurrentViewer(viewer.uniqueId);};
-            lane.appendChild(label);
-
+            const lane=div({
+                "data-lane":viewer.uniqueId,
+                class:()=>`relative rounded-sm border ${state.current.val?"border-info":"border-base-300"}`,
+                // paddingLeft leaves room for the arm toggle; it is equal across
+                // lanes, so steps still column-align.
+                style:()=>`height:${rowHeight}px;box-sizing:border-box;white-space:nowrap;width:max-content;min-width:100%;padding-left:30px;`
+                    +`background-color:${state.current.val?"rgba(56,189,248,0.07)":"rgba(255,255,255,0.03)"};`
+                    +`box-shadow:${state.armed.val?"inset 3px 0 0 rgb(220 38 38)":"none"};`,
+            },
+                // Record-arm toggle (explicit capture target, independent of hover).
+                button({type:"button","data-lane-chrome":"true",
+                    class:()=>`btn btn-ghost btn-xs btn-square absolute ${state.armed.val?"text-error":"opacity-50"}`,
+                    style:"left:2px;top:2px;z-index:3;pointer-events:auto;",
+                    title:()=>state.armed.val?this.t("disarmViewer"):this.t("armViewer"),
+                    onclick:(event:MouseEvent)=>{event.stopPropagation(); this._toggleArm(viewer.uniqueId);},
+                },span({class:()=>`ph-light ${state.armed.val?"ph-record":"ph-circle"}`})),
+                span({"data-lane-chrome":"true",
+                    class:"absolute right-2 bottom-1 text-xs uppercase opacity-60 bg-base-100 px-1 rounded",
+                    style:"z-index:3;pointer-events:auto;cursor:pointer;",
+                    title:this.t("makeCurrentHint",{label:fullLabel}),
+                    onclick:(event:MouseEvent)=>{event.stopPropagation(); this._setCurrentViewer(viewer.uniqueId);},
+                },this._shortLabel(fullLabel)),
+            );
             this.track.appendChild(lane);
         });
     }
@@ -899,21 +920,10 @@ class RecorderPlugin extends XOpatPlugin{
     /** Update lane tint / armed indicator in place (no step rebuild). */
     private _refreshLaneChrome():void{
         const currentId=this._currentViewerId();
-        this.track.querySelectorAll<HTMLElement>("[data-lane]").forEach(lane=>{
-            const vid=(lane.dataset.lane||"") as UniqueViewerId;
-            const isCurrent=vid===currentId, isArmed=this.armed.has(vid);
-            lane.classList.toggle("border-info",isCurrent);
-            lane.classList.toggle("border-base-300",!isCurrent);
-            lane.style.backgroundColor=isCurrent?"rgba(56,189,248,0.07)":"rgba(255,255,255,0.03)";
-            lane.style.boxShadow=isArmed?"inset 3px 0 0 rgb(220 38 38)":"none";
-            const arm=lane.querySelector<HTMLElement>("button[data-lane-chrome]");
-            if(arm){
-                arm.classList.toggle("text-error",isArmed);
-                arm.classList.toggle("opacity-50",!isArmed);
-                const s=arm.querySelector("span"); if(s) s.className=`fa-auto ${isArmed?"fa-circle-dot":"fa-circle"}`;
-                arm.title=isArmed?"Armed for recording — click to disarm":"Arm this viewer for recording";
-            }
-        });
+        for(const [viewerId,state] of this._laneStates){
+            state.current.val=viewerId===currentId;
+            state.armed.val=this.armed.has(viewerId);
+        }
     }
 
     private _toggleArm(viewerId:UniqueViewerId):void{
@@ -988,7 +998,6 @@ class RecorderPlugin extends XOpatPlugin{
             this.stopNavigationRecording(false);
             if(this.isPlaying) return; // fan-out fires `play` once per viewer
             this.isPlaying=true;
-            $("#presenter-play-icon span").addClass("timeline-play");
             this._syncPlayButton();
             this._clearMeasureLoop();
             this._ensureMeasureNode();
@@ -1000,7 +1009,6 @@ class RecorderPlugin extends XOpatPlugin{
         this.recorder.addHandler("stop",()=>{
             if(this.recorder.isPlaying()) return; // other viewers still playing
             this.isPlaying=false;
-            $("#presenter-play-icon span").removeClass("timeline-play");
             this._syncPlayButton();
             this._clearMeasureLoop();
         });

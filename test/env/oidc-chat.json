@@ -1,0 +1,202 @@
+/**
+ * Anonymous viewer, login-gated chat — the OIDC counterpart of
+ * `env/env.chat-authed-saml.json`.
+ *
+ * The slides need no credential and the viewer never redirects at boot; only the CHAT is
+ * gated, on a context of its own. Sign-in happens on demand, from the chat's Login button.
+ *
+ * ── How this differs from `test/env/oidc.json`, and why it matters ───────────────────────
+ * That file puts the chat on **`core`** — the viewer's own identity — because it is the
+ * protocol-swap twin of `test/env/saml.json`, whose whole point is that ONE login covers the
+ * viewer, its roles and the chat. Gating `core` gates every *unscoped* RPC, so a logged-out
+ * boot 401s and the viewer gets dragged into a login it does not need. That is the right
+ * shape for a deployment where the user must be identified to see the slides at all, and the
+ * wrong one here.
+ *
+ * The fix is not a code change, it is a context: name a SUB-context and gate that. A main
+ * context with no `rpcVerifiers` entry is the zero-config deployment and stays open
+ * (`server/node/auth.js` → `resolveVerifierContext`), so the provider-registration RPC — which
+ * sends no contextId — passes anonymously. The provider then registers with
+ * `requiresLogin: true`, and the chat's own RPCs carry the `chat` context's token.
+ *
+ *   Boot ................ anonymous, role-free, no redirect, slides open
+ *   Chat panel .......... provider listed, marked `requiresLogin`, Login button offered
+ *   After signing in .... chat unlocks; the viewer identity is untouched
+ *
+ * ── Deliberately absent ──────────────────────────────────────────────────────────────────
+ * No `core.roles` block. `roles.claims` reads a claim out of the token held for a context,
+ * and the viewer has no identity here — a role block keyed on `core` would silently never
+ * fill, which looks like a broken rules engine rather than a deployment that has no rules.
+ * Roles live in the envs that log the VIEWER in (`test/env/{saml,oidc}.json`).
+ *
+ * ── The Keycloak side ────────────────────────────────────────────────────────────────────
+ * Nothing to add. Unlike SAML — whose ACS/SLO URLs carry the context id in their path, which
+ * is why `env.chat-authed-saml.json` has to register a second set — an OIDC `redirect_uri` is
+ * just the page URL, so the existing `xopat-viewer-oidc` client covers a sub-context as-is.
+ *
+ *   docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d
+ *
+ * ── Environment variables ────────────────────────────────────────────────────────────────
+ *   XOPAT_SSRF_ALLOWED_HOSTS ... REQUIRED for a loopback Keycloak. The `oidc` RPC verifier
+ *                                fetches the JWKS through the core SSRF guard, which blocks
+ *                                private upstreams and fails CLOSED — without `localhost`
+ *                                here every chat RPC is refused even with a valid token.
+ *   OPENAI_API_KEY ............. OPTIONAL. Unset leaves the provider keyless; the login path
+ *                                is still fully exercisable.
+ *
+ * Run it:
+ *   XOPAT_ENV=test/env/oidc-chat.json XOPAT_SSRF_ALLOWED_HOSTS=localhost npm run dev
+ *   set "XOPAT_ENV=test/env/oidc-chat.json" && set "XOPAT_SSRF_ALLOWED_HOSTS=localhost" && npm run dev
+ *
+ * No Playwright project: the `oidc` project already drives this broker and this JWKS verifier
+ * end to end, and this deployment differs only in which context key the gate hangs on.
+ */
+{
+  "$base": "env/env.default.json",
+  "core": {
+    "server": {
+      "secure": {
+        "rpcVerifiers": {
+          /**
+           * The viewer itself stays anonymous — only the chat's own context is gated.
+           *
+           * Stating the main context disabled rather than omitting it: an absent entry is
+           * ALSO open (that is the zero-config deployment), but then "the viewer is
+           * deliberately anonymous" and "nobody configured this yet" look identical in the
+           * file. One of those is a decision and should read as one.
+           */
+          "default": { "enabled": false },
+          /**
+           * SERVER-SIDE ENFORCEMENT for the chat login. The RS256/JWKS verifier is
+           * registered by `modules/oidc-client-ts`'s own `register.server.ts` — core stays
+           * auth-agnostic and the module that provides OIDC provides its verifier.
+           *
+           * The key MUST equal `plugins["chat-openai"].authContext` AND the context id in
+           * `modules["oidc-client-ts"].contexts` below. A sub-context that a caller names
+           * but that has no entry here is REJECTED, never quietly downgraded onto the main
+           * entry — which is what stops a caller choosing its own gate by naming a context
+           * that does not exist.
+           *
+           * `audience` is the client id because `tokenForServer` is the id token; see the
+           * note on that setting below.
+           */
+          "chat": {
+            "verifiers": {
+              "oidc": {
+                "jwksUri": "http://localhost:8081/realms/xopat/protocol/openid-connect/certs",
+                "issuer": "http://localhost:8081/realms/xopat",
+                "audience": "xopat-viewer-oidc"
+              }
+            },
+            "mode": "all"
+          }
+        },
+        /**
+         * SERVER-ONLY provider configuration. The key never reaches the browser: the
+         * plugin's host reads this through `getSecurePluginConfig` and talks to the
+         * upstream itself.
+         */
+        "plugins": {
+          "chat-openai": {
+            "providerDefaults": {
+              /* Three-state (see `plugins/chat-openai/server.json`). An UNSET
+                 `<% OPENAI_API_KEY %>` resolves to `""` — "a key is required but none is
+                 configured" — so this file boots for anyone and picks the key up when the
+                 variable is present. Never put a placeholder string here: it is
+                 indistinguishable from a real key, so discovery runs and 401s upstream. */
+              "apiKey": "<% OPENAI_API_KEY %>"
+            }
+          }
+        },
+        /* Chat transcripts. Without `core.kv:sessions` bound to a shared driver an
+           anonymous caller gets a fresh `sess:` principal after every restart and loses
+           their own history — which matters MORE here, where the viewer is anonymous. */
+        "storage": {
+          "bindings": {
+            "core": { "kv:sessions": ["tiered"] },
+            "vercel-ai-chat-sdk": {
+              "kv:sessions": ["tiered"],
+              "log:messages": ["tiered"],
+              "log:attachment-index": ["tiered"],
+              "blob:attachments": ["file"]
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    /**
+     * The plugin NAMES a context and knows nothing about OIDC — this block is identical to
+     * the one in `test/env/oidc.json` apart from the context id, and identical again to the
+     * SAML deployments'. Swapping the broker, or moving the gate off the viewer's identity,
+     * is a change to `modules` and `rpcVerifiers` only.
+     */
+    "chat-openai": {
+      "enabled": true,
+      "permaLoad": true,
+      "authMode": "jwt",
+      "authContext": "chat"
+    },
+    /* One provider is enough to exercise the login path; the rest stay off so a failure is
+       unambiguously about the auth wiring rather than about which plugin claimed the panel. */
+    "chat-anthropic": { "enabled": false },
+    "chat-openai-compatible": { "enabled": false },
+    "pathology-medgemma": { "enabled": false }
+  },
+  "modules": {
+    "oidc-client-ts": {
+      "enabled": true,
+      "permaLoad": true,
+      "contexts": {
+        /**
+         * NOT "core", so this is a SUB-identity: it does not touch the appbar user or the
+         * default XOpatUser/HttpClient context. The viewer stays anonymous while this is
+         * signed in.
+         */
+        "chat": {
+          "oidc": {
+            "authority": "http://localhost:8081/realms/xopat",
+            "client_id": "xopat-viewer-oidc",
+            "scope": "openid profile email"
+          },
+          /**
+           * Popup, not redirect: this login is started by the user clicking Login, so there
+           * IS a gesture (the thing that makes a popup viable), and it keeps the anonymous
+           * viewer session — open slides, viewport, annotations — instead of unloading the
+           * page to visit the IdP.
+           */
+          "authMethod": "popup",
+          /**
+           * On demand. Redundant for a sub-context — those must opt in with `=== true`,
+           * unlike "core", which logs in at boot by default — but stated so the intent does
+           * not depend on knowing that asymmetry.
+           */
+          "autoLogin": false,
+          /**
+           * The ID token, not the access token: Keycloak's access token carries
+           * `aud: ["account"]` and names this client in `azp`, so the `audience` check above
+           * would fail against it until an `oidc-audience-mapper` is added to the client.
+           * The id token's `aud` IS the client id, so minting and verifying agree with no
+           * extra mapper.
+           */
+          "tokenForServer": "id_token",
+          /**
+           * Point the popup/silent redirect URIs at the module's bare `auth-callback.html`
+           * so neither boots a SECOND viewer. This matters more here than in a redirect
+           * deployment: the popup would otherwise load the whole application, and the user
+           * would watch a second viewer appear and vanish inside the sign-in window.
+           */
+          "useCallbackPage": true,
+          "serviceName": "Keycloak (chat)"
+        }
+      }
+    },
+    /* Pulled in by `chat-openai`'s own `modules` list; named here so an operator reading
+       this file can see what the chat actually loads. */
+    "vercel-ai-chat-sdk": { "enabled": true },
+    /* Not loaded: two brokers racing to claim a context is a misconfiguration. */
+    "saml-auth": { "enabled": false },
+    "oidc-server-ts": { "enabled": false }
+  }
+}

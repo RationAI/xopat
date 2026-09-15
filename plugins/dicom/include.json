@@ -5,7 +5,7 @@
   "author": "Aiosa",
   "name": "%meta.name%",
   "categories": ["Data"],
-  "keywords": ["dicom", "dicomweb", "wsi"],
+  "keywords": ["dicom", "dicomweb", "wsi", "ct", "mr", "pet", "radiology"],
   "icon": "ph-stack",
   // Provide service URL of your DICOM API
   // (default below is dev-only — see `requiredConfig` note).
@@ -18,31 +18,73 @@
   // DICOM is dropped in `"available"` mode unless the deployment supplies
   // a real `serviceUrl` in one of the two buckets.
   "requiredConfig": ["serviceUrl"],
-  "includes": [
-    "dist/dcmjs.js",
-    // Minified file, do not bundle.
-    { "src": "dist/cornerstoneWADOImageLoader.bundle.min.js", "bundle": false },
-    // Web Worker source: despite the `.js` suffix it must stay a standalone
-    // file (it is loaded as a worker, not bundled). `bundle: false` keeps the
-    // production minifier from folding it into index.min.js.
-    { "src": "dist/index.worker.bundle.min.worker.js", "bundle": false }
-  ],
-  // Default study to open. The key must be `studyUID` — the plugin reads
-  // `studyUID` / `seriesUID` / `patientUID`, so the old `defaultStudy` name was
-  // never consulted by anything. Note a restored session takes precedence over
-  // this default (see the `hasRestoredBackground` guard in index.workspace.mjs).
-  // "studyUID": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
-  // Discover DICOM Segmentation / Parametric Map series that derive from the
-  // opened slide and render them as overlay shader layers. Discovery costs one
-  // QIDO series listing plus one metadata fetch per SEG/OT candidate per study,
-  // so deployments whose stores hold many unrelated derived objects may want it
-  // off. Deployment-controlled (getStaticMeta), not session-controlled.
-  "renderDerivedObjects": true,
+  // DELIBERATELY EMPTY. The three vendored libraries this plugin ships are
+  // 4.24 MB together, and none of them is needed to open a slide — they used to
+  // be parsed at boot in every session, DICOM or not:
+  //
+  //   dist/dcmjs.js (1.64 MB)
+  //     Reads and writes DICOM SR. Loaded by `annotation-convertor.mjs` when
+  //     annotations are actually imported or exported.
+  //
+  //   dist/cornerstoneWADOImageLoader.bundle.min.js (1.36 MB)
+  //     Decodes what the browser cannot (J2K, JPEG-LS, RLE, lossless JPEG,
+  //     uncompressed). Loaded by `DICOMWebTileSource._ensureCornerstone()` on
+  //     the first such frame — a baseline-JPEG colour pyramid takes the native
+  //     path and never loads it at all.
+  //
+  //   dist/index.worker.bundle.min.worker.js (1.24 MB)
+  //     Worker source. `bundle: false` stopped the minifier folding it in, but
+  //     it was still emitted as a <script> tag — loading a worker bundle into
+  //     the page, which nothing reads. The worker fetches this URL itself
+  //     (`webWorkerPath` in `_initializeCornerstoneLoader`), so listing it here
+  //     only ever cost a duplicate download.
+  //
+  // Both lazy loads resolve their URL against `import.meta.url`, so the files
+  // stay plugin-local and same-origin. See `lazy-lib.mjs`.
+  "includes": [],
+  // THIS PLUGIN OPENS NOTHING ON ITS OWN. There is no `studyUID` /
+  // `seriesUID` / `patientUID` default here any more, and no
+  // `renderDerivedObjects` switch: what to view — and whether to expand a case
+  // or attach SEG / Parametric Map overlays — is declared per background in the
+  // session, e.g.
+  //
+  //   { "dataID": { "studyUID": "…", "seriesUID": "…" },                    "protocol": "dicom" }
+  //   { "dataID": { "studyUID": "…", "seriesUID": "…", "role": "radiology" }, "protocol": "dicom" }
+  //   { "dataID": { "studyUID": "…", "expand": "case" },                     "protocol": "dicom" }
+  //   { "dataID": { "studyUID": "…", "seriesUID": "…", "derived": "auto" },  "protocol": "dicom" }
+  //
+  // A study UID on its own is enough for the `expand: "case"` form: the primary
+  // series is picked from the study's own listing, `role` is read from the
+  // series' modality when absent, and a radiology background with no shaders
+  // gets its `dicom-window` layer. Declared values always win. Completion runs
+  // over the whole session on `before-refresh`, because slide-switcher
+  // thumbnails resolve every catalog entry without opening it. See the README
+  // section "What you do not have to declare".
+  //
+  // For boot-time defaults and a patient/study/series browser, load the
+  // companion `dicom-browser` plugin; those keys live on it now.
+  //
   // Override the runtime QIDO probe for `/patients`. Set to `false` for cloud
   // stores that don't implement it (e.g. Google Healthcare) — the probe
   // otherwise produces a loud CORS error even though the JS code recovers.
   // Leave unset to auto-detect at runtime.
   // "supportsPatients": false
+  //
+  // Never rotate the rendered image for ImageOrientationSlide (0048,0102).
+  //
+  // By default the tag decides which way up the slide is drawn. Slide X runs
+  // DOWN the image and slide Y across it, so the usual `[0,-1,0,-1,0,0]` is a
+  // 180-degree turn on screen — which is what other DICOM viewers show, and what
+  // this plugin rendered upside down before it read the tag. An orientation that
+  // would need a MIRROR is refused instead: OSD draws a flip but does not
+  // convert coordinates through one, so annotations would end up unmirrored on
+  // mirrored pixels. See the README section "Slide orientation".
+  //
+  // This switch only affects PIXELS. DICOM SR coordinates always go through the
+  // full affine, reflection and origin included, because SCOORD3D is defined in
+  // the slide frame of reference whatever the renderer chooses to draw. Read
+  // with `getStaticMeta`, so a session can never set it.
+  // "ignoreSlideOrientation": true
   // Optional: override the HttpClient used for every DICOMweb request issued
   // by this plugin (tiles, metadata, QIDO, STOW). Defaults to a direct client
   // at `serviceUrl` with the main user-auth JWT injected. To proxy through

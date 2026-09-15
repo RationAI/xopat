@@ -1,6 +1,6 @@
 {
   "meta": {
-    "name": "File browser",
+    "name": "WSI-Service Slide Browser",
     "description": "Browse and open whole-slide images served by the RationAI WSI Service."
   }
 }

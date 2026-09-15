@@ -164,6 +164,21 @@
         return r;
     };
 
+    // A pure reorder changes nothing the spatial index's cache key can see — not
+    // the member count, not the viewport, not the selection — but `visibleObjects`
+    // returns its result in canvas z-order, so a cached answer would keep the old
+    // stacking. Add/remove already invalidate through the hooks above; these are
+    // the paths that move an object without adding or removing one.
+    for (const method of ['bringToFront', 'sendToBack', 'bringForward', 'sendBackwards', 'moveTo']) {
+        const original = fabric.Canvas.prototype[method];
+        if (typeof original !== 'function') continue;
+        fabric.Canvas.prototype[method] = function (...args) {
+            const r = original.apply(this, args);
+            this.__spatialIndex?.invalidateVisibleCache();
+            return r;
+        };
+    }
+
     const _origSetCoords = fabric.Object.prototype.setCoords;
     fabric.Object.prototype.setCoords = function (skipCorners) {
         const r = _origSetCoords.call(this, skipCorners);
@@ -432,17 +447,26 @@
 
     /**
      * Label string for one object with a cheap per-object cache. Recomputed only
-     * when a lightweight geometry token changes (bbox + point/path count), so a
-     * static polygon does not re-run its area math every frame; an edited shape
-     * refreshes because its bbox changes. Always-fresh while an object is being
-     * actively transformed (its bbox moves each frame).
+     * when a lightweight token changes, so a static polygon does not re-run its
+     * area math every frame; an edited shape refreshes because its bbox changes.
+     * Always-fresh while an object is being actively transformed (its bbox moves
+     * each frame).
+     *
+     * The token carries `displayValue` and `presetID` as well as the geometry,
+     * because the label is a value slot rather than a measurement readout: an
+     * integration attaching a value to a *static* shape changes no geometry at
+     * all, and a geometry-only token would pin the stale string for the lifetime
+     * of the object. Both are scalars already on the object — the point of the
+     * cache is to skip the area math, and neither adds work to the render path.
      */
     function _measurementLabelFor(mod, obj) {
         const token = obj.factoryID + '|'
             + Math.round((obj.width || 0) * (obj.scaleX || 1)) + '|'
             + Math.round((obj.height || 0) * (obj.scaleY || 1)) + '|'
             + (obj.points ? obj.points.length : 0) + '|'
-            + (obj.path ? obj.path.length : 0);
+            + (obj.path ? obj.path.length : 0) + '|'
+            + (obj.displayValue == null ? '' : obj.displayValue) + '|'
+            + (obj.presetID == null ? '' : obj.presetID);
         const cached = obj.__mLabel;
         if (cached && cached.token === token) return cached.text;
         const text = mod.getMeasurementLabel(obj) || '';
@@ -618,6 +642,39 @@
     // No offscreen render (fabric's `perPixelTargetFind` would do that);
     // typical cost at one click is a few µs across tens of candidates, well
     // under one frame even at 10k+ annotations on the canvas.
+    //
+    // Every test is widened by a tolerance derived from `obj.padding` — the
+    // same screen-px margin fabric already folded into `lineCoords` for the
+    // bbox phase — so the two phases never disagree about how close is close
+    // enough. Callers that want stricter geometry just set `padding: 0`.
+
+    function _distToSegmentSq(px, py, ax, ay, bx, by) {
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+        return ex * ex + ey * ey;
+    }
+
+    // Distance from a point to a poly-path. `closed` adds the wrap-around
+    // segment (polygon outline) — an open polyline must NOT get it, or its
+    // last vertex would appear connected to its first.
+    function _nearPath(px, py, points, tolSq, closed) {
+        const n = points.length;
+        if (n === 0) return false;
+        if (n === 1) {
+            const dx = px - points[0].x, dy = py - points[0].y;
+            return dx * dx + dy * dy <= tolSq;
+        }
+        for (let i = 1; i < n; i++) {
+            if (_distToSegmentSq(px, py, points[i - 1].x, points[i - 1].y,
+                points[i].x, points[i].y) <= tolSq) return true;
+        }
+        if (closed && n > 2 && _distToSegmentSq(px, py, points[n - 1].x, points[n - 1].y,
+            points[0].x, points[0].y) <= tolSq) return true;
+        return false;
+    }
 
     function _rayCastInPolygon(px, py, points) {
         // Odd-even rule. Points are in object-local coords; pre-adjusted by
@@ -656,32 +713,64 @@
         }
         const type = obj.type;
 
+        // Grab tolerance, expressed in the same local units as `local`.
+        // `obj.padding` is the caller's margin in SCREEN px (fabric applies it
+        // that way in calcLineCoords, which is what the bbox phase tested), so
+        // it has to come back through the same combined matrix _normalizePointer
+        // inverted: viewportTransform ∘ obj.calcTransformMatrix(). Half the
+        // stroke is added so a thick line is grabbable across its drawn width.
+        let tol = 0;
         try {
-            // Polygon / polyline — odd-even ray-cast on obj.points.
-            // Rendered points sit at (p.x - pathOffset.x, p.y - pathOffset.y)
-            // in the centered local space, so equivalently we test the local
-            // pointer plus pathOffset against the raw obj.points array.
+            const m = fabric.util.multiplyTransformMatrices(
+                this.viewportTransform, obj.calcTransformMatrix());
+            const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+            tol = (obj.padding || 0) / scale + (obj.strokeWidth || 0) / 2;
+        } catch (e) {
+            tol = (obj.strokeWidth || 0) / 2;
+        }
+        const tolSq = tol * tol;
+
+        try {
+            // Polygon / polyline — points live at (p.x - pathOffset.x,
+            // p.y - pathOffset.y) in the centered local space, so equivalently
+            // we test the local pointer plus pathOffset against raw obj.points.
             if ((type === 'polygon' || type === 'polyline') && Array.isArray(obj.points)) {
                 const offX = obj.pathOffset ? obj.pathOffset.x : 0;
                 const offY = obj.pathOffset ? obj.pathOffset.y : 0;
-                return _rayCastInPolygon(local.x + offX, local.y + offY, obj.points);
+                const px = local.x + offX, py = local.y + offY;
+                // A polyline is an OPEN path: it has no interior, so the
+                // odd-even rule is meaningless for it (and _rayCastInPolygon
+                // rejects < 3 points outright, which made every 2-point
+                // polyline permanently unselectable). Hit it on its stroke.
+                if (type === 'polyline') return _nearPath(px, py, obj.points, tolSq, false);
+                // Polygon: interior OR outline, so a click that lands just
+                // outside a thin/outline-only shape still selects it.
+                return _rayCastInPolygon(px, py, obj.points)
+                    || _nearPath(px, py, obj.points, tolSq, true);
             }
-            // Ellipse — closed-form, centered.
+            // Line — exact segment distance. Previously this fell through to
+            // the "unknown type" branch and accepted the whole AABB, so a long
+            // diagonal was selectable from far off the drawn line.
+            if (type === 'line' && typeof obj.calcLinePoints === 'function') {
+                const p = obj.calcLinePoints();
+                return _distToSegmentSq(local.x, local.y, p.x1, p.y1, p.x2, p.y2) <= tolSq;
+            }
+            // Ellipse — closed-form, centered, radii inflated by the tolerance.
             if (type === 'ellipse') {
-                const rx = obj.rx || 0, ry = obj.ry || 0;
+                const rx = (obj.rx || 0) + tol, ry = (obj.ry || 0) + tol;
                 if (rx <= 0 || ry <= 0) return true;
                 const dx = local.x / rx, dy = local.y / ry;
                 return dx * dx + dy * dy <= 1;
             }
             // Circle — closed-form, centered.
             if (type === 'circle') {
-                const r = obj.radius || 0;
+                const r = (obj.radius || 0) + tol;
                 if (r <= 0) return true;
                 return local.x * local.x + local.y * local.y <= r * r;
             }
             // Rect — AABB centered at local (0,0).
             if (type === 'rect') {
-                const w = (obj.width || 0) / 2, h = (obj.height || 0) / 2;
+                const w = (obj.width || 0) / 2 + tol, h = (obj.height || 0) / 2 + tol;
                 return Math.abs(local.x) <= w && Math.abs(local.y) <= h;
             }
             // Group / activeSelection — bbox already passed; keep current
@@ -968,7 +1057,23 @@
             const zoom = transform.zoom;
             const canvas = this._fabricCanvas;
             canvas.__osdViewportScale = zoom;
-            canvas.setViewportTransform(transform.matrix);
+
+            // Only re-apply a transform that actually differs.
+            //
+            // OSD raises `update-viewport` once per rendered frame whether or not
+            // the viewport moved (tile arrivals and forceRedraw raise it too), and
+            // setViewportTransform recomputes vptCoords and bumps the spatial
+            // index's setCoords version. Applying an identical matrix therefore
+            // cost a full re-cluster of the viewport on frames where nothing had
+            // moved — and, because it ran before any consumer could compare the
+            // cache key, on the hit-tests between those frames as well.
+            const current = canvas.viewportTransform;
+            const m = transform.matrix;
+            if (!current
+                || current[0] !== m[0] || current[1] !== m[1] || current[2] !== m[2]
+                || current[3] !== m[3] || current[4] !== m[4] || current[5] !== m[5]) {
+                canvas.setViewportTransform(m);
+            }
 
             // square root will make closer zoom a bit larger -> nicer
             const smallZoom = Math.sqrt(zoom) / 2;

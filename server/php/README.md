@@ -13,7 +13,6 @@ define('ABS_PLUGINS', ABSPATH . 'plugins/');
 //Relative Paths For the Viewer
 defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
 define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
-define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
 define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
 define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
 define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');

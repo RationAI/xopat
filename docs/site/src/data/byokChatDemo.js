@@ -29,7 +29,7 @@ export const byokChatConfig = {
     notificationsPosition: 'top',
   },
   data: [SLIDE],
-  background: [{dataReference: 0, goalIndex: 0}],
+  background: [{dataReference: 0, visualizationIndex: 0}],
   plugins: {
     // Enable the chat plugin for this session. Its provider(s) still come from
     // the server; an empty-apiKey provider is what turns it into BYOK.

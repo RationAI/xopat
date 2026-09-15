@@ -25,11 +25,13 @@
  */
 
 import { ProxyDecoderPool } from "./decode-pool.mjs";
-import { installWebTiffTileSource } from "./tile-source.mjs";
+import { installWebTiffTileSource, decoderOptionsFrom } from "./tile-source.mjs";
 import { registerRawTiffConverters } from "./raw-tiff.mjs";
 import { describeTileSource, descriptorsDiffer } from "./tiff-metadata.mjs";
 import { buildAutoShaders, shadersAreAutoOwned, stripAutoDerived } from "./auto-config.mjs";
 import { measureChannelRanges } from "./tiff-statistics.mjs";
+import { isEvictableSource } from "./source-cache.mjs";
+import { onDiagnostic } from "./dist/web-tiff.mjs";
 
 const MODULE_ID = "webtiff";
 const meta = (key, fallback) => {
@@ -82,18 +84,51 @@ const httpFetch = adapter
  * otherwise print once per tile and bury everything else. Repeats are still
  * visible under `debugMode`.
  *
- * @param {{code?: string, message?: string}} warning
+ * Keyed by `(file, code)`: the decoder now stamps each diagnostic with the
+ * handle it came from, so one slide's benign warning no longer swallows another
+ * slide's genuine version of the same code. `label` is the human name for that
+ * handle — the data id, when the open passed one.
+ *
+ * `severity` decides the channel, not the wording. `info` marks a decision that
+ * is correct and worth naming (a plane stack read as channels is the one this
+ * deployment meets on every multichannel open); reporting those as warnings is
+ * what taught people to read past the whole class.
+ *
+ * @param {{code?: string, message?: string, severity?: string, file?: number, label?: string}} warning
  */
 const seenWarnings = new Set();
 function reportDecoderWarning(warning) {
     const code = warning?.code || warning?.message || "unknown";
-    if (seenWarnings.has(code)) {
+    const key = `${warning?.file ?? "-"}::${code}`;
+    if (seenWarnings.has(key)) {
         debug("decoder (repeat):", warning?.message || code);
         return;
     }
-    seenWarnings.add(code);
-    console.warn(`[webtiff] decoder: ${warning?.message || code}`);
+    seenWarnings.add(key);
+    const where = warning?.label ? ` [${warning.label}]` : "";
+    const text = `[webtiff] decoder${where}: ${warning?.message || code}`;
+    if (warning?.severity === "info") {
+        // Not a problem, so not a warning. Still said once, because "why is this
+        // slide five channels" is a real question with an answer here.
+        console.info(text);
+        return;
+    }
+    console.warn(text);
 }
+
+/**
+ * The decoder's JS half raises diagnostics on whichever thread calls it, and
+ * this module calls it on both: the pool's worker decodes, but channel parsing
+ * and format merging happen here when a tile source is built. With nobody
+ * subscribed the bundle writes straight to `console`, which is how the
+ * `channels: "all"` notice appeared twice — once raw from that fallback, once
+ * properly through the per-slide report.
+ *
+ * Subscribing routes it through the same reporting as everything else, so the
+ * dedup, the severity split and the slide label apply once, in one place. The
+ * worker subscribes separately for its own module instance.
+ */
+onDiagnostic?.(reportDecoderWarning);
 
 /**
  * The decode transport. Workers are created on the first slide, not at load:
@@ -303,6 +338,12 @@ let warnedViewerOrigin = false;
  */
 function warnIfViewerOrigin(dataID, url) {
     if (warnedViewerOrigin) return;
+    // A configured base IS the deployment saying where the slides live, which is
+    // exactly what this message asks for. A relative one (`/test/fixtures/data`)
+    // is the normal shape when the viewer serves them itself — it follows
+    // whatever port and origin the server bound — so warning about it would be
+    // telling the operator to do the thing they just did.
+    if (baseUrl) return;
     // An absolute URL — from an absolute data id or an absolute base — says where
     // it points, whether or not that is the viewer.
     if (/^(https?:)?\/\//i.test(url)) return;
@@ -311,6 +352,10 @@ function warnIfViewerOrigin(dataID, url) {
     // against the page before matching, so this is the accurate test.
     if (window.SLIDE_PROTOCOLS?.getActiveClientForUrl?.(url)) return;
 
+    // Latched here, after every check — latching before them meant that in a
+    // multi-viewer session the first slide to resolve consumed the one report
+    // even when it had nothing to report, and the misconfigured second slide
+    // was then silent.
     warnedViewerOrigin = true;
     let absolute = url;
     try {
@@ -342,7 +387,12 @@ function warnIfViewerOrigin(dataID, url) {
 const sources = new Map();
 const maxOpenSlides = Math.max(1, Number(meta("maxOpenSlides", 4)) || 4);
 
-/** Whether any viewer is currently rendering this source. */
+/**
+ * Whether any viewer is currently rendering this source.
+ *
+ * Also records that it *was* rendered, which is the fact eviction actually needs
+ * — see {@link isEvictableSource}.
+ */
 function sourceInUse(source) {
     const viewers = window.VIEWER_MANAGER?.viewers;
     if (!Array.isArray(viewers)) return true;   // cannot tell: assume yes, never evict blindly
@@ -350,22 +400,31 @@ function sourceInUse(source) {
         const world = viewer?.world;
         if (!world) continue;
         for (let i = 0; i < world.getItemCount(); i++) {
-            if (world.getItemAt(i)?.source === source) return true;
+            if (world.getItemAt(i)?.source === source) {
+                source.__xopatWasShown = true;
+                return true;
+            }
         }
     }
     return false;
 }
 
-/** Close the oldest idle sources until the cache is within its bound. */
+/**
+ * Close the oldest idle sources until the cache is within its bound.
+ *
+ * "Idle" is decided by `isEvictableSource` (`source-cache.mjs`), which is where
+ * the reasoning lives — the short version is that a source still opening is in
+ * no viewer's world and must not be mistaken for one nobody wants.
+ */
 function trimSources() {
     if (sources.size <= maxOpenSlides) return;
-    for (const [url, source] of sources) {
+    for (const [key, source] of sources) {
         if (sources.size <= maxOpenSlides) return;
-        if (sourceInUse(source)) continue;
-        sources.delete(url);
+        if (!isEvictableSource(source, sourceInUse(source))) continue;
+        sources.delete(key);
         try {
             source.closeFile();
-            debug("closed idle slide", url);
+            debug("closed idle slide", key);
         } catch (e) {
             console.warn("[webtiff] closing an idle slide failed:", e?.message || e);
         }
@@ -390,18 +449,49 @@ function stampClient(source, client) {
 }
 
 /**
+ * The identity of one *rendering* of a file, which is not the same thing as the
+ * file.
+ *
+ * Layout options — `planeIndex`, `layout`, `pyramid` — choose which directories
+ * of the file the level pyramid is built from, and that decision is made once,
+ * when the header is parsed. Two backgrounds naming the same URL with different
+ * plane selections are therefore two sources, and keying either the source cache
+ * or `tileSourceId` on the URL alone would hand the second one the first one's
+ * pyramid. `channels` and `interpretation` are deliberately *not* part of the key:
+ * they are per-read parameters, so one open file serves both.
+ *
+ * The suffix is empty for a slide with no options, which is the overwhelming
+ * majority — so the ordinary key stays exactly the URL, and every per-slide cache
+ * already keyed by `tileSourceId` keeps its entries.
+ *
+ * @param {string} url
+ * @param {{layout?: object}} [decoderOptions] from `decoderOptionsFrom`
+ * @return {string}
+ */
+function slideKeyFor(url, decoderOptions) {
+    const layout = decoderOptions?.layout;
+    if (!layout) return url;
+    // Sorted, so two entries spelling the same selection in a different key order
+    // are one slide and not two.
+    const parts = Object.keys(layout).sort().map(key => `${key}=${layout[key]}`);
+    return parts.length ? `${url}#${parts.join(",")}` : url;
+}
+
+/**
  * Build (or reuse) the source for a resolved URL.
  * @param {string} url
  * @param {object} [client] the protocol's HttpClient, when it declares one
+ * @param {object} [decoderOptions] layout/format options from the slide's entry
  * @return {object} the tile source; possibly still parsing its header
  */
-function sourceFor(url, client) {
-    const cached = sources.get(url);
+function sourceFor(url, client, decoderOptions) {
+    const key = slideKeyFor(url, decoderOptions);
+    const cached = sources.get(key);
     // Only reuse a source that actually parsed: one that failed would otherwise
     // pin its failure for the rest of the session.
     if (cached && cached._ready) {
-        sources.delete(url);
-        sources.set(url, cached);       // refresh recency
+        sources.delete(key);
+        sources.set(key, cached);       // refresh recency
         stampClient(cached, client);
         return cached;
     }
@@ -410,12 +500,16 @@ function sourceFor(url, client) {
         return cached;                  // still opening
     }
 
-    const source = new WebTiffTileSource(url, {});
+    // Layout options must be here rather than in a later `setSourceOptions`: the
+    // header read starts inside this constructor, and the level pyramid it
+    // resolves is what `planeIndex` / `layout` decide.
+    const source = new WebTiffTileSource(url, decoderOptions ? { ...decoderOptions } : {});
     // The identity everything per-slide is keyed by (preview cache, visited
     // slides, virtualization detectors). The URL is a correct id here because
     // this protocol serves one file per URL — unlike DICOMweb, which shares one
-    // base URL across slides.
-    source.tileSourceId = url;
+    // base URL across slides — and `slideKeyFor` separates two plane selections
+    // of that one file, which really are two different pictures.
+    source.tileSourceId = key;
     stampClient(source, client);
     // The header read is already in flight, so an `open-failed` can fire before
     // the open pipeline subscribes; record it where `awaitSourceReady` looks.
@@ -423,7 +517,7 @@ function sourceFor(url, client) {
         source.__xopatOpenFailure = (typeof e?.message === "string" ? e.message : e?.message?.message)
             || "[webtiff] the slide failed to open";
     });
-    sources.set(url, source);
+    sources.set(key, source);
     trimSources();
     return source;
 }
@@ -438,16 +532,17 @@ function sourceFor(url, client) {
  * render with the wrong colour and a second one correctly.
  *
  * @param {string} dataId
+ * @param {object} [decoderOptions] the slide's resolved layout/format options
  * @return {Promise<object|undefined>} the ready source, or undefined on failure
  */
-async function readySourceFor(dataId) {
-    // The same client the protocol factory will be handed. Resolving without it
-    // would give a different URL — and the URL is both the cache key and
-    // `tileSourceId`, so the probe and the open would build two sources for one
-    // slide and read its header twice.
+async function readySourceFor(dataId, decoderOptions) {
+    // The same client the protocol factory will be handed, and the same options.
+    // Resolving without either would give a different key — and the key is both
+    // the cache key and `tileSourceId`, so the probe and the open would build two
+    // sources for one slide and read its header twice.
     const client = window.SLIDE_PROTOCOLS?.getClientForProtocol?.(PROTOCOL_ID);
     const url = slideUrlFor(dataId, client);
-    const source = sourceFor(url, client);
+    const source = sourceFor(url, client, decoderOptions);
     if (source._ready) return source;
 
     try {
@@ -481,38 +576,66 @@ const layoutInFlight = new Map();
  * window — so the same slide would render windowed in one place and black in the
  * other, which is the exact defect this module exists to avoid.
  *
+ * Keyed by {@link slideKeyFor}, not by the bare data id: a slide opened twice with
+ * two different `planeIndex` values has two channel layouts and two measured
+ * ranges, and the data id alone cannot tell them apart. A slide with no options —
+ * every slide, in the ordinary case — keys exactly as it did before.
+ *
  * @param {string} dataId
  * @param {object} [knownSource] a source the caller already resolved and awaited
+ * @param {object} [decoderOptions] the slide's resolved layout/format options
  * @return {Promise<object|undefined>} the descriptor, or undefined when unknown
  */
-function ensureSlideLayout(dataId, knownSource) {
+function ensureSlideLayout(dataId, knownSource, decoderOptions) {
     if (!dataId) return Promise.resolve(undefined);
-    if (descriptors.has(dataId) && (autoWindow === "off" || statistics.has(dataId))) {
-        return Promise.resolve(descriptors.get(dataId));
+    const layoutKey = slideKeyFor(dataId, decoderOptions);
+    if (descriptors.has(layoutKey) && (autoWindow === "off" || statistics.has(layoutKey))) {
+        return Promise.resolve(descriptors.get(layoutKey));
     }
 
-    let pending = layoutInFlight.get(dataId);
+    let pending = layoutInFlight.get(layoutKey);
     if (!pending) {
         pending = (async () => {
             const source = ownsSource(knownSource) && knownSource._ready
                 ? knownSource
-                : await readySourceFor(dataId);
-            const descriptor = descriptors.get(dataId)
+                : await readySourceFor(dataId, decoderOptions);
+            const descriptor = descriptors.get(layoutKey)
                 || (source ? describeTileSource(source) : undefined);
             if (!descriptor) return undefined;
-            descriptors.set(dataId, descriptor);
+            descriptors.set(layoutKey, descriptor);
 
-            if (autoWindow !== "off" && !statistics.has(dataId) && source) {
+            if (autoWindow !== "off" && !statistics.has(layoutKey) && source) {
                 // An `undefined` result is stored deliberately: a slide that cannot
                 // be measured must not be re-measured on every thumbnail repaint.
-                statistics.set(dataId,
+                statistics.set(layoutKey,
                     await measureChannelRanges(source.getTiffFile?.(), descriptor));
             }
             return descriptor;
-        })().finally(() => layoutInFlight.delete(dataId));
-        layoutInFlight.set(dataId, pending);
+        })().finally(() => layoutInFlight.delete(layoutKey));
+        layoutInFlight.set(layoutKey, pending);
     }
     return pending;
+}
+
+/**
+ * The decoder options a background's slide asks for, resolved the same way the
+ * protocol registry resolves them for the factory — `data[i].options` merged with
+ * the background entry's own, entry-wins (`slide-protocols.ts:69`).
+ *
+ * Resolved here as well as there so the layout probe, which runs *before* any
+ * factory call, builds the same source the open will use rather than a second one
+ * on the file's default plane.
+ *
+ * @param {object} background background config entry
+ * @return {object} from `decoderOptionsFrom`; empty when the slide sets nothing
+ */
+function slideOptionsFor(background) {
+    try {
+        return decoderOptionsFrom(
+            window.SLIDE_PROTOCOLS?.optionsFor?.(specOf(background), background));
+    } catch (e) {
+        return {};
+    }
 }
 
 if (meta("registerSlideProtocol", true) && window.SLIDE_PROTOCOLS) {
@@ -524,7 +647,12 @@ if (meta("registerSlideProtocol", true) && window.SLIDE_PROTOCOLS) {
             // The tile source reads the file itself (range requests through the
             // pool's `HttpClient` fetch), so the data id resolves to the file URL.
             createTileSource: (ctx) => sourceFor(
-                slideUrlFor(ctx.dataID, ctx.httpClient), ctx.httpClient),
+                slideUrlFor(ctx.dataID, ctx.httpClient),
+                ctx.httpClient,
+                // Layout options decide the level pyramid, which is resolved by the
+                // header read this constructor starts — so they have to be here,
+                // not in the `setSourceOptions` the registry calls afterwards.
+                decoderOptionsFrom(ctx.options)),
         });
     } catch (e) {
         // The most likely cause by far is that `geotiff` is loaded too and got
@@ -553,15 +681,16 @@ if (meta("autoConfigure", true) && window.VIEWER_MANAGER) {
         if (!ownsBackground(background) || !shadersAreAutoOwned(background)) return;
 
         const dataId = dataIdOf(background);
+        const decoderOptions = slideOptionsFor(background);
 
         // This handler is awaited and the source is memoized, so reading the header
         // now costs one read that would have happened moments later anyway — and it
         // buys the layout *before* the shader list is assembled.
-        const descriptor = await ensureSlideLayout(dataId);
+        const descriptor = await ensureSlideLayout(dataId, undefined, decoderOptions);
         if (!descriptor) return;   // unknown layout: leave the implicit identity
 
         const { shaders, reason } = buildAutoShaders(descriptor, {
-            statistics: statistics.get(dataId),
+            statistics: statistics.get(slideKeyFor(dataId, decoderOptions)),
             autoWindow,
         });
         reportPlan(dataId, reason);
@@ -583,13 +712,14 @@ if (meta("autoConfigure", true) && window.VIEWER_MANAGER) {
         if (!ownsBackground(background) || !shadersAreAutoOwned(background)) return;
 
         const dataId = e.dataId || dataIdOf(background);
+        const decoderOptions = slideOptionsFor(background);
         // The preview already resolved and awaited the source, so in the common case
         // this costs no I/O at all — and whatever it does read warms the later open.
-        const descriptor = await ensureSlideLayout(dataId, e.source);
+        const descriptor = await ensureSlideLayout(dataId, e.source, decoderOptions);
         if (!descriptor) return;
 
         const { shaders, reason } = buildAutoShaders(descriptor, {
-            statistics: statistics.get(dataId),
+            statistics: statistics.get(slideKeyFor(dataId, decoderOptions)),
             autoWindow,
         });
         if (!shaders) return;               // implicit identity is the right answer
@@ -618,19 +748,32 @@ if (meta("autoConfigure", true) && window.VIEWER_MANAGER) {
             if (!descriptor) continue;
 
             const dataId = dataIdOf(background);
-            const known = descriptors.get(dataId);
-            descriptors.set(dataId, descriptor);
+            // Keyed off the data id, like `ensureSlideLayout` — the source's own
+            // `tileSourceId` carries the same options but is built from the resolved
+            // URL, so using it here would write the open's descriptor to a key the
+            // pre-open probe never reads.
+            const layoutKey = slideKeyFor(dataId, slideOptionsFor(background));
+            const known = descriptors.get(layoutKey);
+            descriptors.set(layoutKey, descriptor);
 
-            const warnings = item.source.getWarnings?.();
-            if (warnings?.length) {
-                console.warn(`[webtiff] ${dataId}: ${warnings.join("; ")}`);
+            // Through the same reporter as the streamed ones, rather than a
+            // second formatting of the same records: `getWarnings()` returns
+            // Diagnostics carrying `severity`, `file` and `label`, and a
+            // diagnostic that also arrived on the live stream would otherwise be
+            // printed twice — once here at open, once as it happened. One
+            // reporter means one dedup key, one severity policy, one shape.
+            //
+            // `dataId` is the better name for the slide than the decoder's
+            // basename-derived label, so pass it when the record has none.
+            for (const diagnostic of item.source.getWarnings?.() ?? []) {
+                reportDecoderWarning(diagnostic?.label ? diagnostic : { ...diagnostic, label: dataId });
             }
 
             if (!shadersAreAutoOwned(background) || corrected.has(background)) continue;
             if (known && !descriptorsDiffer(known, descriptor)) continue;
 
             const { shaders, reason } = buildAutoShaders(descriptor, {
-                statistics: statistics.get(dataId),
+                statistics: statistics.get(layoutKey),
                 autoWindow,
             });
             reportPlan(dataId, reason);

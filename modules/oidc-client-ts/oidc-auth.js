@@ -18,6 +18,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
     static SILENT_PROBE_ONCE_PER_SESSION = true;
 
     /**
+     * How long before expiry the silent-renew loop fires, when the deployment does not
+     * say. Overridable per context via
+     * `modules["oidc-client-ts"].contexts.<ctx>.oidc.accessTokenExpiringNotificationTimeInSeconds`.
+     *
+     * Must stay comfortably below the IdP's access-token lifetime — see
+     * {@link _tuneRenewWindow}, which warns when it is not.
+     */
+    static DEFAULT_RENEW_LEAD_SECONDS = 120;
+
+    /**
      * OAuth error codes meaning "the IdP will not answer without a human".
      * These are RECOVERABLE — one user gesture fixes them — but never in the
      * background: `window.open` without a gesture is blocked by every browser.
@@ -131,7 +141,35 @@ window.OIDCAuthClient = class OIDCAuthClient {
             }
         }
 
+        // The one line that turns a redirect-URI mismatch from an unreadable
+        // cross-origin error page into a copy-paste comparison. An identity
+        // provider matches these verbatim, and when it refuses one it renders its
+        // OWN page (Perun MITREid: "Redirect URI does not match any of the
+        // registered ones") rather than redirecting back — so inside the silent
+        // frame nothing can read the reason and the only symptom is a watchdog
+        // timeout. Printing the effective set costs nothing and is the fastest
+        // route from that timeout to the cause.
+        console.debug(`OIDC[${this.userContextId || 'core'}]: effective redirect URIs — ` +
+            `redirect_uri=${this.configuration.redirect_uri}, ` +
+            `popup_redirect_uri=${this.configuration.popup_redirect_uri || this.configuration.redirect_uri}, ` +
+            `silent_redirect_uri=${this.configuration.silent_redirect_uri || this.configuration.redirect_uri}. ` +
+            `Each must be registered at the identity provider verbatim.`);
+
+        // Renewal is armed MANUALLY (enableEvents / startSilentRenew) once a user has
+        // loaded WITH a refresh token — the library's own flag would also start the
+        // loop for a session that has none, where `signinSilent` degrades to hidden
+        // `prompt=none` iframes that bounce on interaction_required.
         this.configuration.automaticSilentRenew = false;
+        // Renew well AHEAD of expiry, not at it. The library default is 60s; against a
+        // Keycloak default 300s access token that leaves renewal at 20% of remaining
+        // life, so a backgrounded tab, a slow token endpoint or one retry lands after
+        // the token is already dead — and a dead token means a 401, which is the input
+        // the refresh loop feeds on. `_tuneRenewWindow` still warns (and names this
+        // exact key) if a deployment's token lifetime is too short for the lead.
+        if (this.configuration.accessTokenExpiringNotificationTimeInSeconds === undefined) {
+            this.configuration.accessTokenExpiringNotificationTimeInSeconds =
+                OIDCAuthClient.DEFAULT_RENEW_LEAD_SECONDS;
+        }
         this.configuration.storeState = this.configuration.userStore = undefined;
 
         this._setupStore();
@@ -630,6 +668,16 @@ window.OIDCAuthClient = class OIDCAuthClient {
      * prompt); reporting it upward is what lets core inherit that judgement without
      * this method having to own the recovery UI.
      *
+     * `"unknown"` is reserved for the REFRESH-TOKEN route, which is a plain fetch to
+     * the token endpoint and therefore real evidence about reachability. A timeout on
+     * the hidden-frame probe is not: the frame carries the viewer's own load cost, and
+     * it also times out when the authority answers perfectly well but refuses to be
+     * framed, or rejects the `redirect_uri` and renders its own error page. Reporting
+     * that as "unreachable" made core drop the context from the interactive phase
+     * entirely — no redirect, no interaction gate — so every request went out bare and
+     * 401'd against an identity provider that was up the whole time. It is `false`:
+     * no credential, and nothing learned that should stop a top-level attempt.
+     *
      * @return {Promise<boolean|"unknown">}
      */
     async signInSilent() {
@@ -637,7 +685,19 @@ window.OIDCAuthClient = class OIDCAuthClient {
             await this._silentSignIn({ reason: "requested" });
         } catch (e) {
             const ctx = this.userContextId || 'core';
-            if (OIDCAuthClient.isTransientFailure(e) || String(e?.message || "").includes("Failed to fetch")) {
+            const transient = OIDCAuthClient.isTransientFailure(e)
+                || String(e?.message || "").includes("Failed to fetch");
+            if (transient && e?.xopatSilentPath === "frame") {
+                const uri = this.configuration.silent_redirect_uri || this.configuration.redirect_uri;
+                console.warn(`OIDC[${ctx}]: the hidden sign-in frame did not answer in time ` +
+                    `(${e?.error || e?.name || e}). This is NOT evidence that the identity provider is ` +
+                    `unreachable — the same timeout appears when it refuses to be framed, or when it ` +
+                    `rejects the redirect URI and renders its own error page, which cannot be read ` +
+                    `cross-origin. Verify '${uri}' is registered at the provider verbatim. ` +
+                    `Reporting "no session" so an interactive login can still proceed.`);
+                return false;
+            }
+            if (transient) {
                 console.debug(`OIDC[${ctx}]: silent sign-in could not reach the identity provider ` +
                     `(${e?.error || e?.name || e}); reporting "unknown".`);
                 return "unknown";
@@ -650,7 +710,10 @@ window.OIDCAuthClient = class OIDCAuthClient {
     }
 
     /**
-     * The ONLY place `userManager.signinSilent()` is called.
+     * The only xOpat-initiated call to `userManager.signinSilent()` — this is the
+     * REACTIVE path (a 401, a boot probe, an expired cached token). The library's own
+     * `SilentRenewService`, armed by {@link enableEvents}, drives the PROACTIVE
+     * renewals on its expiring timer and does not come through here.
      *
      * Coalesces concurrent callers onto one attempt (a burst of failing requests
      * must not become a burst of IdP round trips) and enforces the one-probe rule
@@ -679,7 +742,19 @@ window.OIDCAuthClient = class OIDCAuthClient {
         }
 
         console.debug(`OIDC[${ctx}]: silent sign-in (${reason}, ${renewable ? "refresh token" : "session probe"}).`);
+        // Which route this attempt took is the only thing that tells a caller whether
+        // a timeout says anything about the authority: the refresh grant is a plain
+        // fetch to the token endpoint, the probe is a hidden frame that fails for a
+        // dozen reasons having nothing to do with reachability. Tag the rejection —
+        // never replace it — because coalesced callers all see this same object.
+        const path = renewable ? "refresh" : "frame";
         this._silent.inFlight = this.userManager.signinSilent(this.extraSigninRequestArgs)
+            .catch((e) => {
+                try {
+                    if (e && typeof e === "object" && !e.xopatSilentPath) e.xopatSilentPath = path;
+                } catch (ignored) { /* frozen/exotic rejection: classification just falls back */ }
+                throw e;
+            })
             .finally(() => { this._silent.inFlight = null; });
         return this._silent.inFlight;
     }
@@ -1083,15 +1158,29 @@ window.OIDCAuthClient = class OIDCAuthClient {
                 // available again: its earlier "no" is now stale evidence, because
                 // the user has since signed in somewhere.
                 this._silent.probedWithoutRefreshToken = false;
+                // Same reasoning for the transient-failure counter. It was only ever
+                // reset by a successful `_trySignIn`, so a run of network blips could
+                // push it past maxRetryCount and RETIRE the renew loop for the rest of
+                // the session (renewErrorHandler -> disableEvents), after which every
+                // expiry became a reactive 401.
+                this._connectionRetries = 0;
             } catch (e) {
                 console.warn("OIDC: failed to sync the signed-in identity to XOpatUser.", e);
             }
 
-            // Kick off the in-session silent-renew loop once — but only when a
-            // refresh_token is available. Without one, startSilentRenew falls back
-            // to iframe/redirect renewal which loops on interaction_required.
+            // (Re-)arm the in-session silent-renew loop — but only when a refresh_token
+            // is available. Without one, startSilentRenew falls back to
+            // iframe/redirect renewal which loops on interaction_required.
+            //
+            // This is the only place that arms it, so `_silentRenewEnabled` must never
+            // disagree with whether the loop is actually running — it is now
+            // maintained by enable/disableEvents themselves. It previously did
+            // disagree: `renewErrorHandler` called `disableEvents()` on exhausted
+            // retries WITHOUT clearing the flag, so the guard below saw "already
+            // enabled", never re-armed, and the session ran with no proactive renewal
+            // at all — after which every token expiry became a reactive 401, the fuel
+            // for the 401-refresh loop.
             if (!this._silentRenewEnabled && oidcUser.refresh_token) {
-                this._silentRenewEnabled = true;
                 this._tuneRenewWindow(oidcUser);
                 this.enableEvents();
             }
@@ -1119,8 +1208,8 @@ window.OIDCAuthClient = class OIDCAuthClient {
         if (!Number.isFinite(lifetime) || lifetime <= 0) return;
 
         const ctx = this.userContextId || 'core';
-        // 60 is oidc-client-ts's DefaultAccessTokenExpiringNotificationTimeInSeconds.
-        const lead = this.configuration.accessTokenExpiringNotificationTimeInSeconds ?? 60;
+        const lead = this.configuration.accessTokenExpiringNotificationTimeInSeconds
+            ?? OIDCAuthClient.DEFAULT_RENEW_LEAD_SECONDS;
         console.debug(`OIDC[${ctx}]: access token lifetime ${lifetime}s, silent-renew lead ${lead}s`);
 
         if (lead >= lifetime) {
@@ -1132,10 +1221,18 @@ window.OIDCAuthClient = class OIDCAuthClient {
         }
     }
 
+    /**
+     * `_silentRenewEnabled` is maintained HERE, by the two methods that actually start
+     * and stop the loop, and nowhere else. It is the guard `handleUserDataChanged`
+     * re-arms on, so a caller that stopped the loop without clearing it retired
+     * proactive renewal for the whole session — which is what `renewErrorHandler` did
+     * on exhausted retries.
+     */
     disableEvents() {
         this.userManager.events.removeAccessTokenExpired(this.renewErrorHandler);
         this.userManager.events.removeSilentRenewError(this.renewErrorHandler);
         this.userManager.stopSilentRenew();
+        this._silentRenewEnabled = false;
     }
 
     enableEvents() {
@@ -1144,6 +1241,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
         this.userManager.events.addAccessTokenExpired(this.renewErrorHandler);
         this.userManager.events.addSilentRenewError(this.renewErrorHandler);
         this.userManager.startSilentRenew();
+        this._silentRenewEnabled = true;
     }
 
     /**

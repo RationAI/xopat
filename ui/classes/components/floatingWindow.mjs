@@ -49,7 +49,6 @@ function serializeDomLike(value) {
     if (Array.isArray(value)) return value.map(item => serializeDomLike(item)).join("");
     if (typeof value === "string") return value;
     if (typeof value === "number" || typeof value === "boolean") return String(value);
-    if (value.jquery?.length) return value[0]?.outerHTML || "";
     if (value.outerHTML) return value.outerHTML;
     if (value.nodeType) {
         const wrapper = document.createElement("div");
@@ -434,15 +433,10 @@ export class FloatingWindow extends BaseComponent {
         return openerRef.confirm(message);
     };
 
-    if (openerRef.$) {
-        window.$ = openerRef.$;
-        window.jQuery = openerRef.jQuery || openerRef.$;
-        window.$.t = openerRef.$.t;
-        window.$.i18n = openerRef.$.i18n;
-        if (window.$.prototype) {
-            window.$.prototype.localize = () => console.error("localize() not supported in child window!");
-        }
-    }
+    // $ is the i18n namespace (t / i18n), not a DOM library - share the
+    // opener's so translations resolve identically in the popup.
+    // (No backticks in this comment: the whole bootstrap is a template literal.)
+    if (openerRef.$) window.$ = openerRef.$;
 
     window.Dialogs = {
         show: (...args) => openerRef.Dialogs?.show?.(...args),
@@ -533,11 +527,11 @@ export class FloatingWindow extends BaseComponent {
         header.className = "navbar min-h-0 h-9 bg-base-300/70 px-2 select-none";
         header.innerHTML = `
             <div class="flex items-center gap-2">
-                <i class="fa-solid fa-up-down-left-right"></i>
+                <i class="ph-light ph-arrows-out-cardinal"></i>
                 <span class="font-semibold truncate">${escapeHtml(this.title)}</span>
             </div>
             <div class="ml-auto flex items-center gap-1">
-                ${this.closable ? `<button type="button" class="btn btn-ghost btn-xs btn-square" data-window-close="true"><i class="fa-solid fa-close"></i></button>` : ""}
+                ${this.closable ? `<button type="button" class="btn btn-ghost btn-xs btn-square" data-window-close="true"><i class="ph-light ph-x"></i></button>` : ""}
             </div>
         `;
 

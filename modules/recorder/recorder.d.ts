@@ -98,6 +98,22 @@ declare global {
         viewerId?: UniqueViewerId;
     }
 
+    /**
+     * The verdict of `RecorderModule.summarizeTour` — the counts a caller needs to judge
+     * a recording it cannot watch, plus `warnings` phrased as the edits to make.
+     * `warnings` is empty when the tour is fine.
+     */
+    interface RecorderTourSummary {
+        /** Every step, holds and recorded paths included. */
+        stepCount: number;
+        /** Steps that show a view of their own — the ones a caption belongs on. */
+        keyframeCount: number;
+        narratedCount: number;
+        totalSeconds: number;
+        shortestSeconds: number;
+        warnings: string[];
+    }
+
     interface RecorderSnapshotStep {
         id: string;
         /**
@@ -133,7 +149,6 @@ declare global {
         navigation?: RecorderNavigationTrack;
         visualization?: RecorderVisualizationStateSnapshot;
         annotationFilters?: RecorderAnnotationFilter[];
-        screenShot?: unknown;
         /**
          * Annotations associated with this step. Migrated from the recorder
          * plugin's side-channel `annotationRefs: Record<stepId, AnnObj[]>`
@@ -206,7 +221,7 @@ declare global {
 
     interface RecorderTextOverlay extends RecorderOverlayBase {
         kind: "text";
-        /** Markdown source; renderer parses via window.xnpm.marked. */
+        /** Markdown source; rendered (and sanitized) by the `markdown` module. */
         markdown: string;
     }
 
@@ -318,7 +333,6 @@ declare global {
         viewers: Map<UniqueViewerId, RecorderViewerCollection>;
         captureVisualization: boolean;
         captureViewport: boolean;
-        captureScreen: boolean;
     }
 
     interface RecorderModule extends IXOpatModuleSingleton {
@@ -412,10 +426,8 @@ declare global {
         downloadActiveRecording(viewerId?: UniqueViewerId): void;
         capturesVisualization: boolean;
         capturesViewport: boolean;
-        capturesScreen: boolean;
         setCapturesVisualization(value: boolean): void;
         setCapturesViewport(value: boolean): void;
-        setCapturesScreen(value: boolean): void;
         exportJSON(serialize?: true): string;
         exportJSON(serialize: false): RecorderSnapshotStep[];
         importJSON(json: string | RecorderSnapshotStep[]): RecorderSnapshotStep[];
@@ -429,6 +441,12 @@ declare global {
         stepCapturesVisualization(step: RecorderSnapshotStep): boolean;
         stepCapturesViewport(step: RecorderSnapshotStep): boolean;
         stepCapturesNavigation(step: RecorderSnapshotStep): boolean;
+        /**
+         * Whether a recording is watchable, and what to fix when it is not. Shared by
+         * every surface that finishes a tour (recorder playback, questionnaire page
+         * binding) so "a good tour" has one definition. Never throws.
+         */
+        summarizeTour(steps: RecorderSnapshotStep[] | undefined | null): RecorderTourSummary;
         sortWithIdList(ids: string[], removeMissing?: boolean, viewerId?: UniqueViewerId): void;
 
         /**

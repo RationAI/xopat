@@ -13,6 +13,21 @@ export const PENDING_STATUSES = new Set(["NONE", "ASSEMBLY", "READY"]);
 
 /** Filter buckets, in the order the chips are rendered. */
 export const FILTERS = ["all", "running", "completed", "failed", "pending"];
+
+/**
+ * Job modes, for the second filter row.
+ *
+ * The list carries every mode's jobs for the slide now — a postprocessing step
+ * is built on a preprocessing result, so hiding one while preparing the other
+ * was the wrong shape. That makes "which step is this?" a question the window has
+ * to be able to answer and to filter on.
+ */
+export const MODE_FILTERS = ["all", "standalone", "preprocessing", "postprocessing"];
+
+/** The EAD mode name of a job, lowercased from the uppercase wire enum. */
+export function modeOf(job) {
+    return String(job?.mode ?? "").toLowerCase();
+}
 /** Day buckets, newest first. */
 export const DAY_GROUPS = ["today", "yesterday", "earlier"];
 
@@ -88,6 +103,7 @@ export function relativeTime(t, timestamp, now = Date.now()) {
  *
  * @param jobs the slide's analyses
  * @param query.filter one of {@link FILTERS}
+ * @param query.mode one of {@link MODE_FILTERS}
  * @param query.search free text; empty matches everything
  * @param query.appName the app's display name, matched as if it were a field
  * @param query.statusLabel translator for a status, so a user searching the word
@@ -95,6 +111,7 @@ export function relativeTime(t, timestamp, now = Date.now()) {
  */
 export function selectJobs(jobs, query = {}) {
     const filter = query.filter || "all";
+    const mode = query.mode || "all";
     const needle = String(query.search ?? "").trim().toLowerCase();
     const appName = String(query.appName ?? "").toLowerCase();
     const statusLabel = query.statusLabel ?? (status => status);
@@ -102,12 +119,14 @@ export function selectJobs(jobs, query = {}) {
     return (jobs ?? [])
         .filter(job => {
             if (filter !== "all" && statusGroup(job?.status) !== filter) return false;
+            if (mode !== "all" && modeOf(job) !== mode) return false;
             if (!needle) return true;
             return [
                 job?.id,
                 job?.app_id,
                 appName,
                 statusLabel(job?.status),
+                modeOf(job),
                 job?.error_message,
                 job?.input_validation_error_message,
                 job?.output_validation_error_message,

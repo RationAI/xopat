@@ -430,6 +430,44 @@ Prefer:
 
 Avoid returning host objects directly.
 
+### Do: ask before re-exporting what a `sensitive` namespace gates
+
+Marking a namespace `sensitive` (the 4th constructor argument; `patient` is the only one
+today) lets a consumer grant and revoke it on its own. That promise is only as good as
+every OTHER namespace: a `sensitive` flag stops calls into `patient`, it does not stop
+`visualization.describeData()` returning the same slide path under a different name.
+
+So: **if your method returns a value some sensitive namespace also exposes — a raw path or
+filename, a study/series UID, free-form metadata off a tile source, or a fact derived from
+any of those — gate it.**
+
+``````ts
+// `mayExposeSensitive` is `true` unless the host installed a policy, so local scripting
+// and in-process contexts are unaffected.
+dataId: this.mayExposeSensitive ? rawPath : this.maskedHandle("data", index),
+metadata: this.scrubSensitiveMetadata(rawMetadata),
+data: this.maskDataEntries(config.data),          // same length — dataReference indexes it
+``````
+
+Three rules the helpers already encode, worth knowing before you hand-roll one:
+
+- **Mask, do not omit.** The payload shape must not change with consent, and positional
+  handles keep `dataReference` joinable across `describeData`, shaders and backgrounds.
+- **Unmask on the way back in.** Anything that accepts a snapshot must run
+  `unmaskDataEntries` before it reaches `openViewerWith`, or a restore writes handles into
+  `config.data` and opens a slide that does not exist.
+- **A derived fact is still the fact.** Matching a filename against a closed vocabulary
+  bounds *what* can be emitted, never *whether* it may be — "lung" read off a path is
+  withheld data as much as the path is. Gate the derivation, not its output.
+
+Viewer identity has its own, older chokepoint for the same reason — route ids through
+`toPresentedViewerId` / `toInternalViewerId`, **including inside error messages**, which
+reach the model like any other value.
+
+Never reach a sensitive namespace by handing `getApi()` a synthetic context: that is the
+trusted main-thread path and it does not check the grant. Forward the real context's
+`mayExposeSensitiveData` and alias hooks if you must bind one.
+
 ### Stored results: parking large payloads under a handle
 
 A consumer that relays script results to a context-limited channel (the LLM chat)

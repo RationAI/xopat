@@ -1,0 +1,47 @@
+{
+  "$meta": {
+    "description": "Everything io/mlflow does, plus annotation bundles as MLflow run artifacts",
+    "dimension": "io"
+  },
+  /**
+   * `io/mlflow` is taken as a base rather than layered beside this fragment:
+   * `dimension: "io"` is exclusive, so two peer io layers are a conflict by
+   * design. A base states the starting point and is exempt.
+   *
+   * The point of this fragment is that **one sink instance serves two owners**.
+   * A binding target may be `{sink, config}` instead of a bare sink id, and
+   * that `config` is the per-(owner, capability) option layer the sink reads
+   * back through `IO_PIPELINE.bindingConfig`. So `slide-scoring` keeps the
+   * numeric `slide-scoring` mapper while `annotations` gets `bundle-artifact`,
+   * with no second sink id, no second proxy alias and no plugin change. That
+   * is the whole claim of the IO design: a binding names a capability and a
+   * destination, never a plugin.
+   *
+   * Everything security-relevant still comes from `io/mlflow`: the `mlflow`
+   * proxy alias holds the credential server-side, `experimentAllow` bounds the
+   * experiment a mapper may name, and `artifactPathPrefix` bounds the path an
+   * artifact may land on. None of them are expressible from a session.
+   */
+  "$base": "io/mlflow",
+
+  "core": {
+    "client": {
+      "localhost": {
+        "io": {
+          "bindings": {
+            "annotations": {
+              "bundle-export": [{ "sink": "mlflow", "config": { "template": "bundle-artifact" } }],
+              "bundle-import": [{ "sink": "mlflow", "config": { "template": "bundle-artifact" } }]
+            }
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "annotations": { "enabled": true, "permaLoad": true }
+  },
+  "plugins": {
+    "gui_annotations": { "enabled": true, "permaLoad": true }
+  }
+}

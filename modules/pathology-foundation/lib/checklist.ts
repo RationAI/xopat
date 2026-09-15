@@ -48,6 +48,16 @@ export interface ChecklistFeature {
     weight?: number;
 }
 
+/**
+ * Why a run is using the generic checklist instead of one derived from the question.
+ *
+ * `no-query` is the benign case and the only one that is the caller's to fix. The other three
+ * are failures on this side, and telling them apart is the difference between "ask a more
+ * specific question" (useless advice when the question was fine) and "the assistant model is
+ * not reachable from here". Only ever set alongside `source: "fallback"`.
+ */
+export type ChecklistFallbackReason = "no-query" | "no-model" | "unparseable" | "error";
+
 export interface Checklist {
     features: ChecklistFeature[];
     /**
@@ -55,6 +65,8 @@ export interface Checklist {
      * `fallback` — no query, or derivation was unavailable; the generic checklist below.
      */
     source: "explicit" | "derived" | "fallback";
+    /** Set with `source: "fallback"`: what stopped a real checklist from being derived. */
+    fallbackReason?: ChecklistFallbackReason;
     query?: string;
     /** Stable hash of the normalized features; part of the analyze memo key. */
     hash: string;
@@ -73,16 +85,37 @@ export interface FeatureAnswer {
      */
     present: "yes" | "no" | "uncertain" | "not-assessable";
     confidence: "low" | "medium" | "high" | null;
-    /** Why it was not assessable: the walk distinguishes "too coarse" from "model said so". */
-    reason?: "resolution" | "model" | "unparsed";
+    /**
+     * Why it was not assessable. These send a reader to four different next steps, so they
+     * must not be collapsed:
+     *
+     * - `resolution` — the image was too coarse to show the feature. *Look closer.*
+     * - `model` — the model saw the image and could not tell. *A real, if unhelpful, reading.*
+     * - `unparsed` — the model replied, but not about this feature. *A prompt/parse problem.*
+     * - `unread` — no image was ever produced (render failed or timed out). Nothing looked at
+     *   anything. *Re-run.* Reporting this as `model` is how a rendering failure came back as a
+     *   clinical non-answer and sent a user zooming in to fix a network problem.
+     */
+    reason?: "resolution" | "model" | "unparsed" | "unread";
+    /**
+     * The feature was asked at a resolution COARSER than its `requiredMpp`, because the
+     * slide holds nothing finer.
+     *
+     * Set on an answer the model actually gave. The alternative — deferring the feature
+     * because the stated requirement cannot be met — asks nobody and then reports the
+     * silence as `not-assessable`, which manufactures a finding out of a resolution
+     * figure. A real answer at the slide's limit is information; it just has to be read
+     * knowing what it was formed at, which is what this flag says.
+     */
+    belowRequested?: boolean;
 }
 
 export const MAX_CHECKLIST_FEATURES = 6;
 const MAX_LABEL = 48;
 const MAX_QUESTION = 160;
 const MAX_ID = 32;
-/** Bounds on a plausible slide resolution, in µm/px. */
-const MPP_RANGE: [number, number] = [0.1, 8];
+/** Used when `requiredMpp` is absent or not a usable number at all. */
+const DEFAULT_REQUIRED_MPP = 1.0;
 
 /**
  * Normalize and BOUND a checklist from any source.
@@ -91,9 +124,21 @@ const MPP_RANGE: [number, number] = [0.1, 8];
  * make every vision call enormous; the strings are capped and stripped so nothing can
  * inject prompt structure (newlines, backticks, `${`) into the framing the engine wraps
  * them in; ids are slugged so a feature name can never be read as anything but a key;
- * unknown keys are dropped rather than carried; and `requiredMpp` is clamped into a range
- * a real slide could satisfy so a feature cannot demand a resolution that makes every
- * field unassessable forever.
+ * and unknown keys are dropped rather than carried.
+ *
+ * **`requiredMpp` is NOT clamped**, and used to be. A fixed `[0.1, 8]` range was applied
+ * here with the stated purpose of stopping "a feature that demands a resolution that makes
+ * every field unassessable forever" — which it could never do, because the range is not the
+ * slide's. On a 20x scan (0.504 µm/px) a derived `0.25` for nuclear detail sailed through,
+ * and every downstream stage then treated an impossible target as a live one: the ladder grew
+ * a rung nothing could render, the drill gate never closed, and the feature was reported
+ * `not-assessable` on every field of every run without any model ever being asked.
+ *
+ * A stated requirement is a true fact about the QUESTION. What the slide can deliver is a
+ * separate fact about the SCAN. Rewriting the first to match the second destroys the
+ * information needed to say "asked for 0.25, answered at 0.504" — so the requirement is kept
+ * verbatim, and reconciling the two belongs to whoever knows the slide: see
+ * {@link splitByResolution}, and `ladderRungs` for the render targets.
  *
  * Note what is NOT validated: whether the questions are clinically sensible. That is not
  * knowable here and pretending otherwise would put a term list in this file.
@@ -131,7 +176,9 @@ export function sanitizeChecklist(
             id,
             label: clean(e.label, MAX_LABEL) || id,
             question,
-            requiredMpp: clampNumber(e.requiredMpp, MPP_RANGE, 1.0),
+            // Kept as stated. Only a value that is not a positive finite number at all is
+            // replaced — that is a parse failure, not a requirement.
+            requiredMpp: positiveNumber(e.requiredMpp, DEFAULT_REQUIRED_MPP),
             weight: clampNumber(e.weight, [0, 1], 1),
         });
     }
@@ -159,14 +206,15 @@ export function fallbackChecklist(
         extentLabel: string; extent: string;
         qualityLabel: string; quality: string;
     },
-    query?: string
+    query?: string,
+    fallbackReason: ChecklistFallbackReason = query?.trim() ? "error" : "no-query"
 ): Checklist {
     const features: ChecklistFeature[] = [
         { id: "match", label: strings.matchLabel, question: strings.match, requiredMpp: 1.0, weight: 1 },
         { id: "extent", label: strings.extentLabel, question: strings.extent, requiredMpp: 1.0, weight: 0.6 },
         { id: "quality", label: strings.qualityLabel, question: strings.quality, requiredMpp: 2.0, weight: 0.3 },
     ];
-    return { features, source: "fallback", query, hash: hashFeatures(features) };
+    return { features, source: "fallback", fallbackReason, query, hash: hashFeatures(features) };
 }
 
 /**
@@ -178,14 +226,31 @@ export function fallbackChecklist(
  * Deferred features are recorded as `not-assessable` with `reason: "resolution"` and cost
  * no model call at all — which is both the honest answer and the signal that makes the
  * walk go deeper.
+ *
+ * **Deferring is only honest while a finer read is still coming.** Pass `nativeMpp` (the
+ * slide's own calibration — level 0, the finest sampling that exists) and a feature whose
+ * requirement is finer than the whole scan is asked ANYWAY, at the limit, rather than
+ * deferred to a rung that will never arrive. Without it, a checklist asking for 0.25 µm/px
+ * on a 0.504 µm/px slide produced `not-assessable` for that feature on every field of every
+ * run — a verdict reached without a single model call, indistinguishable in the report from
+ * a model that looked and could not tell. Those answers are marked `belowRequested` by the
+ * caller so the difference stays legible.
+ *
+ * Omit `nativeMpp` and the behaviour is exactly as before.
  */
 export function splitByResolution(
     checklist: Checklist,
     deliveredMpp: number | null,
-    slack = 1.1
+    slack = 1.1,
+    nativeMpp?: number | null
 ): { assessable: ChecklistFeature[]; deferred: ChecklistFeature[] } {
     // No calibration means no basis to defer on — ask everything and let the model judge.
     if (!deliveredMpp) return { assessable: checklist.features, deferred: [] };
+    // Already reading at the slide's limit: nothing finer is reachable, so nothing can be
+    // deferred TO. Ask the whole checklist.
+    if (nativeMpp && nativeMpp > 0 && deliveredMpp <= nativeMpp * slack) {
+        return { assessable: checklist.features, deferred: [] };
+    }
     const assessable: ChecklistFeature[] = [];
     const deferred: ChecklistFeature[] = [];
     for (const f of checklist.features) {
@@ -194,9 +259,47 @@ export function splitByResolution(
     return { assessable, deferred };
 }
 
+/**
+ * True when this feature's stated requirement is finer than the scan itself holds.
+ *
+ * A property of the (feature, slide) pair, not of any one field — which is what makes it
+ * reportable once per run instead of once per region, and what distinguishes "we never got
+ * close enough" (go look closer) from "this scan does not contain that detail" (nothing to
+ * go and do).
+ */
+export function exceedsSlide(
+    feature: ChecklistFeature,
+    nativeMpp: number | null | undefined,
+    slack = 1.1
+): boolean {
+    if (!nativeMpp || !(nativeMpp > 0)) return false;
+    return feature.requiredMpp * slack < nativeMpp;
+}
+
 /** An answer for a feature nobody could ask about at this resolution. */
 export function unassessable(id: string, reason: FeatureAnswer["reason"]): FeatureAnswer {
     return { id, answer: null, present: "not-assessable", confidence: null, reason };
+}
+
+/**
+ * Flag the answers that were produced coarser than their feature asked for.
+ *
+ * Mutates in place, because the caller has just built the map and the alternative is a copy
+ * of every answer on every field of every run. Only touches features it was given, and only
+ * when the comparison is meaningful — an uncalibrated field flags nothing.
+ */
+export function markBelowRequested(
+    answers: Record<string, FeatureAnswer>,
+    asked: readonly ChecklistFeature[],
+    deliveredMpp: number | null,
+    slack = 1.1
+): void {
+    if (!deliveredMpp || !(deliveredMpp > 0)) return;
+    for (const f of asked) {
+        const answer = answers[f.id];
+        if (!answer) continue;
+        if (f.requiredMpp * slack < deliveredMpp) answer.belowRequested = true;
+    }
 }
 
 /** FNV-1a over the normalized features — a memo key, not a security digest. */
@@ -229,6 +332,12 @@ function clean(value: unknown, max: number): string {
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, max);
+}
+
+/** A positive finite number, or `fallback` when the value is not one. No upper bound. */
+function positiveNumber(value: unknown, fallback: number): number {
+    const n = typeof value === "number" ? value : parseFloat(String(value));
+    return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function clampNumber(value: unknown, [lo, hi]: [number, number], fallback: number): number {

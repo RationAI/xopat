@@ -200,6 +200,11 @@ auth: {
 }
 ```
 
+`auth: false` is **not** an opt-out. Policy normalization
+(`server-runtime.js:879`, `rawPolicy.auth || { required: false }`) turns it into
+an object, so the method keeps the default session + CSRF gate. Write
+`{ public: true, requireSession: false }` when you mean "no checks".
+
 ### Meaning
 `public: false`
 
@@ -208,8 +213,11 @@ context, or both — see the decision matrix below.
 
 `public: true`
 
-The method is public and skips both session and verifier checks. Anyone who
-can reach the endpoint can call the method.
+The method skips the **verifier** check. It does *not* skip the session check —
+that gate is governed by `requireSession` alone and runs first, independently of
+`public` (`server-runtime.js:1847` vs `:1859`). On its own, `public: true` means
+"any viewer tab may call this, no credential needed". For an endpoint anybody on
+the network may call, pair it with `requireSession: false`.
 
 `requireSession: true`
 
@@ -233,7 +241,8 @@ resolved verifier context. The outcome:
 
 | `public` | `requireSession` | Verifier context | Verifier entries | Result |
 |---|---|---|---|---|
-| `true` | — | — | — | Accepted (no checks) |
+| `true` | `true` (default) | — | — | Session + CSRF; verifier skipped |
+| `true` | `false` | — | — | Accepted (no checks) — truly public |
 | `false` | `true`  | any                  | any   | Session + CSRF (+ verifier if present); all must pass |
 | `false` | `false` | has `verifiers`      | ≥ 1   | Verifier only (e.g. raw JWT calls) |
 | `false` | `false` | `{ enabled: false }` | —     | Accepted — explicit operator opt-out |
@@ -482,18 +491,19 @@ network ACL).
 
 ### How to make a method "auth-less"
 
-There are three legitimate ways to expose a method without bothering with
+There are four legitimate ways to expose a method without bothering with
 JWT/RPC verifiers, depending on what "auth-less" should mean for your use
 case:
 
 1. **Truly public** — anybody on the network can call it.
    ```ts
    export const policy = {
-     pingHealth: { auth: { public: true } },
+     pingHealth: { auth: { public: true, requireSession: false } },
    } as const;
    ```
-   Skip session, CSRF and verifier checks. Suitable only for endpoints that
-   leak nothing and have no side effects.
+   Skips session, CSRF and verifier checks. **Both flags are required**:
+   `public` alone only skips the verifier, and the call stays session-gated.
+   Suitable only for endpoints that leak nothing and have no side effects.
 
 2. **Session-only** — the call must come from a logged-in viewer tab. This
    is the *default*; you can leave `auth` off entirely.
@@ -525,6 +535,18 @@ case:
    An empty `default: {}` (or no `default` at all) is rejected — that was
    the original silent-bypass shape and is the failure mode the fail-closed
    guard is named after.
+
+4. **Credential-free but tab-bound** — any viewer tab may call it, the network
+   may not. This is what `public: true` alone means.
+   ```ts
+   export const policy = {
+     beginLogin: { auth: { public: true, requireSession: true } },
+   } as const;
+   ```
+   Session + CSRF are enforced; no verifier runs. Use it for the methods that
+   *establish* a credential and therefore cannot require one —
+   `modules/oidc-server-ts/register.server.ts` and `modules/saml-auth/register.server.ts`
+   both do exactly this, and spell `requireSession: true` out for the reader.
 
 #### Note on Proxy auth configuration
 
@@ -651,6 +673,43 @@ code drifted to `process.env`. Use `XOPAT_SERVER.getStaticModuleConfig(id)` /
 `getStaticPluginConfig(id)`: the same composed (author ⊕ deployer) config, read
 from the snapshot core republishes on every core build. Returns `{}` before the
 first build — treat that as "defaults", never as "configured empty".
+
+### Capability policy (roles)
+
+A method may declare the capabilities its caller must hold. This is the half of
+the roles system that is authorization rather than UI gating: the client decodes
+the token unverified, the server resolves the same `core.roles` rules from the
+token it has already verified.
+
+```js
+export const policy = {
+    deleteEverything: {
+        auth: { public: false, requireSession: true },
+        capabilities: ["myPlugin.crud:thing.delete"],
+        capabilitiesMode: "all",      // or "any"; default "all"
+    },
+};
+```
+
+Checked **after** authentication — a capability is a statement about a known
+caller, and answering "forbidden" to an anonymous request would enumerate
+methods — and **before** the concurrency gate, so a refused call costs no slot
+and reaches no upstream. Refusal is `403` with code `RPC_CAP_DENIED`.
+
+Two things worth knowing:
+
+- **Declaring nothing changes nothing.** Existing methods are untouched, which
+  is what makes this safe to add to a running deployment.
+- **It fails closed on identity.** A capability-declaring method with no verified
+  identity is refused, unlike the browser, which answers `true` for ids it does
+  not know so that one deployment's config cannot lock another's UI.
+
+For decisions that depend on the record being touched rather than the method,
+call `XOPAT_SERVER.resolveRoles(ctx)` / `XOPAT_SERVER.can(ctx, id)` in the
+handler. Resolution lives in `server/node/roles.js`, which borrows the browser's
+own resolver (`src/classes/user-roles-core.ts`) rather than copying it; the two
+are pinned together by `test/suites/unit/server-roles-parity.test.mjs`. Full
+spec: [`src/USER_ROLES.md`](../../src/USER_ROLES.md).
 
 ### Runtime policy API
 

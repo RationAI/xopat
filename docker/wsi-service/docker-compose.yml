@@ -1,20 +1,48 @@
 services:
   wsi_service:
-    image: ghcr.io/rationai/wsi-service:test0.15
-    entrypoint: ["/bin/bash", "-c", "/entrypoint.sh"]
+    image: ghcr.io/rationai/wsi-service:latest
     environment:
     - WS_CORS_ALLOW_CREDENTIALS=False
     - WS_CORS_ALLOW_ORIGINS=["*"]
     - WS_DEBUG=False
     - WS_DISABLE_OPENAPI=True
     - WS_MAPPER_ADDRESS=http://localhost:8080/slides/storage?slide={slide_id}
-    - WS_LOCAL_MODE=wsi_service.simple_mapper:SimpleMapper
+    # PathsMapper, not SimpleMapper: it exposes the directory tree, taking a
+    # `context` (a relative path) and listing that folder's subdirectories as
+    # cases, with slide ids that ARE relative paths (`slides/slide.tif`). That is
+    # what `plugins/rationai-wsi-file-browser` sends and how it addresses a
+    # slide, so it browses the repo's fixture tree with no restructuring.
+    # SimpleMapper is the other shape — it ignores `context`, requires every
+    # slide to sit in a case folder, and caches its index to a pickle that a
+    # restart does not invalidate.
+    - WS_LOCAL_MODE=wsi_service.paths_mapper:PathsMapper
+    # Which auth integration guards the v3 API. NOT optional: with it unset the
+    # service loads its `Default` integration, whose `global_depends()` is a
+    # dependency that raises 401 `{"detail":"Integration not configured"}` on
+    # every v3 route — so the viewer's slide listing and every tile 401 while
+    # `/alive` still answers 200, which reads as an xOpat auth problem and is not
+    # one. `disable_auth` is the local-development choice; the image also ships
+    # `empaia`, `lsaai_groups` and `lsaai_resources` for real deployments.
+    - WS_API_V3_INTEGRATION=wsi_service.api.v3.integrations.disable_auth:DisableAuth
     - WS_ENABLE_VIEWER_ROUTES=False
+    # De-register the Mapbox-vector-tile plugin. It claims a slide by extension,
+    # and its extension is `.json` — so with the fixture root served, the
+    # bookkeeping files in it (`manifest.json`, `generated/.stamp.json`) are
+    # offered as slides, and the file browser renders a card for each, which
+    # opens a tile source and 500s. `_get_plugin_priority() >= 0` is what gates
+    # registration, so a negative priority removes the plugin. Drop this line if
+    # you ever serve real MVT slides.
+    - WS_PLUGIN_PRIORITY_MVT=-1
     - WS_INACTIVE_HISTO_IMAGE_TIMEOUT_SECONDS=600
     - WS_MAX_RETURNED_REGION_SIZE=25000000
     volumes:
-    # if you do not have this folder and docker is runned as root, it will create this folder under root
-    - ${DOCKER_COMPOSE_WSI_SERVER_DATA:-../../wsi_data}:/data
+    # The repo's fixture root, one level ABOVE `slides/` on purpose: PathsMapper
+    # lists a context's subdirectories as cases, so mounting the parent makes
+    # `slides` itself a case and every fetched fixture in it a slide — no case
+    # folders to create, nothing copied. Mounting `slides/` directly would list
+    # its (flat) files as nothing at all.
+    # If you do not have this folder and docker runs as root, it will be created under root.
+    - ${DOCKER_COMPOSE_WSI_SERVER_DATA:-../../test/fixtures/data/}:/data
     # this file is runned with another docker compose and chooses their folder as root
     - ../wsi-service/entrypoint.sh:/entrypoint.sh
     ports:

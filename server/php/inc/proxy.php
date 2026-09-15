@@ -34,16 +34,29 @@ function handleProxyRequest($pathInfo) {
     // text/html by default, and this response renders on the viewer's own origin
     // next to the CSRF token. Reflecting it here was a reflected XSS. Log the
     // offending value instead; mirrors the same fix in server/node/index.js.
-    if (!$proxyConfig || !is_array($proxyConfig) || !is_string($proxyConfig['baseUrl'] ?? null)) {
-        error_log("[proxy] refused unknown/misconfigured alias for path: $pathInfo");
+    // The per-session alias allowlist answers deliberately the same way as an
+    // unknown alias: which aliases exist is not a restricted session's business.
+    if (!$proxyConfig || !is_array($proxyConfig) || !is_string($proxyConfig['baseUrl'] ?? null)
+        || !proxyAliasAllowedForSession($alias)) {
+        error_log("[proxy] refused unknown/disallowed alias for path: $pathInfo");
         header("HTTP/1.1 403 Forbidden");
         header("Content-Type: text/plain; charset=utf-8");
         exit("Proxy target alias is not allowed or not configured.");
     }
 
+    // An alias that attaches operator credentials must enforce authentication —
+    // session + CSRF only proves same-origin, and both are handed to any anonymous
+    // page load.
+    if (!enforceProxyCredentialGate($alias, $proxyConfig)) exit;
+
     // 3. Prepare Upstream
-    // Target path starts AFTER the alias
-    $targetPath = '/' . implode('/', array_slice($parts, $proxyIndex + 2));
+    // Target path starts AFTER the alias. The trailing slash is restored: the
+    // `trim()` above drops it, and upstreams distinguish `/v3/cases/` from
+    // `/v3/cases` — the latter is commonly answered with a redirect back to the
+    // former, which this proxy hands to the caller rather than following. Mirrors
+    // the same fix in server/node/index.js.
+    $rest = implode('/', array_slice($parts, $proxyIndex + 2));
+    $targetPath = '/' . $rest . ($rest !== '' && substr($pathInfo, -1) === '/' ? '/' : '');
     $targetUrl = rtrim($proxyConfig['baseUrl'], '/') . $targetPath . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : '');
 
     $incoming = getallheaders();

@@ -1,5 +1,38 @@
 # Changelog
 
+### 3.1.1
+
+Improvements across dictation, reporting, measurements, UI, rendering, web-tiff and security, with
+broad fixes to speech-to-text reliability, session handling, storage, annotations and image data.
+
+**Features**:
+
+* **Chat & voice** — multilingual dictation with automatic language detection, Silero VAD, improved
+  transcription prompts, transcript review/correction, and more reliable speech handling.
+* **Reporting** — optional resume of earlier dictations, faster transcript-only sessions, and
+  persistent provider/session recovery across server restarts.
+* **Measurements** — tissue-mask derivation and tissue-ratio measurements from the panel, context menu
+  and scripting, with improved mask selection, sampling and measurement UI.
+* **UI** — appearance controls, configurable side-menu state, more compact context menus and
+  improved transcript suggestions.
+* **Rendering & data** — multichannel OME-TIFF and sparse/non-square MVT support, preview injection,
+  and improved overlay scaling.
+* **Security & tooling** — safer custom-page rendering and sanitization, plus new visualization and
+  web-tiff integration improvements.
+
+**Bugfixes**:
+
+* **Chat & voice** — fixed transcription prompting, duplicate flushes, correction/lexicon handling,
+  silent speech loss, VAD, archive and session recovery issues.
+* **Proxy & storage** — fixed image-service proxy paths and trailing slashes; chat sessions now restore
+  correctly without persisting secrets.
+* **Annotations & UI** — fixed creation-helper interaction, mode switching, translation interpolation,
+  menu layout and side-menu state handling.
+* **Rendering & data** — fixed multichannel and JPEG/YCbCr TIFF handling, MVT positioning, preview
+  integration, overlay rendering and single-tile failure detection.
+* **Menus & security** — fixed custom/menu-page rendering, sanitizer upgrades and viewer-menu XSS paths.
+* **Web-tiff** — re-vendored upstream fixes and added runtime bundle version reporting.
+
 
 ### 3.1.0
 

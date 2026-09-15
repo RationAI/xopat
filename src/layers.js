@@ -519,6 +519,11 @@ function initXOpatLayers() {
             mutated = true;
         }
 
+        // An empty `layerOrder` reaches the renderer as "no explicit order",
+        // which renders every registered layer. That is the current library
+        // semantics and what we keep — but it is the reverse of what it used to
+        // do, so a session exported by an older build with an empty order now
+        // restores as "everything visible" rather than "nothing".
         const incomingOrder = Array.isArray(payload.layerOrder) ? payload.layerOrder : null;
         if (incomingOrder && typeof renderer.setShaderLayerOrder === "function") {
             const localOrder = namespace
@@ -602,14 +607,91 @@ function initXOpatLayers() {
         viewer.drawer.rebuild();
     };
 
+    /**
+     * Authored (session-config) counterpart of a live renderer shader layer.
+     *
+     * The renderer works on a deep clone of the session config (`cloneRuntimeState`,
+     * src/app.ts, applied in assemble-render-output), so `changeShaderType`'s params scrub
+     * never touches this copy — it is the only place a layer's original params survive a
+     * type switch. Matched by stripped shader key/id AND type, so a layer is only ever
+     * restored to params that were authored *for that type*.
+     */
+    function findAuthoredShaderConfig(viewer, layerId, type) {
+        const namespace = viewer?.__shaderNamespace;
+        const wanted = namespace ? stripShaderNamespaceFromPath(layerId, namespace) : layerId;
+        const visualizations = APPLICATION_CONTEXT.config?.visualizations;
+        if (!Array.isArray(visualizations)) return null;
+
+        let found = null;
+        for (const visualization of visualizations) {
+            forEachShaderConfig(visualization?.shaders, (config, shaderId) => {
+                if (found || config.type !== type) return;
+                if (shaderId === wanted || config.id === wanted) found = config;
+            });
+            if (found) return found;
+        }
+        return null;
+    }
+
+    /**
+     * Shader types a user must not switch a layer to, or away from.
+     *
+     * Structural types (`group`), debug shaders, and wrapper shaders whose configuration
+     * cannot be authored from the menu at all — `time-series` needs a `series` list, so
+     * switching *to* it yields an empty wrapper and switching *away* from it deletes the
+     * series the session declared. The shader menu hides these from its type dropdown; this
+     * list is the single source of truth both it and the guard below read, so they cannot
+     * drift apart.
+     */
+    UTILITIES.NON_SWITCHABLE_SHADER_TYPES = ["group", "interaction-debug", "time-series", "texture"];
+
     UTILITIES.changeVisualizationLayer = function (layerId, type, viewer = window.VIEWER) {
+        let currentType;
         try {
+            currentType = viewer.drawer?.renderer?.getShaderLayerConfig?.(layerId)?.type;
+        } catch (e) {
+            // unknown layer id — changeShaderType below reports it properly
+        }
+        const blocked = UTILITIES.NON_SWITCHABLE_SHADER_TYPES;
+        if (blocked.includes(type) || (currentType && blocked.includes(currentType))) {
+            // Reachable only if some caller bypasses the menu — the menu renders no selector
+            // for these. Refuse rather than let a stray event rewrite the layer.
+            console.warn(`UTILITIES::changeVisualizationLayer refused '${currentType}' -> '${type}': `
+                + `not a user-switchable shader type.`);
+            return;
+        }
+
+        // `changeShaderType` -> `_sanitizeShaderParams` deletes every params key the target
+        // type does not declare. For a wrapper shader that is its whole configuration
+        // (time-series' seriesRenderer / series / timeline), and undo cannot bring it back —
+        // the live snapshot pair (exportLiveVisualization) carries no params. Re-seed from
+        // the authored config whenever the layer returns to the type it was authored as; the
+        // library's own sanitize + normalizeConfig still run afterwards and get the last word.
+        let authored = null;
+        try {
+            authored = findAuthoredShaderConfig(viewer, layerId, type);
+        } catch (e) {
+            console.warn("[layers] changeVisualizationLayer: authored config lookup failed", e);
+        }
+        const restoreAuthoredParams = (renderer) => {
+            if (!authored || typeof renderer?.getShaderLayerConfig !== "function") return;
+            try {
+                const live = renderer.getShaderLayerConfig(layerId);
+                if (live) live.params = jsonClone(authored.params) || {};
+            } catch (e) {
+                // layer not mirrored on this renderer (navigator) — non-fatal
+            }
+        };
+
+        try {
+            restoreAuthoredParams(viewer.drawer.renderer);
             viewer.drawer.renderer.changeShaderType(layerId, type);
         } catch (e) {
             console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': ${e.message}`);
             return;
         }
         try {
+            restoreAuthoredParams(viewer.navigator?.drawer?.renderer);
             viewer.navigator?.drawer?.renderer?.changeShaderType?.(layerId, type);
         } catch (e) {
             // navigator may not mirror every layer; non-fatal

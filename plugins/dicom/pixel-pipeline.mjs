@@ -380,6 +380,35 @@ export function parseVoiLut(ds) {
 }
 
 /**
+ * Recover the signed stored value from a raw sample as it sits in the pixel
+ * buffer: mask to `bitsStored`, then sign-extend when the object declares two's
+ * complement.
+ *
+ * `buildGrayscaleLut` does this inline while filling its table, but the direct
+ * typed-array path (quantitative consumers that never build a LUT) had nothing.
+ * Reading a 12-bit-stored signed CT straight out of an `Int16Array` is *usually*
+ * right — the high nibble is normally sign-extended padding already — and
+ * occasionally catastrophically wrong, because nothing in DICOM requires the
+ * bits above `highBit` to be anything at all. A wrong value here is a wrong
+ * Hounsfield number, silently.
+ *
+ * @param {number} raw sample as stored
+ * @param {ImagePixelDescriptor} pixel
+ * @returns {number} the signed stored value
+ */
+export function signExtendStored(raw, pixel) {
+    const bitsAllocated = Math.min(pixel?.bitsAllocated || 16, 32);
+    const bitsStored = Math.min(pixel?.bitsStored || bitsAllocated, bitsAllocated);
+    if (bitsStored >= 32) return raw;
+
+    const stored = raw & ((1 << bitsStored) - 1);
+    if (pixel?.pixelRepresentation !== 1) return stored;
+
+    const signBit = 1 << (bitsStored - 1);
+    return (stored & signBit) ? stored - (signBit << 1) : stored;
+}
+
+/**
  * The value range a stored sample can occupy, after the Modality LUT.
  * Used to synthesize a window when the object carries no VOI at all.
  */
@@ -436,6 +465,87 @@ export function applyVoiValue(value, { center, width, fn = "LINEAR", outMax = 25
     const denom = width - 1;
     if (denom <= 0) return outMax;   // width 1: a step at c; both tests above already handled it
     return ((value - c) / denom + 0.5) * outMax;
+}
+
+/**
+ * Is this Modality LUT the identity — i.e. does the stored value already *equal*
+ * the real-world value?
+ *
+ * `null` and an explicit `slope 1 / intercept 0` mean the same thing and must
+ * answer the same way: a slide that carries the rescale pair at its identity
+ * values (the common case for `SM`) is not thereby a different kind of data.
+ */
+export function isIdentityModalityLut(modalityLut) {
+    if (!modalityLut) return true;
+    return modalityLut.kind === "linear" && modalityLut.slope === 1 && modalityLut.intercept === 0;
+}
+
+/**
+ * Can the VOI transform be left to a shader instead of baked into the tile?
+ *
+ * A slide tile source hands the renderer 8-bit RGBA, so a window applied in a
+ * shader can only be honest when the byte the shader samples **is** the stored
+ * value. That holds under one narrow, checkable condition set:
+ *
+ * - `MONOCHROME2`, one sample per pixel — colour and palette have no window, and
+ *   `MONOCHROME1` would need its inversion moved to the shader too, which changes
+ *   what an author-declared layer other than `dicom-window` would render.
+ * - unsigned, `bitsAllocated === bitsStored === 8` — anything wider is quantized
+ *   on the way to the byte, and windowing a quantized sample bands visibly. That
+ *   data is what {@link RadiologySeriesTileSource} and its half-float packs exist
+ *   for; a slide pyramid has no such path.
+ * - identity Modality LUT — otherwise the byte carries a rescaled value the
+ *   shader would have to un-rescale, in 8 bits, having already lost the range.
+ * - no VOI LUT and no declared window — with a window declared, the bake is doing
+ *   real work and dropping it would change the default picture. Keeping the bake
+ *   there is also what makes this switch invisible to every existing deployment.
+ *
+ * Under exactly those conditions the baked table is the identity (modulo the
+ * LINEAR formula's ±1 LSB rounding, which the identity table does not have), so
+ * skipping it is not a change of appearance — it is what makes the *stored*
+ * value reach a `dicom-window` layer, and window/level therefore reachable at
+ * all for a monochrome slide.
+ *
+ * Shared deliberately: the plugin decides whether to mount the layer and the
+ * tile source decides whether to bake, and those two must never disagree.
+ *
+ * @param {ImagePixelDescriptor} pixel
+ * @param {object} [opts]
+ * @param {ModalityLut|null} [opts.modalityLut]
+ * @param {VoiLut|null} [opts.voiLut]
+ * @returns {boolean}
+ */
+export function canDeferVoiToShader(pixel, opts = {}) {
+    if (!pixel) return false;
+    if (pixel.photometricInterpretation !== "MONOCHROME2") return false;
+    if ((pixel.samplesPerPixel ?? 1) !== 1) return false;
+    if (pixel.pixelRepresentation === 1) return false;
+    if (pixel.floatPixelData || pixel.doubleFloatPixelData) return false;
+    if ((pixel.bitsAllocated ?? 8) !== 8) return false;
+    if ((pixel.bitsStored ?? pixel.bitsAllocated ?? 8) !== 8) return false;
+
+    if (!isIdentityModalityLut(opts.modalityLut ?? null)) return false;
+
+    const voiLut = opts.voiLut ?? null;
+    if (voiLut?.lut) return false;
+    if (voiLut?.presets?.length) return false;
+
+    return true;
+}
+
+/**
+ * The lookup table for {@link canDeferVoiToShader}: 8-bit stored value straight
+ * through, so the RGBA byte the renderer samples is the DICOM stored value.
+ *
+ * Built rather than skipped so the decode hot loop keeps ONE shape — one array
+ * read per pixel — instead of growing a branch that has to be right in both arms.
+ *
+ * @returns {Uint8ClampedArray} length 256
+ */
+export function buildIdentityLut() {
+    const out = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) out[i] = i;
+    return out;
 }
 
 /**
@@ -529,7 +639,31 @@ export function parseRealWorldRange(ds) {
     const last = fv(rwvm, "00409211") ?? fv(rwvm, "00409213");
     if (!Number.isFinite(first) || !Number.isFinite(last) || last === first) return null;
 
-    return { min: Math.min(first, last), max: Math.max(first, last) };
+    // First/LastValueMapped are STORED-value bounds — the interval over which the
+    // mapping is defined (PS3.3 C.7.6.16.2.11), not the real-world values those
+    // bounds denote. Returning them raw declared a range in one unit system while
+    // `applyModality` put the samples in another, so an object with slope 2 was
+    // labelled [0,1] while its data reached 2 — and the tile source then clamped
+    // the excess away. Push the bounds through the very transform the samples get,
+    // which is also what `storedValueRange` does.
+    const lut = parseModalityLut(ds);
+    let lo, hi;
+    if (lut?.kind === "lut" && lut.data?.length) {
+        // A lookup table need not be monotonic, so its endpoints are not its
+        // extremes. The table IS the set of reachable values.
+        lo = hi = lut.data[0];
+        for (let i = 1; i < lut.data.length; i++) {
+            const v = lut.data[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+    } else {
+        lo = applyModality(Math.min(first, last), lut);
+        hi = applyModality(Math.max(first, last), lut);
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return null;
+
+    return { min: Math.min(lo, hi), max: Math.max(lo, hi) };
 }
 
 /**
@@ -782,7 +916,7 @@ export function hueForIndex(index) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Half-float encoding (RGBA16F texture upload)                        */
+/* Half-float encoding (R16F / RG16F / RGBA16F texture upload)         */
 /* ------------------------------------------------------------------ */
 
 const _f32 = new Float32Array(1);
@@ -836,16 +970,63 @@ export function floatToHalf(value) {
 }
 
 /**
- * Encode a plane of floats into an interleaved RGBA half-float buffer, writing
- * into one channel and leaving the rest untouched.
+ * Guard for {@link warnHalfFloatPrecisionOnce}.
  *
- * @param {Uint16Array} target RGBA half-float destination (4 entries per pixel)
- * @param {ArrayLike<number>} values source plane
- * @param {number} channel 0..3
+ * Keyed on the application context rather than held as a module flag, because
+ * "once" means once per *session*: a host that tears the viewer down and builds
+ * a new one gets a new context and deserves to hear about a precision setting
+ * again. A module-level boolean would also make the warning depend on whatever
+ * else happened to touch this module first, which is exactly the kind of hidden
+ * ordering coupling that makes a diagnostic untrustworthy.
  */
-export function writeHalfChannel(target, values, channel) {
-    const n = Math.min(values.length, Math.floor(target.length / 4));
-    for (let i = 0, o = channel; i < n; i++, o += 4) {
+const _warnedHalfFloatPrecision = new WeakSet();
+
+/**
+ * Warn when the renderer will quantize a half-float pack before any shader can
+ * read it.
+ *
+ * Uploading `R16F`/`RGBA16F` only buys fidelity if the renderer's first-pass
+ * colour target keeps float precision, and that is a deployment decision:
+ * `webGlPrecision: "auto"` negotiates it from the data (these packs report
+ * themselves non-normalized) and `"float16"` forces it. **Only `"unorm8"` — the
+ * `src/config.json` default — actually bands**, so only that is worth a warning.
+ * The previous per-source version fired for `"float16"` too, telling a correctly
+ * configured deployment to change a working setting, and repeated itself once
+ * per series in a study.
+ *
+ * @param {string} label the subsystem to name in the message
+ */
+export function warnHalfFloatPrecisionOnce(label) {
+    const context = globalThis.APPLICATION_CONTEXT;
+    if (!context || _warnedHalfFloatPrecision.has(context)) return;
+    const precision = context.getOption?.("webGlPrecision", "unorm8");
+    if (precision !== "unorm8") return;
+    _warnedHalfFloatPrecision.add(context);
+    console.warn(
+        `[${label}] webGlPrecision is "unorm8"; the renderer's first pass will quantize samples ` +
+        `to 8 bits before the shader reads them, so a narrow window will band. Set ` +
+        `"webGlPrecision": "auto" in the session params (or the deployment setup) for full fidelity.`
+    );
+}
+
+/**
+ * Encode a plane of floats into an interleaved half-float buffer, writing into
+ * one channel and leaving the rest untouched.
+ *
+ * `componentsPerPack` is the pack's own width, not always 4: the renderer takes
+ * `R16F` (1) and `RG16F` (2) as well as `RGBA16F`, and a single-channel plane in
+ * an RGBA pack is three quarters padding. It doubles as the stride and as the
+ * bound, so a buffer sized for the narrow format is filled completely rather
+ * than a quarter of the way.
+ *
+ * @param {Uint16Array} target half-float destination
+ * @param {ArrayLike<number>} values source plane
+ * @param {number} channel component index within the pack, `0..componentsPerPack-1`
+ * @param {number} [componentsPerPack=4] components per pixel in `target`
+ */
+export function writeHalfChannel(target, values, channel, componentsPerPack = 4) {
+    const n = Math.min(values.length, Math.floor(target.length / componentsPerPack));
+    for (let i = 0, o = channel; i < n; i++, o += componentsPerPack) {
         target[o] = floatToHalf(values[i]);
     }
 }

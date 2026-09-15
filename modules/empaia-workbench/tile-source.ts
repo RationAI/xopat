@@ -149,6 +149,15 @@ export function registerEmpaiaTileSource(): void {
             return undefined;
         }
 
+        /**
+         * Same story for raw slide access: the scope-rooted workbench API has no
+         * `/download` route, and the app's data-access contract is the scope, not
+         * the file. Never offer it, whatever `raw_download` the info says.
+         */
+        canDownloadSlideFile(): boolean {
+            return false;
+        }
+
         /** Technical metadata only — nothing patient-identifying (see src/tile-source.ts). */
         getDisplayMetadata() {
             const t = (key: string) => $.t(`slideInfo.${key}`, { ns: "empaia-workbench" });

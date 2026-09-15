@@ -9,6 +9,7 @@ const { pathToFileURL } = require("node:url");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
 const {getServerLogging} = require("./logging");
+const roles = require("./roles");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
@@ -889,6 +890,11 @@ class XopatServerRuntime {
             // sibling methods (e.g. buffered + streaming variants of one upstream
             // operation) share one slot pool instead of doubling it.
             concurrencyKey: runtime.concurrencyKey ?? rawPolicy.concurrencyKey,
+            // Role gate, declared per method. Absent on every existing method,
+            // which is the point: this cannot change the behaviour of anything
+            // that has not opted in. See server/node/roles.js.
+            capabilities: Array.isArray(rawPolicy.capabilities) ? rawPolicy.capabilities : null,
+            capabilitiesMode: rawPolicy.capabilitiesMode === "any" ? "any" : "all",
         };
 
         // Read the body only now: the method (and therefore its size limit) is
@@ -919,6 +925,27 @@ class XopatServerRuntime {
             { kind, item, method, contextId: readBodyField(body, "contextId") }
         );
         if (!authResult.ok) return;
+
+        // Capability gate. Deliberately AFTER authentication — a capability is a
+        // statement about a known caller, and answering "forbidden" to an
+        // anonymous request would tell them which methods exist. Deliberately
+        // BEFORE the concurrency gate and the handler, so a refused call costs
+        // no slot and touches no upstream.
+        if (policy.capabilities && policy.capabilities.length) {
+            const verdict = roles.checkCapabilities(
+                { user: authResult.user },
+                policy.capabilities,
+                policy.capabilitiesMode,
+                core,
+            );
+            if (!verdict.ok) {
+                this.rpcLog.warn(`${kind}/${item.id}/${method} refused: ${verdict.reason}`);
+                return this.#writeJson(res, 403, {
+                    error: "Forbidden",
+                    code: "RPC_CAP_DENIED",
+                });
+            }
+        }
 
         const methodKey = `${kind}/${item.id}/${method}`;
         const gateKey = policy.concurrencyKey ? `${kind}/${item.id}/${policy.concurrencyKey}` : methodKey;
@@ -1080,7 +1107,7 @@ class XopatServerRuntime {
             if (disconnected) return; // nobody to answer
 
             const payload = this.#rpcErrorPayload(error, aborted, timeoutMs);
-            const status = aborted ? 504 : 500;
+            const status = aborted ? 504 : XopatServerRuntime.#clientErrorStatus(error);
             // Headers are already out for a streaming request, so the answer must be
             // a terminal record; #writeJson would throw ERR_HTTP_HEADERS_SENT and
             // leave the caller reading a stream nobody will ever end.
@@ -1367,8 +1394,14 @@ class XopatServerRuntime {
      * debugging a live deployment should not need a redeploy to see the server's
      * own records. Everything else stays dev-only, and the log methods still run
      * their own access check (`#assertLogReadAllowed`) inside the handler.
+     *
+     * `ingestClientLogs` joins them for the same reason in reverse: a client half
+     * that only works in dev leaves the browser's records out of exactly the
+     * deployment an operator is trying to observe. It is gated on its own
+     * operator opt-in (`logging.client.ingest`, default off) and treats its
+     * payload as hostile — see `#ingestClientLogs`.
      */
-    static #PROD_BUILTIN_METHODS = new Set(["getLogs", "getLogChannels"]);
+    static #PROD_BUILTIN_METHODS = new Set(["getLogs", "getLogChannels", "ingestClientLogs"]);
 
     #getBuiltinRpcTarget(scopeId, methodName) {
         if (!this.devMode && !XopatServerRuntime.#PROD_BUILTIN_METHODS.has(methodName)) return null;
@@ -1392,6 +1425,9 @@ class XopatServerRuntime {
             },
             getLogChannels: {
                 fn: (ctx) => this.#readLogChannels(ctx),
+            },
+            ingestClientLogs: {
+                fn: (ctx, payload) => this.#ingestClientLogs(ctx, payload),
             },
         };
 
@@ -1466,6 +1502,110 @@ class XopatServerRuntime {
             pid: process.pid,
             channels: this.logging.channels(),
             ...this.logging.stats(),
+        };
+    }
+
+    /**
+     * Per-principal budget for browser-supplied log records.
+     *
+     * A bounded cache rather than a plain Map (AGENTS.md §4: no unbounded
+     * module-level state) — the key space is "every principal that ever posted",
+     * which is unbounded by definition. One minute of idle TTL is the window the
+     * budget is expressed in.
+     */
+    #clientLogBudget = null;
+
+    #clientLogBudgetFor(principal, limit) {
+        if (!this.#clientLogBudget) {
+            const { createBoundedCache } = require("./storage/bounded-cache");
+            this.#clientLogBudget = createBoundedCache({
+                name: "core:client-log-budget",
+                maxEntries: 5_000,
+                ttlMs: 60_000,
+            });
+        }
+        const used = this.#clientLogBudget.get(principal) || 0;
+        return {
+            used,
+            remaining: Math.max(0, limit - used),
+            spend: (n) => this.#clientLogBudget.set(principal, used + n),
+        };
+    }
+
+    /**
+     * Accept a batch of records the BROWSER produced, so client-side diagnostics
+     * reach the same sinks — and the same stream — as everything else.
+     *
+     * This is the only INBOUND path into the logs, which decides its whole shape:
+     * the payload is attacker-controlled, so it is capped, rate-limited, and
+     * stripped of everything identifying before it is re-emitted. A client says
+     * WHAT happened; the server decides who said it, when it arrived, and whether
+     * the channel is even listening.
+     *
+     * Refused unless the operator turned it on: a deployment that never
+     * configured client ingest must not accept writes into its logs, and "off"
+     * has to be the state you get by doing nothing.
+     */
+    #ingestClientLogs(ctx, payload = {}) {
+        if (!this.logging?.ingestClientRecord) {
+            const error = new Error("The logging broker is not available");
+            error.code = "RPC_LOGGING_UNAVAILABLE";
+            throw error;
+        }
+        const policy = this.logging.clientIngestPolicy();
+        if (!policy.ingest) {
+            const error = new Error("Client log ingest is disabled. Enable core.server.logging.client.ingest.");
+            error.code = "RPC_FORBIDDEN";
+            error.status = 403;
+            throw error;
+        }
+
+        const records = Array.isArray(payload?.records) ? payload.records : [];
+        // A correlation token the browser minted at boot: it groups one sitting's
+        // records together and says nothing about who the person is. Validated to
+        // a narrow shape because it ends up in every record on this batch — an
+        // unbounded string here would be a free field in the log format.
+        const clientSession = typeof payload?.sessionId === "string"
+            && /^[A-Za-z0-9_-]{6,64}$/.test(payload.sessionId)
+            ? payload.sessionId
+            : null;
+        // The principal is the budget key AND the record's identity, and it comes
+        // from the verified context — never from the body, which would let one
+        // caller spend another's budget and forge their records (§7).
+        const principal = this.logging.hashPrincipal(ctx?.principal
+            || (ctx?.user?.id && `user:${ctx.user.id}`)
+            || (ctx?.session?.id && `sess:${ctx.session.id}`)) || "anonymous";
+        const budget = this.#clientLogBudgetFor(principal, policy.maxRecordsPerMinute);
+
+        const admitted = Math.min(records.length, policy.maxRecordsPerBatch, budget.remaining);
+        let accepted = 0;
+        let oversized = 0;
+        for (const record of records.slice(0, admitted)) {
+            if (!record || typeof record !== "object") continue;
+            // Size is measured on the way in. A record over the cap is dropped
+            // whole rather than truncated: half a payload record is a misleading
+            // artifact, and the cap exists to stop one caller filling the disk.
+            let bytes = 0;
+            try { bytes = Buffer.byteLength(JSON.stringify(record)); } catch { continue; }
+            if (bytes > policy.maxRecordBytes) { oversized++; continue; }
+            const emitted = this.logging.ingestClientRecord(record, {
+                requestId: ctx?.requestId,
+                principal,
+                clientSession,
+            });
+            if (emitted) accepted++;
+        }
+        budget.spend(admitted);
+
+        return {
+            accepted,
+            // Everything the client should know about what happened to the rest —
+            // a forwarder that is silently losing records is the failure this
+            // reporting exists to make visible.
+            dropped: records.length - accepted,
+            oversized,
+            throttled: Math.max(0, records.length - admitted),
+            maxRecordsPerBatch: policy.maxRecordsPerBatch,
         };
     }
 
@@ -1954,6 +2094,25 @@ class XopatServerRuntime {
      *     it is; omitting the field keeps the heuristic. Carrying it here rather
      *     than per-caller keeps buffered and streaming responses consistent.
      */
+    /**
+     * The HTTP status for a failed RPC.
+     *
+     * Every failure used to leave as 500, including the ones that declared
+     * otherwise: `#assertLogReadAllowed` has set `error.status = 403` since it was
+     * written, and the dispatcher dropped it. That is wrong twice — the caller
+     * cannot tell "you may not" from "we broke", and the client's retry heuristic
+     * reads 5xx as possibly-transient and replays an authorization refusal that
+     * will answer identically forever.
+     *
+     * Only a 4xx is honoured. A handler may say "this is the caller's fault"; it
+     * may not dress a server failure up as anything else, and it certainly may not
+     * declare a success status on the error path.
+     */
+    static #clientErrorStatus(error) {
+        const status = Number(error?.status ?? error?.statusCode);
+        return Number.isInteger(status) && status >= 400 && status <= 499 ? status : 500;
+    }
+
     #rpcErrorPayload(error, aborted, timeoutMs) {
         if (aborted) return { error: `RPC timed out after ${timeoutMs}ms`, code: "RPC_TIMEOUT" };
         const rawCode = error && typeof error.code === "string" ? error.code : "";

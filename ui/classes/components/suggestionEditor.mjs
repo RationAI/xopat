@@ -313,6 +313,50 @@ export class SuggestionEditor extends BaseComponent {
 
     // ---- API --------------------------------------------------------------
 
+    /**
+     * Add a change the editor was not given, as an accepted chip.
+     *
+     * Finds the first occurrence of `from` in the PLAIN text (never inside an existing
+     * chip, whose two sides are already a decision) and replaces it with a chip
+     * `from → to`, accepted. So it behaves exactly like a suggestion that had been
+     * offered from the start: visible, serialized by `getValue()`, reported by
+     * `getDecisions()`, and reversible with one click.
+     *
+     * Why it exists: a consumer may hold proposed edits the editor never saw — a
+     * correction pass whose guard withheld some of its rewrites, say — and the person
+     * reviewing the text is the one who can say whether a withheld edit was right.
+     * Without this they would have to retype it, which is neither reviewable nor
+     * recorded as a decision.
+     *
+     * @param {string} from text to replace, matched verbatim
+     * @param {string} to replacement
+     * @returns {boolean} false when `from` is not present in the plain text (it may
+     *   have been edited away, or it may lie inside an existing chip)
+     */
+    applyReplacement(from, to) {
+        from = String(from ?? "");
+        if (!this.root || !from) return false;
+        const walker = document.createTreeWalker(this.root, NodeFilter.SHOW_TEXT, {
+            acceptNode: (node) => (node.parentElement?.closest("[data-suggestion-chip]")
+                ? NodeFilter.FILTER_REJECT
+                : NodeFilter.FILTER_ACCEPT),
+        });
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const at = String(node.nodeValue ?? "").indexOf(from);
+            if (at < 0) continue;
+            // Split so the match becomes its own (discarded) node: `tail` starts at the
+            // match, `rest` just after it.
+            const tail = node.splitText(at);
+            tail.splitText(from.length);
+            const chip = this._buildChip(from, String(to ?? ""));
+            tail.parentNode.replaceChild(chip, tail);
+            this._chips[this._chips.length - 1].set(true);
+            this._emitChange();
+            return true;
+        }
+        return false;
+    }
+
     /** Accept every suggestion. */
     acceptAll() { this._chips.forEach((c) => c.set(true)); this._emitChange(); }
     /** Decline every suggestion (revert to originals). */

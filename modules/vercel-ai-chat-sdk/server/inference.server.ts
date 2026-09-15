@@ -3,7 +3,28 @@ import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAcce
 import type { TranscriptionModelV4 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal, errorText } from './abort-utils';
 import { compareProviderCandidates, isOperatorRecord } from '../shared/providerRef';
+// The biasing-prompt allowance (default 0 = dropped) and why: see the module's own doc.
+// The shipped adapters copy `providerDefaults.transcriptionPromptMaxChars` into the
+// type's `fixedConfig`; before that plumbing existed the key documented here reached
+// nothing, and every deployment silently ran without a prompt.
+import { promptCapFor } from '../shared/transcriptionPrompt';
 import { chatLog } from './tuning';
+import { logVisionCall } from './vision-log';
+
+/**
+ * The vision audit channel: one record + the reviewed image per remote call.
+ *
+ * Separate from `:llm` (which is about chat turns) and from `:transcript` (which
+ * is the conversation) because it answers its own question — what did the
+ * foundation model actually LOOK at. Records carry user-adjacent content and an
+ * image of patient tissue, so they are `sensitive()`: off unless an operator
+ * enabled the channel AND allowed payloads.
+ *
+ *   core.server.logging.channels: { "module.vercel-ai-chat-sdk:vision": "trace" }
+ *
+ * See server/LOGGING.md → "reconstruct a pilot session".
+ */
+const vision = chatLog('vision');
 
 // Tolerant scope resolution: inference must keep working for callers without a
 // user/session identity — no scope just means no BYOK secrets overlay.
@@ -39,6 +60,13 @@ function safeUserScope(ctx: any): string | null {
 // JSON. 4096 is generous by default and env-tunable for models/prompts that need
 // more headroom. (`readPositiveEnvInt` is a hoisted function declaration.)
 const VISION_MAX_OUTPUT_TOKENS = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS', 4096);
+/**
+ * How far the output cap may be raised, once, when a reply came back EMPTY with the cap
+ * exhausted: a reasoning model spends the budget thinking and returns no text at all —
+ * observed as two 65 s corrector calls with 0 characters on glm-5.2. The caller-facing
+ * cap above stays the normal budget; this is the ceiling of the one self-heal retry.
+ */
+const VISION_MAX_OUTPUT_TOKENS_CEILING = readPositiveEnvInt('XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS_CEILING', 16384);
 
 function readPositiveEnvInt(name: string, fallback: number): number {
     const raw = Number((globalThis as any)?.process?.env?.[name]);
@@ -94,14 +122,54 @@ export interface RunVisionInferenceInput {
     /** Image media type, e.g. "image/png". */
     mediaType?: string | null;
     /**
+     * What this image IS — logged, never sent to the model.
+     *
+     * The pathology broker knows which slide and which box it just rendered; this
+     * server only receives pixels. Without it, a logged vision call is an
+     * anonymous PNG and the audit trail cannot say what the model reviewed.
+     *
+     * Diagnostics only, and deliberately so: it must never reach the message
+     * content, or enabling logging would change what the model is asked. Shape is
+     * `pathology-foundation`'s `AnalysisContext` — carried loosely because module
+     * server files do not import across element boundaries.
+     */
+    context?: Record<string, unknown> | null;
+    /**
      * Optional per-call output cap. Clamps the server default DOWN (never up) so a caller
      * that knows the target model's context window (e.g. a small-context vision model) can
      * avoid the "max_tokens too large" rejection. Ignored if >= the server default.
      */
     maxOutputTokens?: number | null;
+    /**
+     * Ask the provider to constrain the reply to a JSON object.
+     *
+     * The JSON contract has always been carried in prose ("Return ONLY a JSON object…"),
+     * which is why callers ship parse-repair machinery — fence stripping, per-entry
+     * salvage, truncated-prefix repair — and why a weaker model still gets through it.
+     * `gpt-oss-120b` returned `"{\n  }\n"` and `"{\n  {}\n}"` in the 9-10 reporting round;
+     * the latter defeats both salvage strategies and costs the whole chunk.
+     *
+     * Best-effort by construction: not every adapter or model supports a response format,
+     * so a provider that rejects it falls back to the prose contract rather than failing
+     * the call. It narrows the failure rate; it does not replace the parser.
+     */
+    jsonMode?: boolean | null;
 }
 
-export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<{ text: string }> {
+/** What a vision/text inference returns, beside the text: why it stopped, what it cost, how many tries. */
+export interface RunVisionInferenceResult {
+    text: string;
+    /** The provider's finish reason (`stop`, `length`, …) or null when it reported none. */
+    finishReason: string | null;
+    usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
+    /** Characters of reasoning text the model emitted (0 when none/unreported). */
+    reasoningChars: number;
+    /** Calls made to the provider for this request (1 = no self-heal retry). */
+    attempts: number;
+}
+
+export async function runVisionInference(ctx: any, input: RunVisionInferenceInput): Promise<RunVisionInferenceResult> {
+    const startedAt = Date.now();
     if (!input?.providerId) {
         throw new Error("runVisionInference requires a providerId (a dedicated pathology provider instance).");
     }
@@ -172,8 +240,21 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     // rejects with a "max_tokens too large / context length" error. Halve and retry (bounded) so a
     // small-context vision model degrades gracefully instead of hard-failing every call.
     let result;
+    // Dropped, and the call retried once, when the provider rejects the response format.
+    // Support is per adapter AND per model, and neither is knowable here, so the only
+    // honest test is to ask — a caller must never lose an extraction because it wanted
+    // stricter output than the endpoint offers.
+    let wantJson = !!input.jsonMode;
+    // An EMPTY reply is a failure the SDK does not raise. A reasoning model that spends the
+    // whole output budget thinking returns `finishReason: "length"` and no text; some also
+    // answer nothing under `json_object`. Each condition gets exactly one bounded retry —
+    // first more room, then the plain format — so a review is not silently unchecked.
+    let raisedCap = false;
+    let droppedJson = false;
+    let attempts = 0;
     for (let attempt = 0; ; attempt++) {
         try {
+            attempts++;
             result = await generateText({
                 model,
                 instructions,
@@ -181,7 +262,26 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
                 maxOutputTokens,
                 abortSignal: signal,
                 maxRetries: VISION_MAX_RETRIES,
+                ...(wantJson ? { providerOptions: { openai: { response_format: { type: 'json_object' } } } } : {}),
             });
+            const replyText = typeof result?.text === 'string' ? result.text.trim() : '';
+            if (!replyText && attempt < 6) {
+                const finish = String((result as any)?.finishReason || '');
+                const reasoned = reasoningChars(result) > 0;
+                if (!raisedCap && (finish === 'length' || reasoned) && maxOutputTokens < VISION_MAX_OUTPUT_TOKENS_CEILING) {
+                    raisedCap = true;
+                    const next = Math.min(VISION_MAX_OUTPUT_TOKENS_CEILING, maxOutputTokens * 4);
+                    vision.warn({ modelId, finishReason: finish || null, maxOutputTokens, next, reasoned }, 'empty reply with the output cap spent; retrying with a larger cap');
+                    maxOutputTokens = next;
+                    continue;
+                }
+                if (!droppedJson && wantJson) {
+                    droppedJson = true;
+                    vision.warn({ modelId, finishReason: finish || null, maxOutputTokens }, 'empty reply under json_object; retrying with the plain format');
+                    wantJson = false;
+                    continue;
+                }
+            }
             break;
         } catch (e: any) {
             // Flattened: the provider states the cap violation in `responseBody` or under
@@ -194,12 +294,51 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
                 maxOutputTokens = Math.max(256, Math.floor(maxOutputTokens / 2));
                 continue;
             }
+            if (wantJson && msg.includes('response_format')) {
+                vision.debug('provider rejected json_object response format; retrying without it', { modelId });
+                wantJson = false;
+                continue;
+            }
             throw e;
         }
     }
 
-    return { text: typeof result?.text === 'string' ? result.text : '' };
+    const text = typeof result?.text === 'string' ? result.text : '';
+    // Why the reply looks the way it does — what the client's trace needs to tell a cut-off
+    // answer from a model that had nothing to say.
+    const finishReason = typeof (result as any)?.finishReason === 'string' ? (result as any).finishReason : null;
+    const u: any = (result as any)?.usage || {};
+    const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : null);
+    const usage = {
+        inputTokens: num(u.inputTokens ?? u.promptTokens),
+        outputTokens: num(u.outputTokens ?? u.completionTokens),
+        reasoningTokens: num(u.reasoningTokens ?? u.outputTokenDetails?.reasoningTokens),
+    };
+    const reasoning = reasoningChars(result);
+    // The audit trail: this image and this question, kept where they can be
+    // reviewed. `input.context` says which slide and box it is; it is logged and
+    // never added to the model's message, so enabling logging cannot change what
+    // the model was asked.
+    logVisionCall(
+        ctx?.requestId && typeof vision.with === 'function' ? vision.with({ requestId: ctx.requestId }) : vision,
+        String(ctx?.requestId || `vc${++visionCallSeq}`),
+        input,
+        { providerId: runtime.instance.id, model: modelId, text, durationMs: Date.now() - startedAt, finishReason, usage, reasoningChars: reasoning, attempts },
+    );
+    return { text, finishReason, usage, reasoningChars: reasoning, attempts };
 }
+
+/** Length of the model's reasoning text, across the AI SDK's names for it (0 when absent). */
+function reasoningChars(result: any): number {
+    if (!result) return 0;
+    const r = result.reasoningText ?? result.reasoning;
+    if (typeof r === 'string') return r.length;
+    if (Array.isArray(r)) return r.reduce((n: number, part: any) => n + (typeof part?.text === 'string' ? part.text.length : 0), 0);
+    return 0;
+}
+
+/** Monotonic fallback when a call arrives without a request id. */
+let visionCallSeq = 0;
 
 // ---- Speech-to-text -------------------------------------------------------
 
@@ -227,9 +366,6 @@ export interface RunTranscriptionInput {
      */
     prompt?: string | null;
 }
-
-/** Hard cap on the biasing prompt forwarded upstream (~224 Whisper tokens ≈ 1000 chars). */
-const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
 
 /** A usable string, or '' — never a stringified object. */
 function trimmedString(value: unknown): string {
@@ -354,7 +490,11 @@ function transcriptionConfigError(message: string): Error {
     return new Error(`${TRANSCRIPTION_CONFIG_ERROR_TAG} ${message}`);
 }
 
-export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{ text: string; language?: string; durationInSeconds?: number }> {
+export async function runTranscription(ctx: any, input: RunTranscriptionInput): Promise<{
+    text: string; language?: string; durationInSeconds?: number;
+    /** Whisper decode verdicts summarized by the adapter (verbose_json only) — see openaiCompatibleTranscription.server.ts. */
+    noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number; responseFormat?: string;
+}> {
     if (!input?.audioBase64) throw new Error('runTranscription requires audioBase64.');
     // Spends a provider credential — require an identified caller at the call
     // site so a misconfigured `rpcVerifiers` cannot re-expose it.
@@ -440,8 +580,14 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
     // names the namespace its SDK package reads (defaults to model.provider).
     const hints: Record<string, unknown> = {};
     if (input.language) hints.language = String(input.language);
-    const bias = String(input.prompt ?? '').trim().slice(0, TRANSCRIBE_MAX_PROMPT_CHARS);
+    const promptCap = promptCapFor(runtime.config);
+    const requestedBias = String(input.prompt ?? '').trim();
+    const bias = requestedBias.slice(0, promptCap);
     if (bias) hints.prompt = bias;
+    else if (requestedBias) {
+        chatLog('transcription').debug({ providerId, requestedChars: requestedBias.length, promptCap },
+            'biasing prompt dropped: provider allows none (transcriptionPromptMaxChars)');
+    }
 
     const result = await model.doGenerate({
         audio: new Uint8Array(Buffer.from(input.audioBase64, 'base64')),
@@ -452,10 +598,18 @@ export async function runTranscription(ctx: any, input: RunTranscriptionInput): 
         abortSignal: createTimeoutLinkedSignal(ctx?.signal, TRANSCRIBE_TIMEOUT_MS),
     });
 
+    // Decode verdicts, when the adapter reports them (`providerMetadata.xopat`).
+    // Forwarded as plain numbers so the client's `normalizeResult` picks them up.
+    const meta: any = (result as any)?.providerMetadata?.xopat || {};
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
     return {
         text: typeof result?.text === 'string' ? result.text : '',
         ...(result?.language ? { language: String(result.language) } : {}),
         ...(typeof result?.durationInSeconds === 'number' ? { durationInSeconds: result.durationInSeconds } : {}),
+        ...(num(meta.noSpeechProb) !== undefined ? { noSpeechProb: num(meta.noSpeechProb) } : {}),
+        ...(num(meta.avgLogprob) !== undefined ? { avgLogprob: num(meta.avgLogprob) } : {}),
+        ...(num(meta.compressionRatio) !== undefined ? { compressionRatio: num(meta.compressionRatio) } : {}),
+        ...(typeof meta.responseFormat === 'string' ? { responseFormat: meta.responseFormat } : {}),
     };
 }
 

@@ -2,6 +2,25 @@ type XOpatClientConfig = {
     domain: string | null;
     path: string | null;
     /**
+     * Identity of this deployment for browser-local boot state — the session
+     * cache (`xoSessionCache`, `__xopat_session__`) and the plugin-autoload
+     * cookie. Browsers scope those by ORIGIN, and one origin routinely serves
+     * several deployments (every env file on localhost), so without a key a
+     * session captured under one env replays under another.
+     *
+     * Pin it in production: the key then never changes and users keep their
+     * state across unrelated config edits. Leave it unset in development and
+     * each env file gets its own automatically derived key (fingerprint of the
+     * configuration that decides whether data references still resolve — see
+     * `src/classes/app/deployment-key.ts`).
+     *
+     * Does NOT scope `kv:*` storage (AppCache/AppCookies/plugin caches); those
+     * remain keyed by `<ownerUid>::<key>` only.
+     */
+    cacheKey?: string | null;
+    /** @deprecated Use `cacheKey`. Kept as a backwards-compatible alias. */
+    sessionCacheKey?: string | null;
+    /**
      * Named slide-protocol registry. Each entry is either a backtick-template
      * URL string with `data` (scalar DataID) in scope — the server URL embedded
      * in the template — or an object
@@ -112,14 +131,38 @@ type XOpatUiSetup = {
      * Unlike the boolean visibility flags above this defaults to `false` and
      * is therefore NOT read via `getUiOption` (which defaults unset keys to
      * `true`) — see `resolveSideMenuCompact` in
-     * `ui/classes/components/rightSideViewerMenu.mjs`. The user's Settings
+     * `ui/classes/components/sideMenuPreferences.mjs`. The user's Settings
      * toggle persists to AppCache and this session param overrides it.
      */
     sideMenuCompact?: boolean | null;
+    /**
+     * Initial open/closed state of the per-viewer right-side menu panels.
+     * Either a boolean applying to every tab, or a map of tab id → boolean
+     * where `"*"` is the fallback for tabs the map does not name, e.g.
+     * `{"*": false, "navigator": true}` boots with only the navigator open.
+     * Unset (`null`) means every panel opens.
+     *
+     * Not read via `getUiOption` (boolean-only). Resolution lives in
+     * `resolveSideMenuTabOpen` (`ui/classes/mixins/utils.mjs`)
+     * and applies to panels appended later by plugins too — the side menu
+     * hands it to `Menu` as `options.initialOpenResolver`.
+     *
+     * Precedence (mirrors `sideMenuCompact`): session param > the user's
+     * cached `<tabId>-open` toggle > deployment default > open. Note the
+     * navigator's `ui.navigator === false` still wins over this, because it
+     * hides the OSD navigator element rather than only collapsing a panel.
+     */
+    sideMenuTabs?: boolean | Record<string, boolean> | null;
 };
 
 type XOpatSetup = {
     sessionName?: string | null;
+    /**
+     * @deprecated Use `core.client.<active>.cacheKey`. Read only as a legacy
+     * fallback: `setup` doubles as the session-`params` allowlist, and
+     * deployment identity must not be settable from a session (AGENTS.md §7).
+     */
+    sessionCacheKey?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
@@ -141,7 +184,10 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
-    /** Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). */
+    /**
+     * Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). Session-wide
+     * default; a single slide overrides it with `background[i].fill`.
+     */
     backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
@@ -259,6 +305,15 @@ type XOpatSetup = {
      */
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
+    /**
+     * How many viewer cells may hold their own WebGL context instead of sharing
+     * one. A private context removes the per-frame `readPixels` + `putImageData`
+     * transfer a shared context needs; cells past the budget fall back to the
+     * shared context so a host spawning many viewers stays under the browser's
+     * ~16-context cap. Counted in cells (a cell costs two contexts: viewer +
+     * navigator). `0` disables private contexts.
+     */
+    webGlPrivateContextBudget?: number | null;
     fetchAsync?: boolean | null;
     /**
      * Hide the plugin catalogue — the listing that browses available plugins and
@@ -336,6 +391,12 @@ type XOpatSetup = {
     visualizationInspectorMode?: string | null;
     visualizationInspectorRadiusPx?: number | null;
     visualizationInspectorLensZoom?: number | null;
+    /**
+     * FlexDrawer pointer forwarding, required by shaders reading `fr_interaction_*`
+     * state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a
+     * visible layer exists; `"always"` / `"never"` pin it.
+     */
+    flexInteractionForwarding?: "auto" | "always" | "never" | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
@@ -489,6 +550,16 @@ type XOpatElementItem = {
      * A deployment can override it via ENV `plugins[id]` / `modules[id]`.
      */
     stability?: "stable" | "experimental" | "deprecated";
+    /**
+     * Development harness marker. Unlike `stability`, this DOES gate loading: the
+     * element is refused unless the server reports dev mode (`--dev` /
+     * `XOPAT_DEV_MODE`). Declare it on anything that exists to give a developer —
+     * or a model driving one — access the application would not otherwise grant.
+     * Nothing session-supplied reaches this: the record is the deployment-merged
+     * `include.json`, so only an operator can clear the marker, and only dev mode
+     * lets the element through with it.
+     */
+    devOnly?: boolean;
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */

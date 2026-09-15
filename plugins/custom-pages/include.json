@@ -11,5 +11,10 @@
     "modules": ["menu-pages"],
     "hidden": true,
     "sanitizeConfig": false,
-    "target": "plugins"
+    "target": "plugins",
+    "tests": {
+        "dir": "test",
+        "envs": ["default"],
+        "requires": { "browser": true, "server": true }
+    }
 }

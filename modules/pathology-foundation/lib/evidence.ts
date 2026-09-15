@@ -15,6 +15,7 @@
  */
 
 import type { Checklist, FeatureAnswer } from "./checklist";
+import { exceedsSlide } from "./checklist";
 import type { Bounds } from "./types";
 
 /** The minimum a node must expose to appear in the table. */
@@ -51,8 +52,22 @@ export interface EvidenceRow {
      * True when NO region ever reached this feature's required resolution. The verdict is
      * then `not-assessable` and means "the run never got close enough", which is an
      * invitation to look closer — never a negative finding.
+     *
+     * NOT set when the reason is {@link exceedsSlide}: "look closer" is not advice when
+     * there is nothing closer to look at, and a row that can never clear it makes every
+     * run of that slide report itself unexamined forever. That case is
+     * {@link beyondSlide} instead.
      */
     underResolved: boolean;
+    /**
+     * True when this feature asks for finer detail than the SCAN holds.
+     *
+     * A fact about the slide, not about the walk — no amount of further reading changes it,
+     * so it is reported once and separately. The feature is still asked at the slide's limit
+     * (see `splitByResolution`), so this row can carry real answers; what it must not carry
+     * is the implication that a closer read is available.
+     */
+    beyondSlide: boolean;
 }
 
 const MAX_CITATIONS = 5;
@@ -68,10 +83,17 @@ const MAX_CITATIONS = 5;
  * because the walk only ever samples part of the tissue. Averaging would let breadth
  * bury a focal finding — which, on a slide, is usually the finding that matters.
  */
-export function buildEvidence(nodes: EvidenceNode[], checklist: Checklist): EvidenceRow[] {
+export function buildEvidence(
+    nodes: EvidenceNode[],
+    checklist: Checklist,
+    /** The slide's own calibration, so a requirement finer than the scan is told apart from
+     *  a walk that stopped short. Omit on an uncalibrated slide. */
+    nativeMpp?: number | null
+): EvidenceRow[] {
     const usable = nodes.filter(n => n && n.answers && n.bounds && !n.error);
 
     return checklist.features.map(feature => {
+        const beyondSlide = exceedsSlide(feature, nativeMpp);
         const counts = { yes: 0, no: 0, uncertain: 0, notAssessable: 0 };
         const citations: Array<EvidenceCitation & { present: FeatureAnswer["present"]; rank: number }> = [];
         let reachedResolution = false;
@@ -126,7 +148,9 @@ export function buildEvidence(nodes: EvidenceNode[], checklist: Checklist): Evid
                 .sort((a, b) => b.rank - a.rank)
                 .slice(0, MAX_CITATIONS)
                 .map(({ present, rank, ...citation }) => citation),
-            underResolved: !reachedResolution,
+            // "The run never got close enough" is only true while closer exists.
+            underResolved: !reachedResolution && !beyondSlide,
+            beyondSlide,
         };
     });
 }

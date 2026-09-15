@@ -318,7 +318,21 @@ interface ChatSession {
     createdAt: string;
     updatedAt: string;
     summary: string;
-    metadata?: Record<string, unknown> & { viewerContextId?: string | null };
+    metadata?: Record<string, unknown> & {
+        viewerContextId?: string | null;
+        /**
+         * The durable identity of `providerId`, stamped server-side at creation.
+         * Provider instance ids are re-minted every boot, so this is what lets a
+         * persisted session find its provider again. See shared/providerRef.ts.
+         */
+        providerRef?: { managedKey: string | null; managedByPlugin: string | null; typeId: string | null };
+    };
+    /**
+     * Projection only, set by `listSessions` — never stored. True when nothing in
+     * the current registry answers to this session's provider identity, so the
+     * transcript is readable but a turn cannot be sent until a provider is picked.
+     */
+    providerUnavailable?: boolean;
 }
 
 interface ChatSessionHydration {
@@ -394,6 +408,38 @@ interface LiveViewerContextViewportFields {
     scalebarText?: string | null;
     /** Focal-plane (z-stack) state; null for single-plane slides. */
     zStack?: LiveViewerContextZStack | null;
+    /** The visualization currently drawn over this slide's data; null when none is active. */
+    visualization?: LiveViewerContextVisualization | null;
+    /**
+     * Shader types configured on the BACKGROUND (the scan itself). `["identity"]` for the
+     * usual case — the renderer's implicit pass-through, i.e. the raw scan.
+     */
+    backgroundShaderTypes?: string[] | null;
+}
+
+/**
+ * What the user is actually looking at, layer-wise. Carried every turn because the
+ * alternative — a script round-trip through `application.getGlobalInfo()` — was being
+ * paid on every appearance question, and because without it an agent asked to "improve
+ * the visualization" has no idea whether one even exists.
+ *
+ * Deliberately shallow: types and data bindings, not `params`. Choosing new params
+ * requires the schema and the data's value range anyway (visualization.getSchema() /
+ * probeData), so shipping current param values every turn would cost prompt budget
+ * without shortening the work.
+ */
+interface LiveViewerContextVisualization {
+    /** Index into `config.visualizations`, or null when the entry is not persisted there. */
+    index: number | null;
+    /** Author-set visualization name. Omitted under the `full` anonymization posture. */
+    name?: string | null;
+    /** One entry per shader layer, in config order. */
+    layers: Array<{
+        id: string;
+        type: string;
+        /** Indices into `config.data` this layer renders, when declared in persisted form. */
+        dataReferences?: number[] | null;
+    }>;
 }
 
 /**
@@ -407,9 +453,22 @@ interface LiveViewerContextOverview {
     regionsDescribed: number;
     /** How many levels deep the walk went, counted from 1 (a flat overview is 1). */
     levels: number;
-    /** Whole-slide tissue coverage the overview reported (0..1). */
+    /** Tissue coverage the overview reported (0..1), over whatever `coverageScope` names. */
     slideCoverage: number;
-    /** False when the underlying overview ran on partially-loaded tiles. */
+    /**
+     * What the cached walk actually covered. "whole-slide" is a slide-wide map; anything
+     * else means it was restricted to one area, and both `slideCoverage` and the tree
+     * describe that area only. Carried here because the marker is what decides whether the
+     * agent reuses the cached run — reusing a viewport-scoped walk to answer a slide-wide
+     * question is exactly the mistake this field exists to prevent.
+     */
+    coverageScope: 'whole-slide' | 'current-view' | 'region';
+    /**
+     * False when the cached walk did not EXAMINE the tissue — some question was left
+     * unanswered or was only ever met at too coarse a resolution. Not a statement about the
+     * render (the overview reports that separately as `surveyComplete`): a cached run with
+     * this false is one to continue or redo, never one to answer from.
+     */
     isComplete: boolean;
     /** True when a budget cap stopped the walk early (the map is partial). */
     truncated: boolean;
@@ -683,6 +742,52 @@ interface ChatVoiceSegmentPayload {
      * mode that asks an observer to REMOVE text rather than add it.
      */
     mode: "once" | "continuous" | "flush" | "discarded";
+    /**
+     * What the segment was made of and what it cost, when the recognizer reported it
+     * (`continuous` mode only — a flush or a retraction re-reports existing text and
+     * has no capture of its own).
+     *
+     * This is what separates a BAD MODEL from BAD AUDIO in a session trace. Without it
+     * a three-word transcript of ten seconds of speech and a three-word transcript of a
+     * three-word utterance are the same event, which is why attributing the
+     * whisper-large-v3 segment collapse needed the source rather than the dump.
+     */
+    metrics?: {
+        /** Wall-clock length of the captured segment, silence included. */
+        audioMs?: number;
+        /** Detected voiced duration within it. `audioMs` >> `voicedMs` = mostly silence. */
+        voicedMs?: number;
+        /** False when Web Audio was unavailable, so the two above are absent, not zero. */
+        tracked?: boolean;
+        /** Encoded audio actually sent to the driver. */
+        bytes?: number;
+        /** Driver round-trip for this segment. */
+        latencyMs?: number;
+        /** First to last detected speech (ms) — the ratio rule's denominator. */
+        speechSpanMs?: number;
+        /** Loudest sample 0..1; 0 is digital silence, which is never uploaded. */
+        maxPeak?: number;
+        /** The trailing-silence window that cuts a segment (ms). */
+        silenceMs?: number;
+        /** Audio this recording shared with its successor (ms); trimmed at the seam after transcription. */
+        overlapMs?: number;
+        /** Audio duration the backend measured (ms), when it reports one. */
+        reportedDurationMs?: number;
+        /** Rolling-context characters the decoder was primed with. */
+        contextChars?: number;
+        /** The driver/model that ANSWERED — never the configured one. */
+        driverId?: string;
+        model?: string;
+        /** Whisper's own decode verdicts (verbose_json backends). */
+        noSpeechProb?: number;
+        avgLogprob?: number;
+        compressionRatio?: number;
+        /** Text filters that altered the raw decode. */
+        filtered?: string[];
+        probe?: boolean;
+        failOpen?: boolean;
+        flush?: boolean;
+    };
 }
 
 /** Payload of the `voice-transcribing` module event (segment transcription start/end). */

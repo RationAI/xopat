@@ -14,7 +14,7 @@ import { PhIcon, componentIconNode } from '../classes/elements/ph-icon.mjs';
  * @property {string} providerId
  * @property {string} rawId
  * @property {string} label       already-translated plain text (never an i18n key, never HTML)
- * @property {string|BaseComponent} [icon] `ph-*`/`fa-*` class, image URL or component
+ * @property {string|BaseComponent} [icon] `ph-*` class, image URL or component
  * @property {string} [hint]      long-form tooltip
  * @property {string} [kbd]       display combo, e.g. `"Ctrl+S"`
  * @property {string} [group]     translated catalogue group (Settings card sectioning)
@@ -712,8 +712,8 @@ export class QuickActionsBar {
             this._overflow.addItem({
                 id: desc.key,
                 // Dropdown rows resolve icons through `iconComponentFor`, which
-                // only understands ph-*/fa-* classes (not URLs or components).
-                icon: /^(ph|fa)[-\s]/.test(textOf(desc.icon)) ? desc.icon : PLACEHOLDER_ICON,
+                // only understands ph-* classes (not URLs or components).
+                icon: /^ph[-\s]/.test(textOf(desc.icon)) ? desc.icon : PLACEHOLDER_ICON,
                 label: textOf(desc.label, desc.rawId),
                 title: textOf(desc.hint),
                 kbd: textOf(desc.kbd),

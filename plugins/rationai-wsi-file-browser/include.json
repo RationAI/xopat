@@ -4,7 +4,7 @@
   "author": "Vendula Penazova",
   "version": "1.0.0",
   "description": "%meta.description%",
-  "categories": ["Data"],
+  "categories": ["Navigation"],
   "keywords": ["wsi", "browser", "files", "rationai"],
   "icon": "ph-folder-open",
   "includes": [
@@ -12,6 +12,11 @@
   ],
   "requiredConfig": ["wsiService"],
   "modules": ["rationai-wsi-tile-source"],
-  // RationAI WSI Service URL
-  "wsiService": "http://localhost:8080"
+  // RationAI WSI Service URL. Unused when `proxy` is set.
+  "wsiService": "http://localhost:8080",
+  // Server proxy alias (`core.server.secure.proxies.<alias>`) to route the
+  // listing through instead of calling `wsiService` directly. With it every
+  // request travels `/proxy/<alias>/v3/...` on the viewer origin, so the
+  // upstream needs no CORS and its origin never reaches the browser.
+  "proxy": null
 }

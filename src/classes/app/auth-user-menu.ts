@@ -17,7 +17,32 @@
 const ROW_IDENTITY = "auth.identity";
 const ROW_SIGN_IN = "auth.signin";
 const ROW_SIGN_OUT = "auth.signout";
+const ROW_ROLES = "auth.roles";
 const ROW_SIGN_IN_CTX = (contextId: string) => `auth.signin:${contextId}`;
+
+/**
+ * Show the roles panel.
+ *
+ * Lives next to identity because that is the question it answers — "who am I,
+ * and what may I do" — and because it is the only place a user reliably looks
+ * after being refused something. In debug mode the same panel also switches
+ * roles, which is how a deployment's `core.roles` block is exercised without an
+ * identity provider (see src/USER_ROLES.md).
+ */
+function openRolesPanel(): void {
+    const UI = (window as any).UI;
+    if (!UI?.Modal || !UI?.UserRolesPanel) return;
+    const panel = new UI.UserRolesPanel({ id: "user-roles-panel" });
+    const modal = new UI.Modal({
+        header: $.t("user.roles.panelTitle"),
+        body: panel.create(),
+        width: "min(90vw, 720px)",
+        allowResize: true,
+    });
+    const close = modal.close.bind(modal);
+    modal.close = () => { try { panel.dispose?.(); } catch (e) { /* ignore */ } return close(); };
+    modal.mount(document.body).open();
+}
 
 const auth = (): any => (window as any).APPLICATION_CONTEXT?.auth;
 const userMenu = (): any => (window as any).USER_INTERFACE?.AppBar?.User;
@@ -77,6 +102,15 @@ function render(): void {
         icon: "ph-user-circle",
         disabled: true,
         label: name ? $.t("auth.signedInAs", { name }) : $.t("auth.notSignedIn"),
+    });
+
+    // Roles. Registered unconditionally: "no role assigned" is itself an answer,
+    // and hiding the row when the deployment defines none would make the empty
+    // case indistinguishable from a broken menu.
+    menu.register(ROW_ROLES, {
+        icon: "ph-identification-badge",
+        label: $.t("user.roles.panelTitle"),
+        onClick: () => openRolesPanel(),
     });
 
     // The main identity: sign in XOR sign out, never both.

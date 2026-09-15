@@ -200,10 +200,14 @@ test('"unknown" from a silent route never escalates to a navigation', async () =
     const result = await auth.runAutoLogin({ timeoutMs: 2000 });
 
     expect(interactiveCalls).toBe(0);
-    // Nor is the gate raised: we have no evidence the session is actually gone.
-    expect(seen.required).toBe(0);
-    expect(auth.isInteractionRequired("core")).toBe(false);
+    // The gate IS raised, though. Nothing was ever authenticated here, so there is no
+    // session to protect — and staying silent only means every request bound to the
+    // context goes out with no credential and fails. Holding them behind a scrim whose
+    // click can sign the user in is the better failure.
+    expect(seen.required).toBe(1);
+    expect(auth.isInteractionRequired("core")).toBe(true);
     expect(result.verdicts.core).toBe(false);
+    expect(result.deferred).toEqual(["core"]);
 });
 
 test("a boot attempt already spent hands over to the gate instead of redirecting again", async () => {

@@ -42,10 +42,11 @@ class XOpatServer {
     #captured = null;
     #session = null;
 
-    constructor({ scratch, port, devMode }) {
+    constructor({ scratch, port, devMode, extraEnv = {} }) {
         this.scratch = scratch;
         this.port = port;
         this.devMode = devMode;
+        this.extraEnv = extraEnv;
         // `localhost`, not `127.0.0.1`: every ENV file in the repo writes
         // `client.domain` as `http://localhost:<port>`, and the client builds
         // absolute URLs from it. Browsing the numeric address instead makes the
@@ -70,6 +71,12 @@ class XOpatServer {
                 XOPAT_DEV_MODE: this.devMode ? "1" : "0",
                 XOPAT_CACHE_DIR: this.cacheDir,
                 XOPAT_STORAGE_ROOT: this.storageRoot,
+                // Project-declared bootstrap vars, last so a project can also
+                // override the defaults above. A deployment needing a secret or
+                // an SSRF allowlist entry (the SAML project needs both) states
+                // it in `playwright.config.mjs` rather than relying on whatever
+                // the developer happened to export.
+                ...this.extraEnv,
             },
             stdio: ["ignore", "pipe", "pipe"],
             detached: process.platform !== "win32",
@@ -221,9 +228,23 @@ export const serverFixtures = {
     xopatDevMode: [false, { option: true, scope: "worker" }],
     /** `core.server.logging.level` for the spawned server. */
     xopatServerLogLevel: [process.env.XOPAT_TEST_SERVER_LOG || null, { option: true, scope: "worker" }],
+    /**
+     * Extra environment for the spawned server. For bootstrap values read before
+     * any config — a secret, an SSRF allowlist entry — which by definition
+     * cannot come from the ENV file itself.
+     */
+    xopatServerEnv: [{}, { option: true, scope: "worker" }],
+    /**
+     * Pin the server port instead of deriving it from the worker index.
+     *
+     * Needed when something OUTSIDE the repo has the URL baked in: an identity
+     * provider's registered redirect URIs, for instance. A project that sets
+     * this must also set `workers: 1`, or two workers fight over the port.
+     */
+    xopatPort: [null, { option: true, scope: "worker" }],
 
     xopatServer: [
-        async ({ xopatEnv, xopatDevMode, xopatServerLogLevel }, use, workerInfo) => {
+        async ({ xopatEnv, xopatDevMode, xopatServerLogLevel, xopatServerEnv, xopatPort }, use, workerInfo) => {
             const scratch = createEnvScratch({
                 envFile: xopatEnv,
                 label: `${workerInfo.project.name.replace(/[^\w.-]+/g, "-")}-w${workerInfo.parallelIndex}`,
@@ -231,8 +252,9 @@ export const serverFixtures = {
             });
             const server = new XOpatServer({
                 scratch,
-                port: PORT_BASE + workerInfo.parallelIndex,
+                port: xopatPort ?? (PORT_BASE + workerInfo.parallelIndex),
                 devMode: xopatDevMode,
+                extraEnv: xopatServerEnv,
             });
             activeServers.add(server);
             try {

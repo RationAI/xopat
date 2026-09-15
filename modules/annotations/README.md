@@ -78,6 +78,53 @@ annotations after hydration.
 `forceExportsProp = "name"` is the older single-property setter; it still works and
 now feeds the same registry, but it returns no disposer.
 
+### The label is a value slot
+
+The pill drawn next to an annotation — the same text the annotation board's row
+shows — is **not** a measurement readout. It resolves in this order, first
+non-empty wins:
+
+| | |
+|---|---|
+| `annotation.displayValue` | instance override |
+| `preset.meta.labelSource` | names which of the annotation's own `meta` keys to render |
+| area, else length | the default; unchanged for everything untouched |
+
+```js
+// one shape: a prediction instead of its area
+object.displayValue = "0.62";
+
+// a whole class of shapes: every object of this preset shows its own meta value
+preset.meta.labelSource = { name: "Label source", value: "Tumor ratio" };
+object.meta["Tumor ratio"] = 0.62;
+annotations.invalidateAnnotationLabel(object);   // only needed for the meta route
+```
+
+Read it back with `annotations.getAnnotationLabel(object)` → `{text, source}`,
+where `source` is `'value' | 'area' | 'length' | ''` so a list can pick an icon
+without re-deriving where the text came from. `getMeasurementLabel(object)` is
+the text alone.
+
+Three things worth knowing:
+
+- **The value wins over `supportsMeasurements()`.** That opt-out means "this
+  shape's extent carries no meaning" (a pointer arrow) — a statement about
+  geometry, which must not suppress a value someone deliberately attached.
+- **`displayValue` is derived and is NOT persisted.** It is deliberately absent
+  from `copiedProperties` / `necessaryProperties`, so an exported bundle never
+  carries a value whose source no longer exists. Whoever attaches it re-attaches
+  it, and removes it when its source goes away. Do not register it via
+  `registerPersistedProperties` unless you genuinely own the value for good.
+- **The overlay caches label text per object**, on a token covering geometry,
+  `displayValue` and `presetID` — so setting `displayValue` needs nothing extra.
+  Changing a **meta** value the preset route reads does need
+  `invalidateAnnotationLabel(object)`: hashing `meta` on a path that runs every
+  frame for every labelled object would cost more than the area math the cache
+  exists to avoid.
+
+`0` and `false` are values, not absences — only `undefined`, `null` and `""` fall
+through to the next rule.
+
 ### Read-only annotations
 
 `annotation.readOnly` marks an annotation the user may see but not change — an
@@ -199,6 +246,39 @@ For most of the behaviour, you can consult ``fabricjs`` documentation, however t
  - inherited from ``fabricjs module`` there is a new function on  `fabric.Object`: `zooming(zoom)` that gets invoked if exists
  - extended by ``annotations module`` there is a new funciton on  `fabric.Object`: `_factory()` memoization that simplifies factory API access
 
+
+#### Writing a mode
+
+A mode extends `OSDAnnotations.AnnotationState` and is registered with `setModeUsed(id)` (built-in)
+or `setCustomModeUsed(id, ModeClass)` (anything else, including modes shipped by a plugin).
+
+The one contract that is easy to get wrong is **`handleClickUp`'s return value**:
+
+- `AnnotationState.CLICK_CONSUMED` (`true`) — the mode acted on the release; the canvas does
+  nothing else.
+- `AnnotationState.CLICK_NOT_CONSUMED` (`false`) — the canvas performs its default handling:
+  select the annotation under the cursor (or clear the selection) and raise `canvas-release`.
+
+**A mode that started a gesture and then discarded it must report NOT_CONSUMED.** Nothing was
+created, so from the user's point of view the release was a plain click, and a plain click
+selects. Reporting CONSUMED there is what used to make clicking an existing annotation in a
+drawing mode do nothing at all. Use the `clickUpResult(produced)` helper rather than a bare
+boolean:
+
+```js
+handleClickUp(o, point, isLeftClick, objectFactory) {
+    if (!objectFactory) return OSDAnnotations.AnnotationState.CLICK_NOT_CONSUMED;
+    return this.clickUpResult(this._finish(this._lastUsed));  // false when discarded
+}
+```
+
+`OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
+implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied
+to a plugin-owned mode. Modes whose short click does real work (the free-form-tool brushes, the
+magic wand, viewport segmentation) legitimately consume every release.
+
+`objectSelected(event, object)` is the per-mode veto over a selection the canvas is about to make —
+return `false` to refuse it. It is consulted only on the NOT_CONSUMED path.
 
 #### The Factory
 Factories govern how object behave - it is the module API over annotations. They provide handful

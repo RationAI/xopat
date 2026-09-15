@@ -1,0 +1,67 @@
+{
+    "name": "Tutorial App 10 v3",
+    "name_short": "TA10v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_10.v3.0",
+    "io": {
+        "slide": {
+            "type": "wsi"
+        },
+        "region_of_interest": {
+            "type": "rectangle",
+            "reference": "io.slide",
+            "classes": [
+                "org.empaia.global.v1.classes.roi"
+            ]
+        },
+        "detected_nuclei": {
+            "type": "collection",
+            "reference": "io.region_of_interest",
+            "items": {
+                "type": "point",
+                "reference": "io.slide"
+            }
+        },
+        "model_confidences": {
+            "type": "collection",
+            "items": {
+                "type": "float",
+                "reference": "io.detected_nuclei.items"
+            }
+        },
+        "nucleus_classifications": {
+            "type": "collection",
+            "items": {
+                "type": "class",
+                "reference": "io.detected_nuclei.items"
+            }
+        },
+        "number_positive": {
+            "type": "integer",
+            "reference": "io.region_of_interest"
+        },
+        "number_negative": {
+            "type": "integer",
+            "reference": "io.region_of_interest"
+        },
+        "positivity": {
+            "type": "float",
+            "reference": "io.region_of_interest"
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "slide",
+                "region_of_interest"
+            ],
+            "outputs": [
+                "detected_nuclei",
+                "model_confidences",
+                "nucleus_classifications",
+                "number_positive",
+                "number_negative",
+                "positivity"
+            ]
+        }
+    }
+}

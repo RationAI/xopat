@@ -1,0 +1,30 @@
+{
+    "name": "Tutorial App 14 v3",
+    "name_short": "TA14v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_14.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_questionnaire": {
+            "type": "fhir_questionnaire",
+            "selectors": [
+                "org.empaia.my_vendor.my_app.v3.1.selectors.something.something-else"
+            ]
+        },
+        "my_questionnaire_response": {
+            "type": "fhir_questionnaire_response"
+        }
+    },
+    "modes": {
+        "preprocessing": {
+            "inputs": [
+                "my_wsi",
+                "my_questionnaire"
+            ],
+            "outputs": [
+                "my_questionnaire_response"
+            ]
+        }
+    }
+}

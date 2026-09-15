@@ -272,7 +272,7 @@ addPlugin('profiler', class extends XOpatPlugin {
         this.page.buildMetaDataMenu([{
             title: 'Profiler output',
             id: 'profiler-output',
-            icon: 'fa-gauge',
+            icon: 'ph-gauge',
             page
         }], false);
 

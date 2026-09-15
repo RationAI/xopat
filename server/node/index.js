@@ -16,13 +16,17 @@ const i18n = require('../../src/libs/i18next.min');
 
 const utils = require('./utils');
 const { getCore } = require("../templates/javascript/core");
+const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
 
 
 const constants = require("./constants");
 const {rawReqToString, RawBodyTooLargeError, jsonForScript} = require("./utils");
-const {verifyProxyAuth, verifyRpcAuth, csrfTokenMatches} = require("./auth");
+const {
+    verifyProxyAuth, verifyRpcAuth, csrfTokenMatches,
+    proxyAliasAllowedForSession, checkProxyCredentialGate,
+} = require("./auth");
 const { XopatServerRuntime } = require("./server-runtime");
 const { getServerLogging, setLoggingConfig } = require("./logging");
 const { setServerConfigSnapshot } = require("./server-helpers");
@@ -136,6 +140,61 @@ const CACHE_DIR = process.env.XOPAT_CACHE_DIR
 let EXTRA_STATIC_ROOTS = [];
 
 /**
+ * Bulk-media serving (`core.server.media`). **Absent means the feature does not
+ * exist** — no root is reachable through it, no response advertises
+ * `Accept-Ranges`, and `staticRoots` behaviour is unchanged byte for byte.
+ *
+ * It is a separate allowlist from `staticRoots` rather than a flag on it,
+ * because they are different powers. `staticRoots` says "this directory holds
+ * client assets", which the handler answers with one buffered `readFile` and a
+ * `200` — correct for a 40 kB bundle, useless for a 2 GB pyramid a client-side
+ * decoder reads by byte range, and a memory hazard if you point it at one.
+ * `media` says "stream this directory, honour `Range`", which is genuinely more
+ * capability: long-lived open handles, concurrent partial reads, an
+ * amplification lever a static asset directory does not have. A deployment that
+ * wants one does not thereby want the other, so declaring one never implies the
+ * other, and neither changes how the other's files are served.
+ *
+ * Development convenience only. In production, bulk media belongs behind a
+ * reverse proxy — see `server/README.md` § *Serving static files*.
+ */
+let MEDIA_CONFIG = null;
+
+/** Default ceiling on one ranged read. A decoder asks for tiles, not gigabytes. */
+const MEDIA_DEFAULT_MAX_RANGE_BYTES = 32 * 1024 * 1024;
+/** Default ceiling on simultaneously open media streams, process-wide. */
+const MEDIA_DEFAULT_MAX_CONCURRENT_STREAMS = 32;
+
+/**
+ * Validate and freeze the operator's `core.server.media` block once at boot —
+ * here rather than beside the handler, because `bootStorageConfig` below reads
+ * the config long before the request path is ever entered.
+ *
+ * Roots are resolved lazily (`mediaRoots()`) for the same reason `staticRoots`
+ * is: the handler must not pay for path work per request.
+ */
+function normalizeMediaConfig(media) {
+    const exts = Array.isArray(media.extensions)
+        ? media.extensions
+            .filter(e => typeof e === "string" && e.trim())
+            .map(e => (e.startsWith(".") ? e : `.${e}`).toLowerCase())
+        : null;
+    const num = (v, fallback, min) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= min ? n : fallback;
+    };
+    return Object.freeze({
+        roots: media.roots.filter(r => typeof r === "string" && r.trim()),
+        // An empty array would mean "serve nothing", which is a configuration
+        // mistake dressed as a policy — treat only a declared, non-empty list as
+        // a restriction, and no list as "every extension inside the root".
+        extensions: exts && exts.length ? Object.freeze(exts) : null,
+        maxRangeBytes: num(media.maxRangeBytes, MEDIA_DEFAULT_MAX_RANGE_BYTES, 1),
+        maxConcurrentStreams: num(media.maxConcurrentStreams, MEDIA_DEFAULT_MAX_CONCURRENT_STREAMS, 1),
+    });
+}
+
+/**
  * Baseline security-header policy, `core.server.security`. Read once at boot.
  *
  * Defaults are the safe-but-non-breaking set: framing denied to other origins
@@ -226,6 +285,15 @@ function normalizeFrameAncestors(value) {
  */
 let EXPOSE_SCHEME_ROUTES = DEV_MODE;
 
+/**
+ * `core.server.secure.examples` — sessions this deployment publishes as
+ * ready-to-open URLs in the startup banner. Server-only by construction (the
+ * `server.secure` strip), printed unconditionally: a deployment that bothered to
+ * declare what can be opened should say so in production too. See
+ * `server/node/examples.js`.
+ */
+let PUBLISHED_EXAMPLES = {};
+
 (function bootStorageConfig() {
     try {
         const core = getCore(constants.ABSPATH, PROJECT_PATH,
@@ -239,6 +307,12 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
         setLoggingConfig(core?.CORE?.server?.logging || {});
         const roots = core?.CORE?.server?.staticRoots;
         if (Array.isArray(roots)) EXTRA_STATIC_ROOTS = roots.filter(r => typeof r === "string");
+
+        const media = core?.CORE?.server?.media;
+        if (media && typeof media === "object" && !Array.isArray(media)
+            && Array.isArray(media.roots) && media.roots.some(r => typeof r === "string" && r.trim())) {
+            MEDIA_CONFIG = normalizeMediaConfig(media);
+        }
 
         const sec = core?.CORE?.server?.security;
         if (sec && typeof sec === "object") {
@@ -302,6 +376,9 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
         }
 
         if (core?.CORE?.server?.exposeSchemeRoutes === true) EXPOSE_SCHEME_ROUTES = true;
+
+        const examples = core?.CORE?.server?.secure?.examples || core?.CORE_SECURE?.examples;
+        if (examples && typeof examples === "object") PUBLISHED_EXAMPLES = examples;
     } catch (e) {
         logger.warn?.('[storage] could not pre-read storage config; using defaults:', e?.message || e);
         setStorageConfig({});
@@ -315,6 +392,11 @@ const { storage: SERVER_STORAGE, cache: SERVER_CACHE } = getServerStorage({ cach
 const language = constants.SERVER.LANGUAGE;
 const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
+// Same reasoning as the client init (src/app.ts): these strings are DATA — plugin
+// records, error texts — not markup. The one sink that renders them as HTML escapes
+// at the sink (`escapeHtml` in loader.ts), so escaping here only means a dependency
+// id with a quote arrives pre-mangled and then double-escaped.
+languageServerConf.interpolation = { ...(languageServerConf.interpolation || {}), escapeValue: false };
 i18n.init(languageServerConf);
 
 // Browser sessions. These are not just CSRF holders any more: an unauthenticated
@@ -578,7 +660,12 @@ async function createSession(res, { isSecureRequest = false } = {}) {
         csrfToken,
         createdAt: Date.now(),
         lastSeenAt: Date.now(),
-        // you can attach extra flags here, e.g. which proxies are allowed
+        // Which `/proxy/<alias>` targets this session may reach. 'ALL' is the
+        // unrestricted default — a fresh session is anonymous, so narrowing here
+        // would break every deployment that never logs anyone in. An auth module
+        // narrows it on a completed login with
+        // `XOPAT_SERVER.setSessionAllowedProxies(session, [...])`; enforcement is
+        // in responseProxy via proxyAliasAllowedForSession (server/node/auth.js).
         allowedProxies: 'ALL'
     };
 
@@ -975,6 +1062,55 @@ function staticRoots() {
     return out;
 }
 
+let _mediaRootsCache = null;
+/**
+ * Media roots, resolved through exactly the containment rule `staticRoots()`
+ * uses: under the application root or refused loudly. A root that escapes is a
+ * configuration bug, and honouring it would turn an ENV typo into a filesystem
+ * read primitive — which is why slides living outside the repository still go
+ * through `npm run fixtures:serve` instead.
+ */
+function mediaRoots() {
+    if (_mediaRootsCache) return _mediaRootsCache;
+    if (!MEDIA_CONFIG) return (_mediaRootsCache = []);
+    const root = constants._ABSPATH_NO_SLASH || constants.ABSPATH;
+    const seen = new Set();
+    const out = [];
+    for (const rel of MEDIA_CONFIG.roots) {
+        const abs = path.resolve(root, rel.replace(/[\\/]+/g, path.sep));
+        if (!pathIsInside(abs, root)) {
+            logger.warn(`[media] ignoring media.roots entry '${rel}': resolves outside the application root.`);
+            continue;
+        }
+        const key = _samePathCase(abs);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(abs);
+    }
+    _mediaRootsCache = out;
+    return out;
+}
+
+/** Currently open media streams, process-wide. Bounded by `maxConcurrentStreams`. */
+let _mediaStreamsOpen = 0;
+
+/**
+ * Is this resolved path served as media?
+ *
+ * A static root wins a tie. Overlap should not happen, but if a deployment
+ * declares one, the *existing* asset behaviour is the one that must not change.
+ * The extension allowlist is NOT consulted here — it decides reachability, in
+ * `resolveStaticTarget`, so a disallowed extension inside a media root is a 404
+ * rather than a file quietly served through the asset path instead.
+ */
+function isMediaPath(realPath) {
+    if (!MEDIA_CONFIG) return false;
+    const roots = mediaRoots();
+    if (!roots.length) return false;
+    if (!roots.some(r => pathIsInside(realPath, r))) return false;
+    return !staticRoots().some(r => pathIsInside(realPath, r));
+}
+
 /**
  * Second gate, applied *inside* the allowed roots. The roots already exclude
  * `env/` and `server/.cache/`; this is what keeps server-side material that
@@ -1001,6 +1137,12 @@ function isDeniedStaticPath(relPath) {
  * so no URL that used to resolve stops resolving. Containment is checked twice:
  * once on the resolved path (traversal) and once on the realpath (a symlink
  * inside an allowed root pointing out of it).
+ *
+ * BOTH gates run on the realpath, not just containment. Containment alone asks
+ * "does this land inside SOME allowed root", which a symlink to `.git/config`,
+ * `server.json` or a `*.server.ts` sitting next to a client bundle answers
+ * `yes` — the deny-list would then have been applied only to the request path
+ * the attacker chose, never to the file actually served.
  */
 async function resolveStaticTarget(pathname) {
     // Backslash is not a path separator to the URL parser but IS one to `fs` on
@@ -1010,16 +1152,33 @@ async function resolveStaticTarget(pathname) {
 
     const root = constants._ABSPATH_NO_SLASH || constants.ABSPATH;
     const candidate = path.resolve(root, rel);
-    const roots = staticRoots();
+    // Both allowlists grant reachability; which one matched decides how the file
+    // is *delivered* (see `isMediaPath`). With no `media` block this is exactly
+    // the previous set.
+    const roots = [...staticRoots(), ...mediaRoots()];
     if (!roots.some(r => pathIsInside(candidate, r))) return null;
 
-    let real;
-    try {
-        real = await fsp.realpath(candidate);
-    } catch (_) {
-        return null;                       // missing, or a broken symlink
+    // realpath() is unimplemented on pkg's snapshot fs.
+    let real = candidate;
+    if (typeof process.pkg === "undefined") {
+        try {
+            real = await fsp.realpath(candidate);
+        } catch (_) {
+            return null;                       // missing, or a broken symlink
+        }
+        if (!roots.some(r => pathIsInside(real, r))) return null;
+        // Re-run the deny gate on what the symlink actually points AT.
+        if (isDeniedStaticPath(path.relative(root, real).replace(/\\/g, "/"))) return null;
+    } else {
+        // No realpath here, so the link cannot be followed to be judged — and an
+        // unjudged link is exactly the bypass above. Refuse symlinks outright;
+        // serving one unchecked is the worse failure.
+        try {
+            if ((await fsp.lstat(candidate)).isSymbolicLink()) return null;
+        } catch (_) {
+            return null;
+        }
     }
-    if (!roots.some(r => pathIsInside(real, r))) return null;
 
     let stat;
     try {
@@ -1030,7 +1189,137 @@ async function resolveStaticTarget(pathname) {
     // A directory used to reach `fs.readFile` and answer 500 with the errno.
     if (!stat.isFile()) return null;
 
-    return { path: real, stat };
+    const media = isMediaPath(real);
+    // The extension allowlist is a reachability rule, not a delivery rule: a
+    // media root declared for `.tif` must not become a way to read the `.md`
+    // sitting next to the slides.
+    if (media && MEDIA_CONFIG?.extensions
+        && !MEDIA_CONFIG.extensions.includes(path.extname(real).toLowerCase())) {
+        return null;
+    }
+
+    return { path: real, stat, media };
+}
+
+/**
+ * Parse a single `Range` header against a known size.
+ *
+ * Multi-range (`bytes=0-9,20-29`) returns `"multi"`, which the caller answers
+ * with the whole body — a legal response, and one that keeps us out of
+ * multipart/byteranges assembly for a case no slide decoder issues.
+ *
+ * @returns {{start:number,end:number}|"multi"|"unsatisfiable"|null} `null` = no
+ *          usable range header, serve normally.
+ */
+function parseRangeHeader(header, size) {
+    if (typeof header !== "string") return null;
+    const m = /^bytes=(.+)$/i.exec(header.trim());
+    if (!m) return null;
+    const specs = m[1].split(",").map(s => s.trim()).filter(Boolean);
+    if (!specs.length) return null;
+    if (specs.length > 1) return "multi";
+
+    const spec = /^(\d*)-(\d*)$/.exec(specs[0]);
+    if (!spec) return "unsatisfiable";
+    const [, rawStart, rawEnd] = spec;
+    if (rawStart === "" && rawEnd === "") return "unsatisfiable";
+
+    let start;
+    let end;
+    if (rawStart === "") {
+        // `bytes=-N` — the final N bytes. N === 0 asks for nothing.
+        const suffix = Number(rawEnd);
+        if (!Number.isFinite(suffix) || suffix <= 0) return "unsatisfiable";
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+    } else {
+        start = Number(rawStart);
+        if (!Number.isFinite(start) || start >= size) return "unsatisfiable";
+        end = rawEnd === "" ? size - 1 : Number(rawEnd);
+        if (!Number.isFinite(end)) return "unsatisfiable";
+        end = Math.min(end, size - 1);
+        if (end < start) return "unsatisfiable";
+    }
+    return { start, end };
+}
+
+/**
+ * Serve a file from a `core.server.media` root: streamed, `Range`-aware, and
+ * bounded.
+ *
+ * The bounds are the reason this is a separate path rather than a flag on the
+ * asset handler. Ranged reads keep a file handle open for the life of the
+ * response, so an unbounded version of this is a cheap way to pin a process's
+ * descriptors and memory from anonymous requests. `maxConcurrentStreams` caps
+ * how many can be in flight and `maxRangeBytes` caps how much one of them may
+ * ask for; both are operator-set, and neither is reachable from a session (§7).
+ */
+function responseMediaFile(req, res, target, headers, etag) {
+    const size = target.stat.size;
+    headers["Accept-Ranges"] = "bytes";
+
+    const isHead = req.method === "HEAD";
+    const rawRange = req.headers["range"];
+
+    // `If-Range` with a non-matching validator means "the entity changed, send
+    // me the whole thing" — not an error, and not a partial response.
+    const ifRange = req.headers["if-range"];
+    const rangeUsable = !ifRange || ifRange.trim() === etag;
+
+    let range = rangeUsable ? parseRangeHeader(rawRange, size) : null;
+    if (range === "multi") range = null;
+    if (range === "unsatisfiable") {
+        res.writeHead(416, { ...headers, "Content-Range": `bytes */${size}` });
+        return res.end();
+    }
+
+    let start = 0;
+    let end = size - 1;
+    let status = 200;
+    if (range) {
+        start = range.start;
+        // Clamp rather than refuse: a decoder asking for more than the operator
+        // allows should get a short read it can continue from, not a failure it
+        // has no way to interpret.
+        end = Math.min(range.end, start + MEDIA_CONFIG.maxRangeBytes - 1);
+        status = 206;
+        headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+    }
+    headers["Content-Length"] = end - start + 1;
+
+    if (isHead) {
+        res.writeHead(status, headers);
+        return res.end();
+    }
+
+    if (_mediaStreamsOpen >= MEDIA_CONFIG.maxConcurrentStreams) {
+        logger.warn(`[media] refusing '${target.path}': ${_mediaStreamsOpen} streams already open `
+            + `(media.maxConcurrentStreams = ${MEDIA_CONFIG.maxConcurrentStreams}).`);
+        res.writeHead(503, { "Content-Type": "text/plain", "Retry-After": "1" });
+        return res.end("Server busy, retry shortly.");
+    }
+
+    _mediaStreamsOpen++;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        _mediaStreamsOpen--;
+    };
+
+    const stream = fs.createReadStream(target.path, { start, end });
+    stream.on("error", (e) => {
+        logger.warn(`[media] read failed for '${target.path}':`, e?.code || e);
+        if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end();
+        release();
+    });
+    stream.on("close", release);
+    // A client that navigates away mid-tile must not leave the handle open.
+    res.on("close", () => stream.destroy());
+
+    res.writeHead(status, headers);
+    stream.pipe(res);
 }
 
 async function responseStaticFile(req, res, target, urlObj) {
@@ -1039,7 +1328,12 @@ async function responseStaticFile(req, res, target, urlObj) {
 
     // Cheap, correct validators — the previous handler had none, so an
     // unversioned asset was re-read and re-sent in full on every request.
-    const etag = `W/"${target.stat.size.toString(16)}-${Math.floor(target.stat.mtimeMs).toString(16)}"`;
+    //
+    // Media gets a STRONG validator: RFC 7233 requires a strong one for
+    // `If-Range`, so a weak ETag there would silently disable resumption and
+    // turn every conditional range into a full-file transfer.
+    const validator = `"${target.stat.size.toString(16)}-${Math.floor(target.stat.mtimeMs).toString(16)}"`;
+    const etag = target.media ? validator : `W/${validator}`;
     const lastModified = target.stat.mtime.toUTCString();
 
     const headers = {
@@ -1047,8 +1341,21 @@ async function responseStaticFile(req, res, target, urlObj) {
         "ETag": etag,
         "Last-Modified": lastModified,
     };
-    if (version) {
+    if (version && DEV_MODE) {
+        // `?v=` carries the APP version (`src/config.json`), not the file's — so
+        // `immutable` is only true across releases. In development it means an
+        // edit to a module or plugin source is invisible until a hard reload,
+        // because the URL does not change when the file does. That is a
+        // debugging trap, not a caching win: it silently runs stale code while
+        // the server serves the new file. Revalidate instead; the ETag below
+        // keeps a 304 cheap.
+        headers["Cache-Control"] = "no-cache";
+    } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
+    } else if (target.media) {
+        // `no-store` would forbid keeping the partial responses a tile decoder
+        // re-reads constantly; revalidation against the ETag is what we want.
+        headers["Cache-Control"] = "no-cache";
     } else {
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
         headers["Pragma"] = "no-cache";
@@ -1060,6 +1367,8 @@ async function responseStaticFile(req, res, target, urlObj) {
         res.writeHead(304, headers);
         return res.end();
     }
+
+    if (target.media) return responseMediaFile(req, res, target, headers, etag);
 
     let content;
     try {
@@ -1136,15 +1445,23 @@ function sameOrigin(a, b) {
     }
 }
 
-async function responseProxy(req, res, requestUrl) {
+async function responseProxy(req, res, requestUrl, session) {
     // 1. todo parse just core for now, no need to load plugins
     const core = initViewerCoreAndPlugins(req, res, true);
     if (!core) return;
 
     // 2. Extract alias from /proxy/alias/v1/...
+    // `filter(Boolean)` is load-bearing: it collapses the empty segments that let
+    // `/proxy/<alias>//evil.com/x` (or a pasted absolute URL) reconstruct into a
+    // second origin. It also drops a TRAILING slash, which upstreams distinguish
+    // — wsi-service answers `/v3/cases/` with 200 and `/v3/cases` with a 307 to
+    // itself, and the redirect guard then refuses the loopback hop with a 502.
+    // Restore that one slash explicitly; it cannot carry an origin.
     const parts = requestUrl.pathname.split('/').filter(Boolean);
     const alias = parts[1];
-    const targetPath = '/' + parts.slice(2).join('/') + (requestUrl.search || '');
+    const rest = parts.slice(2).join('/');
+    const trailing = rest && requestUrl.pathname.endsWith('/') ? '/' : '';
+    const targetPath = '/' + rest + trailing + (requestUrl.search || '');
 
     // 3. Match against the "secure.proxies" definition. `hasOwnProperty`, not a
     // bare index: `alias` is client-supplied, so `/proxy/constructor/...` would
@@ -1155,11 +1472,26 @@ async function responseProxy(req, res, requestUrl) {
         ? proxies[alias]
         : undefined;
 
-    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string") {
+    // 3b. Per-session alias allowlist. Deliberately indistinguishable from the
+    // unknown-alias answer: which aliases exist is not a restricted session's
+    // business. Unrestricted by default — see proxyAliasAllowedForSession.
+    if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
+        || !proxyAliasAllowedForSession(session, alias)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         return res.end('Proxy target alias is not allowed or not configured.');
+    }
+
+    // 3c. An alias that attaches operator credentials must enforce authentication.
+    // Session + CSRF only proves same-origin, and both are handed to any anonymous
+    // page load, so without this the operator's API key is reachable by every
+    // visitor. Opt out per alias (`auth.enabled: false`) or deployment-wide
+    // (`secure.proxyCredentialsRequireAuth: false`).
+    const credentialGate = checkProxyCredentialGate(alias, proxyConfig, serverConf.secure);
+    if (!credentialGate.ok) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        return res.end(credentialGate.message);
     }
 
     const baseUrl = proxyConfig.baseUrl.replace(/\/$/, '');
@@ -1386,7 +1718,6 @@ async function responseViewer(req, res, session) {
                 return `
 ${core.requireOpenseadragon()}
 ${core.requireLibs()}
-${core.requireExternal()}
 ${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
@@ -1738,7 +2069,17 @@ const server = http.createServer(async (req, res) => {
         // Treat suffix paths as attempt to access existing files. Resolution is
         // confined to the allowed roots (see DEFAULT_STATIC_ROOTS) — a path that
         // exists but sits outside them is a 404, not a download.
-        if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
+        //
+        // The suffix length is bounded only to keep this from claiming ordinary
+        // routes; it is not a list of known types, and it used to stop at five
+        // characters. `.geojson` is seven, so a request for one fell past the
+        // static handler entirely and was answered with the application page —
+        // HTTP 200, `text/html`, and a consumer that reports
+        // `Unexpected token '<'` from whatever tried to parse it. That failure
+        // names neither the file nor the server, which is what makes an arbitrary
+        // bound expensive: `.webmanifest` and `.geojson` are ordinary web assets,
+        // and the next one costs the same afternoon.
+        if (urlObj.pathname.match(/\.[A-Za-z0-9]{2,12}$/)) {
             const target = await resolveStaticTarget(urlObj.pathname);
             if (target) {
                 return await responseStaticFile(req, res, target, urlObj);
@@ -1901,6 +2242,12 @@ async function shutdown(signal) {
         // `getServerStorage()` hands back `{storage, cache}`; the broker with the
         // sweeper lease and the drivers is the `storage` half.
         await getServerStorage()?.storage?.dispose?.();
+
+        // 5. Push what the log stream still holds. Its whole contract is that a
+        // record never delays a request, which means at any moment up to one
+        // batch is queued — and the records describing a shutdown are exactly the
+        // ones an operator goes looking for afterwards.
+        await LOGGING?.flushStreams?.();
     } catch (e) {
         logger.error('[process] error during shutdown', e);
     } finally {
@@ -1941,4 +2288,36 @@ function onListening() {
     logger.info(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
     logger.info(`                                      or sent the data using HTTP POST`);
     logger.info(`  The session description is available in src/README.md`);
+    printPublishedExamples(url);
+}
+
+/**
+ * Print `core.server.secure.examples` as ready-to-open URLs.
+ *
+ * Nothing declared prints nothing — no empty header. A malformed record prints a
+ * warning and the rest still print: the whole point is answering "what can I open
+ * here", so one bad entry must not take the answer down with it.
+ */
+function printPublishedExamples(url) {
+    let entries;
+    try {
+        entries = buildExampleEntries(constants.ABSPATH, PUBLISHED_EXAMPLES, url);
+    } catch (e) {
+        logger.warn?.('[examples] could not build example sessions:', e?.message || e);
+        return;
+    }
+    if (!entries.length) return;
+
+    logger.info(`  Example sessions published by this deployment:`);
+    for (const entry of entries) {
+        logger.info(`    [${entry.id}] ${entry.name}`);
+        if (entry.description) logger.info(`      ${entry.description}`);
+        if (entry.note) logger.info(`      ${entry.note}`);
+        if (entry.url) {
+            logger.info(`      ${entry.url}`);
+        } else {
+            logger.warn?.(`      unavailable: ${entry.warning}`
+                + (entry.source ? ` (${entry.source})` : ""));
+        }
+    }
 }

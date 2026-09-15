@@ -1,0 +1,40 @@
+{
+  "$meta": {
+    "description": "Self-hosted MedGemma vision provider — composes alongside any chat/* choice",
+    "defaults": { "MEDGEMMA_BASE_URL": "http://localhost:11434/v1", "MEDGEMMA_MODEL": "medgemma-4b-it" }
+  },
+  /**
+   * Deliberately dimensionless: MedGemma answers vision inference, not
+   * conversation, so it stacks with whichever `chat/*` provider is composed
+   * rather than competing for the panel.
+   *
+   * `baseUrl` MUST be an absolute http(s) URL, and there is no SSRF-guard
+   * bypass for "trusted" endpoints — a loopback host like the default one is
+   * refused unless the operator allowlists it:
+   *
+   *   XOPAT_SSRF_ALLOWED_HOSTS=localhost   (or XOPAT_SSRF_ALLOWED_CIDRS=127.0.0.0/8)
+   *
+   * The allowlist relaxes only the private-IP verdict; scheme, redirect and
+   * DNS-rebinding checks stay in force, and an http:// upstream that
+   * 308-redirects to https is still refused. See server/ENVIRONMENT.md → SSRF.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "pathology-medgemma": {
+            "providerDefaults": {
+              "baseUrl": "<% MEDGEMMA_BASE_URL:-http://localhost:11434/v1 %>",
+              "defaultModelId": "<% MEDGEMMA_MODEL:-medgemma-4b-it %>",
+              "apiKey": "<% MEDGEMMA_API_KEY %>",
+              "requiresLogin": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "pathology-medgemma": { "enabled": true, "permaLoad": true }
+  }
+}

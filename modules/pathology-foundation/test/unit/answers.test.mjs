@@ -9,7 +9,7 @@
 import { test, expect } from "@xopat/test-harness";
 import { loadLib, cleanupLib } from "../load-lib.mjs";
 
-const { parseFieldAnswers } = await loadLib("answers");
+const { parseFieldAnswers, aggregateFeatureAnswers } = await loadLib("answers");
 const { sanitizeChecklist } = await loadLib("checklist");
 
 test.afterAll(() => cleanupLib());
@@ -198,4 +198,76 @@ test("prose survives when there is no machine block at all", { tag: ["@unit"] },
     const r = parseFieldAnswers("Dense lymphoid infiltrate throughout.", CHECKLIST);
 
     expect(r.prose).toBe("Dense lymphoid infiltrate throughout.");
+});
+
+/**
+ * Aggregating several fields into one answer per feature.
+ *
+ * The polarity rule (any positive wins) is a sampling argument. The REASON rule is a
+ * communication one: a run whose fields all failed to render must not describe itself the
+ * same way as a run whose fields the model examined and could not call, because the two
+ * need opposite next steps and the caller cannot tell them apart from `present` alone.
+ */
+const field = (...answers) => ({ answers });
+const ans = (id, present, reason) => ({ id, answer: null, present, confidence: null, ...(reason ? { reason } : {}) });
+
+test("any positive wins over any number of negatives", { tag: ["@unit"] }, () => {
+    const out = aggregateFeatureAnswers([
+        field(ans("invasion", "no")),
+        field(ans("invasion", "yes")),
+        field(ans("invasion", "no")),
+    ], CHECKLIST.features);
+
+    expect(out.find(a => a.id === "invasion").present,
+        "one field showing a feature is evidence; several not showing it is not proof").toBe("yes");
+});
+
+test("uncertain outranks a negative but not a positive", { tag: ["@unit"] }, () => {
+    expect(aggregateFeatureAnswers(
+        [field(ans("invasion", "no")), field(ans("invasion", "uncertain"))], CHECKLIST.features
+    )[0].present).toBe("uncertain");
+    expect(aggregateFeatureAnswers(
+        [field(ans("invasion", "uncertain")), field(ans("invasion", "yes"))], CHECKLIST.features
+    )[0].present).toBe("yes");
+});
+
+test("fields that never rendered report 'unread', not 'model'", { tag: ["@unit"] }, () => {
+    // The regression: a failed render still contributed answers, so "did any field answer?"
+    // was true and the aggregate said the model had looked and could not tell — about images
+    // that were never produced. The advice that follows is "zoom in", which cannot help.
+    const out = aggregateFeatureAnswers([
+        field(ans("invasion", "not-assessable", "unread")),
+        field(ans("invasion", "not-assessable", "unread")),
+    ], CHECKLIST.features);
+
+    expect(out[0].present).toBe("not-assessable");
+    expect(out[0].reason).toBe("unread");
+});
+
+test("a field that WAS read at too coarse a resolution outranks one that never rendered", { tag: ["@unit"] }, () => {
+    // Ordered by how actionable the answer is, not by how many fields voted for it.
+    const out = aggregateFeatureAnswers([
+        field(ans("invasion", "not-assessable", "unread")),
+        field(ans("invasion", "not-assessable", "unread")),
+        field(ans("invasion", "not-assessable", "resolution")),
+    ], CHECKLIST.features);
+
+    expect(out[0].reason, "there is a closer look to offer, and that is the useful advice").toBe("resolution");
+});
+
+test("'unread' outranks 'model'", { tag: ["@unit"] }, () => {
+    const out = aggregateFeatureAnswers([
+        field(ans("invasion", "not-assessable", "model")),
+        field(ans("invasion", "not-assessable", "unread")),
+    ], CHECKLIST.features);
+
+    expect(out[0].reason).toBe("unread");
+});
+
+test("a feature no field mentioned is 'unparsed', never a negative", { tag: ["@unit"] }, () => {
+    const out = aggregateFeatureAnswers([field(ans("invasion", "yes"))], CHECKLIST.features);
+    const atypia = out.find(a => a.id === "atypia");
+
+    expect(atypia.present, "silence is not absence").toBe("not-assessable");
+    expect(atypia.reason).toBe("unparsed");
 });

@@ -198,8 +198,8 @@ export const quickDrawMethods = {
                 Dialogs.show(this.t('annotations.quickDraw.shapeUnavailable'), 3000, Dialogs.MSG_WARN);
                 return;
             }
-            this._armQuickDrawAutoReturn();
             this.switchModeActive('custom', action.factory, isLeft);
+            this._armQuickDrawAutoReturn();
             return;
         }
 
@@ -209,8 +209,8 @@ export const quickDrawMethods = {
             Dialogs.show(this.t('annotations.quickDraw.noPreset'), 3000, Dialogs.MSG_WARN);
             return;
         }
-        this._armQuickDrawAutoReturn();
         this.context.setModeById('custom');
+        this._armQuickDrawAutoReturn();
     },
 
     /**
@@ -223,15 +223,38 @@ export const quickDrawMethods = {
      * The arming is self-cancelling: if the mode leaves `custom` by any other
      * route before a shape is finished (user picks another tool/mode), we
      * disarm without forcing AUTO, so we never fight an explicit user choice.
+     *
+     * MUST be called AFTER the mode switch, never before: entering `custom`
+     * from any non-AUTO mode emits a transient `mode-changed {mode: AUTO}`
+     * first — `setMode` tears the old mode down through `_setModeToAuto(true)`,
+     * and `switchModeActive` additionally bounces auto->custom when the mode is
+     * already `custom`. Armed early, the arming cancelled itself on that
+     * transient and the user stayed stuck in manual mode.
      */
     _armQuickDrawAutoReturn() {
         // Re-firing quick-draw before finishing the previous shape: drop the
         // stale arming so we never leave a dangling one-shot listener.
         this._disarmQuickDrawAutoReturn?.();
 
+        // The mode may have refused to activate (no preset, nothing to draw
+        // with) and bounced back to AUTO. Arming then would leave a one-shot
+        // listener that fires on some unrelated later annotation.
+        if (this.context.mode !== this.context.Modes.CUSTOM) return;
+
         const onCreate = () => {
             this._disarmQuickDrawAutoReturn?.();
-            this.context.setMode(this.context.Modes.AUTO);
+            // Deferred out of the `annotation-create` stack on purpose: the
+            // event is raised from inside the factory's finishDirect/
+            // finishIndirect, BEFORE it clears `_current` (polygon, text).
+            // Switching to AUTO synchronously calls objectFactory
+            // .finishIndirect() re-entrantly, which removes the annotation
+            // just added and commits a duplicate copy.
+            queueMicrotask(() => {
+                const context = this.context;
+                if (!context || context.disabledInteraction) return;
+                if (context.mode !== context.Modes.CUSTOM) return;
+                context.setMode(context.Modes.AUTO);
+            });
         };
         const onModeChanged = (e) => {
             if (e.mode !== this.context.Modes.CUSTOM) this._disarmQuickDrawAutoReturn?.();

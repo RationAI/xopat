@@ -11,6 +11,15 @@ const { span, div } = van.tags
 /**
  * @class MultiPanelMenuTab
  * @description A internal tab component for the multiPanelMenu component
+ *
+ * **Chrome contract.** The tab supplies exactly three things: the panel
+ * background (`bg-base-200`, uniform for every tab — there is deliberately no
+ * per-tab override), the leading corner radius, and the margin *between*
+ * tabs. It contributes **no padding and no inner margin**, so the background
+ * hugs the body exactly. Every body owns its own padding; follow the rhythm
+ * the annotations panel establishes (`px-1` on a header row, `px-2 mt-1` on
+ * content sections) so all panels line up.
+ *
  * @extends MenuTab
  * @example
  * this.menu = new UI.MultiPanelMenu({
@@ -53,8 +62,9 @@ class MultiPanelMenuTab extends MenuTab {
         this.iconName = inIcon.options.name;
         this.title = inText;
 
-        // Store visual properties for the wrapper
-        this._bgClass = item.background || "bg-base-200";
+        // Store visual properties for the wrapper. The background is fixed, not
+        // an item option: one opaque surface for every panel in the column.
+        this._bgClass = "bg-base-200";
         this._radiusClass = "rounded-tl-md rounded-bl-md";
 
         const pinIcon = new PhIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "ph-push-pin" });
@@ -168,12 +178,14 @@ class MultiPanelMenuTab extends MenuTab {
             this.openButton, flyout
         );
 
-        // Define content div options without background/radius (now moved to mainDiv)
+        // Define content div options without background/radius (now moved to mainDiv).
+        // No margin here either: this node sits *inside* the panel background, so
+        // any inset shows up as a strip of bare background above and below the
+        // body. Inter-tab spacing lives on mainDiv, outside the background.
         const openDivOptions = {
             id: this.parent.id + "-opendiv-" + item.id,
             // Removed background and radius from here to apply to wrapper
             extraClasses: {display: "display-none", flex: "flex flex-row flex-1 min-w-0"},
-            extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
         };
 
         // Content fills the panel width minus the vertical tab strip;

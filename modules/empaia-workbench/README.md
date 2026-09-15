@@ -37,8 +37,21 @@ Only **workbench v3** is supported (`/v3/scopes/...`, EAD with `io` + `modes`).
   // Tile transfer preferences, forwarded as image_format / image_quality.
   "tileFormat": "jpeg",
   "tileQuality": 90,
-  // Job status poll interval while anything is non-terminal.
+  // Job status poll interval while anything is non-terminal — a FLOOR: idle
+  // ticks back off geometrically towards `jobPollMaxMs`.
   "jobPollMs": 2000,
+  "jobPollMaxMs": 30000,
+  // How many annotations one analysis may deliver before the user is asked
+  // rather than served. 0 disables the gate.
+  "annotationBudget": 5000,
+  // How many analyses' results stay cached in memory (LRU).
+  "jobOutputCache": 12,
+  // Re-reads allowed before a completed-but-empty annotation output is believed
+  // to be empty, and the window they live in. 0 restores the single read.
+  "emptyOutputRetries": 5,
+  "emptyOutputWindowMs": 60000,
+  // Upper bound for "Show all" — every shown analysis imports onto the canvas.
+  "maxVisibleJobs": 8,
   // Optional: route every workbench request through a server proxy alias
   // declared under `server.secure.proxies`. Leave null when the workbench is
   // reachable from the browser (the usual case).
@@ -181,26 +194,97 @@ existing OIDC/SAML context:
   OIDC flows cannot complete at all.
 
 So `auth-broker.ts` registers a broker for the `empaia` context and owns its
-whole lifecycle. Three consequences worth knowing before editing it:
+whole lifecycle. Four consequences worth knowing before editing it:
 
-- **`setWorkbenchIdentity()` must never call `logout()`.** On a non-core context
-  `XOpatUser.logout()` also clears that context's secrets
-  (`src/classes/user.ts` `_clearContextSecrets`), so a logout/login cycle throws
-  the workbench token away — the next request goes out with no `Authorization`
-  header and the workbench answers 403. `login()` overwrites the identity in
-  place and never touches `_secret`; re-asserting is enough.
+- **The token's `exp` is load-bearing, and `token-expiry.ts` is the only way to
+  read it.** VACI's wire model is `{ value, type }` — there is no `expires_in`
+  and no expiry on the message — so the lifetime comes from decoding the JWT
+  locally. That decode is **never** a verification: the Workbench Service is the
+  only authority on whether a token is acceptable, and a token this module
+  cannot parse is treated as live, because locking a working session out is a
+  worse failure than the one being prevented. Two things depend on it:
+  `isAuthenticated` (below) and the proactive renew armed at `exp − 60 s`
+  (clamped to half the lifetime; `renewDelayMs` is the same arithmetic as
+  `modules/saml-auth/renew-window.ts`, kept identical by hand because neither
+  can import the other). Without the renew, a long session is guaranteed one 401
+  per token lifetime, and it then asks for a replacement at the worst possible
+  moment — after the credential is dead, and possibly after the workbench has
+  stopped answering for this frame at all.
+
+- **`setWorkbenchIdentity()` must never call `logout()` — and must never change
+  the context's identity id.** On a non-core context both `XOpatUser.logout()`
+  *and* a `login()` whose id differs from the one in place clear that context's
+  secrets (`src/classes/user.ts` `_clearContextSecrets`), throwing the workbench
+  token away: the next request goes out with no `Authorization` header and the
+  workbench answers `403 {"detail":"Not authenticated"}`. This bit twice — first
+  as a logout/login cycle, then as "refine the label to `scope.user_id`", which
+  is an identity **swap** because the token listener installs the scope id.
+  The identity id therefore stays the scope id for the session and the workbench
+  user id is carried as the display `name`, which takes `login()`'s re-assert
+  path (refreshes `{id,name,icon}`, raises nothing, keeps `_secret`).
+  Consequence: `getUserId("empaia")` reports the scope id.
 - **Renewal runs through `secret-needs-update:<ctx>`.** `HttpClient`'s
   `refreshOn401` calls `XOpatUser.requestSecretUpdate`, which *rejects* unless a
   provider is subscribed. The handler asks the workbench via `requestNewToken()`.
+  It waits `TOKEN_WAIT_MS`, which must stay **under** core's own refresh window
+  (`XOpatUser.requestSecretUpdate` defaults to 20 s and `_maybeRefreshSecrets`
+  does not override it): waiting longer means core gives up first, drops its
+  `secret-updated` handler and retries with the credential that just failed,
+  while this broker is still waiting for the replacement.
+  The binding is latched separately from the VACI listener, because a call that
+  arrives before `XOpatUser` exists can register the listener but not the
+  handler — latching both together left `requestSecretUpdate` rejecting with
+  *"no provider listens"* for the rest of the session.
 - **`whenSettled` reports readiness.** `init()` only registers the VACI listener;
   the token lands later. Without the hook core waits a blind 1.5 s grace before
   every early request.
 
-A caveat on **403 vs 401**: `HttpClient` refreshes only on 401. The workbench
-returns 403 when the `Authorization` header is *absent* (FastAPI's bearer
-scheme), which is not a refreshable condition and should no longer occur. If a
-deployment turns out to answer 403 for genuine expiry, the refresh path will not
-fire.
+On **403 vs 401**: the workbench returns 403 when the `Authorization` header is
+*absent* (FastAPI's bearer scheme) and 401 only once a header is present and
+rejected. `HttpClient` refreshes on `auth.refreshOnStatuses`, which defaults to
+`[401]`, so `wbs3-client.ts` passes `[401, 403]` — otherwise a context that lost
+its token is served 403s nothing retries and the session is dead for the tab.
+Core pairs with it: a request that carried **no** credential asks the provider
+instead of retrying bare, so the 403 drives `secret-needs-update:empaia` →
+`requestNewToken()` → retry. `job-runner.ts` treats both statuses as "waiting for
+a token" rather than a transport fault.
+
+### An expired token is not a credential
+
+`isAuthenticated` used to answer *"is there a non-empty string?"*. An expired
+token is a non-empty string and nothing ever removes it, so one wrong answer
+propagated everywhere:
+
+- `XOpatAuth.isAuthenticated` prefers the broker's verdict, so the context
+  reported itself authenticated for the rest of the session;
+- `whenContextSettled("empaia")` therefore resolved `"authenticated"` in a
+  microtask — the job runner's "stop and wait for a credential" waited for the
+  dead token it already had, and resumed straight into the next 401. Neither
+  brake applies on that path (`MAX_POLL_FAILURES` deliberately does not count a
+  401, and `startPolling` resets both it and the idle backoff), so the result was
+  `GET /jobs` at round-trip rate for the life of the tab;
+- the escalation in the refresh handler was guarded on the token being *absent*,
+  so the badge, the request hold and the recovery scrim — the whole point of
+  reporting it — were dead surface in exactly the case they were written for.
+
+`isTokenLive` (`token-expiry.ts`) is the predicate now, with a 5 s skew so a
+token that would die in flight is not called live. Everything above follows from
+it being right.
+
+The resume is the second half: `index.ts::_resumePolling` **reads the verdict**.
+On `true` it polls; otherwise it parks and arms a one-shot
+`APPLICATION_CONTEXT.auth.onSettled` watch, so a credential landing by any route
+— a proactive renew, a fresh workbench push, a click on the recovery badge —
+restarts it. It waits with `{awaitInteractive: true}`, so a sign-in the user has
+actually started is waited out rather than answered `"needs-interaction"` the
+moment it begins.
+
+When even that cannot help — the workbench has stopped answering `tokenRequest`
+for this frame, which is what an expired app-frontend token
+(`/v3/frontends/<JWT>/`) looks like from in here — the generic "Sign in" affordance
+is a dead end, because the click lands back in `requestNewToken()`. The module
+says the one thing that does work (`error.tokenUnrecoverable`: reopen the app
+from the Workbench), once per session, re-armed when a token lands.
 
 ---
 
@@ -472,6 +556,26 @@ debugging session if forgotten. All verified against `workbench-service:0.13.3`:
   **mints a new server id** — which is why an edit is refused wherever a delete
   would be.
 
+### What "locked" does NOT forbid
+
+**Delete and update. That is the whole surface.** Every enforcement point in this
+repo tests exactly `pre-delete` / `pre-update` — the ROI-lock guard, the job-owned
+guard, and the annotations module's own `readOnly` guard — and
+`POST /collections/{id}/items` has no lock precheck at all.
+
+So an annotation one analysis consumed **can still be handed to another run**. It
+cannot be moved, edited, re-classified or deleted; it can be selected and staged
+again. This is stated here because its absence caused the bug: a UI that collapsed
+"cannot be edited" into "cannot be used" made previously-analysed regions vanish
+from every offer without a word — and the natural workflow is precisely to show
+analysis A, look at the regions it ran on, and run analysis B over the same set.
+
+The client mirrors the split with two independent verdicts
+(`plugins/empaia-app-ui/sections/region-eligibility.mjs`): **analysable** ignores
+the lock, **convertible** does not, because giving an annotation the ROI preset is
+a preset change and therefore an update. `markAsRoi` refuses a locked object for
+that reason and that reason only.
+
 ### What can no longer be deleted, and why the UI must know first
 
 Two permanent refusals, both discovered only *after* the annotation is already
@@ -527,6 +631,58 @@ message, because `JSON.stringify(detail)` is how a pathologist came to read
 
 ---
 
+## What an app has to declare, and what this viewer can fill
+
+`inputs.ts` describes a mode's inputs once, and every other decision — can this
+run, what does the drawing tool produce, what does a job need wiring to — reads
+off that description. Five sources:
+
+| source | filled by | example |
+|---|---|---|
+| `wsi` | the open slide | `"my_wsi": {"type": "wsi"}` |
+| `roi` | one region the user draws | `"my_rectangle": {"type": "rectangle"}` |
+| `roi-collection` | the staged batch | `{"type": "collection", "items": {"type": "rectangle"}}` |
+| `from-job` | an earlier job's output | postprocessing's `my_cells` |
+| `unsupported` | nothing — the mode is blocked, with a reason | a `collection` of `wsi` |
+
+**Provenance beats shape.** A `collection<polygon>` looks like something a user
+could draw, but if another mode of the same app declares it as an *output* it is a
+result being consumed, not a request. Classifying by shape first is how a
+postprocessing run would have asked a pathologist to hand-draw the cells
+preprocessing had already found.
+
+`modeBlockers` turns everything unfillable into sentences, and
+`EmpaiaWorkbench.runBlockers` is what **every** run path calls before creating
+anything. That gate is the point: the old `checkCompatibility` fed a banner and
+nothing else, so a UI could say "this app analyses several slides at once, which
+this viewer cannot do" and then start the job anyway.
+
+### The tutorial apps
+
+`test/fixtures/ead/ta01…ta14.json` are the EMPAIA sample apps, and
+`test/unit/inputs.test.mjs` asserts the resolved sources and blockers of each. It
+is the regression net for the whole matrix — a new app shape either resolves to
+sources this viewer can fill, or it names a blocker; never neither.
+
+| app | shape | here |
+|---|---|---|
+| TA01, TA07, TA08 | slide + one rectangle, scalar out | runs |
+| TA02 | slide + rectangle collection, per-region scalars | runs, per-region table |
+| TA03, TA06 | outputs are `collection<collection<point>>` | runs; the points land on the slide and are **not** queried as values |
+| TA04, TA10 | one float/class per output point | runs; the value lands on the annotation (`meta`) |
+| TA05 | per-point classes | runs; classes arrive inlined and become presets |
+| TA09 | slide collection, depth-2 input collections, float inputs | **refused**, by name, before any job is created |
+| TA11 | pre + standalone + postprocessing (`containerized: false`) | standalone runs; postprocessing is listed and refused — the app computes that step in its own UI |
+| TA12 | pre + postprocessing, no standalone | postprocessing runs, consuming the preprocessing job's outputs |
+| TA13 | preprocessing, pixel map out | results shown; nothing to start |
+| TA14 | `fhir_questionnaire` io | listed, refused with the io type named |
+
+**Not supported, deliberately:** multi-slide jobs (`collection<wsi>`),
+non-containerized postprocessing, `fhir_*` io, and writing primitives,
+collections or pixel maps back.
+
+---
+
 ## Jobs
 
 The choreography is dictated by the backend and mirrors the reference AppUI's
@@ -536,17 +692,238 @@ NgRx effects (`apps/generic-app-ui-v3/src/app/jobs/store/jobs/jobs.effects.ts`):
 `POST /jobs` → set the `wsi` and ROI inputs **in parallel** → wait for both to be
 acknowledged → `PUT /run`. Running before both land is refused by the backend.
 
-**multi-ROI app** (`"multiple"`)
+**multi-ROI app** (`"multiple"`) — the **staged batch**
 `POST /jobs` → set the `wsi` input → one `POST /collections` per collection input
 key → bind each as a job input → `POST /collections/{id}/items` per ROI → the
 user runs explicitly, after adding as many regions as they want.
+
+That "runs explicitly" is a state, not a moment, so it has a name:
+`JobRunner.createBatch()` / `addToBatch()` / `resolveBatch()`, wrapped by
+`wb.ensureBatch()` / `addRegionsToBatch()` / `runBatch()` / `discardBatch()`.
+A **draft is a real job in `ASSEMBLY`**, not a client-side list, because that is
+the only form that survives a reload — this module runs on an opaque origin and
+has no client persistence at all. Four consequences worth knowing:
+
+- **Drafts are keyed by `(slideId, mode)`.** Switching slides or modes does not
+  destroy one; nothing is deleted implicitly, because silently dropping a server
+  job because the user touched a dropdown is worse than an orphan.
+- **They are re-derived, never cached.** After every poll `_adoptOrphanBatch`
+  looks at the slide's `ASSEMBLY` jobs: exactly one is adopted silently — that is
+  unambiguously "the batch I was building"; several is ambiguous, so **none** is
+  adopted and the UI reports them. They are ordinary rows in the analyses list
+  under the `pending` filter, where deleting them is already offered.
+- **Staging is append-only.** There is no route that removes an item from a
+  collection; `addToBatch` therefore also refuses to post an id it already holds,
+  since the same annotation twice is two collection items and the app would count
+  that region twice.
+- **`runBatch` records the members as locked before any poll can.** `job.inputs`
+  names the *collection*, never the annotations inside it, so nothing else on the
+  client can predict the 423 the backend now raises for each of them. On a
+  reloaded session `loadJobOutputs` does the same from `inputCollections`.
 
 Polling ticks while any job for the current (slide, mode) is non-terminal and
 stops once they all are — status *and* input/output validation. All job traffic
 uses the `background` scheduler lane so it never competes with tile loading.
 
-`PREPROCESSING` jobs are listed read-only: the user cannot create preprocessing
-regions, so they cannot create, run, stop or delete those jobs either.
+**postprocessing** — the second half of the preprocessing flow
+`POST /jobs` → wsi → the user's region → **each `from-job` input bound to the
+source job's `outputs[key]`** → run. No new wire concept:
+`PUT /jobs/{id}/inputs/{key}` takes an id, and a preprocessing job's output *is*
+one.
+
+Which earlier result? **The one whose output is currently shown**, falling back to
+the newest completed candidate. That is the App-UI flow diagram's "display
+preprocessing results → user interacts → run postprocessing" — the pathologist
+chooses by looking, so the eye in the analyses window *is* the choice, and the
+panel names what it resolved to. `containerized: false` is refused: that flag
+means the app computes the step inside its own interface and posts the result
+back, and this module writes no primitives or collections.
+
+`PREPROCESSING` jobs are listed read-only — nobody presses start on them, the
+platform schedules them when the examination opens. Read-only follows the **row's**
+mode, not the panel's: one list carries every mode's jobs for the slide, because
+a postprocessing run is built on a preprocessing result and hiding one while
+preparing the other was the wrong shape. Switching the mode changes what you are
+about to run, not what you can see.
+
+### Reading results the EAD declared
+
+`loadResults` answers what the three flat queries return. `loadResolvedResults`
+additionally reads the app's **declared** outputs (`outputs.ts`), which is the
+only way an output like
+
+```json
+"tumor_cell_counts": { "type": "collection",
+                       "items": { "type": "integer", "reference": "io.my_rectangles.items" } }
+```
+
+can be read at all: it is a *collection*, so it is absent from
+`PUT /primitives/query`'s idea of the job's values, and its items carry no name —
+rendered in the flat value table they were a column of blanks.
+
+The `reference` chain is what makes it attributable. `io.my_wsi` describes the
+slide, `io.my_rectangles` the collection as a whole, and `io.my_rectangles.items`
+**one value per member of it**. `describeOutputs` resolves that,
+`zipRegionResults` joins it to the input collection's members — by
+`reference_id` wherever the wire populates it, positionally otherwise, which is
+why the input order is read back from the collection record rather than
+reconstructed from the canvas.
+
+**The one detail that decides whether this works:** an output collection's items
+are queried with **`{ jobs: [jobId] }`**. They were created by the *job*, so
+`_scopedQuery`'s default `creators: [scopeId]` — correct for an *input*
+collection, whose members this scope authored — selects nothing at all for an
+output one. See "The `*/query` selector rule".
+
+### Only ask for what has values
+
+`outputKind` strips every `collection` wrapper and dispatches on what is actually
+held, because `spec.type === "collection"` alone is not enough to know:
+
+| holds | what happens |
+|---|---|
+| `integer`/`float`/`bool`/`string` | queried — the per-region table (TA02) |
+| an annotation type | **not queried.** They already arrived through `queryAnnotations({jobs})` and are on the slide. Named with a count |
+| `class` | **not queried.** `with_classes=true` inlined them, and `_presetForClassValue` mints a preset per value |
+
+TA03 and TA06 declare `collection<collection<point>>`. Asking the collection route
+for those fetched records whose `value` is `undefined` — one wasted request per
+output per job, and, because `undefined` still created the key,
+a results-table column of blank cells where "—" was meant.
+
+### Shapes that carry no class
+
+TA03, TA04 and TA06 declare an annotation output and **no class output**, and an
+app may only write what its EAD declares — so their shapes legitimately arrive
+unclassified. That is not a "no preset" case: `checkAnnotation` stamps one onto
+every imported object, so the only question is *which*, and the answer used to be
+`unknownPreset` — 24 690 points filed under the literal word "Unknown".
+
+`_ensureOutputPreset` mints one per declared annotation output, named like the ROI
+preset (`"TA06v3 my_cells"` beside `"TA06v3 ROI"`) from `soleAnnotationOutput`,
+with a colour hashed from its id so a result set does not change colour on every
+reload. Shared across runs of the same app, so recolouring it once recolours every
+run. Only a **job's** shapes get it (`jobCreated && !classValue`): the user's own
+unclassified scratch work is not the app's result.
+
+Two constraints it must respect, both of which the id encodes:
+
+- **It carries no class, and its id must not look like one.** `_classValueForPreset`
+  derives a class value from the id suffix of anything under `empaia:`, so the id
+  prefix is `empaia-out:` instead — otherwise `empaia:output:my_cells` would be
+  offered to `POST /classes`, which answers 400 for a value outside the app's
+  namespace. The vocabulary permits a class-less preset explicitly
+  (`allowUnclassified: true`), so drawing with it stores geometry and posts
+  nothing the service can refuse.
+- **Several annotation outputs name nothing per-output.** The pooled
+  `annotations/query` cannot say which output a shape came from without one
+  collection query per output — the same reason `annotationCount` is only claimed
+  for a single output. The preset falls back to `"{{app}} results"`.
+
+Values that describe an *annotation* rather than a region (TA04's confidences,
+TA10's `model_confidences`) go onto the annotation itself. It costs no request:
+`queryPrimitives({jobs})` already returned them, and a per-object one names its
+subject in `reference_id`. They land in `annotation.meta`, which is the annotation
+module's own per-instance override channel and is already in both
+`copiedProperties` and `necessaryProperties` — so it survives export, import and
+undo with nothing registered. Two constraints: the override is only consulted for
+a key the **preset already declares**, and **colour has no per-instance
+override**, so a value changes the label and never the tint.
+
+### The poll, and the four ways it used to go wrong
+
+`GET /jobs` returns the whole scope, so the loop around it is the module's most
+expensive habit. Four rules, each of which is a bug that shipped:
+
+- **`refresh()` keeps its `AbortController` in a local.** Reading `this._inFlight`
+  back inside its own catch is a use-after-free in two directions: `stopPolling()`
+  nulls it (→ `Cannot read properties of undefined (reading 'signal')`), and a
+  concurrent `refresh` replaces it (→ one call reports the other's abort as a
+  transport failure). The crash landed on the *first* line of the catch, before the
+  failure counter — so the budget below never counted anything and never stopped the
+  loop it exists to stop.
+- **`tick()` always re-arms.** It used to re-arm on the line *after*
+  `await this.refresh()`, so one throw ended polling for the rest of the session.
+  Silent permanent death is the worst failure mode this loop has; a bug in the read
+  must never decide whether the loop lives.
+- **A 401 is a wait, not a fault.** `HttpClient` refreshes through the auth broker,
+  so a 401 reaching the runner means the new token is on its way. Polling stops and
+  calls `onAuthStalled`; the module awaits `whenContextSettled(authContext)` and
+  restarts **only if the wait says it is authenticated** — otherwise it parks on an
+  `onSettled` watch (see *An expired token is not a credential*). Resuming
+  unconditionally turned this deliberately brake-free branch into the fastest loop
+  in the module. Retrying on the timer is what filled a session's log with
+  `"Access Token expired."`. The failure budget (`MAX_POLL_FAILURES`) is for
+  transport faults only.
+- **Idle ticks back off.** `jobPollMs` is a floor; each tick whose signature is
+  unchanged doubles the wait up to `jobPollMaxMs`, and any movement — or any user
+  action, via `startPolling` — resets it. Otherwise a job that never finalises costs
+  a request every two seconds for the life of the tab.
+
+The tab's own visibility is part of this: hidden stops the loop, and returning
+resumes it *off* the event handler (resuming inside it measured 1131 ms) and only
+after the auth context settles.
+
+### "Produced nothing" has to be earned
+
+`_emptyJobs` records analyses that wrote no annotations, so they are not re-queried
+on every reconcile — and it is never revisited, so a wrong entry is permanent for
+the session. Worse, it *suppresses* the self-healing re-import in
+`syncJobAnnotations`, so a job wrongly marked empty never appears again without a
+page reload.
+
+Two ways to see an empty list mean nothing of the kind, and both shipped: a job read
+before it finished, and a query that failed — every failure in that path degrades to
+`[]`, so a 4xx was byte-identical to a finished, empty analysis. `JobResults.failed`
+now names the queries that rejected, and `isEmptyResultConclusive` (`visibility.ts`)
+is the one place that decides whether an empty list is evidence.
+
+A job that reaches a terminal state while *already* visible also gets an explicit
+reconcile: its contents changed, its visible set did not, and `_setVisibleJobs`
+short-circuits on set equality.
+
+### Bounded reads
+
+- **Counted before fetched — off the first page.** Past `annotationBudget`
+  (default 5000) the annotations are *not* fetched: the count is reported and the
+  user chooses. The count comes from the first page's own `item_count`, not from
+  `PUT /annotations/query/count` — that route works, but asking it first was a whole
+  extra round trip per result read to learn something the next request already
+  carried. `countAnnotations` stays on the client as a legitimate API with no
+  caller.
+- **Paged** at 500, like `sink.ts`'s `readBundle`, and `item_count` is compared
+  rather than discarded — so a truncated read says so. `skip` is omitted when it is
+  `0`, so the first (and usually only) request keeps the wire shape it always had.
+- **`_jobOutputs` is an LRU** (`jobOutputCache`, default 12) and a **non-terminal
+  job is never cached**: a result read while RUNNING is empty, and caching that
+  forever is why a run could finish and still show nothing.
+- **Nor is an empty read that has not earned it.** `COMPLETED` is not the same
+  as *readable*: the workbench flips the status before the app's records are
+  queryable, and for TA06 — 24 690 points — the gap is seconds. A read fired on
+  that same tick answers `[]`, and it used to be latched in two places at once
+  (`_jobOutputs` and `_emptyJobs`), so the analysis reported nothing for the rest
+  of the session and the retry button could not clear it. Now a job that
+  *declared* an annotation output and returned none opens a bounded **output
+  wait** (`emptyOutputRetries` / `emptyOutputWindowMs`), which rides the poll
+  backoff (~0/2/6/14/30 s) and keeps the loop alive through `isAwaitingOutputs`.
+  An app that declares no annotation output is still conclusive on read one, so
+  `_emptyJobs` keeps doing the job it was written for.
+- **"Load anyway" imports.** Fetching filled the cache and stopped; the import
+  lives in `syncJobAnnotations`, behind a reconcile. So the button said "loading
+  annotations" and then showed nothing until the user toggled the eye — which is
+  what finally reconciled. Both it and the retry now queue a reconcile.
+- **Eviction yields.** `dropAnnotations` is a synchronous loop; taking a
+  ten-thousand-point analysis off the slide is chunked so the tab stays alive.
+- **Polling gives up.** Five consecutive `GET /jobs` failures stop it, and a
+  hidden tab stops it too — it used to loop every 2 s for the life of the tab.
+- **And polling actually stops.** The done-check is `isJobTerminal &&
+  isJobValidationTerminal && !isAwaitingOutputs`. The middle one is written as a
+  deny-list — only `"RUNNING"` is pending — because the allow-list it replaces
+  accepted `undefined` but not the declared literal `"NONE"`, while
+  `TERMINAL_JOB_STATUSES` calls that same literal terminal for `status`. A
+  validation that never runs cannot transition, so a `COMPLETED` job reporting
+  `output_validation_status: "NONE"` polled forever while the panel showed
+  "completed" throughout.
 
 ---
 
@@ -568,6 +945,52 @@ bespoke GPU path.
 Buffers are length-checked against the declared geometry before being viewed as
 a typed array.
 
+### Attaching a map costs a re-open — so re-opens are coalesced
+
+A pixel map becomes a `config.data` entry plus a shader layer in the slide's
+overlay visualization, and the overlay is assembled in `before-open`. Attaching
+one therefore means re-opening the slide, which tears the world down and
+re-downloads every visible tile. Three rules keep that from happening more than
+once:
+
+- `openSlide` **preloads** the pixel maps of the analyses the slide is showing
+  before it opens, so the first open already carries their layers. Discovering
+  them afterwards used to cost a second full open, seconds after the slide
+  appeared.
+- `registerPixelmaps` marks the overlay dirty and re-opens on a trailing
+  `OVERLAY_REFRESH_DEBOUNCE_MS` window, so a burst of job results (one
+  `loadJobOutputs` per visible analysis) shares one re-open. It still resolves
+  only when the re-open has finished — `_reconcileVisibility` depends on that
+  ordering, since the teardown must not land under annotations it just drew.
+- Maps registered for a slide that is not open re-open nothing; the marker is
+  dropped and the next open builds them in.
+
+`config.data` entries are reused per `(slideId, pixelmapId, channel)` rather than
+appended per rebuild, so repeated opens do not grow the session — or the world's
+tiled-image count, which the renderer relinks its second-pass program to follow.
+
+### Performance in the sandboxed embedding
+
+Three costs are deployment-side, not code, and they dominate a captured session:
+
+- **A CORS preflight per tile.** The Workbench sandboxes the app-UI frame without
+  `allow-same-origin`, so the document's origin is opaque (`Origin: null`) and
+  *every* request is cross-origin. The `Authorization` header then makes each tile
+  a non-simple request, so a GET is preceded by an OPTIONS. `Access-Control-Max-Age`
+  does not help: the preflight cache is keyed per URL and every tile URL is
+  distinct. The only client-side escape would be authenticating tiles through the
+  URL, which xOpat does not do (`AGENTS.md` §7 — no tokens in URLs).
+- **Tile responses carry no `Cache-Control`.** Nothing is reusable from the browser
+  cache, so any re-open pays full network cost for tiles it already had. This is
+  what makes the point above expensive rather than merely wasteful.
+- **HTTP/1.1 on the EATS reverse proxy.** With ~6 sockets per origin and two
+  requests per tile, queueing — not the server — is most of the latency (in the
+  captured session: 703 ms queued of a 897 ms average tile GET, against 193 ms of
+  actual server time).
+
+A deployment that adds `Cache-Control` to tile responses and serves the API over
+HTTP/2 removes most of the remaining cost without any change here.
+
 ---
 
 ## Public API (for `plugins/empaia-app-ui` and scripting)
@@ -580,9 +1003,16 @@ wb.getScope(); wb.getEad(); wb.getSlides(); wb.getActiveSlideId();
 await wb.openSlide(slideId);
 
 wb.getAvailableModes(); wb.getActiveMode(); wb.setActiveMode("standalone");
-wb.getRoiTypes(); wb.getRoiMode(); wb.checkModeCompatibility();
+wb.getRoiTypes(); wb.getRoiMode();
+wb.runBlockers(mode);        // why a job cannot be started — [] means it can
+wb.canRunMode(mode);         // the same answer as a boolean
+wb.sourceJobFor(mode);       // the earlier result a postprocessing run consumes
+wb.sourceJobCandidates(mode);
+wb.roiFactories();                      // xOpat factory ids the app accepts
+wb.roiTypeOf(annotation);               // the EMPAIA type it would be sent as
 
 wb.activateRoiTool(roiType);            // drives the annotation module
+await wb.markAsRoi(annotations, viewer);// existing annotation → job input
 wb.empaiaIdOf(incrementId);             // local id → server id, once persisted
 wb.isEmpaiaViewer(viewer); wb.slideIdOfViewer(viewer);
 
@@ -598,20 +1028,37 @@ const runner = wb.getJobRunner();
 await runner.runStandalone({ roiIds, roiType }, { autoRun: true });
 await runner.loadResults(jobIds, slideId);
 
+// A multi-region run, staged as an ASSEMBLY job (see "Jobs").
+wb.getBatch(); wb.getBatchSize(); wb.orphanBatches();
+await wb.addRegionsToBatch(empaiaIds, "rectangle");   // creates the draft on first use
+await wb.runBatch();                                  // locks its members, forgets the draft
+await wb.discardBatch();                              // DELETE, legal only in ASSEMBLY
+
+const results = await wb.loadJobOutputs(jobId, slideId);   // resolves declared outputs
+await wb.loadJobOutputsForced(jobId, slideId);            // past the size budget
+wb.regionResults(results);   // {columns, rows} — one row per input region
+wb.annotationBudget(); wb.visibleJobLimit();
+
+await wb.showJobs(jobIds, slideId);   // paint exactly this set
+
 await wb.registerPixelmaps(slideId, pixelmaps);
 wb.getPixelmapSource(pixelmapId, channel);
 ```
 
 Events (`wb.addHandler(...)`): `ready`, `failed`, `slides-changed`,
-`slide-changed`, `mode-changed`, `jobs-changed`, `pixelmaps-changed`,
-`annotation-linked`.
+`slide-changed`, `mode-changed`, `jobs-changed`, `job-visibility-changed`,
+`batch-changed`, `pixelmaps-changed`, `annotation-linked`.
 
 ---
 
 ## Not supported
 
 - Workbench v1 / v2 (`/v1`, `/v2` scopes, EAD with top-level `inputs`/`outputs`).
-- `POSTPROCESSING` and `REPORT` job modes.
+- `REPORT` job mode, and `fhir_questionnaire` / `fhir_questionnaire_response` io.
+- Multi-slide jobs — an app whose `wsi` input is a `collection` (TA09), and
+  input collections nested more than one deep.
+- **Non-containerized** postprocessing: `containerized: false` means the app
+  computes that step in its own interface and posts the result back.
 - Writing primitives, collections or pixel maps back to the workbench — this UI
   consumes app output, it does not produce it.
 - Standalone operation: without a workbench client embedding it, the module

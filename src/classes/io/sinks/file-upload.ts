@@ -11,6 +11,8 @@ export const fileUploadSink: IOSink = {
     // restriction means an admin who binds this to `bundle-export` is told at
     // boot, instead of discovering it when a Save writes nowhere.
     supports: { kinds: ["bundle"], capabilities: ["*import*"] },
+    // Reads from the user's own machine — the import half of the local route.
+    route: "local",
 
     async readBundle(ctx) {
         const U = (globalThis as any).UTILITIES;

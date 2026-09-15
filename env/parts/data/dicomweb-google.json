@@ -1,0 +1,50 @@
+{
+  "$meta": {
+    "description": "Google Healthcare DICOMweb store (needs an auth/* fragment that yields a Google token)",
+    "dimension": "data",
+    "clientKey": "localhost",
+    "requires": ["GOOGLE_DICOM_SERVICE_URL"]
+  },
+  /**
+   * Google Healthcare refuses anonymous reads, so this fragment is only half a
+   * deployment: compose it with `auth/google-oidc-server` (the server holds the
+   * client secret and DICOM's HttpClient reads the `core` context's access
+   * token) or with the proxy variant, and set `GOOGLE_DICOM_SERVICE_URL` to
+   * your store's dicomWeb endpoint.
+   *
+   * Annotations round-trip as DICOM SR through the `dicom-sr-annotations` sink,
+   * which is the sink the `dicom` plugin registers.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "io": {
+          "bindings": {
+            "annotations": {
+              "bundle-export": ["dicom-sr-annotations"],
+              "bundle-import": ["dicom-sr-annotations"]
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "dicom": {
+      "enabled": true,
+      "permaLoad": true,
+      "serviceUrl": "<% GOOGLE_DICOM_SERVICE_URL %>"
+    },
+    "dicom-browser": {
+      "enabled": true,
+      "permaLoad": true,
+      "patientUID": null
+    },
+    "gui_annotations": { "enabled": true, "permaLoad": true },
+    "rationai-wsi-file-browser": { "enabled": false }
+  },
+  "modules": {
+    "icc-profiles": { "enabled": true, "permaLoad": true },
+    "rationai-wsi-tile-source": { "enabled": false }
+  }
+}

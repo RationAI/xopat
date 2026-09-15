@@ -5,10 +5,12 @@
  * by design. Vision calls can, and the walk was making them one at a time, which is where
  * nearly all of a run's wall-clock went.
  *
- * Two limits, and they are not the same limit: the render window bounds resident PIXELS
- * (each raster is megabytes held until its analysis consumes it), while the vision
- * semaphore bounds concurrent REQUESTS to match the inference RPC's own ceiling. Letting
- * the wider one become the effective cap just moves the queue to the server.
+ * Three limits, and they are not the same limit: the render window bounds resident PIXELS
+ * (each raster is megabytes held until its analysis consumes it), the vision semaphore bounds
+ * concurrent REQUESTS to match the inference RPC's own ceiling, and `renderConcurrency` bounds
+ * SUBMISSIONS. Letting the wider one become the effective cap just moves the queue somewhere it
+ * cannot be seen — for renders, into the core, where a render's own wall-clock guard then
+ * measured the queue instead of the render and failed every field past the first.
  */
 import { test, expect } from "@xopat/test-harness";
 import { loadLib, cleanupLib } from "../load-lib.mjs";
@@ -21,7 +23,13 @@ const tick = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
 /** Records concurrency and ordering so the invariants can be asserted rather than timed. */
 function tracker() {
-    const state = { renderConcurrent: 0, maxRender: 0, visionConcurrent: 0, maxVision: 0, order: [] };
+    const state = {
+        renderConcurrent: 0, maxRender: 0,
+        visionConcurrent: 0, maxVision: 0,
+        // Rasters produced but not yet consumed — what the render window actually bounds.
+        resident: 0, maxResident: 0,
+        order: [],
+    };
     return {
         state,
         async render(field) {
@@ -29,6 +37,8 @@ function tracker() {
             state.maxRender = Math.max(state.maxRender, state.renderConcurrent);
             await tick(1);
             state.renderConcurrent--;
+            state.resident++;
+            state.maxResident = Math.max(state.maxResident, state.resident);
             return { field, pixels: `raster:${field.id}` };
         },
         async analyze(field, raster) {
@@ -39,6 +49,7 @@ function tracker() {
             state.order.push(field.id);
             return { id: field.id, raster: raster.pixels };
         },
+        consumed() { state.resident--; },
     };
 }
 
@@ -74,14 +85,61 @@ test("the render window does not become the vision cap", { tag: ["@unit"] }, asy
 });
 
 test("in-flight work is bounded by the render window", { tag: ["@unit"] }, async () => {
-    // Thirty queued fields is a quarter of a gigabyte of RGBA waiting its turn.
+    // Thirty queued fields is a quarter of a gigabyte of RGBA waiting its turn. The window
+    // bounds RESIDENT RASTERS, which is not the same as concurrent renders — since renders
+    // serialize, counting those would pass regardless of the window.
     const t = tracker();
 
     await collectPipeline(fields(30), {
         render: t.render, analyze: t.analyze, visionConcurrency: 4, renderWindow: 5,
+        onRasterConsumed: t.consumed,
     });
 
-    expect(t.state.maxRender).toBeLessThanOrEqual(5);
+    expect(t.state.maxResident).toBeLessThanOrEqual(5);
+});
+
+test("renders are submitted one at a time", { tag: ["@unit"] }, async () => {
+    // The core serializes off-screen passes anyway, so submitting a window's worth at once
+    // only queues them where the caller cannot see the wait. A render carries a wall-clock
+    // guard whose clock starts at the CALL, so that invisible wait was being charged to the
+    // render: every field past the first failed a deadline it never got a chance to meet.
+    const t = tracker();
+
+    await collectPipeline(fields(12), {
+        render: t.render, analyze: t.analyze, visionConcurrency: 4, renderWindow: 6,
+    });
+
+    expect(t.state.maxRender, "one render in flight, by default").toBe(1);
+    expect(t.state.maxVision, "while the vision fan-out is untouched").toBeGreaterThan(1);
+});
+
+test("renderConcurrency raises the submission cap for callers that do not render", { tag: ["@unit"] }, async () => {
+    // The overview walk passes a no-op render and does its real work in `analyze`; nothing
+    // there needs serializing.
+    const t = tracker();
+
+    await collectPipeline(fields(10), {
+        render: t.render, analyze: t.analyze, visionConcurrency: 4, renderConcurrency: 4,
+    });
+
+    expect(t.state.maxRender).toBeGreaterThan(1);
+    expect(t.state.maxRender).toBeLessThanOrEqual(4);
+});
+
+test("a field admitted before an abort does not render after it", { tag: ["@unit"] }, async () => {
+    // Serializing renders means a field can wait behind others for its turn. Cancelling the
+    // run must stop it there, not let it render into a result nobody will read.
+    const controller = new AbortController();
+    const rendered = [];
+
+    await collectPipeline(fields(8), {
+        render: async (f) => { rendered.push(f.id); await tick(2); return { pixels: f.id }; },
+        analyze: async (f) => { controller.abort(); return { id: f.id }; },
+        renderWindow: 8,
+        signal: controller.signal,
+    });
+
+    expect(rendered.length, "the queued ones were dropped at their boundary").toBeLessThan(8);
 });
 
 test("analyses actually overlap rather than running one at a time", { tag: ["@unit"] }, async () => {
@@ -95,15 +153,27 @@ test("analyses actually overlap rather than running one at a time", { tag: ["@un
 test("results arrive in completion order, not submission order", { tag: ["@unit"] }, async () => {
     // Imposing submission order would reintroduce head-of-line blocking — the thing the
     // pipeline exists to remove.
-    const t = tracker();
-    const slowFirst = [{ id: "slow", cost: 40 }, { id: "fast-a", cost: 1 }, { id: "fast-b", cost: 1 }];
+    //
+    // Gated rather than timed: the FIRST field's analysis is held open until both later ones
+    // have been yielded, so the assertion is about the pipeline's ordering and not about
+    // whether one sleep outlasts another on a loaded CI box.
+    let releaseSlow;
+    const slowHeld = new Promise(r => { releaseSlow = r; });
+    const out = [];
 
-    const out = await collectPipeline(slowFirst, {
-        render: t.render, analyze: t.analyze, visionConcurrency: 3,
-    });
+    for await (const result of runFieldPipeline(
+        [{ id: "slow" }, { id: "fast-a" }, { id: "fast-b" }],
+        {
+            render: async (f) => ({ pixels: f.id }),
+            analyze: async (f) => { if (f.id === "slow") await slowHeld; return { id: f.id }; },
+            visionConcurrency: 3,
+        }
+    )) {
+        out.push(result.id);
+        if (out.length === 2) releaseSlow();
+    }
 
-    expect(out[0].id).not.toBe("slow");
-    expect(out.at(-1).id).toBe("slow");
+    expect(out, "the field submitted first is delivered last").toEqual(["fast-a", "fast-b", "slow"]);
 });
 
 test("one failing field does not take the run down", { tag: ["@unit"] }, async () => {

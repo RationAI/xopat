@@ -64,14 +64,25 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 ];
                 if (clinical) page.push(this._displaySectionToSpec(clinical));
                 // Technical block is a placeholder filled post-render with a real
-                // <details> node — the menu-pages string→innerHTML path runs a
-                // sanitizer that strips <details>/<summary> (only div-like tags
-                // survive), so a declarative {type:"collapse"} loses its wrapper.
+                // <details> node. Historically the menu-pages body was re-parsed
+                // by the UI layer's untrusted-text allowlist, which has no
+                // <details>/<summary>, so a declarative {type:"collapse"} lost
+                // its wrapper. menu-pages now hands over nodes, but the fill is
+                // kept: it is also what carries the live toggle handlers.
                 const techId = `slide-info-tech-${viewer.id}`;
                 if (technical.length) {
                     page.push({ type: "div", id: techId, extraClasses: "hidden" });
                 }
                 if (!clinical && !technical.length) page.push(this._noMetadataSpec());
+
+                // Slide actions live inside this per-viewer page — no new
+                // top-level menu entry. Placeholder filled post-render because
+                // the JSON path is sanitized and cannot carry a live handler.
+                const downloadId = `slide-info-download-${viewer.id}`;
+                const offersDownload = this._canDownloadSlide(source);
+                if (offersDownload) {
+                    page.push({ type: "div", id: downloadId, extraClasses: "hidden mt-1" });
+                }
 
                 result.page = page;
 
@@ -81,6 +92,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                     || null;
                 if (bg?.id) this._fillSlideLabel(viewer, bg, labelId);
                 if (technical.length) this._fillTechnical(techId, technical);
+                if (offersDownload) this._fillDownloadAction(downloadId, source, viewer);
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
                 result.page = [{
@@ -128,33 +140,74 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 this.menu?.visibilityManager.on();
             };
 
-            // TODO: does not work, OSD overlays are hidden behind another canvas - either annotations
-            // const openBtn = new UI.Button({
-            //     onClick: showExplorer,
-            //     extraClasses: "btn-primary btn-lg shadow-lg",
-            // }, "Open Slide Manager").create();
+            // Reactive, because this handler runs at BOOT and the locale bundle
+            // is fetched asynchronously (`this._localeReady`, seeded in the
+            // constructor). Reading a key before its bundle is registered gets
+            // the key back verbatim — `demo.title` on the canvas — which is the
+            // i18next behaviour AGENTS.md §3 warns about, not a missing string:
+            // both keys exist in `locales/en.json`.
             //
-            // new OpenSeadragon.MouseTracker({
-            //     element: openBtn,
-            //     handler: (event) => {
-            //         // This prevents OSD from panning the viewer when you click the button
-            //         event.preventDefaultAction = true;
-            //     }
-            // });
+            // Seeded eagerly because this is already correct on every later call
+            // (a second demo page, a slide closed mid-session), and only the
+            // first paint of a cold boot needs the fill-in below.
+            const title = van.state(this.t('demo.title'));
+            const hint = van.state(this.t('demo.hint'));
+            const openLabel = van.state(this.t('demo.open'));
+            const menuHint = van.state(this.t('demo.menuHint'));
 
-            const demoUI = van.tags.div({
-                    id: e.id,
-                    class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
-                },
-                van.tags.div({ class: "mb-6 opacity-20" },
-                    new UI.FAIcon({ name: "fa-images", extraClasses: "text-9xl" }).create()
-                ),
-                van.tags.h2({ class: "text-2xl font-bold mb-2" }, this.t('demo.title')),
-                van.tags.p({ class: "max-w-md mb-6 opacity-70" }, this.t('demo.hint')),
-                // openBtn
+            // The page is no longer an OSD overlay (it used to sit under the
+            // annotation canvas, unclickable and anchored in viewport
+            // coordinates, which is why it drifted off-centre on an empty
+            // viewer). `loader.ts` mounts it as a screen-fixed, centred layer
+            // whose host is click-through, so this button works and no
+            // MouseTracker is needed to stop the viewer from panning.
+            const openBtn = van.tags.button({
+                class: "btn btn-primary btn-sm",
+                onclick: (ev) => { ev.stopPropagation(); showExplorer(); },
+            },
+                new UI.PhIcon({ name: "ph-folder-open" }).create(),
+                openLabel,
             );
 
+            // Inline styles over utilities: the shipped Tailwind build is
+            // purge-minimised (AGENTS §8), and the card mirrors the core
+            // `viewer-demo-overlay` shell so both variants read as one screen.
+            const demoUI = van.tags.div({
+                    id: e.id,
+                    class: "bg-base-100 border border-base-300 rounded-2xl shadow-lg",
+                    style: "pointer-events:auto;max-width:28rem;width:100%;"
+                        + "padding:2rem 2.25rem;text-align:center;display:flex;"
+                        + "flex-direction:column;align-items:center;",
+                },
+                new UI.PhIcon({
+                    name: "ph-images",
+                    extraClasses: "opacity-20",
+                    // `style` is not a top-level option — BaseComponent only
+                    // forwards `extraProperties` onto the node.
+                    extraProperties: {
+                        style: "font-size:3.5rem;line-height:1;margin-bottom:0.75rem;",
+                    },
+                }).create(),
+                // Bound as text, not through a node-returning derivation: van
+                // patches the text node in place instead of swapping the subtree.
+                van.tags.h2({ style: "font-size:1.375rem;font-weight:700;margin:0 0 0.5rem;" }, title),
+                van.tags.p({ class: "opacity-70", style: "margin:0 0 1.25rem;font-size:0.95rem;line-height:1.45;" }, hint),
+                openBtn,
+                van.tags.p({ class: "opacity-50", style: "margin:0.75rem 0 0;font-size:0.8rem;" }, menuHint),
+            );
+
+            // Synchronously, and NOT after awaiting the locale: `show-demo-page`
+            // is first-call-wins (src/EVENTS.md), so awaiting here hands the
+            // canvas to the built-in overlay and this UI never appears. Claim the
+            // slot now, translate when the bundle lands.
             e.show(demoUI);
+
+            this._localeReady.then(() => {
+                title.val = this.t('demo.title');
+                hint.val = this.t('demo.hint');
+                openLabel.val = this.t('demo.open');
+                menuHint.val = this.t('demo.menuHint');
+            });
         });
 
         this._customControlButtons = undefined;
@@ -570,8 +623,108 @@ addPlugin('slide-info', class extends XOpatPlugin {
         });
     }
 
+    /**
+     * Whether a "Download slide" action should be offered for `source`.
+     *
+     * Two independent gates: the optional tile-source capability (only some
+     * protocols can hand back the original file — see `src/tile-source.ts`) and
+     * the plugin capability, which an operator can deny per role. The capability
+     * check is client-side UI gating; the backend still authorizes the fetch.
+     * @private
+     */
+    _canDownloadSlide(source) {
+        if (!this.can('slide-info.download-slide')) return false;
+        try {
+            return typeof source?.canDownloadSlideFile === "function" && source.canDownloadSlideFile();
+        } catch (e) {
+            console.warn("slide-info: canDownloadSlideFile threw", e);
+            return false;
+        }
+    }
+
+    /**
+     * Context-menu entry for downloading the original slide file, or null when
+     * the slide offers none. Shared by the canvas menu and the slide-card menu
+     * so both surfaces gate identically.
+     * @private
+     */
+    _downloadMenuItem(source, viewer, fallbackName) {
+        if (!this._canDownloadSlide(source)) return null;
+        return {
+            title: this.t('info.downloadSlide'),
+            icon: 'ph-download-simple',
+            action: () => UTILITIES.downloadSlideFile(source, { viewer, fallbackName })
+                .catch(() => { /* already reported to the user by the driver */ }),
+        };
+    }
+
+    /**
+     * Canvas right-click entry. The source comes from the event's own viewer —
+     * never `window.VIEWER`, which in a multi-viewport grid is whichever viewport
+     * happens to hold focus.
+     * @private
+     */
+    _registerCanvasMenu() {
+        if (this._canvasMenuRegistered || !globalThis.CanvasContextMenu) return;
+        globalThis.CanvasContextMenu.register(`${this.id}-download`, (ctx) => {
+            const source = ctx.viewer?.world?.getItemAt(0)?.source;
+            const item = this._downloadMenuItem(source, ctx.viewer, this._slideNameFor(ctx.viewer));
+            return item ? [item] : [];
+        }, -10);
+        this._canvasMenuRegistered = true;
+    }
+
+    /**
+     * Display name of the slide open in `viewer`, used as the download's file-name
+     * fallback when neither the server nor the source names the file.
+     * @private
+     */
+    _slideNameFor(viewer) {
+        try {
+            const bg = viewer?.world?.getItemAt(0)?.getConfig?.("background")
+                || viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
+            return bg ? UTILITIES.nameFromBGOrIndex(bg) : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /**
+     * Inject the "Download slide" button into its placeholder in the per-viewer
+     * info page. Same post-render technique as `_fillTechnical`: the menu-pages
+     * JSON path renders to sanitized HTML, which cannot carry a live handler.
+     * @private
+     */
+    _fillDownloadAction(containerId, source, viewer) {
+        let tries = 0;
+        const attempt = () => {
+            const host = document.getElementById(containerId);
+            if (!host) {
+                if (tries++ < 5) requestAnimationFrame(attempt);
+                return;
+            }
+            const fallbackName = this._slideNameFor(viewer);
+            const button = new UI.Button(
+                {
+                    size: UI.Button.SIZE.SMALL,
+                    outline: UI.Button.OUTLINE.ENABLE,
+                    extraClasses: "w-full",
+                    onClick: () => UTILITIES.downloadSlideFile(source, { viewer, fallbackName })
+                        .catch(() => { /* already reported to the user by the driver */ }),
+                },
+                new UI.PhIcon({ name: 'ph-download-simple' }).create(),
+                this.t('info.downloadSlide')
+            );
+            host.innerHTML = "";
+            host.appendChild(UI.BaseComponent.toNode(button));
+            host.classList.remove("hidden");
+        };
+        requestAnimationFrame(attempt);
+    }
+
     async pluginReady() {
         await this._localeReady;
+        this._registerCanvasMenu();
         // Load visited history before first render so already-seen slides show
         // the badge immediately (and resolve the gate for early open events).
         await this._hydrateVisited();
@@ -607,6 +760,9 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * Set custom browser hierarchy for the slide item browser.
      * Note that you should do this before the viewer is opened. If you cannot do it, you can use setWillInitCustomBrowser instead,
      * and initialize the UI later on.
+     * Leaf items must be identifiable: give them an `id`, or give the level a `keyOf`.
+     * Slide cards derive their DOM ids and their thumbnail cache slot from that identity,
+     * so items that share one (or expose none) render every thumbnail into the first card.
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
      * @param {customItemToBackground} config.customItemToBackground a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.

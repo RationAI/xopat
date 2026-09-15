@@ -41,6 +41,35 @@ function _ensureHtmlSanitizer() {
     try { UTILITIES.loadModules(() => {}, "sanitize-html"); } catch (_) { /* best effort */ }
 }
 
+// Nodes rendered as plain text because the sanitizer was missing, kept so a
+// later load can repair them. Degrading closed is only defensible if it is
+// temporary — otherwise a deployment that loads no other sanitizer consumer
+// shows raw markup forever. Same contract as `modules/markdown` (upgradePending)
+// and `Toast` (renderToken re-apply).
+// Bounded: when the sanitizer never arrives this list would otherwise pin every
+// degraded node (including detached ones) for the session.
+const _PENDING_HTML_MAX = 256;
+const _pendingHtml = [];
+let _upgradeHooked = false;
+function _hookSanitizerUpgrade() {
+    if (_upgradeHooked) return;
+    const manager = globalThis.VIEWER_MANAGER;
+    if (!manager?.addHandler) return;   // too early - retried on the next degrade
+    _upgradeHooked = true;
+    manager.addHandler("module-loaded", e => {
+        if (e?.id === "sanitize-html") _upgradeDegradedHtml();
+    });
+}
+function _upgradeDegradedHtml() {
+    if (typeof globalThis.SanitizeHtml !== "function") return;
+    const pending = _pendingHtml.splice(0, _pendingHtml.length);
+    for (const { node, source } of pending) {
+        // A node the owner already discarded needs no repair.
+        if (!node.isConnected) continue;
+        node.replaceWith(HtmlRenderer(source));
+    }
+}
+
 const HtmlRenderer = v => {
     const s = v.trim();
     if (s.startsWith("<")) {
@@ -52,9 +81,14 @@ const HtmlRenderer = v => {
         }
         // Sanitizer not loaded yet: never inject unsanitized markup. Render the
         // raw string as text — safe, if visually degraded — and trigger a
-        // one-shot background load so later renders get real markup back.
+        // one-shot background load; the upgrade hook re-renders it once the
+        // module lands.
         _ensureHtmlSanitizer();
-        return span(s);
+        const degraded = span(s);
+        if (_pendingHtml.length >= _PENDING_HTML_MAX) _pendingHtml.shift();
+        _pendingHtml.push({ node: degraded, source: s });
+        _hookSanitizerUpgrade();
+        return degraded;
     }
     return span(s);
 };
@@ -164,13 +198,12 @@ export class BaseComponent {
 
     /**
      * Resolve a mount target to a DOM Element.
-     * Accepts: string id, Element, or jQuery wrapper. Returns null if unresolvable.
+     * Accepts: string id or Element. Returns null if unresolvable.
      * @private
      */
     _resolveMountNode(element) {
         if (typeof element === "string") return document.getElementById(element);
         if (!element) return null;
-        if (element.jquery && typeof element.get === "function") return element.get(0) || null;
         return element;
     }
 
@@ -302,7 +335,9 @@ export class BaseComponent {
      */
     get children() {
         if (this._renderedChildren) return this._renderedChildren;
-        this._renderedChildren = (this._children || []).map(this.toNode).filter(Boolean);
+        // NOT `.map(this.toNode)`: map passes (item, index, array), so `reinit`
+        // would receive the index — falsy for child 0, truthy for the rest.
+        this._renderedChildren = (this._children || []).map(item => this.toNode(item)).filter(Boolean);
         return this._renderedChildren;
     }
 
@@ -433,7 +468,6 @@ export class BaseComponent {
     static parseDomLikeItem(item, reinit = true) {
         if (item == null) return [];
         if (typeof item === "string") return item;
-        if (item.jquery) return item;
         if (Array.isArray(item)) return item.map(this.parseDomLikeItem);
 
         // BaseComponent instance (your components have create() or render())
@@ -452,6 +486,41 @@ export class BaseComponent {
         // Fallback: stringify
         console.warn(`Component ${typeof item} probably not parseable: stringified.`, item);
         return String(item);
+    }
+
+    /**
+     * Like {@link parseDomLikeItem}, but always returns a flat array of
+     * Elements ready to be appended — HTML strings are parsed, arrays are
+     * flattened, and DocumentFragments are unwrapped into their children.
+     *
+     * This is the native replacement for the `$(parseDomLikeItem(x))` idiom
+     * callers used to normalise the union return type.
+     *
+     * @param {*} item
+     * @param {boolean} [reinit=true]
+     * @return {Element[]}
+     */
+    static parseDomNodes(item, reinit = true) {
+        const out = [];
+        const collect = (value) => {
+            if (value == null || value === "") return;
+            if (Array.isArray(value)) { value.forEach(collect); return; }
+            if (typeof value === "string") {
+                // <template> parses markup inertly — no scripts run, no
+                // side effects — unlike assigning to a live element.
+                const holder = document.createElement("template");
+                holder.innerHTML = value;
+                out.push(...holder.content.children);
+                return;
+            }
+            if (value.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+                out.push(...value.children);
+                return;
+            }
+            if (value.nodeType === Node.ELEMENT_NODE) { out.push(value); return; }
+        };
+        collect(BaseComponent.parseDomLikeItem(item, reinit));
+        return out;
     }
 
     /**

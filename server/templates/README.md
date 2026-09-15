@@ -68,7 +68,7 @@ and expect ``i18next`` object ready to be used. The data object:
 ### The error page
 
 The error page must be provided with all the following replacements:
-- `head`: where header scripts and other tags are rendered, here we require primer and jquery dependencies
+- `head`: where header scripts and other tags are rendered
 - `text-title`:  the translated string for `Error` title
 - `text-details`: the translated string for 'more details' button text
 - `custom`: here you should provide a button that takes the user back to where they came from, and add other custom HTML
@@ -79,7 +79,7 @@ You can of course add more features if you like to each of the templates.
 ### The Developer Setup page
 The dev setup page defines the following replacements:
 - `head`: where header scripts and other tags are rendered, here we require 
-  - CORE: ``primer``, `jquery`, `env`, `deps`
+  - CORE: ``primer``, `env`, `deps`
 - `form-init`:  optional JS script that can override the following `window.formInit` object (defaults are shown):
   ````html
     <script type="text/javascript">

@@ -1,3 +1,4 @@
+import {_t} from "../shared/i18n";
 const { div, span, button, input } = (globalThis as any).van.tags;
 
 export interface ChatAttachmentBarOptions {
@@ -61,8 +62,8 @@ export class ChatAttachmentBar {
                 if (this._disabled || !this._filesEnabled) return;
                 this._fileInputEl?.click();
             },
-            title: $.t('chat.attachFilesOrImages'),
-        }, $.t('chat.attachFile')) as HTMLButtonElement;
+            title: _t('attachFilesOrImages'),
+        }, _t('attachFile')) as HTMLButtonElement;
 
         this._screenshotBtn = button({
             type: "button",
@@ -74,8 +75,8 @@ export class ChatAttachmentBar {
                 this._closeMenu();
                 this.options.onScreenshot?.();
             },
-            title: $.t('chat.attachScreenshotViewport'),
-        }, $.t('chat.takeScreenshot')) as HTMLButtonElement;
+            title: _t('attachScreenshotViewport'),
+        }, _t('takeScreenshot')) as HTMLButtonElement;
 
         this._menuEl = div(
             {
@@ -95,7 +96,7 @@ export class ChatAttachmentBar {
                 if (this._disabled) return;
                 this._toggleMenu();
             },
-            title: $.t('chat.addAttachmentOrScreenshot'),
+            title: _t('addAttachmentOrScreenshot'),
         }, "+") as HTMLButtonElement;
 
         this._root = div(
@@ -146,10 +147,10 @@ export class ChatAttachmentBar {
         if (this._busy) {
             this._closeMenu();
             this._attachBtn.appendChild(span({ class: "loading loading-spinner loading-xs" }) as HTMLElement);
-            this._attachBtn.title = $.t('chat.uploadingAttachment');
+            this._attachBtn.title = _t('uploadingAttachment');
         } else {
             this._attachBtn.textContent = "+";
-            this._attachBtn.title = $.t('chat.addAttachmentOrScreenshot');
+            this._attachBtn.title = _t('addAttachmentOrScreenshot');
         }
     }
 
@@ -174,8 +175,8 @@ export class ChatAttachmentBar {
             this._attachFileBtn.classList.toggle("opacity-50", this._disabled || !this._filesEnabled);
             this._attachFileBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._filesEnabled);
             this._attachFileBtn.title = this._filesEnabled
-                ? $.t('chat.attachFilesOrImages')
-                : $.t('chat.fileUploadUnavailableForModel');
+                ? _t('attachFilesOrImages')
+                : _t('fileUploadUnavailableForModel');
         }
 
         if (this._screenshotBtn) {
@@ -183,16 +184,16 @@ export class ChatAttachmentBar {
             this._screenshotBtn.classList.toggle("opacity-50", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.title = this._screenshotEnabled
-                ? $.t('chat.attachScreenshotViewport')
-                : $.t('chat.screenshotUnavailableForModel');
+                ? _t('attachScreenshotViewport')
+                : _t('screenshotUnavailableForModel');
         }
 
         const anyAvailable = this._filesEnabled || this._screenshotEnabled;
         if (this._attachBtn) {
             this._attachBtn.disabled = this._disabled || !anyAvailable;
             this._root!.title = !anyAvailable
-                ? $.t('chat.attachmentsUnavailableForModel')
-                : $.t('chat.addAttachmentOrScreenshot');
+                ? _t('attachmentsUnavailableForModel')
+                : _t('addAttachmentOrScreenshot');
         }
 
         if ((!this._filesEnabled && !this._screenshotEnabled) || this._disabled) {

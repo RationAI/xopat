@@ -13,6 +13,13 @@
     "apiKey": "",
     "defaultModelId": "",
     "defaultTranscriptionModelId": "whisper-1",
+    // Biasing-prompt allowance for transcription, in characters (ceiling 1000). 0 =
+    // the prompt the client composes is dropped server-side. Off by default because
+    // a self-hosted whisper-large-v3 dropped audio in proportion to prompt length;
+    // OpenAI's gpt-4o-transcribe family takes the full ceiling (see
+    // env/parts/voice/openai-4o-transcribe.json). Deployer-only: not a configSchema
+    // field, so no RPC caller can raise its own cap.
+    "transcriptionPromptMaxChars": 0,
     "modelsPath": "/models"
   }
 }

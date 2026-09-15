@@ -1,13 +1,34 @@
 // Bootstrap the generic IO pipeline (`window.IO_PIPELINE`) before
-// APPLICATION_CONTEXT is constructed. Must run after Cookies.withAttributes
-// is configured — the `cookies` KV driver reads `globalThis.Cookies` EAGERLY
-// at registration (`kv-drivers.ts`), not on first access — and before any
-// code calls `getOption()` / touches
-// AppCache/AppCookies — both go through `XOpatStorage` façades that resolve
-// their handles via `window.IO_PIPELINE`.
+// APPLICATION_CONTEXT is constructed, and before any code calls
+// `getOption()` / touches AppCache/AppCookies — both go through
+// `XOpatStorage` façades that resolve their handles via `window.IO_PIPELINE`.
+//
+// The deployment cookie policy travels in as `cookieAttributes` rather than
+// being read off a global: the `cookies` KV driver owns `document.cookie`
+// directly now, so there is no external library to configure first.
 
 import type { XOpatCoreConfig } from "../../types/config";
 import { createIOPipeline, IOPipeline, withRetry } from "./index";
+
+/**
+ * Normalize a configured cookie domain to a bare host.
+ *
+ * `ENV.client.domain` is an ORIGIN (`https://host:port`) in most deployments,
+ * but the cookie `domain=` attribute accepts only a host — a browser that sees
+ * anything else silently drops the **whole** cookie, not just the attribute.
+ * That made every cookie write a no-op wherever `js_cookie_domain` was unset
+ * and `client.domain` carried a scheme.
+ */
+export function normalizeCookieDomain(raw: string | null | undefined): string | undefined {
+    const value = (raw ?? "").trim();
+    if (!value) return undefined;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
+    try {
+        return new URL(value).hostname || undefined;
+    } catch {
+        return undefined;
+    }
+}
 
 export function bootstrapIOPipeline(
     ENV: XOpatCoreConfig,
@@ -16,6 +37,14 @@ export function bootstrapIOPipeline(
     const IO_PIPELINE: IOPipeline = createIOPipeline({
         POST_DATA,
         getConfig: () => (ENV?.client as any)?.io,
+        cookieAttributes: {
+            path: ENV.client.js_cookie_path,
+            domain: normalizeCookieDomain(ENV.client.js_cookie_domain || ENV.client.domain),
+            expires: ENV.client.js_cookie_expire,
+            sameSite: ENV.client.js_cookie_same_site,
+            secure: typeof ENV.client.js_cookie_secure === "boolean"
+                ? ENV.client.js_cookie_secure : undefined,
+        },
         getViewers: () => {
             const vm = (window as any).VIEWER_MANAGER;
             return Array.isArray(vm?.viewers)

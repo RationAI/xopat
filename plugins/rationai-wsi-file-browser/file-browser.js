@@ -3,10 +3,43 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
         super(id);
 
         this.wsi_server = this.getStaticMeta('wsiService');
-        if (!this.wsi_server) {
-            console.warn('Wsi server not configured: exitting..');
+        // Deployment-controlled (ENV / include.json), never `getOption`: which
+        // upstream this plugin may reach is operator policy, not a preference.
+        const proxyAlias = this.getStaticMeta('proxy');
+        this.proxy = typeof proxyAlias === "string" && proxyAlias.trim() ? proxyAlias.trim() : undefined;
+
+        // Judged once, here, and reported with the key and the value.
+        //
+        // A missing value used to say only "not configured", and an unusable one
+        // said nothing at all until `new URL()` threw `Invalid URL` per listing
+        // attempt — naming neither the setting nor its content. That cost real
+        // debugging time for a value that was simply corrupt: an `env/.env` line
+        // appended without a trailing newline resolved `<% WSI_PORT %>` to
+        // `9002"WSI_PORT=9002"`, so the base read
+        // `http://localhost:9002"WSI_PORT=9002"`. Printing the value makes that
+        // self-evident; a TypeError from a URL constructor does not.
+        const configured = typeof this.wsi_server === "string" ? this.wsi_server.trim() : "";
+        let baseIsValid = false;
+        if (configured) {
+            try {
+                new URL(configured);
+                baseIsValid = true;
+            } catch (e) {
+                baseIsValid = false;
+            }
+        }
+        // With a proxy alias the origin lives server-side in
+        // `core.server.secure.proxies.<alias>.baseUrl`, so `wsiService` is unused
+        // and need not be valid — one of the two must be.
+        if (!this.proxy && !baseIsValid) {
+            console.warn(`[${id}] not starting: 'wsiService' must be an absolute URL, got ` +
+                `${JSON.stringify(this.wsi_server)}. Set it per deployment under ` +
+                `ENV.plugins["${id}"].wsiService, or route the plugin through a ` +
+                `server proxy alias with ENV.plugins["${id}"].proxy.`);
             return;
         }
+        // Trailing slashes would double up against the `/v3/...` paths below.
+        this.wsi_server = baseIsValid ? configured.replace(/\/+$/, "") : "";
 
         this.integrateWithPlugin("slide-info", async (info) => {
             this.slideMenu = info.menu;
@@ -20,10 +53,8 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
              * it off its parent).
              */
             const listCasesAt = async (contextPath) => {
-                const url = new URL(`${this.wsi_server}/v3/cases/`);
-                url.searchParams.set("context", contextPath);
-
-                const res = await fetch(url.toString());
+                const res = await this.client().fetchRaw(
+                    `/v3/cases/?${new URLSearchParams({ context: contextPath })}`);
                 let cases = await res.text();
                 if (!res.ok) {
                     throw new Error(cases);
@@ -74,10 +105,8 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
 
                     if (!parent) {
                         try {
-                            const url = new URL(`${this.wsi_server}/v3/cases/slides/`);
-                            url.searchParams.set("slide_id", contextPath);
-
-                            const res = await fetch(url.toString());
+                            const res = await this.client().fetchRaw(
+                                `/v3/cases/slides/?${new URLSearchParams({ slide_id: contextPath })}`);
                             let slides = await res.text();
                             if (!res.ok) {
                                 throw new Error(slides);
@@ -108,7 +137,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     if (item.type === "case") {
                         return div(
                             { class: "flex items-center gap-2 px-2 py-2 hover:bg-base-300 rounded cursor-pointer text-base-content/80"},
-                            new UI.FAIcon({ name: "fa-folder", extraClasses: "text-base-content/70" }).create(),
+                            new UI.PhIcon({ name: "ph-folder", extraClasses: "text-base-content/70" }).create(),
                             span(item.label)
                         );
                     }
@@ -156,5 +185,25 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                 },
             });
         });
+    }
+
+    /**
+     * The one endpoint this plugin talks to, built on first use — a plugin
+     * constructor runs before the core globals are settled, and `HttpClient` is
+     * what carries the CSRF header a proxied request needs.
+     *
+     * Both modes resolve the same relative paths: with `proxy` the origin lives
+     * server-side under `proxies.<alias>.baseUrl` and requests travel
+     * `/proxy/<alias>/v3/...` on the viewer origin; without it they go straight
+     * to the configured `wsiService` base. Never a bare `fetch`: that bypassed
+     * CSRF, the proxy alias, and secureMode policy alike.
+     */
+    client() {
+        if (!this._client) {
+            this._client = new HttpClient(this.proxy
+                ? { proxy: this.proxy }
+                : { baseURL: this.wsi_server });
+        }
+        return this._client;
     }
 });

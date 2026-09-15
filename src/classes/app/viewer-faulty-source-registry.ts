@@ -39,6 +39,9 @@ export class ViewerFaultySourceRegistry {
 
     constructor(private readonly threshold: number = 5) {}
 
+    /** The default tolerance, so callers can derive a per-source budget from it. */
+    get faultyThreshold(): number { return this.threshold; }
+
     private ensure(key: string): FaultyEntry {
         let entry = this.entries.get(key);
         if (!entry) {
@@ -69,14 +72,55 @@ export class ViewerFaultySourceRegistry {
     }
 
     /**
+     * How many consecutive failures should condemn THIS source.
+     *
+     * The default threshold is calibrated for whole-slide pyramids, where a
+     * handful of failed requests among thousands is a transient blip worth
+     * tolerating. It is exactly wrong for a small source: a single-level,
+     * single-tile overlay — a prediction grid, a thumbnail-only mask — can only
+     * ever produce one failure, and `tileRetryMax` defaults to 0, so it could
+     * never reach five and failed in complete silence. One tile out of one is
+     * not a blip, it is the whole layer missing.
+     *
+     * So the budget is the smaller of the default and the number of tiles the
+     * source actually has. The loop exits as soon as it passes the threshold, so
+     * a gigapixel pyramid costs a couple of `getNumTiles` calls, not a walk.
+     *
+     * @param item an OSD TiledImage
+     * @param fallback used when the source cannot report its tile counts
+     */
+    static tileFailureBudgetFor(item: any, fallback: number): number {
+        const source = item?.source;
+        if (!source || typeof source.getNumTiles !== "function") return fallback;
+        try {
+            const min = Number.isFinite(source.minLevel) ? source.minLevel : 0;
+            const max = Number.isFinite(source.maxLevel) ? source.maxLevel : min;
+            let total = 0;
+            for (let level = min; level <= max; level++) {
+                const tiles = source.getNumTiles(level);
+                total += (tiles?.x || 0) * (tiles?.y || 0);
+                if (total >= fallback) return fallback;
+            }
+            return Math.max(1, total);
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    /**
      * Record a single failed tile request for `key`. Returns true only on the
      * transition into the faulty state (so callers raise one notification).
+     *
+     * @param budget consecutive failures to tolerate; defaults to the registry
+     *     threshold. See {@link tileFailureBudgetFor} for why a small source
+     *     must not be held to a pyramid's tolerance.
      */
-    recordTileFailure(key: string | undefined, error?: string): boolean {
+    recordTileFailure(key: string | undefined, error?: string, budget?: number): boolean {
         if (!key) return false;
         const entry = this.ensure(key);
         entry.consecutiveFails += 1;
-        if (!entry.faulty && entry.consecutiveFails >= this.threshold) {
+        const limit = Number.isFinite(budget) && (budget as number) > 0 ? (budget as number) : this.threshold;
+        if (!entry.faulty && entry.consecutiveFails >= limit) {
             entry.faulty = true;
             entry.reason = "tiles";
             entry.error = error || entry.error || "Repeated tile request failures.";

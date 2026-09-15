@@ -1,5 +1,11 @@
 # `geotiff` — TIFF / GeoTIFF support
 
+> **Deprecated — use [`modules/webtiff`](../webtiff/README.md).** Both register the
+> `tiff` slide protocol and only one may be enabled. This module's decoder reads no
+> SubIFD pyramid (see *Limits*) and no OME-XML channel metadata, so a multi-channel
+> OME-TIFF renders one plane in fallback tints; webtiff reads the whole stack, named
+> and tinted from the file. This module stays for deployments already pinned to it.
+
 Opens TIFF, OME-TIFF and QPTIFF slides, including 10/12/14/16-bit and
 floating-point samples.
 
@@ -203,8 +209,40 @@ pyramidal fixtures the behaviour above is verified against.
 
 - Complex and undefined `SampleFormat` values are refused by the decoder; the
   slide still opens, rendered as an ordinary image.
+- **A `SampleFormat` array shorter than `SamplesPerPixel` is one of those
+  "undefined" cases, and it is not exotic.** A *missing* tag defaults to
+  unsigned-integer; a tag written **once** to mean "every sample is alike" does
+  not — `getSampleFormat(i)` indexes the array directly, so samples past its end
+  come back `undefined` and the read throws
+  `Unsupported data format/bitsPerSample`
+  (`dist/geotiff-tilesource.lite.mjs:712`, `:865`). If you see that message, look
+  at the tag's *count* before suspecting an unusual bit depth.
+  Where it bites in practice: the fixture OME-TIFF's companion pages
+  (macro/label/overview — `SamplesPerPixel = 3`, `SampleFormat` count 1) are
+  selected as this decoder's *coarse pyramid levels*, because level bucketing
+  sorts by width and the smallest page becomes level 0. So the failure is total
+  for those levels rather than cosmetic, and only the full-resolution plane
+  decodes.
+- **Do not "fix" that by filtering the unreadable pages out.** The tile source
+  takes an `imagesFilter` option applied before `setupLevels()`, so dropping them
+  is easy and looks right — it was tried, and it is worse. Those pages are the
+  only *coarse* levels this decoder has for such a file: the real ones live in
+  SubIFDs it cannot read. Remove them and the five equal-size planes that remain
+  fail `setupLevels`' strictly-decreasing test, leaving **one level at full
+  resolution** (`maxLevel = 0`). A zoomed-out viewport must then fetch the whole
+  24960 × 34560 image at 512 px tiles — about 3300 requests — and the tab locks
+  up. Trading a handful of visible tile errors for that is not an improvement.
+  The fix has to be in the library: read the SubIFD pyramid, or broadcast a
+  single `SampleFormat` value across all samples as the spec intends.
 - SubIFD pyramids are not read by the bundled `geotiff.js`; such files fall back
   to their full-resolution level only.
+- **The multichannel session fixtures are out of scope for this module.**
+  `all-shaders`, `fluorescence-background`, `fluorescence-cross-source`,
+  `channel-series` and `viz-flex-multichannel` all open
+  `LuCa-7color_Scan1.ome.tiff` and need plane stacking. They are tagged
+  `capabilities: ["multichannel"]` in `test/fixtures/sessions/index.json`, and the
+  `geotiff` deployment excludes that capability, so its startup banner lists only
+  the eight sessions it can actually render. Use `webtiff` for those five.
 - The renderer's first pass is 8-bit unless the deployment sets
   `webGlPrecision: "auto"` (see *Render precision* above): values are correct, but
   quantized to 256 levels before any shader sees them.

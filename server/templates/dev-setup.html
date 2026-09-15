@@ -137,7 +137,6 @@
 
 <template id="template-form-init"></template>
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 
 <script type="text/javascript">
     function escapeHtml(value) {
@@ -332,7 +331,7 @@
         { key: "toolBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.toolBar." },
         { key: "statusBar", type: "boolean", default: true, usage: "Deprecated flat alias of ui.statusBar." },
         { key: "ui", type: "object", default: { scaleBar: true, toolBar: true, statusBar: true, mainMenu: true, navigator: true, appBar: true, globalMenu: true }, usage: "Initial visible state of UI components. false boots the component collapsed; the user can still toggle it back via settings or the hide-UI button." },
-        { key: "backgroundColor", type: "string", default: null, usage: "Default background color, a hex RGB or RGBA string." },
+        { key: "backgroundColor", type: "string", default: null, usage: "Session-wide canvas clear color, a hex RGB or RGBA string. A single slide overrides it with background[i].fill." },
         { key: "viewport", type: "object", default: null, usage: "Default viewport position {\"zoomLevel\":<zoom>,\"point\":{\"x\":<x>,\"y\":<y>}} in OpenSeadragon viewport coordinates." },
         { key: "activeBackgroundIndex", type: "number", default: 0, usage: "Default active background (image group) index." },
         { key: "activeVisualizationIndex", type: "number", default: 0, usage: "Default active visualization (data group) index." },
@@ -402,7 +401,7 @@
                             <tbody>
                                 <tr><td><code>params</code></td><td>object</td><td>no</td><td>Viewer parameters and defaults — see <em>Core <code>params</code> Configuration</em> below.</td></tr>
                                 <tr><td><code>data</code></td><td>array</td><td>yes</td><td>Data specifications referenced by backgrounds and shader layers.</td></tr>
-                                <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack.</td></tr>
+                                <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack. Per-entry <code>fill</code> (hex <code>#RGB</code>/<code>#RGBA</code>/<code>#RRGGBB</code>/<code>#RRGGBBAA</code>) overrides <code>params.backgroundColor</code> while that slide is open.</td></tr>
                                 <tr><td><code>visualizations</code></td><td>array</td><td>no</td><td>Visualization goals. Each item must define a <code>shaders</code> map.</td></tr>
                                 <tr><td><code>plugins</code></td><td>object</td><td>no</td><td>Plugin id to plugin-specific configuration object.</td></tr>
                             </tbody>
@@ -597,7 +596,8 @@
                 activeTabId: this.activeTabId
             }));
 
-            $('#save-status').text('Saved ' + new Date().toLocaleTimeString());
+            const saveStatus = document.getElementById('save-status');
+            if (saveStatus) saveStatus.textContent = 'Saved ' + new Date().toLocaleTimeString();
         },
 
         resetDefaults: function() {
@@ -822,19 +822,21 @@
         app.init();
 
         // Legacy Form Handling
-        window.formInit = $.extend(true, {
+        window.formInit = Object.assign({
             location: "/",
             lang: { ready: "Ready!" }
         }, window.formInit || {});
 
-        $("#form-submit-container").html(
-            `<form method="POST" target="_blank" action="${formInit.location}" id="custom-request" class="w-full">
+        const submitContainer = document.getElementById("form-submit-container");
+        if (submitContainer) {
+            submitContainer.innerHTML =
+                `<form method="POST" target="_blank" action="${formInit.location}" id="custom-request" class="w-full">
                     <input type="hidden" name="visualization" id="custom-visualization" value=''>
                     <button class="btn btn-primary btn-wide" type="submit" value="${formInit.lang.ready}">
                         ${formInit.lang.ready}
                     </button>
-                </form>`
-        );
+                </form>`;
+        }
 
         const shaderConfigurator = window.OpenSeadragon?.FlexRenderer?.ShaderConfigurator;
 
@@ -874,9 +876,10 @@
             }
         }
 
-        $('#custom-request').on('submit', evt => {
+        document.getElementById('custom-request')?.addEventListener('submit', () => {
             // Ensure we send the current editor value
-            document.getElementById("custom-visualization").value = $("#custom-params").val();
+            document.getElementById("custom-visualization").value =
+                document.getElementById("custom-params").value;
         });
     });
 </script>

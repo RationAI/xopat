@@ -22,32 +22,30 @@
  * picked up. `isProduction` is surfaced here so the server fixture knows it has
  * to restart instead of just writing.
  */
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parse, stringify } from "comment-json";
+import { pathToFileURL } from "node:url";
+import { stringify } from "comment-json";
 import { fromRoot } from "./paths.mjs";
 
+/**
+ * The merge, `$base` resolution and conflict detection live in
+ * `server/utils/node/env-compose.mjs`, shared with the `npm run up` runner —
+ * one implementation of "what does this ENV actually say", used by both the
+ * deployment matrix and the developer running the thing by hand.
+ *
+ * Loaded through `fromRoot` + a file URL rather than a relative specifier: this
+ * module is also reachable as `node_modules/@xopat/test-harness/env-scratch.mjs`,
+ * and under `--preserve-symlinks` (which the runner enables when an externally
+ * developed element is linked in) `../../server/…` would resolve inside
+ * `node_modules`.
+ */
+const compose = await import(pathToFileURL(fromRoot("server/utils/node/env-compose.mjs")).href);
+
 /** Deep merge, arrays replaced — mirrors the server's ENV-over-config overlay. */
-function mergeDeep(base, overlay) {
-    if (!overlay || typeof overlay !== "object" || Array.isArray(overlay)) return overlay ?? base;
-    const out = Array.isArray(base) ? [...base] : { ...(base ?? {}) };
-    for (const [key, value] of Object.entries(overlay)) {
-        out[key] = value && typeof value === "object" && !Array.isArray(value)
-            ? mergeDeep(out[key], value)
-            : value;
-    }
-    return out;
-}
-
-/** Parse a JSONC file the same way the server does. Missing file → `{}`. */
-export function readJsonc(file) {
-    if (!existsSync(file)) return {};
-    return parse(readFileSync(file, "utf8"), undefined, true) ?? {};
-}
-
-/** Marks a file as a patch over another ENV rather than a whole deployment. */
-const BASE_KEY = "$base";
+const { mergeDeep, readJsonc } = compose;
+export { mergeDeep, readJsonc };
 
 /**
  * Load an ENV file, following `$base` if present.
@@ -64,22 +62,32 @@ const BASE_KEY = "$base";
  *   "core": { "client": { "localhost": { "secureMode": true } } } }
  * ```
  *
+ * `$base` also accepts an ARRAY, whose entries are composer selectors — a
+ * fragment id under `env/parts/`, a preset name, or a path. That is how the
+ * `saml` and `oidc` fixtures share one copy of the blocks they used to keep
+ * byte-identical by hand.
+ *
  * Files without `$base` are read as-is, so real deployment ENVs and the Cypress
  * fixtures are unaffected.
  */
-export function loadEnvFile(repoRelativePath, seen = new Set()) {
-    const absolute = fromRoot(repoRelativePath);
-    if (seen.has(absolute)) {
-        throw new Error(`[xopat-test] circular $base chain at ${repoRelativePath}`);
+export function loadEnvFile(repoRelativePath, seen) {
+    return compose.loadEnvFile(repoRelativePath, seen);
+}
+
+/**
+ * Compose an ordered selector list (fragments, presets, files) into one ENV,
+ * refusing anything the composer reports as ambiguous.
+ *
+ * Conflicts throw here rather than resolving last-wins: a project whose layers
+ * disagree about a value is a project whose failures cannot be attributed, and
+ * that is the exact defect the matrix exists to rule out.
+ */
+export function composeEnvFiles(selectors) {
+    const { env, conflicts } = compose.composeEnv(selectors, {});
+    if (conflicts.length) {
+        throw new Error(`[xopat-test] conflicting ENV layers\n${compose.formatConflicts(conflicts)}`);
     }
-    seen.add(absolute);
-
-    const contents = readJsonc(absolute);
-    const base = contents?.[BASE_KEY];
-    if (typeof base !== "string" || !base.trim()) return contents;
-
-    const { [BASE_KEY]: _dropped, ...patch } = contents;
-    return mergeDeep(loadEnvFile(base, seen), patch);
+    return env;
 }
 
 /**
@@ -105,7 +113,8 @@ export function effectiveClient(envObject) {
 
 /**
  * @param {object} opts
- * @param {string|null} opts.envFile     repo-relative ENV file, or null for the deployment default
+ * @param {string|string[]|null} opts.envFile  repo-relative ENV file, an ordered
+ *        list of composer selectors, or null for the deployment default
  * @param {string} opts.label            used in the temp dir name, for debuggability
  * @param {string} [opts.serverLogLevel] value for `core.server.logging.level`
  */
@@ -113,7 +122,7 @@ export function createEnvScratch({ envFile, label, serverLogLevel }) {
     const dir = mkdtempSync(path.join(tmpdir(), `xopat-test-${label}-`));
     const file = path.join(dir, "env.json");
 
-    let current = loadEnvFile(envFile ?? "env/env.json");
+    let current = Array.isArray(envFile) ? composeEnvFiles(envFile) : loadEnvFile(envFile ?? "env/env.json");
 
     if (serverLogLevel) {
         // Route verbosity through the existing logging broker rather than
@@ -128,7 +137,7 @@ export function createEnvScratch({ envFile, label, serverLogLevel }) {
         /** Absolute path to hand to `XOPAT_ENV`. */
         path: file,
         /** Where this scratch came from, for failure diagnostics. */
-        sourceFile: envFile ?? "env/env.json",
+        sourceFile: Array.isArray(envFile) ? envFile.join(" + ") : (envFile ?? "env/env.json"),
         get isProduction() { return effectiveClient(current).production; },
         get flags() { return effectiveClient(current); },
         read() { return current; },

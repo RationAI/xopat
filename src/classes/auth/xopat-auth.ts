@@ -1387,14 +1387,27 @@ export class XOpatAuth {
                 // Resolved here so a provider never has to ask: an explicit caller
                 // opinion wins, otherwise policy decides.
                 const mayNavigate = options.mayNavigate ?? this.canNavigateAway().ok;
-                await Promise.race([
-                    Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
-                    new Promise<undefined>((resolve) => setTimeout(() => {
-                        console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
-                            `'${contextId}' within ${callBound}ms; giving up on it.`);
-                        resolve(undefined);
-                    }, callBound)),
-                ]);
+                // The timer is CLEARED when the race settles. `Promise.race` does not cancel
+                // the loser, so leaving it armed meant every login — including one that
+                // resolved or rejected in a second — printed "did not answer login" a quarter
+                // of an hour later, one timer per attempt. In a long session that warning
+                // arrived detached from anything, and it buried the real failure the broker
+                // had reported (below) minutes earlier.
+                let wedgeTimer: any;
+                try {
+                    await Promise.race([
+                        Promise.resolve(broker.login(contextId, cfg, { gesture, mayNavigate })),
+                        new Promise<undefined>((resolve) => {
+                            wedgeTimer = setTimeout(() => {
+                                console.warn(`XOpatAuth: broker '${cfg.method}' did not answer login for ` +
+                                    `'${contextId}' within ${callBound}ms; giving up on it.`);
+                                resolve(undefined);
+                            }, callBound);
+                        }),
+                    ]);
+                } finally {
+                    clearTimeout(wedgeTimer);
+                }
             } catch (e) {
                 console.warn(`XOpatAuth: login for '${contextId}' errored`, e);
             }
@@ -1724,12 +1737,24 @@ export class XOpatAuth {
         const remaining = ids.filter((id) => !this.isAuthenticated(id));
         for (const id of ids) if (!remaining.includes(id)) result.verdicts[id] = true;
 
-        // Unreachable authority: no evidence the session is gone, so neither
-        // navigate nor raise the gate. The ordinary 401 paths will speak up.
+        // Unreachable authority: no evidence the session is gone, so do not navigate
+        // — a redirect to a host we just failed to reach lands the user on the
+        // browser's own error page instead of the viewer.
+        //
+        // The gate is a different question, and answering both with "stay silent" was
+        // wrong. These contexts are drawn from `remaining`, which already excludes
+        // every authenticated one — so there is no session here to protect, and saying
+        // nothing means `_authHeaders` has nothing to hold on: every request bound to
+        // the context goes out bare and fails. Holding them behind a scrim whose click
+        // can sign the user in is strictly better. A blip that arrives while a
+        // credential is alive never reaches this branch, and `markNeedsInteraction`
+        // defers itself in that case regardless.
         const unreachable = remaining.filter((id) => silent.get(id)?.outcome === "unreachable");
         for (const id of unreachable) {
             console.warn(`XOpatAuth: could not reach the authority for '${id}' during boot; ` +
-                `not starting an automatic login. Requests bound to it may 401.`);
+                `not starting an automatic login. Requests bound to it will hold for a sign-in.`);
+            this.markNeedsInteraction(id, { reason: "authority-unreachable" });
+            result.deferred.push(id);
             result.verdicts[id] = false;
         }
 

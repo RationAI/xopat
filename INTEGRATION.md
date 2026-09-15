@@ -390,7 +390,7 @@ in-repo examples to copy from:
   through the same session contract. See
   [Viewer Configuration](docs/web/xopat_configuration.md),
   [Core Architecture](src/README.md), and
-  [`docs/example_sessions/`](docs/example_sessions/).
+  [`test/fixtures/sessions/`](test/fixtures/sessions/).
 - **Driving from a host page / iframe.** Mount via the server's SSR template, or
   embed an `<iframe>` with the session in the URL hash. Core ships **no**
   postMessage handshake — plugins add their own. See

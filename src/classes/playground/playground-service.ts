@@ -151,7 +151,7 @@ function tryRegisterEditMenuEntry() {
         }
         Edit.subMenu.addItem({
             id: "open-visualization-playground",
-            icon: "fa-flask",
+            icon: "ph-flask",
             label: tr("playground.openFromActiveViewer", "Open Visualization Playground"),
             section: "playground",
             onClick: () => {
@@ -178,10 +178,10 @@ function tryRegisterCanvasContextProvider() {
         ({ viewer }: any) => ([
             {
                 title: tr("playground.viewerSubmenu", "Viewer"),
-                icon: "fa-display",
+                icon: "ph-monitor",
                 children: [
                     {
-                        icon: "fa-flask",
+                        icon: "ph-flask",
                         title: tr("playground.openHere", "Open Visualization Playground"),
                         action: () => openPlayground({ source: { kind: "viewer", viewer } }),
                     },

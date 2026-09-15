@@ -22,9 +22,19 @@
 // ITS OWN parent.
 //
 // Flip / rotation / translation alignment for overlaid mode is applied at the
-// `addTiledImage` placement level, not inside the source. Raster parents are
-// supported in this first version; vector (MVT) / multi-channel-TIFF parents
-// should be a follow-up (they can't be composited as plain images).
+// `addTiledImage` placement level, not inside the source.
+//
+// PORTABILITY — the border ring is the whole constraint. Interior tiles pass
+// through untouched and work for ANY payload; a border tile is re-fetched from
+// the parent's tile URL and decoded by the BROWSER, so this supports only
+// parents whose tiles are plainly-fetchable browser-decodable images. Vector
+// (MVT), multi-channel TIFF, DICOM and GPU-blob parents cannot be composited
+// as plain images and are REFUSED by `canCompositeRegions` below rather than
+// rendered with a ring of failed tiles; such a source may opt in with
+// `supportsRegionCompositing = true` if its tile URLs are in fact plain images.
+// The follow-up that removes the constraint entirely is drawer clipping
+// (`TiledImage._clip`, honoured by every drawer xOpat ships) — see
+// `src/VIRTUAL_VIEWPORTS_SPLIT.md` → Portability.
 //
 // FOCAL PLANES. A z-stack parent stays a z-stack through the crop: `zStack` and
 // `setZDepth` delegate, so `ViewerDepthController` sees the region as a normal
@@ -37,6 +47,40 @@
 // plane), so they must be resolved AT the tile's plane, not at the live one.
 
 import { withPlane } from "./app/viewer-depth-controller";
+
+/**
+ * Data types `_composeTile` can blit onto a 2D canvas. The base
+ * `downloadTileStart` (`src/tile-source.ts`) publishes the fetched blob as
+ * `this._dataFormat || "rasterBlob"`, so a source negotiating a non-raster
+ * transfer encoding (WSI-Service `image_format=tiff` → `rawTiff`) is excluded
+ * here even though it never overrode the download path.
+ */
+const RASTER_TILE_FORMATS = new Set(["rasterBlob", "image", "imageBitmap", "context2d"]);
+
+/**
+ * Can this source serve a cropped sub-region?
+ *
+ * Border tiles are recomposited by `_composeTile`: the region's tile bytes are
+ * re-fetched from `parent.getTileUrl(...)` and decoded by the BROWSER
+ * (`createImageBitmap` / `<img>`), which requires the parent's tiles to be
+ * plainly-fetchable browser-decodable images. Interior tiles pass through and
+ * would work for any payload — but a region rarely aligns to the tile grid, so
+ * a source failing this test produces a viewer ringed with failed tiles.
+ *
+ * The test is derived, not a hardcoded list: a source that still uses the base
+ * `downloadTileStart` is on exactly the plain URL→image path `_loadParentTile`
+ * imitates, while every source that decodes elsewhere (webtiff, DICOM, MVT,
+ * pixelmaps) overrides it. A source that overrides the download path but whose
+ * tile URLs ARE plain images can opt in with `supportsRegionCompositing = true`;
+ * the flag also lets a source opt OUT explicitly. Degrades closed.
+ */
+export function canCompositeRegions(source: any): boolean {
+    if (!source) return false;
+    if (typeof source.supportsRegionCompositing === "boolean") return source.supportsRegionCompositing;
+    const base = (window as any).OpenSeadragon?.TileSource?.prototype?.downloadTileStart;
+    if (typeof base !== "function" || source.downloadTileStart !== base) return false;
+    return !source._dataFormat || RASTER_TILE_FORMATS.has(source._dataFormat);
+}
 
 interface ParentTileGeometry {
     width: number;
@@ -109,6 +153,11 @@ function ensureCroppedTileSource(): any {
                     .then((parent: any) => { this._parent = parent; this._adoptParentIdentity(); })
                     .catch((e: any) => {
                         this.metadata = { ...(this.metadata || {}), error: (e && (e.message || String(e))) || "Failed to load parent slide." };
+                        // The geometry was known up front, so this source already
+                        // reported ready — but with no usable parent every tile
+                        // would fail one by one. Surface it as an open failure,
+                        // same as the slow path, instead of a viewer of holes.
+                        this.raiseEvent("open-failed", { message: this.metadata.error, source: this._parentResolved, postData: null });
                     });
             } else {
                 // SLOW PATH: load the parent, learn its geometry, cache it, then
@@ -250,9 +299,19 @@ function ensureCroppedTileSource(): any {
         _instantiateParent(): Promise<any> {
             const resolved = this._parentResolved;
             return new Promise((resolve, reject) => {
+                // Gate on the RESOLVED subclass (OSD's autodetect fires 'ready'
+                // with the real instance), never on the placeholder we built:
+                // the placeholder always carries the base download path.
+                const accept = (ts: any) => {
+                    if (!canCompositeRegions(ts)) {
+                        reject(new Error($.t("virtualization.sourceNotCompositable")));
+                        return;
+                    }
+                    resolve(ts);
+                };
                 const waitReady = (ts: any) => {
-                    if (ts.ready) return resolve(ts);
-                    ts.addHandler("ready", (e: any) => resolve(e.tileSource || ts));
+                    if (ts.ready) return accept(ts);
+                    ts.addHandler("ready", (e: any) => accept(e.tileSource || ts));
                     ts.addHandler("open-failed", (e: any) => reject(e.message || e));
                 };
 
@@ -381,6 +440,17 @@ function ensureCroppedTileSource(): any {
         }
 
         // --- Focal planes: the region IS its parent's z-stack -----------------
+        /**
+         * A region of a compositable parent is itself compositable — so
+         * re-splitting an already-split slide (overlaid ⇄ sidebyside) asks the
+         * PARENT, not this wrapper, whose own `downloadTileStart` override would
+         * otherwise read as "not a plain image source". Optimistic before the
+         * parent resolves; `_instantiateParent` is the authoritative gate.
+         */
+        get supportsRegionCompositing(): boolean {
+            return this._parent ? canCompositeRegions(this._parent) : true;
+        }
+
         get zStack(): any { return this._parent?.zStack; }
         setZDepth(index: number): void { this._parent?.setZDepth?.(index); }
 

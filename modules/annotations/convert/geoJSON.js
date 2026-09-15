@@ -312,7 +312,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 if (!result) {
                     //not a native object, parse as well as possible
                     result = this.decoders[object.geometry.type]?.(object.geometry);
-                    if (result) $.extend(result, object.properties); //attach properties for partial compatibility
+                    if (result) OpenSeadragon.extend(result, object.properties); //attach properties for partial compatibility
                 }
 
                 if (result) {

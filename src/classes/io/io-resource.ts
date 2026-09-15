@@ -137,6 +137,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _storePromise: Promise<OutboxStore | null> | null = null;
     /** Approximate count of persisted entries for this resource (cap pre-flight). */
     private _persistedCount = 0;
+    /** `code|resource` pairs already reported — see {@link _warnOutboxFailureOnce}. */
+    private readonly _warnedOutboxFailures = new Set<string>();
     /**
      * Boot replay completed for this resource — the worker's start gate.
      * Starts `true` for resources with no persistent outbox: there is nothing to
@@ -841,6 +843,30 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     }
 
     /** Execute one queue entry: persist-await + dispatch + unpersist + rollback. */
+    /**
+     * Report a failed outbox write once per `(code, resource)`, with the fix.
+     *
+     * These failures are almost always *systematic* — a resource whose payload
+     * cannot be structured-cloned fails on every single operation, so recording
+     * a tour produced one identical warning per step and the actual advice
+     * ("declare a serialize()") appeared nowhere. Say it once, say what to do.
+     *
+     * The write is still ATTEMPTED every time: only the logging is deduped, so
+     * a resource that fails on one payload and succeeds on the next keeps its
+     * crash-recovery for the ones that work.
+     */
+    private _warnOutboxFailureOnce(code: string, reason: string): void {
+        const key = `${code}|${this.name}`;
+        if (this._warnedOutboxFailures.has(key)) return;
+        this._warnedOutboxFailures.add(key);
+        const hint = code === "W_IO_OUTBOX_WRITE" && /clone/i.test(String(reason ?? ""))
+            ? ` The payload is not structured-cloneable — declare a serialize() on this resource `
+              + `that returns JSON-safe data (see src/types/io.d.ts, "persistOutbox").`
+            : "";
+        console.warn(`[IO] resource "${this.name}": outbox persistence is failing (${code}).${hint} `
+            + `Dispatch is unaffected; crash-recovery is off for this resource. Reason:`, reason);
+    }
+
     private async _executeEntry(entry: QueueEntry): Promise<IOResult> {
         // Phase 10: wait for IDB persist before dispatching (crash-safe).
         // Outbox persistence is a best-effort crash-recovery optimization, NOT
@@ -851,13 +877,13 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         if (entry.persistedPromise) {
             const pr = await entry.persistedPromise;
             if (!pr.ok) {
+                // The EVENT stays per-operation: a listener may legitimately
+                // count how many ops lost their crash-recovery record.
                 this.pipeline.emitQueueEvent_("io:outbox-write-failed", {
                     ownerUid: this.ownerUid, resourceName: this.name,
                     code: (pr as any).code, reason: (pr as any).reason,
                 });
-                console.warn(`[IO] resource "${this.name}" outbox persist failed ` +
-                    `(${(pr as any).code}); dispatching without crash-recovery:`,
-                    (pr as any).reason);
+                this._warnOutboxFailureOnce((pr as any).code, (pr as any).reason);
             }
         }
 

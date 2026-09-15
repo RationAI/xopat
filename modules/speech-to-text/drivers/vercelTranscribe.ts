@@ -1,6 +1,6 @@
 /// <reference path="../../../src/types/globals.d.ts" />
 
-import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult, DriverConfigurationError} from "./driver";
+import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult, DriverConfigurationError, bareMediaType} from "./driver";
 
 /**
  * Deployment-controlled config for the Vercel-chat transcription driver. Read
@@ -79,6 +79,8 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
     readonly id: string;
     readonly label = "Cloud transcription (chat provider)";
     readonly local = false;
+    /** Configured model, or undefined when the server resolves it. @see TranscriptionDriver */
+    get modelId(): string | undefined { return this._cfg.model || undefined; }
 
     private _cfg: VercelTranscribeConfig;
     private _moduleId: string;
@@ -162,7 +164,11 @@ export class VercelTranscribeDriver implements TranscriptionDriver {
                 ...(this._cfg.providerId ? {providerId: this._cfg.providerId} : {}),
                 model: this._cfg.model,
                 audioBase64,
-                mediaType: audio.type || "audio/webm",
+                // Bare type: the codec parameter the recorder needs is not something an
+                // upstream should be asked to parse, and one that does rejects the upload
+                // ("Unsupported file format webm;codecs=opus"). The server strips it too —
+                // this keeps the RPC payload honest rather than relying on that.
+                mediaType: bareMediaType(audio.type),
                 language: opts.language,
                 // Domain/vocabulary biasing hint, forwarded to the transcription model.
                 prompt: opts.prompt,

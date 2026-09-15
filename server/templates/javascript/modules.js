@@ -332,7 +332,9 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
     }
 
     let moduleList = Object.values(MODULES);
-    //ascending
-    moduleList.sort((a, b) => a["_priority"] - b["_priority"]);
+    // Ascending by `_xoi`, the DFS post-order `scanDependencies` assigns above. This used to
+    // read `_priority`, a key nothing ever writes: `undefined - undefined` is NaN, so the
+    // comparator was inert and the "dependency order" was really directory-scan order.
+    moduleList.sort((a, b) => a["_xoi"] - b["_xoi"]);
     core._MODULE_ORDER = moduleList.map(mod => mod.id);
 }

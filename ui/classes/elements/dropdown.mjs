@@ -1,7 +1,6 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
-import {FAIcon} from "./fa-icon.mjs";
 import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
 import {findClippingAncestor, placeFixedAnchored, trackAnchor} from "./popupPlacement.mjs";
 
@@ -48,6 +47,7 @@ class Dropdown extends BaseSelectableComponent {
 
         this._headerIconComp = null;
         this._headerLabelSpan = null;
+        this._compactHeader = false;
 
         this.headerButton = this.createButton(options);
         this._contentEl = null;
@@ -106,9 +106,36 @@ class Dropdown extends BaseSelectableComponent {
     iconOnly() {
         this.headerButton.iconOnly();
         if (this._useActiveSelection) {
-            this.headerButton.setExtraProperty("style", "min-width:58px;")
+            this.headerButton.setExtraProperty("style", this._compactHeader ? "" : "min-width:58px;")
         }
         this._iconOnly = true;
+    }
+
+    /**
+     * Collapse an `activeSelection` header down to a split square button.
+     *
+     * The default header lays the selection icon and the caret out side by side
+     * and reserves 58px for the pair. That is right in a roomy horizontal bar
+     * and far too wide for a narrow vertical column, where it drags every
+     * neighbouring button out to the same width. Compact mode stacks the two
+     * instead: icon on the top half, caret on the bottom half, same glyph size,
+     * so both stay real click targets while the button is only as wide as one
+     * icon. Layout lives in `.dropdown-header-compact` (custom.css) — it has to
+     * beat `.btn`'s own padding and `align-items`.
+     *
+     * The padding/min-width numbers are this element's own layout details, which
+     * is why the switch lives here rather than being poked at from the outside.
+     *
+     * @param {boolean} compact
+     */
+    setCompactHeader(compact) {
+        compact = !!compact;
+        if (this._compactHeader === compact) return;
+        this._compactHeader = compact;
+        if (!this._useActiveSelection) return;
+
+        this.headerButton.setExtraProperty("style", compact ? "" : "min-width:58px;");
+        this.headerButton.toggleClass("compact", "dropdown-header-compact", compact);
     }
     titleIcon()  { this.headerButton.titleIcon();  }
     titleOnly()  { this.headerButton.titleOnly();  }
@@ -247,6 +274,9 @@ class Dropdown extends BaseSelectableComponent {
             this._fmToken = UI.Services.FloatingManager.register({
                 el: this._contentEl,
                 owner: this,
+                // Portaled to <body>: keep it above the trigger's own stacking
+                // context (a dropdown inside a modal was painted under the modal).
+                anchor: trigger || this.root,
                 onEscape: "close",
                 // Custom outside-click handler: a mousedown on this
                 // dropdown's own trigger must not auto-close, otherwise
@@ -276,14 +306,10 @@ class Dropdown extends BaseSelectableComponent {
             btnEl.title = headerTitle;
         }
         if (typeof item.icon === "string") {
-            const wantsPh = item.icon.trim().startsWith('ph-');
-            const isPh = this._headerIconComp instanceof PhIcon;
-            const isFa = this._headerIconComp instanceof FAIcon;
-            // Same family: in-place glyph swap. Different family or unknown:
-            // rebuild the header icon component so the wrapper class flips
-            // between fa-auto and ph-light (otherwise the codepoint renders
-            // through the wrong font and produces tofu / unrelated glyphs).
-            if ((wantsPh && isPh) || (!wantsPh && isFa)) {
+            // In-place glyph swap when the header already holds an icon
+            // component; otherwise rebuild it (an ImageIcon header cannot take
+            // a font glyph).
+            if (this._headerIconComp instanceof PhIcon) {
                 this._headerIconComp.changeIcon(item.icon);
             } else {
                 const oldEl = document.getElementById(this._headerIconComp.id);
@@ -686,6 +712,7 @@ class Dropdown extends BaseSelectableComponent {
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,
             owner: this,
+            anchor: anchorEl,
             onEscape: () => this._closeSubmenusFrom(level)
         });
 

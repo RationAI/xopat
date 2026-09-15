@@ -148,26 +148,33 @@ export class CaptureIndicator implements CaptureIndicatorLike {
 
     /**
      * Expose the on/off switch in the app bar's View menu (which also enrols it in
-     * `AppBar.Actions`, so it can be pinned as a quick action). The mode granularity
-     * (flash vs trail) stays a config knob — the menu only answers "show me / don't".
+     * `AppBar.Chrome` and `AppBar.Actions`, so it follows the hide-UI button and can
+     * be pinned as a quick action). The mode granularity (flash vs trail) stays a
+     * config knob — the menu only answers "show me / don't".
+     *
+     * Registered under the `appearance` category rather than through `View.append`:
+     * that call path is for plugin *windows* and renders a loose row above the
+     * grouped submenus, which is not what a viewer-overlay preference is.
      */
     registerViewToggle(): void {
         const View: any = (window as any).USER_INTERFACE?.AppBar?.View;
-        if (!View?.append || this._menuRegistered) return;
+        if (!View?.registerViewComponent || this._menuRegistered) return;
         this._menuRegistered = true;
         const indicator = this;
-        View.append(
-            "core.captureIndicator",
-            "ph-selection-plus",
-            $.t("main.bar.captureIndicator"),
-            {
+        View.registerViewComponent("appearance", {
+            id: "core.captureIndicator",
+            icon: "ph-selection-plus",
+            title: $.t("main.bar.captureIndicator"),
+            visibilityManager: {
                 is: () => indicator.mode !== "off",
+                // on/off are the hide-UI channel and must NOT persist — the user's
+                // own preference has to survive a hide/show cycle.
                 on: () => indicator.setMode(indicator._lastVisibleMode, { persist: false }),
                 off: () => indicator.setMode("off", { persist: false }),
                 set: (value: boolean) => indicator.setMode(value ? indicator._lastVisibleMode : "off"),
                 toggle: () => indicator.setMode(indicator.mode === "off" ? indicator._lastVisibleMode : "off")
             }
-        );
+        });
     }
 
     private _notifyMenu(): void {

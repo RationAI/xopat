@@ -27,15 +27,15 @@ interface RecorderPlaybackSession {
 const RECORDER_BUNDLE_VERSION = 3;
 
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
-    return $.extend(true, {}, value) as T;
+    return OpenSeadragon.extend(true, {}, value) as T;
 }
 
 function cloneValue<T>(value: T): T {
     if (Array.isArray(value)) {
-        return $.extend(true, [], value) as T;
+        return OpenSeadragon.extend(true, [], value) as T;
     }
     if (value && typeof value === "object") {
-        return $.extend(true, {}, value) as T;
+        return OpenSeadragon.extend(true, {}, value) as T;
     }
     return value;
 }
@@ -74,6 +74,10 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
      * the step is a still view to actually look at.
      */
     static readonly DEFAULT_MOVE_SECONDS = 1.8;
+    /** Below this much still time after the move, a stop is a flash, not a view. */
+    static readonly MIN_STILL_SECONDS = 1;
+    /** A tour shorter than this is over before a viewer has settled into it. */
+    static readonly MIN_TOUR_SECONDS = 5;
 
     private readonly _snapshotsState: RecorderState;
     /** CRUD façade for per-step sync; inert until an admin binds `crud:step`. */
@@ -112,7 +116,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewers: new Map<UniqueViewerId, RecorderViewerCollection>(),
             captureVisualization: false,
             captureViewport: true,
-            captureScreen: false,
         };
 
         this._initIOPipeline().catch(e => console.error("[recorder] IO pipeline init failed:", e));
@@ -201,6 +204,24 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!step.id) return { ok: false, refused: true, reason: "missing step id" };
                 return { ok: true };
             },
+            // `persistOutbox` requires a payload that round-trips through JSON:
+            // the entry is structured-cloned into IndexedDB, and the same
+            // projection is what reaches the sink. Without these two the RAW
+            // step went to both — a live step holds OpenSeadragon `Point` /
+            // `Rect` instances (and once held a live `<img>`, which made every
+            // write fail with a DataCloneError and silently disabled
+            // crash-recovery for the whole resource).
+            //
+            // Deliberately the SAME pair the export/import path uses, so a step
+            // has one on-the-wire shape rather than two that can drift.
+            serialize: (e: any) => ({
+                ...(e || {}),
+                step: cloneValue(e?.step),
+            }),
+            deserialize: (raw: any) => ({
+                ...(raw || {}),
+                step: this._hydrateStep(raw?.step, raw?.viewerId),
+            }),
         });
 
         // Binary overlay assets ride on their own CRUD channel — keeps step
@@ -219,6 +240,11 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!asset.data || typeof asset.data !== "string") return { ok: false, refused: true, reason: "asset data (base64) required" };
                 return { ok: true };
             },
+            // Clone-safe only by accident today — `validate` happens to require
+            // `data` to be a string. Declaring the projection makes that a
+            // property of the resource rather than of its validator.
+            serialize: (e: any) => ({ ...(e || {}), asset: cloneValue(e?.asset) }),
+            deserialize: (raw: any) => ({ ...(raw || {}), asset: cloneValue(raw?.asset) }),
         });
     }
 
@@ -667,7 +693,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerId: viewer.uniqueId || viewerId,
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
-            screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
         this._stampRecordingBackground(recording, viewer);
 
@@ -1176,24 +1201,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return !!this._snapshotsState.captureViewport;
     }
 
-    set capturesScreen(value: boolean) {
-        this._snapshotsState.captureScreen = !!value;
-    }
-
-    get capturesScreen(): boolean {
-        return !!this._snapshotsState.captureScreen;
-    }
-
     setCapturesVisualization(value: boolean): void {
         this.capturesVisualization = value;
     }
 
     setCapturesViewport(value: boolean): void {
         this.capturesViewport = value;
-    }
-
-    setCapturesScreen(value: boolean): void {
-        this.capturesScreen = value;
     }
 
     // ---------------------------------------------------------------------
@@ -1292,6 +1305,80 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 
     stepCapturesNavigation(step: RecorderSnapshotStep): boolean {
         return !!step.navigation?.samples?.length;
+    }
+
+    /**
+     * Is this tour watchable — and if not, what is wrong with it?
+     *
+     * Authoring a recording programmatically has no feedback loop: a script writes the
+     * steps and never sees them play, so a tour of nine half-second uncaptioned stops
+     * looks like a success at every single call. This is the one place that can say
+     * otherwise, and it lives on the module rather than in a scripting namespace because
+     * both the recorder's own namespace (on play) and the questionnaire's (on bind) need
+     * the same verdict — two copies would be two definitions of a good tour.
+     *
+     * Never throws and never blocks: a half-finished draft is a legitimate thing to play.
+     * The warnings are phrased as the edit to make, because their reader is usually an
+     * LLM deciding what to do next.
+     */
+    summarizeTour(steps: RecorderSnapshotStep[] | undefined | null): RecorderTourSummary {
+        const all = Array.isArray(steps) ? steps.filter(Boolean) : [];
+        // A hold is a deliberate beat and a navigation step replays a captured path;
+        // neither is a "stop" a caption is missing from.
+        const stops = all.filter((step) => step.kind !== "empty" && !this.stepCapturesNavigation(step));
+        const hasCaption = (step: RecorderSnapshotStep): boolean =>
+            (step.overlays ?? []).some((o: any) => typeof o?.markdown === "string" && o.markdown.trim());
+
+        const uncaptioned: number[] = [];
+        const rushed: number[] = [];
+        let totalSeconds = 0;
+        let shortestSeconds = Number.POSITIVE_INFINITY;
+
+        all.forEach((step, index) => {
+            const duration = Number.isFinite(step.duration) ? Number(step.duration) : 0;
+            totalSeconds += duration + (Number.isFinite(step.delay) ? Number(step.delay) : 0);
+            if (duration < shortestSeconds) shortestSeconds = duration;
+            if (step.kind === "empty" || this.stepCapturesNavigation(step)) return;
+            if (!hasCaption(step)) uncaptioned.push(index + 1);
+            // What is left on screen once the eased move has finished — the only part a
+            // viewer can actually study.
+            const move = typeof step.moveDuration === "number"
+                ? step.moveDuration
+                : Math.min(duration, Recorder.DEFAULT_MOVE_SECONDS);
+            if (duration - move < Recorder.MIN_STILL_SECONDS) rushed.push(index + 1);
+        });
+
+        const round = (value: number) => Math.round(value * 10) / 10;
+        const warnings: string[] = [];
+        if (stops.length && uncaptioned.length === stops.length) {
+            warnings.push(
+                `None of the ${stops.length} stop(s) has a caption: a viewer gets a view and nothing telling `
+                + `them what to look at. Pass { narration } to captureFrame, or call setStepNarration(step, text).`
+            );
+        } else if (uncaptioned.length) {
+            warnings.push(
+                `${uncaptioned.length} of ${stops.length} stop(s) have no caption: step(s) ${uncaptioned.join(", ")}. `
+                + `Call setStepNarration(step, text) on each.`
+            );
+        }
+        if (rushed.length) {
+            warnings.push(
+                `Step(s) ${rushed.join(", ")} leave under ${Recorder.MIN_STILL_SECONDS}s on screen once the movement `
+                + `finishes. Raise their duration, or caption them (a caption stretches the hold to reading time).`
+            );
+        }
+        if (all.length && totalSeconds < Recorder.MIN_TOUR_SECONDS) {
+            warnings.push(`The whole tour runs ${round(totalSeconds)}s — too fast to follow.`);
+        }
+
+        return {
+            stepCount: all.length,
+            keyframeCount: stops.length,
+            narratedCount: stops.length - uncaptioned.length,
+            totalSeconds: round(totalSeconds),
+            shortestSeconds: Number.isFinite(shortestSeconds) ? round(shortestSeconds) : 0,
+            warnings,
+        };
     }
 
     sortWithIdList(ids: string[], removeMissing = false, viewerId?: UniqueViewerId): void {

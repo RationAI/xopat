@@ -1,4 +1,4 @@
-import { jobTime, relativeTime, RUNNING_STATUSES, statusClass } from "./job-status.mjs";
+import { jobTime, modeOf, relativeTime, RUNNING_STATUSES, statusClass } from "./job-status.mjs";
 
 const van = globalThis.van;
 const { div, span, button, i, progress } = van.tags;
@@ -37,6 +37,7 @@ function failureText(job) {
  * @param opts.visible whether its output is on the slide right now
  * @param opts.latest whether it is the newest finished analysis
  * @param opts.expanded whether the detail pane below it is open
+ * @param opts.showMode render the job's mode — only useful when several are listed
  * @param opts.onToggleVisible / onSolo / onExpand
  */
 export function jobRow(plugin, job, opts) {
@@ -92,6 +93,20 @@ export function jobRow(plugin, job, opts) {
                     t("jobs.runtime", { seconds: Math.round(job.runtime) }))
                 : span(),
 
+        // Which step produced this. The list carries every mode's jobs now, and
+        // "preprocessing" versus "standalone" is the difference between a result
+        // the platform made and one the user asked for.
+        opts.showMode && modeOf(job)
+            ? span({ class: "badge badge-xs badge-ghost shrink-0", title: t(`jobs.mode.${modeOf(job)}`) },
+                t(`jobs.modeShort.${modeOf(job)}`))
+            : span(),
+        // The batch being assembled is an ordinary ASSEMBLY row; without this it
+        // is indistinguishable from an abandoned one, which is the difference
+        // between "Run" and "delete this".
+        plugin.isCurrentBatch(job.id)
+            ? span({ class: "badge badge-xs badge-primary shrink-0", title: t("jobs.draftHint") },
+                t("jobs.draft"))
+            : span(),
         opts.latest
             ? span({ class: "badge badge-xs badge-outline shrink-0", title: t("jobs.latestHint") },
                 t("jobs.latest"))

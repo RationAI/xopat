@@ -28,6 +28,18 @@ export interface CapabilityDescriptor {
     default: CapabilityDefault;
     label?: string;
     description?: string;
+    /**
+     * For a CRUD-derived capability, which operation it gates.
+     *
+     * One `io.capabilities` entry produces four capabilities that share the
+     * owner's single `label` — so `annotations.crud:annotation.create` and
+     * `.delete` are both labelled "Annotation". Anything showing a capability
+     * to a human (a refusal message, the roles panel) needs this to tell them
+     * apart. Kept as data rather than folded into `label` at declare time:
+     * declarations happen during element load, and the label has to be
+     * translated at render.
+     */
+    direction?: "create" | "read" | "update" | "delete";
     /** Plugin/module id (or `"core"`) that declared this capability. */
     declaredBy: string;
 }
@@ -40,16 +52,86 @@ export interface RoleDescriptor {
     deny?: string[];
 }
 
+/**
+ * Deployment rule for turning an identity-provider claim into xOpat roles.
+ *
+ * The two namespaces belong to different owners — the IdP names its groups,
+ * xOpat names its roles — so the translation is explicit. Set
+ * `unmapped: "passthrough"` when they already agree and `map` is redundant.
+ */
+export interface RoleClaimsConfig {
+    /** Claim carrying the group/role list. Default `"roles"`. */
+    claim?: string;
+    /** Auth context whose token is read. Default `"core"`. */
+    contextId?: string;
+    /** Claim value → xOpat role ids. */
+    map?: Record<string, string[]>;
+    /**
+     * What to do with a claim value `map` does not mention.
+     *  - `"ignore"` (default) — drop it.
+     *  - `"passthrough"` — treat the value itself as a role id.
+     */
+    unmapped?: "ignore" | "passthrough";
+    /** Roles used when the claim is absent or nothing mapped. */
+    fallback?: string[];
+}
+
 export interface RolesEnvConfig {
     /** Roles assigned automatically when no rights-resolver overrides them. */
     default?: string[];
     /** Role catalog keyed by role id. */
     definitions?: Record<string, Omit<RoleDescriptor, "id">>;
     /**
+     * Map an IdP claim to roles at login. Absent → the client assigns nothing
+     * and `default` stands, exactly as before this existed.
+     */
+    claims?: RoleClaimsConfig;
+    /**
      * JWT claim name that carries roles for optional server-side RPC checks.
-     * Default: `"roles"`. Unused on the client.
+     * Client-side role assignment reads {@link RolesEnvConfig.claims} instead —
+     * this field is only consumed by the (not yet implemented) server-side RPC
+     * capability check sketched in `src/USER_ROLES.md`.
      */
     jwtClaim?: string;
+}
+
+/**
+ * Resolve xOpat role ids from a raw claim value.
+ *
+ * Pure — no token handling, no globals — so the mapping is testable on its own
+ * and reusable server-side. Tolerant of the shapes real IdPs emit: a single
+ * string, an array of strings, or one space-separated string (the OAuth `scope`
+ * convention). Anything else contributes nothing rather than throwing.
+ */
+export function rolesFromClaims(claimValue: unknown, cfg: RoleClaimsConfig | undefined): string[] {
+    const fallback = (cfg?.fallback ?? []).filter(r => typeof r === "string");
+    if (!cfg) return fallback;
+
+    let values: string[];
+    if (Array.isArray(claimValue)) {
+        values = claimValue.filter((v): v is string => typeof v === "string");
+    } else if (typeof claimValue === "string") {
+        // A single claim may legitimately be one name or a space-separated set.
+        values = claimValue.split(/\s+/).filter(Boolean);
+    } else {
+        values = [];
+    }
+
+    const map = cfg.map ?? {};
+    const passthrough = cfg.unmapped === "passthrough";
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+        const mapped = Object.prototype.hasOwnProperty.call(map, value)
+            ? map[value]
+            : (passthrough ? [value] : undefined);
+        for (const role of mapped ?? []) {
+            if (typeof role !== "string" || seen.has(role)) continue;
+            seen.add(role);
+            out.push(role);
+        }
+    }
+    return out.length ? out : fallback;
 }
 
 /**
@@ -195,11 +277,41 @@ export interface ResolveInputs {
  * not applied (a plugin may not be installed in this deployment).
  */
 export function resolveCapabilities(input: ResolveInputs): Record<string, boolean> {
+    const explained = explainCapabilities(input);
     const effective: Record<string, boolean> = {};
+    for (const id of Object.keys(explained)) effective[id] = explained[id].value;
+    return effective;
+}
+
+/** Why one capability resolved the way it did. */
+export interface CapabilityExplanation {
+    /** The effective verdict. */
+    value: boolean;
+    /**
+     * The role id that produced it, or `null` when nothing overrode the
+     * declared default.
+     */
+    decidedBy: string | null;
+    /** The `grant`/`deny` pattern that matched, or `null` for the default. */
+    pattern: string | null;
+}
+
+/**
+ * Same resolution as {@link resolveCapabilities}, but recording WHICH role and
+ * which pattern produced each verdict.
+ *
+ * Split out rather than added as a flag because the provenance is what makes a
+ * role config debuggable: "denied" alone leaves an operator guessing between a
+ * declared default, an inherited role, and a `*` in a deny list three roles up.
+ * `resolveCapabilities` is the same algorithm with the explanation dropped, so
+ * the two can never disagree.
+ */
+export function explainCapabilities(input: ResolveInputs): Record<string, CapabilityExplanation> {
+    const effective: Record<string, CapabilityExplanation> = {};
     const allCaps = input.capabilities.map(c => c.id);
 
     for (const cap of input.capabilities) {
-        effective[cap.id] = cap.default === "allow";
+        effective[cap.id] = { value: cap.default === "allow", decidedBy: null, pattern: null };
     }
 
     const chain = flattenRoles(input.assignedRoles, input.definitions);
@@ -212,7 +324,7 @@ export function resolveCapabilities(input: ResolveInputs): Record<string, boolea
                 let matchedAny = false;
                 for (const capId of allCaps) {
                     if (patternMatches(pattern, capId)) {
-                        effective[capId] = value;
+                        effective[capId] = { value, decidedBy: roleId, pattern };
                         matchedAny = true;
                     }
                 }

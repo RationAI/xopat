@@ -1,0 +1,80 @@
+/**
+ * The `saml` project: the default deployment, behind a real SAML identity
+ * provider, with role-based rules driven by the IdP's group claim.
+ *
+ * This is BOTH the runnable demo and the test deployment. Bring the IdP up with
+ * `test/fixtures/keycloak/` (see its README) and then either:
+ *
+ *   npm test -- --project=saml                    # the assertions
+ *   npm run up -- keycloak-saml                   # click through it yourself
+ *
+ * It lives here rather than in `env/` because `env/` is gitignored: a
+ * deployment nobody else can check out cannot back a test, and the whole point
+ * of this file is that the role rules are provable.
+ *
+ * ── Why this file is now four lines of layers ────────────────────────────────
+ * It used to spell out `core.roles`, the chat provider and the storage bindings
+ * in full, with a comment asking the reader to keep them byte-identical to
+ * `test/env/oidc.json` — because a divergence between the two IS the
+ * regression this pair exists to catch. Sharing the fragments makes that
+ * property structural: there is one copy, so the SAML and OIDC deployments
+ * cannot drift, and what remains below is exactly what differs between them.
+ *
+ * ── What it proves ───────────────────────────────────────────────────────────
+ * Keycloak emits a `groups` SAML attribute; `modules/saml-auth` maps it into the
+ * token it mints (`attributeMap.groups`); `core.roles.claims` turns those group
+ * names into xOpat role ids; the roles grant and deny capabilities; and the IO
+ * pipeline enforces them on every pre-phase. No plugin code, no sink code — an
+ * operator composes the layers below and the rules apply.
+ *
+ * Log in as `pathologist`: fills and submits the questionnaire, annotates, but
+ * the form designer is gone. Log in as `researcher`: authors the form, and
+ * annotations are read-only. Log out: `guest`, denied both.
+ *
+ * ── Environment variables ────────────────────────────────────────────────────
+ *   XOPAT_SAML_JWT_SECRET ...... HS256 secret the module signs its minted token
+ *                                with AND the verifier checks. `openssl rand -base64 48`
+ *   XOPAT_SSRF_ALLOWED_HOSTS ... REQUIRED for a loopback Keycloak: the SSRF guard
+ *                                blocks private upstreams, so the metadata fetch
+ *                                would be refused. Set `localhost`.
+ *   OPENAI_API_KEY ............. OPTIONAL. Unset leaves the provider keyless —
+ *                                the login path is still fully exercisable, the
+ *                                panel just shows the bring-your-own-key hint.
+ */
+{
+  /* Composer selectors: fragment ids under `env/parts/`, in merge order.
+     `base/core` + `data/wsi-service` is byte-equivalent to env/env.default.json. */
+  "$base": [
+    "base/core",
+    "data/wsi-service",
+    "auth/keycloak-saml",
+    "roles/guest-pathologist-researcher",
+    "chat/openai-server-key",
+    "storage/tiered-sessions"
+  ],
+  "plugins": {
+    /**
+     * The one thing this deployment says about the chat that the shared chat
+     * fragment does not: WHICH identity it rides.
+     *
+     * `authContext: "core"` deliberately reuses the viewer's own login rather
+     * than declaring a sub-identity, so ONE Keycloak login covers the viewer
+     * identity, the roles derived from its `groups` claim, and the chat. (For
+     * the opposite shape — a chat login independent of an anonymous viewer —
+     * see `test/env/oidc-chat.json`, which gates a sub-context instead.)
+     *
+     * `authMode: "jwt"` is what makes the provider report `requiresLogin`;
+     * server-side, the `rpcVerifiers.core` entry in `auth/keycloak-saml` is
+     * what enforces it. The plugin itself names a context and knows nothing
+     * about SAML — swapping the broker is a change to one layer.
+     */
+    "chat-openai": {
+      "authMode": "jwt",
+      "authContext": "core"
+    },
+    /* One provider is enough to exercise the login path; the rest stay off so a
+       failure is unambiguously about SAML rather than about which chat plugin
+       claimed the panel. */
+    "pathology-medgemma": { "enabled": false }
+  }
+}

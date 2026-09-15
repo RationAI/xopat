@@ -25,11 +25,27 @@
         clusterMinCellPx: 100,        // smallest screen cell at which a cluster emits
         clusterMaxItemFactor: 1.5,    // items up to this many cells in either dimension are still cluster-eligible; items truly oversized (>= factor * cell) always render individually
         clusterMinThreshold: 20,      // a cell with > this many cluster-eligible members becomes a pill
-        clusterMaxDepth: 8,           // safety cap on recursion depth (image bbox halved 8 times = 256x256 grid)
+        clusterMaxDepth: 8,           // safety cap on recursion depth (image bbox halved 8 times = 256x256 grid). NOT a pill trigger: a cell that runs out of depth while still large on screen renders normally.
+        // No pills at or above `maxZoom * this`. Clustering hides annotations from
+        // BOTH rendering and hit-testing, so it has to be escapable — zooming in
+        // must always be able to reach the real shapes. A ratio rather than an
+        // equality test with maxZoom so pills dissolve over the last zoom octave
+        // instead of a pill of 138 members bursting into 138 shapes on one notch.
+        clusterEscapeZoomRatio: 0.5,
         oversizedAreaRatio: 0.5,      // bbox area > this * slide area => oversized bucket
         moveEpsilonPx: 1,             // bbox shift threshold below which update() no-ops
-        maxRenderedReal: 800          // hard cap: if the would-be unclustered set exceeds this even at max zoom, keep clustering on. Bounds Skia per-frame work so dense scenes can't crash the renderer.
+        maxRenderedReal: 800          // DIAGNOSTIC ONLY: an escaped view above this many visible annotations is logged once per index. It does NOT re-enable clustering — doing so is what made dense slides unreadable at max zoom.
     };
+
+    /**
+     * Number of scalars identifying a cached visible set: the 4 viewport-coord
+     * components, the 6 viewport-transform components, the member count and the
+     * selection version. Kept as numbers in a Float64Array rather than a joined
+     * string — building the string cost 10 number->string coercions and 13
+     * concatenations on *every* query, including the hits it was meant to make
+     * cheap.
+     */
+    const CACHE_KEY_LENGTH = 12;
 
     /**
      * Screen-space half of the rotated-viewport visibility test.
@@ -92,6 +108,13 @@
 
             // cached visible-set, invalidated when transform or membership changes
             this._cache = null;
+            // Scratch key compared against `_cache.key`; reused so validating a
+            // cache hit allocates nothing (see `_writeCacheKey`).
+            this._probeKey = new Float64Array(CACHE_KEY_LENGTH);
+            // Monotonic stamp written onto visible objects so the z-order pass
+            // in `visibleObjects` can test an own numeric property instead of
+            // hashing every object on the canvas.
+            this._visibleStamp = 0;
 
             // Set during ensureFresh's `setCoords` resync so the setCoords
             // prototype patch can skip our index update (image-space bbox
@@ -138,6 +161,10 @@
             if (w > 0 && h > 0) {
                 this._oversizedThreshold = w * h * this.options.oversizedAreaRatio;
                 this._slideBox = { minX: 0, minY: 0, maxX: w, maxY: h };
+                // The slide resolving late changes the cluster root rect and the
+                // oversized verdict, so anything computed before it is stale. The
+                // per-frame cache drop used to hide this.
+                this._cache = null;
             }
         }
 
@@ -212,7 +239,15 @@
         }
 
         markDirty(obj) {
-            if (obj) this._dirty.add(obj);
+            if (!obj || this._dirty.has(obj)) return;
+            this._dirty.add(obj);
+            // `_dirty` members are unioned into every visible set but are not part
+            // of the cache key, so entering the set has to invalidate. This used
+            // to be masked by `bumpSetCoords` nulling the cache every frame; it no
+            // longer does, and without this an object picked up mid-drag would be
+            // missing from the visible set (and from hit-testing) until something
+            // else happened to invalidate.
+            this._cache = null;
         }
 
         clearDirty() {
@@ -248,10 +283,8 @@
         visibleObjects(vptCoords, canvas) {
             if (!vptCoords || !canvas) return canvas ? canvas._objects.slice() : [];
 
-            const cacheKey = this._cacheKeyFor(vptCoords);
-            if (this._cache && this._cache.key === cacheKey) {
-                return this._cache.objects;
-            }
+            const cached = this._validCache(vptCoords, canvas);
+            if (cached) return cached.objects;
 
             const minX = vptCoords.tl.x;
             const minY = vptCoords.tl.y;
@@ -260,38 +293,113 @@
 
             const hits = this._tree.search({minX, minY, maxX, maxY});
             const clip = makeScreenClipper(canvas);
-            const set = new Set();
+
+            // Mark the visible set with a per-call stamp instead of collecting it
+            // into a Set. The z-order pass below has to walk every object on the
+            // canvas either way, and on a slide carrying tens of thousands of
+            // annotations an own-property integer compare is markedly cheaper
+            // per element than a Set hash lookup.
+            const stamp = ++this._visibleStamp;
+            let count = 0;
             for (let i = 0; i < hits.length; i++) {
                 const b = hits[i];
                 if (clip && !clip(b.minX, b.minY, b.maxX, b.maxY)) continue;
-                set.add(b._obj);
+                const o = b._obj;
+                if (o.__idxVisStamp !== stamp) { o.__idxVisStamp = stamp; count++; }
             }
-            for (let i = 0; i < this._oversized.length; i++) set.add(this._oversized[i]);
-            for (const obj of this._dirty) set.add(obj);
+            for (let i = 0; i < this._oversized.length; i++) {
+                const o = this._oversized[i];
+                if (o.__idxVisStamp !== stamp) { o.__idxVisStamp = stamp; count++; }
+            }
+            for (const obj of this._dirty) {
+                if (obj.__idxVisStamp !== stamp) { obj.__idxVisStamp = stamp; count++; }
+            }
 
             // preserve z-order using canvas._objects
             const all = canvas._objects;
-            const ordered = new Array(set.size);
+            const ordered = new Array(count);
             let w = 0;
             for (let i = 0; i < all.length; i++) {
                 const o = all[i];
-                if (set.has(o)) ordered[w++] = o;
+                if (o.__idxVisStamp === stamp) ordered[w++] = o;
             }
+            // An object can be indexed but no longer on the canvas; trust the
+            // canvas walk for the length rather than the mark count.
             ordered.length = w;
 
-            this._cache = { key: cacheKey, objects: ordered, clusters: null };
+            this._cache = {
+                key: this._writeCacheKey(new Float64Array(CACHE_KEY_LENGTH), vptCoords, canvas),
+                objects: ordered,
+                clusters: null,
+            };
             return ordered;
         }
 
-        _cacheKeyFor(vptCoords) {
-            // include viewport coords + zoom + members count + version of mutations
-            // + selection version so cluster results invalidate when the active
-            // object changes (active is exempt from clustering — see clusters()).
-            const c = this.canvas;
-            const vt = c.viewportTransform;
-            return vptCoords.tl.x + ',' + vptCoords.tl.y + ',' + vptCoords.br.x + ',' + vptCoords.br.y +
-                '|' + vt[0] + ',' + vt[1] + ',' + vt[2] + ',' + vt[3] + ',' + vt[4] + ',' + vt[5] +
-                '|' + this.size() + '|' + this.selectionVersion;
+        /**
+         * Write the scalars identifying "the answer for this viewport" into `out`.
+         *
+         * Viewport coords + the full transform + member count + selection version
+         * (the active object is exempt from clustering, so a selection change is a
+         * different answer — see `clusters()`).
+         */
+        _writeCacheKey(out, vptCoords, canvas) {
+            const vt = (canvas || this.canvas).viewportTransform;
+            out[0] = vptCoords.tl.x;
+            out[1] = vptCoords.tl.y;
+            out[2] = vptCoords.br.x;
+            out[3] = vptCoords.br.y;
+            out[4] = vt[0];
+            out[5] = vt[1];
+            out[6] = vt[2];
+            out[7] = vt[3];
+            out[8] = vt[4];
+            out[9] = vt[5];
+            out[10] = this._size;
+            out[11] = this.selectionVersion;
+            return out;
+        }
+
+        /**
+         * The cache entry if it still answers this viewport, otherwise null.
+         *
+         * Every consumer goes through this. `clusters()` and `realCandidates()`
+         * used to trust `_cache` without checking the key, which was only safe
+         * because a viewport change nulled the whole cache — and that in turn is
+         * what stopped the cache from ever surviving a frame.
+         */
+        _validCache(vptCoords, canvas) {
+            const cache = this._cache;
+            if (!cache) return null;
+            const probe = this._writeCacheKey(this._probeKey, vptCoords, canvas);
+            const key = cache.key;
+            for (let i = 0; i < CACHE_KEY_LENGTH; i++) {
+                if (key[i] !== probe[i]) return null;
+            }
+            return cache;
+        }
+
+        /**
+         * Record, once per index, that clustering was escaped on a view dense
+         * enough to be worth knowing about.
+         *
+         * `maxRenderedReal` used to re-enable clustering above this count, which
+         * is exactly what left dense slides unreadable at max zoom. It is now a
+         * diagnostic: a pathological slide stays traceable without the dead end
+         * coming back.
+         *
+         * `_renderObjects` calls `realCandidates()` before `clusters()`, so the
+         * `visibleObjects()` below is a cache hit on the render path.
+         */
+        _noteDenseEscape(vptCoords, canvas) {
+            if (this._denseEscapeLogged) return;
+            const visible = this.visibleObjects(vptCoords, canvas).length;
+            if (visible <= this.options.maxRenderedReal) return;
+            this._denseEscapeLogged = true;
+            const app = typeof APPLICATION_CONTEXT !== 'undefined' ? APPLICATION_CONTEXT : undefined;
+            app?.log?.('module.annotations')?.debug?.(
+                { visible, cap: this.options.maxRenderedReal },
+                'clustering escaped near max zoom on a very dense view'
+            );
         }
 
         /**
@@ -335,31 +443,37 @@
          */
         clusters(vptCoords, canvas) {
             if (!vptCoords || !canvas) return { rects: [], suppressed: null };
-            if (this._cache && this._cache.clusters) return this._cache.clusters;
+            const cached = this._validCache(vptCoords, canvas);
+            if (cached && cached.clusters) return cached.clusters;
 
-            // Soft escape at OSD max zoom: at the closest zoom the user can
-            // reach, prefer to show real annotations rather than pills — but
-            // only when the visible count is small enough that Skia can
-            // rasterize them all without crashing the renderer. Above the
-            // safety cap, keep clustering on regardless of zoom.
+            const opts = this.options;
+
+            // Hard escape approaching max zoom: no pills, whatever the density.
+            //
+            // A clustered annotation is dropped from `realCandidates`, which feeds
+            // the hit-test path as well as the render path — it can be neither seen
+            // nor clicked. That is only tolerable while zooming in can dissolve the
+            // pill, so the escape must not be conditional on anything the user
+            // cannot change. It used to be gated on the visible count staying under
+            // `maxRenderedReal`, which meant the denser the slide the more certain
+            // the annotations were to be unreachable.
+            //
+            // Pure zoom comparison, no `visibleObjects()` — this is the per-frame
+            // path.
             const viewport = this.wrapper?.viewer?.viewport;
             if (viewport && typeof viewport.getMaxZoom === 'function'
                 && typeof viewport.getZoom === 'function') {
                 const zoom = viewport.getZoom();
                 const maxZoom = viewport.getMaxZoom();
                 if (Number.isFinite(zoom) && Number.isFinite(maxZoom)
-                    && zoom >= maxZoom - 1e-3) {
-                    const visible = this.visibleObjects(vptCoords, canvas);
-                    if (visible.length <= this.options.maxRenderedReal) {
-                        const empty = { rects: [], suppressed: null };
-                        if (this._cache) this._cache.clusters = empty;
-                        return empty;
-                    }
-                    // Too many visible — fall through to normal clustering.
+                    && zoom >= maxZoom * opts.clusterEscapeZoomRatio) {
+                    this._noteDenseEscape(vptCoords, canvas);
+                    const empty = { rects: [], suppressed: null };
+                    if (this._cache) this._cache.clusters = empty;
+                    return empty;
                 }
             }
 
-            const opts = this.options;
             const vt = canvas.viewportTransform;
             const root = this._getClusterRoot();
             if (!root) return { rects: [], suppressed: null };
@@ -393,20 +507,23 @@
             // individually — the user is interacting with them and must see them
             // even when the surrounding region clusters into a pill.
             const exempt = this._exemptSet(canvas);
+            const hasExempt = exempt.size > 0;
+            // Ordered cheapest-first. The size test reads `_idxBox`, an own
+            // property every indexed object has; the flags below are *absent* on
+            // ordinary annotations, so each is a prototype-chain miss across
+            // heterogeneous fabric hidden classes, and `exempt` is empty unless
+            // something is selected.
             const isClusterable = (o) => {
+                const b = o._idxBox;
+                if (!b) return false;
+                if (b.maxX - b.minX > itemCapImg || b.maxY - b.minY > itemCapImg) return false;
                 if (o._idxOversized || o.__cluster) return false;
-                if (o.isHighlight || o.__excludeFromCluster) return false;
                 // Mid-creation helpers (polygon's init / follow points, angle
                 // helper groups) must stay visible so the user can see
                 // what they're drawing in dense scenes. addHelperAnnotation
                 // sets this flag on every such helper.
-                if (o.isHelperAnnotation) return false;
-                if (exempt.has(o)) return false;
-                const b = o._idxBox;
-                if (!b) return false;
-                const w = b.maxX - b.minX;
-                const h = b.maxY - b.minY;
-                return w <= itemCapImg && h <= itemCapImg;
+                if (o.isHighlight || o.__excludeFromCluster || o.isHelperAnnotation) return false;
+                return !(hasExempt && exempt.has(o));
             };
 
             // Flat per-cell threshold. Adaptive scaling by total count was
@@ -439,7 +556,31 @@
             const rects = [];
             const suppressed = new Set();
 
-            const rec = (minX, minY, maxX, maxY, depth) => {
+            // One tree query and one eligibility test for the whole recursion.
+            //
+            // Every cell used to re-query rbush over its own (overlapping) region
+            // and re-run `isClusterable` on the hits, so each visible annotation
+            // was tested once per level — 2-4x over, and `isClusterable` was the
+            // single hottest function in a profiled session at 9% of wall clock.
+            // Both the screen clip and the eligibility test are deterministic per
+            // object for a given frame, so hoisting them to the root is
+            // output-identical; cells then narrow the set by intersecting boxes,
+            // which is what the rbush query was doing anyway.
+            const rootBoxes = this._tree.search({
+                minX: vpt.minX, minY: vpt.minY, maxX: vpt.maxX, maxY: vpt.maxY
+            });
+            const eligible = [];
+            for (let i = 0; i < rootBoxes.length; i++) {
+                const b = rootBoxes[i];
+                // under rotation, drop items in the AABB inflation zones —
+                // counts then change only at true screen edges, keeping
+                // pills stable while panning a rotated viewport
+                if (clip && !clip(b.minX, b.minY, b.maxX, b.maxY)) continue;
+                if (!isClusterable(b._obj)) continue;
+                eligible.push(b);
+            }
+
+            const rec = (minX, minY, maxX, maxY, depth, items) => {
                 // cull cells that don't intersect the viewport AABB...
                 if (maxX <= vpt.minX || minX >= vpt.maxX
                     || maxY <= vpt.minY || minY >= vpt.maxY) return;
@@ -451,48 +592,65 @@
                 const qMinY = Math.max(minY, vpt.minY);
                 const qMaxX = Math.min(maxX, vpt.maxX);
                 const qMaxY = Math.min(maxY, vpt.maxY);
-                const hits = this._tree.search({
-                    minX: qMinX, minY: qMinY, maxX: qMaxX, maxY: qMaxY
-                });
-                let clusterMembers = null;
-                for (let i = 0; i < hits.length; i++) {
-                    const b = hits[i];
-                    // under rotation, drop items in the AABB inflation zones —
-                    // counts then change only at true screen edges, keeping
-                    // pills stable while panning a rotated viewport
-                    if (clip && !clip(b.minX, b.minY, b.maxX, b.maxY)) continue;
-                    const o = b._obj;
-                    if (!isClusterable(o)) continue;
-                    if (!clusterMembers) clusterMembers = [];
-                    clusterMembers.push(o);
+
+                // Same membership rbush's `search` applies: boxes that intersect
+                // the query rect, touching edges included. An item straddling a
+                // split therefore lands in several children, exactly as it landed
+                // in several queries before.
+                let cellItems = null;
+                for (let i = 0; i < items.length; i++) {
+                    const b = items[i];
+                    if (b.minX > qMaxX || b.maxX < qMinX
+                        || b.minY > qMaxY || b.maxY < qMinY) continue;
+                    if (!cellItems) cellItems = [];
+                    cellItems.push(b);
                 }
-                const count = clusterMembers ? clusterMembers.length : 0;
+                const count = cellItems ? cellItems.length : 0;
                 if (count <= threshold) return; // render normally
 
                 // rotation-invariant on-screen side lengths of the cell —
                 // a projected-AABB minSide would inflate under rotation
                 const minSidePx = Math.min(sx * (maxX - minX), sy * (maxY - minY));
-                if (minSidePx <= opts.clusterMinCellPx || depth >= opts.clusterMaxDepth) {
+
+                // A pill exists because the cell is too small ON SCREEN to show
+                // what is in it. That, and only that, is what emits one.
+                if (minSidePx <= opts.clusterMinCellPx) {
+                    const members = new Array(count);
+                    for (let i = 0; i < count; i++) {
+                        const o = cellItems[i]._obj;
+                        members[i] = o;
+                        suppressed.add(o);
+                    }
                     rects.push({
                         screen: projectImgRect({ minX, minY, maxX, maxY }),
                         image: { x: qMinX, y: qMinY, w: qMaxX - qMinX, h: qMaxY - qMinY },
                         count,
-                        members: clusterMembers
+                        members
                     });
-                    for (let i = 0; i < clusterMembers.length; i++) suppressed.add(clusterMembers[i]);
                     return;
                 }
+
+                // Out of recursion budget while the cell is still large on screen:
+                // render its members individually rather than pilling them.
+                //
+                // The root is the whole slide, so the finest reachable cell is
+                // slide/2^clusterMaxDepth — a few hundred image pixels on a large
+                // slide. Emitting a pill here used to make that a floor NO zoom
+                // could get past: the recursion stopped on depth, not on cell
+                // size, so the pill survived at every magnification and its
+                // members could never be seen or clicked.
+                if (depth >= opts.clusterMaxDepth) return;
 
                 // image-space midpoint split
                 const mx = (minX + maxX) * 0.5;
                 const my = (minY + maxY) * 0.5;
-                rec(minX, minY, mx,   my,   depth + 1);
-                rec(mx,   minY, maxX, my,   depth + 1);
-                rec(minX, my,   mx,   maxY, depth + 1);
-                rec(mx,   my,   maxX, maxY, depth + 1);
+                rec(minX, minY, mx,   my,   depth + 1, cellItems);
+                rec(mx,   minY, maxX, my,   depth + 1, cellItems);
+                rec(minX, my,   mx,   maxY, depth + 1, cellItems);
+                rec(mx,   my,   maxX, maxY, depth + 1, cellItems);
             };
 
-            rec(root.minX, root.minY, root.maxX, root.maxY, 0);
+            rec(root.minX, root.minY, root.maxX, root.maxY, 0, eligible);
 
             const result = { rects, suppressed };
             if (this._cache) this._cache.clusters = result;
@@ -506,8 +664,9 @@
          * we allocate this once per frame rather than per call site.
          */
         realCandidates(vptCoords, canvas) {
-            const cache = this._cache;
-            if (cache && cache.realCandidates) return cache.realCandidates;
+            if (!vptCoords || !canvas) return this.visibleObjects(vptCoords, canvas);
+            const cached = this._validCache(vptCoords, canvas);
+            if (cached && cached.realCandidates) return cached.realCandidates;
             const visible = this.visibleObjects(vptCoords, canvas);
             const { suppressed } = this.clusters(vptCoords, canvas);
             const out = (suppressed && suppressed.size)
@@ -585,7 +744,14 @@
         bumpZoom()       { this.zoomVersion++;       this._cache = null; }
         // Bumped by the setViewportTransform override; ensureFresh resyncs
         // each visible object's oCoords on demand.
-        bumpSetCoords()  { this.setCoordsVersion++;  this._cache = null; }
+        //
+        // Deliberately does NOT drop `_cache`. The cache key already carries all
+        // six viewport-transform components, so a viewport that actually moved
+        // misses on its own — whereas nulling here ran *before* any consumer
+        // could compare the key, which made the cache incapable of surviving a
+        // frame and re-clustered the whole viewport on every redraw and every
+        // hit-test, including the ones where nothing had moved.
+        bumpSetCoords()  { this.setCoordsVersion++; }
         // Bumped by the active-object hooks in the fabric overlay so
         // clusters() recomputes with the new exempt set on the next render.
         bumpSelection()  { this.selectionVersion++;  this._cache = null; }

@@ -74,6 +74,15 @@
      * background split for THIS region. Removes the need for a hand-tuned
      * fixed threshold that never fits arbitrary stains / colormaps.
      * Returns NaN when the values are empty or single-valued (no split).
+     *
+     * Returns the FIRST FOREGROUND level, not the last background one. The
+     * search accumulates level `t` into the background class before scoring it,
+     * so the maximizing `t` belongs to the background; every consumer here tests
+     * `value >= threshold`, so returning `t` counted the whole background class
+     * as signal. On a clean bimodal region that is literally 100% positive — and
+     * the connected-component mask (measurement-engine `computeComponents`)
+     * labelled background blobs too. `t + 1` makes `>=` mean foreground, and
+     * keeps one convention for auto and hand-set thresholds alike.
      */
     function otsuThreshold(values) {
         const n = values.length;
@@ -98,7 +107,7 @@
             const between = wB * wF * (mB - mF) * (mB - mF);
             if (between > maxVar) { maxVar = between; threshold = t; }
         }
-        return threshold;
+        return Number.isFinite(threshold) ? threshold + 1 : NaN;
     }
 
     NS.stats = {

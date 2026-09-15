@@ -110,8 +110,12 @@ function classifyHttpError(e: any): IOResult {
         return fail(reason, "W_MLFLOW_NOT_FOUND",
             t("error.notFound"));
     }
+    // The catch-all covers both "the host is down" (status 0) and every
+    // unmapped status, which are different problems with different fixes. The
+    // message said neither, so the only way to tell them apart was the Network
+    // tab. Carry the status; `reason` keeps the upstream's own text.
     return fail(reason, `W_MLFLOW_HTTP_${status || "UNKNOWN"}`,
-        t("error.http"));
+        status ? t("error.httpStatus", { status }) : t("error.http"));
 }
 
 /**

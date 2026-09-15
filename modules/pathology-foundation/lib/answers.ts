@@ -289,6 +289,41 @@ function lastJsonBlock(text: string): { body: string; start: number; end: number
     return null;
 }
 
+/**
+ * One answer per feature across several fields.
+ *
+ * Asymmetric on purpose: any positive wins. The fields are a SAMPLE of a region, so one field
+ * showing a feature is evidence it is there, while several not showing it is not proof it is not.
+ *
+ * When nothing was assessable the REASON is what survives, because each one sends the reader to
+ * a different next step and there is no way to recover it from `present` alone. Ordered by how
+ * actionable it is, not by how many fields voted for it: one field that WAS read and came back
+ * too coarse tells a reader more than three that never rendered.
+ *
+ * `unread` outranking `model` is the fix for a specific failure: a field whose render failed
+ * still contributed answers, so the "did any field answer?" test saw a non-empty set and
+ * reported `model` — "the model looked and could not tell" — about images that were never
+ * produced. The advice that follows from that is to look closer, which cannot help, and the
+ * user is sent round a loop with no exit.
+ */
+export function aggregateFeatureAnswers(
+    fields: Array<{ answers: FeatureAnswer[] }>,
+    features: ChecklistFeature[]
+): FeatureAnswer[] {
+    return features.map(feature => {
+        const seen = fields
+            .map(f => f.answers.find(a => a.id === feature.id))
+            .filter((a): a is FeatureAnswer => !!a);
+        const pick = (p: FeatureAnswer["present"]) => seen.find(a => a.present === p);
+        const winner = pick("yes") || pick("uncertain") || pick("no");
+        if (winner) return { ...winner, id: feature.id };
+        for (const reason of ["resolution", "unread", "model"] as const) {
+            if (seen.some(a => a.reason === reason)) return unassessable(feature.id, reason);
+        }
+        return unassessable(feature.id, "unparsed");
+    });
+}
+
 function stripMachineBlock(text: string): string {
     return text
         .replace(/```(?:json)?[\s\S]*?```/gi, "")

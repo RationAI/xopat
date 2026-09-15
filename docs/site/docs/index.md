@@ -5,7 +5,7 @@ sidebar_label: Welcome
 sidebar_position: 0
 ---
 
-![xOpat banner](/img/xopat-banner.png)
+![xOpat banner](/img/xopat-banner-v3.png)
 
 **xOpat** — the e**X**plainable **O**pen **P**athology **A**nalysis **T**ool — is a
 flexible, browser-based whole slide image (WSI) viewer built for AI-assisted

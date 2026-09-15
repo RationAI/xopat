@@ -98,6 +98,107 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         return context;
     }
 
+    /**
+     * May identifying / patient-sensitive values leave this invocation's context?
+     *
+     * `sensitive` above gates a whole namespace by consent. This gates a single VALUE inside a
+     * namespace that is not itself sensitive but re-exports something one is — a raw slide
+     * path, a study UID, a fact derived from a filename. Mask such values when this is false;
+     * return them verbatim when true.
+     *
+     * Defaults to `true` when the context installs no policy, so local scripting and synthetic
+     * in-process contexts keep seeing the user's own data unchanged.
+     */
+    protected get mayExposeSensitive(): boolean {
+        return this._invocationContext?.scriptingContext?.mayExposeSensitiveData?.() ?? true;
+    }
+
+    /**
+     * The opaque stand-in for one masked value.
+     *
+     * Positional on purpose: `dataReference` is an index into `config.data`, so a handle that
+     * carries the index stays joinable with every other row the same payload hands out, and
+     * {@link unmaskDataEntries} can put the real value back if the caller returns it.
+     */
+    protected maskedHandle(kind: string, index: number): string {
+        return `xopat:masked-${kind}:${index}`;
+    }
+
+    /**
+     * `config.data` as the caller may see it: same length, no paths.
+     *
+     * Length is load-bearing — every shader layer, background and describeData row is keyed by
+     * the index — so entries are replaced, never dropped.
+     */
+    protected maskDataEntries(data: any[]): any[] {
+        if (this.mayExposeSensitive) return data;
+        return data.map((_entry, index) => this.maskedHandle("data", index));
+    }
+
+    /**
+     * The inverse, applied to anything coming back IN.
+     *
+     * A masked snapshot handed to a restore call would otherwise write the handles into
+     * `config.data` and open a slide that does not exist. Positional: handle `i` is whatever
+     * `config.data[i]` is right now.
+     */
+    protected unmaskDataEntries(data: any[]): any[] {
+        const live: any[] = Array.isArray(APPLICATION_CONTEXT?.config?.data)
+            ? APPLICATION_CONTEXT.config.data
+            : [];
+        return data.map((entry, index) => {
+            if (typeof entry !== "string" || !entry.startsWith("xopat:masked-data:")) return entry;
+            const from = Number(entry.slice("xopat:masked-data:".length));
+            // Fall back to the entry's own position: a reordered list is still a list of
+            // handles, and inventing a path here would be worse than restoring in place.
+            return live[Number.isInteger(from) ? from : index] ?? live[index] ?? entry;
+        });
+    }
+
+    /**
+     * Free-form tile-source metadata, reduced to what cannot identify a person.
+     *
+     * `getMetadata()` is contracted as non-identifying (`src/tile-source.ts`) and
+     * `getSensitiveMetadata()` is the channel for the rest — but DICOM puts study/series UIDs
+     * in the former for the SR pipeline, so the scripting boundary cannot trust the contract.
+     * It therefore degrades closed rather than enumerating known offenders: numbers and
+     * booleans (the calibration a caller actually needs — microns-per-pixel, tile size,
+     * magnification) survive, and strings survive only from a technical allowlist, because
+     * strings are what carry paths, names and UIDs. Identifier-shaped keys are dropped whatever
+     * their type, so a numeric record id does not slip through.
+     */
+    protected scrubSensitiveMetadata(metadata: any): any {
+        if (this.mayExposeSensitive) return metadata;
+        return XOpatScriptingApi.scrubMetadataValue(metadata);
+    }
+
+    /** Keys that name an identity rather than a measurement, at any depth. */
+    private static readonly IDENTIFYING_KEY = /(uid|^id$|identifier|name|path|url|uri|file|accession|patient|study|series|institution|physician|author|operator|comment|description|note|history|diagnosis|date|birth|sex|gender|age)/i;
+
+    /** String-valued keys whose content describes the FORMAT, never the subject. */
+    private static readonly TECHNICAL_STRING_KEY = new Set([
+        "format", "mimeType", "mime", "type", "unit", "units", "interpretation",
+        "colorSpace", "photometric", "sampleFormat", "compression", "encoding",
+    ]);
+
+    private static scrubMetadataValue(value: any): any {
+        if (Array.isArray(value)) return value.map((item) => XOpatScriptingApi.scrubMetadataValue(item));
+        if (!value || typeof value !== "object") return value;
+
+        const out: Record<string, any> = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (XOpatScriptingApi.IDENTIFYING_KEY.test(key)) continue;
+            if (typeof item === "number" || typeof item === "boolean" || item === null) {
+                out[key] = item;
+            } else if (typeof item === "string") {
+                if (XOpatScriptingApi.TECHNICAL_STRING_KEY.has(key)) out[key] = item;
+            } else if (typeof item === "object") {
+                out[key] = XOpatScriptingApi.scrubMetadataValue(item);
+            }
+        }
+        return out;
+    }
+
     protected get activeViewer(): OpenSeadragon.Viewer {
         const viewers = VIEWER_MANAGER?.viewers || [];
 
@@ -118,8 +219,12 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
                 return boundViewer;
             }
 
+            // Present the handle, not the real id: an error message reaches the model like any
+            // other value, and a raw id here would re-introduce identity the alias just removed.
+            const presented =
+                this.scriptingContext.toPresentedViewerId?.(selectedContextId) ?? selectedContextId;
             throw new Error(
-                `The current script context is bound to viewer '${selectedContextId}', but that viewer is not available.`
+                `The current script context is bound to viewer '${presented}', but that viewer is not available.`
             );
         }
 

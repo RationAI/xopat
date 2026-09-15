@@ -8,7 +8,7 @@ const { img } = van.tags;
  * @extends BaseComponent
  * @description An icon backed by an image URL instead of an icon font, so that
  * components taking an `icon` option (menus, plugin rows) accept both an icon
- * class and a picture. Mirrors the PhIcon/FAIcon interface - notably
+ * class and a picture. Mirrors the PhIcon interface - notably
  * `options.name`, which pass-through components read back.
  * @example
  * const logo = new ImageIcon({ name: "plugins/my-plugin/logo.png", alt: "My plugin" });

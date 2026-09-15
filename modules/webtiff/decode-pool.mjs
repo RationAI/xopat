@@ -46,6 +46,25 @@ const defaultPoolSize = () => {
  * Bounded by block count rather than bytes because the decoder only ever asks
  * for block-aligned ranges (64 KB by default), so the two are the same number.
  */
+
+/**
+ * A human name for a source, for diagnostics that would otherwise carry only a
+ * numeric handle. The last path segment is what a person recognises; a Blob or a
+ * buffer has no name, and `null` is the decoder's own default for that.
+ *
+ * @param {string|URL|Blob|Uint8Array|ArrayBuffer} src
+ * @return {string|null}
+ */
+function deriveLabel(src) {
+    if (typeof src !== "string" && !(src instanceof URL)) return null;
+    try {
+        const path = new URL(String(src), "http://x").pathname;
+        return decodeURIComponent(path.split("/").filter(Boolean).pop() || "") || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 class CachedByteSource {
     /**
      * @param {{getSize: function(): Promise<number>, read: function(number, number, AbortSignal=): Promise<Uint8Array>}} source
@@ -371,6 +390,11 @@ export class ProxyDecoderPool {
             openOptions: {
                 blockSize: options.blockSize ?? this._options.blockSize,
                 cacheBytes: options.cacheBytes ?? this._options.cacheBytes,
+                // Carried so the decoder can stamp it on every diagnostic it
+                // raises for this file. Without it a warning arrives as a bare
+                // numeric handle, which is no help at all when several slides
+                // are open and one of them is the one misbehaving.
+                label: options.label ?? deriveLabel(src),
             },
         });
 

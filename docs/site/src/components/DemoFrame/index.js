@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useState} from 'react';
 import Link from '@docusaurus/Link';
 import CodeBlock from '@theme/CodeBlock';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -20,6 +20,11 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
  *            (avoids the cramped mobile menus in the narrow docs column).
  *   showSource - when a `config` is given, render an expandable block with the
  *            pretty-printed session JSON so readers can see how it is built.
+ *   localSetup - commands that make this demo runnable locally. Passing it
+ *            declares that the session names data only a local fixture server
+ *            resolves, so the public deployment cannot render it: the frame is
+ *            replaced by those commands plus the session, rather than an iframe
+ *            that boots a viewer and then shows nothing.
  */
 export default function DemoFrame({
   path = '',
@@ -27,33 +32,29 @@ export default function DemoFrame({
   config = null,
   scale = 1,
   showSource = true,
+  localSetup = null,
 }) {
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
 
-  // TEMPORARY: the viewer's WebGL renderer hits per-device GPU limits (shader
-  // uniform array sizes) that vary across phones — so it works on some and not
-  // others. We therefore DO load the viewer on mobile, but show a "support is
-  // experimental / work in progress" warning above it. Detected after mount
-  // (SSR-safe); defaults to desktop (no warning). Remove once mobile is solid.
-  const [isMobile, setIsMobile] = useState(false);
   // The embedded viewer is heavy (full xOpat app + WSI tile streams + WebGL).
   // Track load so we can show a placeholder instead of an empty box until the
   // iframe fires `onLoad`. Combined with `loading="lazy"` below, a demo that is
   // scrolled off-screen doesn't boot at all until the reader reaches it.
   const [isLoaded, setIsLoaded] = useState(false);
-  useEffect(() => {
-    const ua = navigator.userAgent || '';
-    const mobileUA = /Mobi|Android|iPhone|iPod|IEMobile|Windows Phone/i.test(ua);
-    // Touch-only device (no hover-capable mouse) — true on phones/tablets,
-    // false on desktops even with a touchscreen (the trackpad/mouse hovers).
-    const touchOnly =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(pointer: coarse) and (hover: none)').matches;
-    const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
-    setIsMobile(mobileUA || (touchOnly && narrow));
-  }, []);
 
+  const sourceBlock = config && showSource && (
+    <details>
+      <summary>View session configuration</summary>
+      <CodeBlock language="json" title="xOpat session config">
+        {JSON.stringify(config, null, 2)}
+      </CodeBlock>
+    </details>
+  );
+
+  // Two reasons an iframe would be dishonest, and they are separate questions:
+  // there is no deployment to point at, or there is one but it cannot serve
+  // this session's data.
   if (!demoUrl) {
     return (
       <div className="alert alert--info" role="alert">
@@ -62,6 +63,19 @@ export default function DemoFrame({
         <Link to="/generated/getting-started/quick-start">Quick Start</Link>{' '}
         guide.
       </div>
+    );
+  }
+
+  if (localSetup) {
+    return (
+      <>
+        <div className="alert alert--info" role="alert">
+          This demo reads fixture data that only a local file server resolves,
+          so it cannot run on the hosted demo. Reproduce it in five commands:
+        </div>
+        <CodeBlock language="bash">{localSetup.join('\n')}</CodeBlock>
+        {sourceBlock}
+      </>
     );
   }
 
@@ -155,36 +169,15 @@ export default function DemoFrame({
     </div>
   );
 
-  const sourceDetails = config && showSource && (
-    <details>
-      <summary>View session configuration</summary>
-      <CodeBlock language="json" title="xOpat session config">
-        {JSON.stringify(config, null, 2)}
-      </CodeBlock>
-    </details>
-  );
-
   return (
     <>
-      {/* TEMPORARY mobile notice — the viewer loads, but may fail on phones
-          whose GPU can't fit the renderer's shader uniforms. */}
-      {isMobile && (
-        <div className="alert alert--warning" role="alert" style={{marginBottom: '1rem'}}>
-          <strong>Mobile support is experimental — we’re working on it.</strong>
-          <p style={{margin: '0.5rem 0 0'}}>
-            The viewer should load below, but depending on your phone it may not
-            run yet (some devices hit GPU limits the renderer doesn’t handle
-            yet). If it fails to load, please open this page on a computer.
-          </p>
-        </div>
-      )}
       {frame}
       <p>
         <a href={src} target="_blank" rel="noopener noreferrer">
           Open the demo in a new tab ↗
         </a>
       </p>
-      {sourceDetails}
+      {sourceBlock}
     </>
   );
 }

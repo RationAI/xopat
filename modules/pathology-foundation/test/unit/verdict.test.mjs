@@ -109,6 +109,21 @@ test("keywordInterest ignores short words and is bounded", { tag: ["@unit"] }, (
     expect(keywordInterest("anything", "")).toBe(0);
 });
 
+test("quoting the question back earns nothing", { tag: ["@unit"] }, () => {
+    // Verbatim from a real run. This field saw nothing, said so, and scored 1.0 — because the
+    // sentence in which it said so contained every word of the query. It then ranked FIRST in
+    // the report, above regions that had actually described tissue. The overlap is a
+    // last-resort signal attached to the least informative fields on the slide, so it must
+    // measure the model's own vocabulary rather than the echo of the prompt.
+    const query = "interesting pathological findings";
+    const echo = "Given the low resolution, judging the presence of "
+        + "'interesting pathological findings' is not possible.";
+
+    expect(keywordInterest(echo, query)).toBe(0);
+    // ...and a field that genuinely used those words on its own still scores.
+    expect(keywordInterest("There are pathological glands; the findings are interesting.", query)).toBe(1);
+});
+
 test("normalizeScore clamps out-of-range values", { tag: ["@unit"] }, () => {
     expect(normalizeScore(1.5, 1)).toEqual({ interest: 1, scale: 1 });
     expect(normalizeScore(-3, null)).toEqual({ interest: 0, scale: 1 });

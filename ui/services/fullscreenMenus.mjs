@@ -8,7 +8,7 @@ import { FullscreenMenuPanel } from "../classes/components/fullscreenMenuPanel.m
 import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { KeymapPanel } from "../classes/components/keymapPanel.mjs";
-import { resolveSideMenuCompact } from "../classes/components/rightSideViewerMenu.mjs";
+import { resolveSideMenuCompact } from "../classes/mixins/utils.mjs";
 import { PhIcon, componentIconNode } from "../classes/elements/ph-icon.mjs";
 import { ImageIcon } from "../classes/elements/image-icon.mjs";
 import { PLACEHOLDER_ICON } from "./appBarActions.mjs";
@@ -338,7 +338,7 @@ export class FullscreenMenus {
         return state;
     }
 
-    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "", opts = {}) {
         const { menu } = this.ensurePluginMenu(ownerPluginId, opts);
         if (menu.tabs?.[toolsMenuId]) {
             return menu.tabs[toolsMenuId];
@@ -534,7 +534,9 @@ export class FullscreenMenus {
     }
 
     getHeaderBrand() {
-        const version = APPLICATION_CONTEXT?.env?.version || APPLICATION_CONTEXT?.env?.VERSION || "dev";
+        // Served by the backend on the ENV object. A deployment that reports no usable
+        // version shows no badge at all - "vdev" / "vundefined" reads like a real build.
+        const version = APPLICATION_CONTEXT?.env?.version;
         return div({ class: "flex items-center gap-3 self-start rounded-2xl border border-base-300 bg-base-100 px-3 py-2 shadow-sm" },
             img({
                 src: `${APPLICATION_CONTEXT.url}src/assets/logos/xopat-logo.png`,
@@ -544,7 +546,7 @@ export class FullscreenMenus {
             }),
             div({ class: "flex flex-col leading-tight" },
                 span({ class: "text-sm font-semibold" }, "Viewer"),
-                span({ class: "text-xs opacity-70" }, `v${version}`)
+                version ? span({ class: "text-xs opacity-70" }, `v${version}`) : null
             )
         );
     }
@@ -577,7 +579,7 @@ export class FullscreenMenus {
         const reloadOnCheck = (key, ui = false) => function () {
             if (ui) APPLICATION_CONTEXT.setUiOption(key, this.checked);
             else APPLICATION_CONTEXT.setOption(key, this.checked);
-            $('#settings-notification-wrap').removeClass('hidden');
+            document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
         };
 
         // Navigation feel (wheel normalization, drag momentum) is read per
@@ -607,7 +609,7 @@ export class FullscreenMenus {
                 selected: APPLICATION_CONTEXT.getOption("locale"),
                 onchange: function () {
                     APPLICATION_CONTEXT.setOption('locale', this.value);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 }
             },
             { value: "en", text: "English" },
@@ -625,7 +627,7 @@ export class FullscreenMenus {
                 class: "h-8 w-12 cursor-pointer rounded border border-base-300 bg-base-100",
                 onchange: function () {
                     APPLICATION_CONTEXT.setOption('backgroundColor', this.value);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 }
             })
         );
@@ -708,6 +710,10 @@ export class FullscreenMenus {
                     for (let viewer of VIEWER_MANAGER.viewers) {
                         viewer.scalebar.setActive(this.checked);
                     }
+                    // The same scalebar is a checkable row under View →
+                    // Appearance; flipping it from outside the registry leaves
+                    // that checkmark stale until the dropdown is told.
+                    USER_INTERFACE?.AppBar?.View?.refresh?.();
                 },
                 APPLICATION_CONTEXT.getUiOption('scaleBar')
             ),
@@ -716,7 +722,7 @@ export class FullscreenMenus {
                 $.t('settings.statusBar'),
                 function () {
                     APPLICATION_CONTEXT.setUiOption('statusBar', this.checked);
-                    $('#viewer-status-bar').toggleClass('hidden');
+                    document.getElementById('viewer-status-bar')?.classList.toggle('hidden');
                 },
                 APPLICATION_CONTEXT.getUiOption('statusBar')
             ),
@@ -806,7 +812,7 @@ export class FullscreenMenus {
                 $.t('settings.cookies'),
                 function () {
                     APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('bypassCookies')
             ),
@@ -815,7 +821,7 @@ export class FullscreenMenus {
                 $.t('settings.debugMode'),
                 function () {
                     APPLICATION_CONTEXT.setOption('debugMode', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('debugMode')
             ),
@@ -824,7 +830,7 @@ export class FullscreenMenus {
                 $.t('settings.debugRender'),
                 function () {
                     APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
-                    $('#settings-notification-wrap').removeClass('hidden');
+                    document.getElementById('settings-notification-wrap')?.classList.remove('hidden');
                 },
                 APPLICATION_CONTEXT.getOption('webglDebugMode')
             )
@@ -1103,7 +1109,7 @@ export class FullscreenMenus {
             input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: entry.id }),
             div({
                     class: "flex w-full cursor-pointer items-center gap-3 rounded-2xl border border-base-300 bg-base-100 p-3 transition-colors hover:bg-base-200/60",
-                    onclick: function () { $(this.previousElementSibling).click(); }
+                    onclick: function () { this.previousElementSibling?.click(); }
                 },
                 BaseComponent.toNode(iconComponent),
                 text,

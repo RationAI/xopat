@@ -63,6 +63,23 @@ export class BackgroundConfig implements BackgroundItem {
         });
     }
 
+    /**
+     * Wrap a raw background entry.
+     *
+     * `reuseExisting` resolves the entry through {@link _CONF_REGISTRY} by `id`,
+     * and **ids are deliberately not unique**: an entry with no explicit `id`
+     * derives one from its data locator ({@link processId}), so two entries
+     * naming the same slide legitimately share an id — that is what makes them
+     * one viewer identity / one IO scope. An author who needs the two hydrated
+     * separately sets an explicit `id`.
+     *
+     * Reuse is therefore only valid for RAW items whose id genuinely names the
+     * thing being wrapped (a custom slide browser's series/case records). Never
+     * pass an entry that is already a `BackgroundConfig` in `config.background`
+     * with `reuseExisting` on — it would come back as a *different* entry that
+     * happens to share the id, with that entry's `name`, `visualizationIndex`
+     * and shaders. `APPLICATION_CONTEXT.registerConfig` guards this.
+     */
     static from(config: BackgroundItem, registerAsSource = true, reuseExisting = true): BackgroundConfig {
         if (!config) throw new Error('config must be defined');
 
@@ -167,6 +184,47 @@ export class BackgroundConfig implements BackgroundItem {
         }
         return dataId;
     }
+
+    /**
+     * Per-background canvas clear color (`background[i].fill`) — the color the
+     * viewer clears to where no tile is drawn, overriding the session/deployment
+     * `setup.backgroundColor` for slides that need their own (e.g. a fluorescence
+     * slide on black next to a brightfield slide on white).
+     *
+     * Returns the normalized hex value (`#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`)
+     * or `undefined` when the entry declares none. A declared-but-malformed value
+     * is refused (warned once per value) instead of reaching the renderer, which
+     * would silently clear to transparent.
+     */
+    static fillColor(item: BackgroundItem | null | undefined): string | undefined {
+        const raw = (item as any)?.fill;
+        if (typeof raw !== "string" || raw.trim() === "") return undefined;
+        const value = raw.trim();
+        if (!/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value)) {
+            if (!BackgroundConfig._warnedFillColors.has(value)) {
+                BackgroundConfig._warnedFillColors.add(value);
+                console.warn(
+                    `[BackgroundConfig] background[i].fill must be a hex color `
+                    + `(#RGB / #RGBA / #RRGGBB / #RRGGBBAA), got "${value}" — ignoring.`
+                );
+            }
+            return undefined;
+        }
+        return value;
+    }
+
+    /**
+     * The clear color a viewer showing this background must render with: the
+     * per-background `fill`, else the session/deployment default
+     * (`setup.backgroundColor`). `undefined` means "renderer default"
+     * (transparent).
+     */
+    static resolveFillColor(item: BackgroundItem | null | undefined): string | undefined {
+        return BackgroundConfig.fillColor(item)
+            ?? (APPLICATION_CONTEXT.getOption("backgroundColor") || undefined);
+    }
+
+    private static _warnedFillColors = new Set<string>();
 
     static processId(id: string | undefined, context: BackgroundItem): string {
         if (id) return UTILITIES.sanitizeID(id);
@@ -363,6 +421,8 @@ export class BackgroundConfig implements BackgroundItem {
                         croppingContext,
                     } as DataOverride,
                 };
+                // A crop of the parent renders on the parent's backdrop.
+                if (parent.fill !== undefined) child.fill = parent.fill;
                 // Pixel size is unchanged by cropping — inherit so the scalebar
                 // stays correct in the child viewer.
                 if (parent.microns !== undefined) child.microns = parent.microns;

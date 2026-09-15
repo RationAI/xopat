@@ -644,6 +644,37 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     }
 
     /**
+     * The original slide file is downloadable when the service says so. WSI
+     * Service reports it per slide as `raw_download` on the info response —
+     * `false` when the deployment disabled raw access or the storage backend
+     * cannot serve the source file.
+     *
+     * Multiplexed `/v3/files` sources are excluded: that handle addresses N
+     * slides at once (`fileId` is a comma-joined list), so there is no single
+     * original file to hand back.
+     *
+     * @returns {boolean}
+     */
+    canDownloadSlideFile() {
+        return !this.multifetch && this.data?.raw_download === true;
+    }
+
+    /**
+     * Location of the original slide file. The `?slide_id=` form matches every
+     * other endpoint of this API (`/info`, `/thumbnail/...`, `/icc_profile`).
+     * The file is served with a `Content-Disposition`, so no name is forced.
+     *
+     * @returns {Promise<SlideFileDownload|undefined>}
+     */
+    async getSlideFileDownload() {
+        if (!this.canDownloadSlideFile()) return undefined;
+        return {
+            url: `${this.tilesUrl}/download?slide_id=${this.fileId}`,
+            client: this.__xopatHttpClient,
+        };
+    }
+
+    /**
      * @returns {Promise<ArrayBuffer>}
      */
     async downloadICCProfile() {
@@ -798,7 +829,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             return false;
         }
 
-        const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+        const AbstractMVT = OpenSeadragon.FlexRenderer?.AbstractMVTTileSource;
         if (!AbstractMVT) {
             return false;
         }
@@ -838,12 +869,12 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     downloadTileStart(context) {
         if (this._isVector) {
-            const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+            const AbstractMVT = OpenSeadragon.FlexRenderer?.AbstractMVTTileSource;
 
             if (!AbstractMVT || !this._ensureVectorPipeline()) {
                 const message =
                     "RationaiStandaloneV3TileSource: MVT vector tiles require " +
-                    "OpenSeadragon.FlexRenderer.MVT.AbstractTileSource. " +
+                    "OpenSeadragon.FlexRenderer.AbstractMVTTileSource. " +
                     "Ensure flex-renderer.js is loaded.";
 
                 if (typeof context.fail === "function") {

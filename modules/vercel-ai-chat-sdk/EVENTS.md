@@ -151,6 +151,24 @@ pause is parked and queued with the resume, so the pause never costs an utteranc
 API is `pauseForEdit()` / `resumeAuto()` (`isPaused` to read it); an external driver that fills the
 composer itself should call them around its edits.
 
+## `voice-ui`
+
+Raised when the composer's voice surface changes state — `listening`, `processing`, `held`,
+`paused`, `idle` — and, while listening, whenever the speech detector's verdict flips. Payload:
+`{ state, speaking }`, where `speaking` is true only for `listening` frames the VAD judged as
+voice. Never fires per level tick (the meter repaints ~30×/s; an indicator changes a few times a
+sentence), so it is safe to render straight into a "Listening / Speaking" label. `voice-state` is
+the on/off transition; this is what the capture hears in between.
+
+## `voice-language`
+
+Raised once per dictation, when the speech-to-text module has pinned the language it is
+transcribing in (under `voice.language: "auto"`, after two consecutive segments agreed).
+Payload: `{ language }` — a BCP-47 primary subtag (`ja`, `en`, `cs`). A deployment that pins
+`voice.language` to a code never raises it. Each `voice-segment`'s `metrics` also carry
+`language` (what the recognizer reported for that segment) and `languageHint` (what the request
+said; undefined = detected).
+
 ## `voice-hold`
 
 Raised when hands-free speech stops being auto-submitted and starts collecting as a draft, and
@@ -206,7 +224,61 @@ interface ChatVoiceSegmentPayload {
     /** Turn index within the current continuous capture; `-1` for one-shot dictation. */
     index: number;
     accepted: boolean;
-    mode: "once" | "continuous" | "flush";
+    mode: "once" | "continuous" | "flush" | "discarded";
+    /**
+     * `continuous` only: the audio this text came from. Without it a three-word
+     * transcript of a ten-second segment and a three-word transcript of a three-word
+     * utterance are the same record, so a session trace cannot tell a bad model from
+     * bad audio.
+     */
+    metrics?: {
+        index?: number;        // the capture's own segment index
+        audioMs?: number;      // wall clock, silence included
+        voicedMs?: number;     // detected speech within it
+        speechSpanMs?: number; // first to last detected speech — the ratio rule's denominator
+        maxPeak?: number;      // loudest sample 0..1; 0 = digital silence (never uploaded)
+        silenceMs?: number;    // the trailing-silence window that cuts a segment
+        tracked?: boolean;     // false = no Web Audio, the above are absent not zero
+        bytes?: number;        // encoded audio sent to the driver
+        latencyMs?: number;    // driver round-trip
+        reportedDurationMs?: number; // what the backend measured (verbose_json)
+        contextChars?: number; // rolling-context characters the decoder was primed with
+        driverId?: string;     // the driver that ANSWERED — never the configured one
+        model?: string;
+        noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number; // Whisper's own verdicts
+        filtered?: string[];   // text filters that altered the raw decode
+        probe?: boolean; failOpen?: boolean; flush?: boolean;
+    };
+}
+```
+
+`driverId` / `model` are stamped from the result, so a fallback's output is never
+filed under the primary recognizer's name (the live path no longer falls back
+silently at all — see the speech-to-text README, "Drivers & the fallback chain").
+`noSpeechProb` is what the consumer gate trusts first: at ≥ 0.6 the model itself
+says it heard silence.
+
+## `voice-gate`
+
+Raised for every recorded segment that did **not** reach the transcript, with why — the
+speech-to-text module's `segment-empty` / `segment-gated` / `segment-discarded` /
+`segment-filtered` / `segment-trimmed` / `segments-abandoned` events forwarded for the
+capture the composer owns. Beside `voice-segment` these make a session dump complete: ten
+uploads with no outcome used to be indistinguishable from a quiet room, when in fact the
+endpoint had answered 200 with an empty body for two minutes. `abandoned` is the one loss a
+consumer judging the live transcript's completeness must hear about: segments captured but
+never transcribed because the queue was dropped at stop (`{indices, bytes, audioMs, reason}`).
+
+```ts
+interface ChatVoiceGatePayload {
+    kind: "empty" | "gated" | "discarded" | "filtered" | "trimmed" | "window-empty" | "abandoned";
+    index?: number;
+    indices?: number[];      // abandoned: every segment the drop took
+    // kind-specific: reason ("no-speech" | "silent" | "session-ended"), filters, emptied,
+    // words, dropped, minVoicedMs, probe, overlapMs, rawText …
+    // plus the audio facts of the segment: audioMs, voicedMs, speechSpanMs, maxPeak,
+    // latencyMs, driverId, model, noSpeechProb, avgLogprob, reportedDurationMs
+    [field: string]: unknown;
 }
 ```
 

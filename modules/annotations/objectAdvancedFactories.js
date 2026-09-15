@@ -57,14 +57,23 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
 
     // The label is the sweep, not a distance — degrees are unit-less, so this
     // bypasses the scalebar formatting the base implementation applies.
-    getMeasurementLabel(target) {
+    //
+    // Overrides `getLabelValue` rather than `getMeasurementLabel` (now a thin
+    // wrapper over it) so an attached value still wins here exactly as it does
+    // everywhere else, and so the board — which reads the pair — gets the right
+    // `source` instead of falling through to raw geometry.
+    getLabelValue(target) {
+        const attached = this.getAttachedLabelValue(target);
+        if (attached) return { text: attached, source: 'value' };
         const d = this.getAngleDegrees(target);
-        return typeof d === 'number' && isFinite(d) ? `${d.toFixed(1)}°` : '';
+        return typeof d === 'number' && isFinite(d)
+            ? { text: `${d.toFixed(1)}°`, source: 'length' }
+            : { text: '', source: '' };
     }
 
     // Neither inherited measure means anything here: the shoelace area of three
     // points is a meaningless triangle, and the rays' length is incidental to
-    // what the annotation states. getMeasurementLabel above replaces both.
+    // what the annotation states. getLabelValue above replaces both.
     getArea(theObject) { return undefined; }
     getLength(theObject) { return undefined; }
 
@@ -194,12 +203,7 @@ OSDAnnotations.Angle = class extends OSDAnnotations.ExplicitPointsObjectFactory 
             points: [this._first, this._vertex, this._second],
             angleMode: this._step3Dragged ? 'clockwise' : 'smaller',
         }, this._opts);
-        next.set({
-            hasBorders: false,
-            hasControls: false,
-            selectable: false,
-            evented: false,
-        });
+        // Interactivity flags are not set here: addHelperAnnotation freezes them.
         if (this._current) this._context.fabric.deleteHelperAnnotation(this._current);
         this._context.fabric.addHelperAnnotation(next);
         this._current = next;
@@ -466,7 +470,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     initializeBeforeImport(object) {
         if (!Array.isArray(object?.objects)) return;
         // The native export omits these on the group; `configure` later runs
-        // `$.extend(wrapper, options)` where `options` (preset common
+        // `OpenSeadragon.extend(wrapper, options)` where `options` (preset common
         // properties) may carry them as `undefined`, nuking fabric's defaults.
         if (object.angle === undefined) object.angle = 0;
         if (object.scaleX === undefined) object.scaleX = 1;
@@ -592,6 +596,11 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         // asks for a length (e.g. the annotation board row renderer).
         const line = theObject?.item?.(0);
         if (!line) return undefined;
+        // NO transform here, deliberately. The shaft endpoints are stored ABSOLUTE on
+        // the child (see `configure` and the note in `toPointArray`); applying the
+        // group matrix would double-count the centre, which is the bug that made
+        // every exported arrow land at ~2x its real position. An arrow is also
+        // `isEditable() === false`, so it never acquires a scale of its own.
         return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
     }
 
@@ -854,7 +863,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         // calculation always adds strokeWidth, regardless of strokeUniform).
         // `_createParts` pre-computes left/top as the line's midpoint to make
         // this work.
-        $.extend(line, {
+        OpenSeadragon.extend(line, {
             scaleX: 1,
             scaleY: 1,
             selectable: false,
@@ -866,7 +875,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureHead(head, options) {
-        $.extend(head, {
+        OpenSeadragon.extend(head, {
             selectable: false,
             hasControls: false,
             factoryID: this.factoryID,
@@ -911,7 +920,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _configureWrapper(wrapper, line, head, options) {
-        $.extend(wrapper, options, {
+        OpenSeadragon.extend(wrapper, options, {
             factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
@@ -995,7 +1004,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //     }
 //
 //     configure(object, options) {
-//         $.extend(object, options, {
+//         OpenSeadragon.extend(object, options, {
 //             strokeWidth: 1,
 //             originalStrokeWidth: 1,
 //             type: this.type,
@@ -1014,7 +1023,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //      */
 //     copy(ofObject, parameters=undefined) {
 //         //to do defalt implementation like this?
-//         return $.extend(fabric.util.object.clone(ofObject), parameters);
+//         return OpenSeadragon.extend(fabric.util.object.clone(ofObject), parameters);
 //     }
 //
 //     /**
@@ -1051,7 +1060,7 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 //     initCreate(x, y, isLeftClick) {
 //         this._origX = x;
 //         this._origY = y;
-//         this._current = new fabric.Rect($.extend({
+//         this._current = new fabric.Rect(OpenSeadragon.extend({
 //             left: x,
 //             top: y,
 //             width: 1,

@@ -295,7 +295,9 @@ migrate:
 - **Per-entity CRUD** (`crud:annotation`, `crud:preset`). Use a database
   sink for that — GitHub's per-file API isn't designed for high-volume
   per-row dispatch.
-- **Multiple repo targets in one app**. One sink id `github` per app.
+- ~~**Multiple repo targets in one app**~~. No longer a limitation: each binding
+  entry carries its own `config`, so one `github` sink id serves several repos —
+  `{"sink": "github", "config": {"repo": "org/other"}}`. See §2c, layer 4.
 - **Auto-flush on edit**. The module is a sink, not a save trigger.
   Existing flush triggers (user save, session export) drive it.
 - **Conflict merging**. Last write wins after one retry; no three-way merge.

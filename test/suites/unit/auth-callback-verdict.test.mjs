@@ -167,7 +167,7 @@ test("the escalation is one-shot — a second round gates instead of redirecting
     expect(second.deferred).toEqual(["core"]);
 });
 
-test("an unreachable authority is never escalated, and never gated", async () => {
+test("an unreachable authority is never escalated, but gates when there is no credential", async () => {
     const user = installUser();
     const auth = await freshAuth();
     const gate = watchInteraction(user);
@@ -178,12 +178,37 @@ test("an unreachable authority is never escalated, and never gated", async () =>
 
     const result = await auth.runAutoLogin({ timeoutMs: 1000 });
 
-    // We never reached the authority, so we have no evidence the session is gone —
-    // and redirecting to a host we just failed to reach would replace the viewer with
-    // the browser's error page.
+    // Still never escalated: redirecting to a host we just failed to reach would
+    // replace the viewer with the browser's error page.
     expect(p.calls.login).toBe(0);
-    expect(gate.required).toBe(0);
     expect(result.verdicts.core).toBe(false);
+
+    // But with nothing in hand there is no session to protect, and silence means every
+    // request bound to the context goes out bare and fails. The gate holds them behind
+    // a scrim whose click can sign the user in instead.
+    expect(gate.required).toBe(1);
+    expect(result.deferred).toEqual(["core"]);
+});
+
+test("an authenticated context never reaches the unreachable branch at all", async () => {
+    const user = installUser();
+    const auth = await freshAuth();
+
+    const p = redirectProvider(user, { outcome: "unreachable", reason: "timeout" });
+    auth.registerBroker("oidc", p.broker);
+    await auth.configureContext({ contextId: "core", method: "oidc", autoLogin: true, secretTypes: ["jwt"] });
+    signIn(user, "core");
+
+    const gate = watchInteraction(user);
+    const result = await auth.runAutoLogin({ timeoutMs: 1000 });
+
+    // This is what makes gating the unreachable branch safe: phase 1 short-circuits a
+    // context that already holds a credential, so a renew blip mid-session can never
+    // reach the gate and tear that credential down.
+    expect(gate.required).toBe(0);
+    expect(user.getSecret("jwt", "core")).toBe("token-core");
+    expect(result.verdicts.core).toBe(true);
+    expect(result.deferred).toEqual([]);
 });
 
 test("a provider whose init returns nothing behaves exactly as before", async () => {

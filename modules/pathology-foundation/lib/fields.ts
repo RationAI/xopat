@@ -81,6 +81,14 @@ export interface FieldPlan {
     tissueCoverage: number;
     /** Set when the requested µm/px was finer than level 0 and could not be honoured. */
     clampedToNative: boolean;
+    /**
+     * Set when the region fitted one call and was therefore delivered FINER than requested.
+     *
+     * The counterpart of `clampedToNative`: both say the delivered resolution is not the
+     * requested one, and in neither case may a caller quote the request. Always an
+     * improvement — see the refinement note in {@link planFields}.
+     */
+    refinedToFit: boolean;
 }
 
 export interface FieldPlanRequest {
@@ -166,7 +174,9 @@ export function maskSampler(mask: MaskResult, maskBounds: Bounds): MaskSampler {
  *    at that downsample. Square cells keep fields comparable across the slide and make
  *    them montage-friendly.
  * 3. A region within one tile becomes exactly one field equal to `bounds` — no padding,
- *    no re-aspecting, no subdivision.
+ *    no re-aspecting, no subdivision. Because that read costs one call whatever its
+ *    resolution, it is delivered at the FINEST the budget affords rather than at the
+ *    requested µm/px, and `refinedToFit` says so.
  * 4. Otherwise an even lattice whose union is `bounds` exactly. Cells are equal-sized
  *    and no larger than `tileSide`, so every field in the plan shares one resolution.
  * 5. Cells below `minFill` are dropped using the cached mask — no render is spent on glass.
@@ -201,12 +211,42 @@ export function planFields(req: FieldPlanRequest): FieldPlan {
     } else {
         downsample = 1;
     }
-    const deliveredMpp = slideMpp ? slideMpp * downsample : null;
 
     // --- tiling -----------------------------------------------------------------
     const tileSide = Math.max(16, Math.floor(Math.sqrt(maxRasterPixels) * downsample));
     const nx = req.single ? 1 : Math.max(1, Math.ceil(bounds.width / tileSide));
     const ny = req.single ? 1 : Math.max(1, Math.ceil(bounds.height / tileSide));
+
+    // A requested µm/px is a CEILING ON COARSENESS, not a downsample to hit.
+    //
+    // When the region already fits one call, the rung has nothing left to decide: the read
+    // costs one call at any resolution, so delivering the rung's figure rather than the
+    // finest the budget affords throws away detail for nothing. It did exactly that — a
+    // 124 x 144 px box asked at a 1.0 µm/px rung on a 0.504 µm/px slide was downsampled by
+    // 1.98 into a 62 x 72 pixel raster, using 0.004% of a 2 MP budget, and a vision model was
+    // then asked to judge cytology on it. Refining costs nothing and can only add pixels.
+    //
+    // Scoped to the NATURAL 1x1 case on purpose — three exclusions, each load-bearing:
+    //
+    // - a lattice (`nx * ny > 1`): there the resolution is what decides how many cells the
+    //   region costs, so refining would multiply the call count. The rung has to govern.
+    // - an explicit `downsample`: an instruction, not a target to be improved on.
+    // - `single: true`: the caller is forcing one field over a region that may not fit one,
+    //   and several such calls are composed into ONE image by the montage path. Refining
+    //   per-call would give the cells of a montage different µm/px while the prompt quotes a
+    //   single figure — the precise failure this file exists to prevent, rebuilt.
+    let refinedToFit = false;
+    if (nx === 1 && ny === 1 && !req.single && slideMpp && wantMpp
+        && !(typeof req.downsample === "number" && req.downsample > 0)) {
+        // The coarsest downsample that fits `bounds` in the budget IS the finest resolution
+        // available for a single call; `fitDownsample` floors it at 1 (level 0).
+        const finest = Math.max(1, fitDownsample(bounds, maxRasterPixels));
+        if (finest < downsample) {
+            downsample = finest;
+            refinedToFit = true;
+        }
+    }
+    const deliveredMpp = slideMpp ? slideMpp * downsample : null;
     // Edges from the grid index rather than an accumulated cell width: at gx === nx the
     // expression is exactly `bounds.x + bounds.width`, so the lattice's union is the
     // region to the last bit. Accumulation drifts, and a field that ends a hair past the
@@ -286,6 +326,7 @@ export function planFields(req: FieldPlanRequest): FieldPlan {
         sampled,
         tissueCoverage: totalTissue > 0 ? clamp01(keptTissue / totalTissue) : (fields.length ? 1 : 0),
         clampedToNative,
+        refinedToFit,
     };
 }
 
@@ -320,6 +361,39 @@ export function rasterSizeFor(bounds: Bounds, downsample: number): { width: numb
     return {
         width: Math.max(1, Math.round(bounds.width / downsample)),
         height: Math.max(1, Math.round(bounds.height / downsample)),
+    };
+}
+
+/**
+ * How a field is rendered on its Nth attempt.
+ *
+ * A field render fails far more often because the tile server is slow than because the region
+ * is unreadable, and a walk that turns the former into `not-assessable` reports a
+ * clinical-sounding non-answer for an infrastructure problem. So the escalation is:
+ *
+ * - **0 and 1 — as planned.** The retry is not optimism: the first attempt already REQUESTED
+ *   its tiles, and they keep arriving into the shared cache after its budget expired. A second
+ *   attempt over that warm cache usually returns immediately, at full resolution, and costs a
+ *   fraction of what the first one did.
+ * - **2 and beyond — one pyramid level coarser.** Halving the resolution quarters the tile
+ *   count, which is the only lever left when the first two attempts genuinely ran out of time.
+ *
+ * `mpp` follows `downsample` or nothing works downstream: `isMppExact` would measure the coarse
+ * raster against the fine request and report a planner defect that did not happen, and
+ * `splitByResolution` would let features through that the delivered pixels cannot carry. Moving
+ * both together is what makes the coarse attempt report itself honestly, as
+ * `reason: "resolution"` on the features that needed the finer look.
+ */
+export function fieldRenderAttempt(field: Field, attempt: number): Field {
+    if (attempt < 2) return field;
+    const steps = attempt - 1;
+    const factor = Math.pow(2, steps);
+    const downsample = field.downsample * factor;
+    return {
+        ...field,
+        downsample,
+        mpp: field.mpp === null ? null : field.mpp * factor,
+        rasterPx: rasterSizeFor(field.bounds, downsample),
     };
 }
 

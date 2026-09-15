@@ -1,6 +1,6 @@
 /// <reference path="../../../src/types/globals.d.ts" />
 
-import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult} from "./driver";
+import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult, bareTypeBlob} from "./driver";
 
 /**
  * Deployment-controlled config for a remote Whisper-compatible endpoint. Read
@@ -53,6 +53,8 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
     readonly id: string;
     readonly label: string;
     readonly local = false;
+    /** Configured model, or undefined when the endpoint picks its own. @see TranscriptionDriver */
+    get modelId(): string | undefined { return this._cfg.model || undefined; }
 
     private _cfg: RemoteWhisperConfig;
     private _client: any;
@@ -102,20 +104,27 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
         const form = new FormData();
         const ext = (audio.type && audio.type.includes("wav")) ? "wav"
             : (audio.type && audio.type.includes("ogg")) ? "ogg" : "webm";
-        form.append(this._fileField, audio, `audio.${ext}`);
+        // Re-wrap without the codec parameter. `MediaRecorder` is asked for
+        // `audio/webm;codecs=opus` — the browser needs the codec to pick an encoder — and
+        // that full string becomes the Blob's `type`, hence the multipart part's
+        // `Content-Type`. Upstreams read the audio format out of that header and reject
+        // the parameterised value verbatim: `Unsupported file format webm;codecs=opus`.
+        // The container is what they need; the codec is inside the file.
+        form.append(this._fileField, bareTypeBlob(audio), `audio.${ext}`);
         if (this._cfg.model) form.append("model", this._cfg.model);
         if (opts.language) form.append("language", opts.language);
         // Domain/vocabulary biasing (Whisper `prompt` / whisper.cpp `initial_prompt`).
         if (opts.prompt) form.append("prompt", opts.prompt);
-        // Whisper-compatible servers accept a plain text or json response format.
-        form.append("response_format", "json");
+        // `verbose_json` carries the detected language (and the decoder's own verdicts);
+        // a server that rejects it is remembered and asked for plain `json` from then on.
+        form.append("response_format", this._responseFormat);
         // Deterministic decoding (matches the WASM driver): sampling randomness
         // mostly manufactures hallucinations on the silence tail of a segment.
         form.append("temperature", "0");
 
-        const raw = await this._client.request(this._endpoint, {
+        const send = (body: FormData) => this._client.request(this._endpoint, {
             method: "POST",
-            body: form,
+            body,
             signal: opts.signal,
             // Dictation is latency-sensitive: jump the bulk background queue (still
             // scheduler-managed, still yields to live tiles) so it isn't stuck behind slow
@@ -123,6 +132,19 @@ export class RemoteWhisperDriver implements TranscriptionDriver {
             priority: "background-urgent",
             timeoutMs: opts.timeoutMs ?? this._cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
+        let raw: any;
+        try {
+            raw = await send(form);
+        } catch (e: any) {
+            const status = Number(e?.status ?? e?.response?.status);
+            if (this._responseFormat !== "verbose_json" || status !== 400) throw e;
+            this._responseFormat = "json";
+            form.set("response_format", "json");
+            raw = await send(form);
+        }
         return normalizeResult(raw);
     }
+
+    /** `verbose_json` until the endpoint refuses it once; then `json` for this driver's lifetime. */
+    private _responseFormat: "verbose_json" | "json" = "verbose_json";
 }

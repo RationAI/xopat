@@ -80,7 +80,7 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
-      image: 'img/xopat-banner.png',
+      image: 'img/xopat-banner-v3.png',
       colorMode: {
         defaultMode: 'light',
         respectPrefersColorScheme: true,

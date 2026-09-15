@@ -18,7 +18,7 @@ export const globalPluginWindowMethods = {
             'annotations-shared',
             this.t('annotations.export.menuTitle'),
             menuContainer,
-            'fa-fw',
+            '',
             { chrome: 'plain' }
         );
         van.add(menuContainer, createAnnotationSettingsMenu(this));
@@ -188,16 +188,6 @@ export const globalPluginWindowMethods = {
                 })
             );
 
-            // Measurements is a utility window, not a drawing control — it lives
-            // in the app-bar Tools category, not the annotation toolbar.
-            USER_INTERFACE.AppBar.Tools.register('annotations.measurements', {
-                section: 'annotations',
-                sectionTitle: this.t('annotations.toolbar.title'),
-                icon: 'ph-chart-bar-horizontal',
-                label: this.t('annotations.toolbar.measurements'),
-                onClick: () => this.showMeasurementsWindow()
-            });
-
             const factories = this._allowedFactories
                 .map((factoryId) => this.context.getAnnotationObjectFactory(factoryId))
                 .filter(Boolean);
@@ -205,8 +195,9 @@ export const globalPluginWindowMethods = {
             const gModes = new ui.ToolbarGroup({
                 itemID: 'g-modes',
                 selectable: true,
-                defaultSelected: modes.AUTO.getId(),
-                extraClasses: { padding: 'mx-2' }
+                defaultSelected: modes.AUTO.getId()
+                // no extra padding: the group renders as its own pill and the
+                // ToolbarSeparators already carry the spacing
             });
 
             new ui.ToolbarItem({
@@ -383,11 +374,10 @@ export const globalPluginWindowMethods = {
                 const modeId = mode.getId();
 
                 if (this._htmlWrap && this._modeOptionsPanel) {
-                    // Read from `e.mode`, not `this.context.mode`: the
-                    // _setModeToAuto path in annotations.js fires the event
-                    // BEFORE assigning `this.mode`, so the global would still
-                    // point at the previous (now-stale) mode and the panel
-                    // would never hide when switching to navigation.
+                    // Read from `e.mode`, not `this.context.mode`: the event
+                    // payload is the authoritative statement of what is now in
+                    // effect, including a REFUSED switch, which reports AUTO
+                    // without anything having changed.
                     const rawHtml = (mode.customHtml && mode.customHtml()) || '';
                     const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
 

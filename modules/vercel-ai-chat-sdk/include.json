@@ -1,10 +1,9 @@
 {
-  "name": "AI Chat",
+  "name": "%meta.name%",
   "icon": "ph-chats-circle",
-  "description": "Integration hub for AI chat models",
+  "description": "%meta.description%",
   "requires": [
-    "@xopat-npm-module/marked",
-    "sanitize-html",
+    "markdown",
     "speech-to-text"
   ],
   "defaultPersonalityId": "pathology-assistant",
@@ -47,7 +46,16 @@
   ],
   "voice": {
     // See ChatVoiceControllerOptions (and the config table in
-    // modules/speech-to-text/README.md). Notable: `busyHoldMs` (default 4000)
+    // modules/speech-to-text/README.md). `language`: "auto" (default — the
+    // speech-to-text module detects the dictation's language and pins the session
+    // once two segments agree; never the UI locale) or a BCP-47 code to pin it.
+    // `prompt`: deployment vocabulary appended to the built-in pathology glossary.
+    // `promptBudget` (default 1000): size of the composed biasing prompt (glossary
+    // + `prompt` + the terms a report plugin supplies); when short, the generic
+    // glossary is what gets trimmed, never the report's terms. Whether ANY prompt
+    // is sent is decided elsewhere: `speech-to-text.promptMaxChars` (client, default
+    // 0 = off) and the provider's `transcriptionPromptMaxChars` (server, default 0).
+    // Notable: `busyHoldMs` (default 4000)
     // is how long the assistant may compute before hands-free speech is held as
     // an editable composer draft instead of being auto-submitted; 0 disables.
     // Also `staleSessionMs` (default 8000) — how long capture may go without a

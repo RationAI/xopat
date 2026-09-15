@@ -20,6 +20,7 @@ import { ViewerScrollZoomController } from "./viewer-scroll-zoom-controller";
 import { ViewerKineticPanController } from "./viewer-kinetic-pan-controller";
 import { computeOsdPerformanceOptions, getDeviceClass } from "./osd-performance";
 import { createHttpClientAdapter } from "../http-client";
+import { FLEX_SHARED_CONTEXT_KEY } from "./flex-renderer-context";
 
 export interface IsolatedViewerOptions {
     /** Container element where the OSD canvas will be mounted. Must be in the DOM and have nonzero size. */
@@ -36,6 +37,13 @@ export interface IsolatedViewerOptions {
     htmlReset?: () => void;
     /** Optional override for the FlexRenderer's WebGL preferred version; falls back to APPLICATION_CONTEXT option. */
     webGlPreferredVersion?: string;
+    /**
+     * Canvas clear color (`#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`). Pass the
+     * mirrored background's resolved `fill` (`BackgroundConfig.resolveFillColor`)
+     * so a sandboxed viewer clears like the source viewport; falls back to the
+     * session/deployment `setup.backgroundColor`.
+     */
+    backgroundColor?: string;
     /** Show the OSD scalebar. Default true. */
     scalebar?: boolean;
     /** Extra options merged into OSD's constructor (last wins). */
@@ -80,17 +88,17 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         // Same first-pass precision as the main viewer, or an isolated/playground render
         // of a float slide would not match what the user sees; see config.json.
         precision: APP?.getOption?.("webGlPrecision"),
-        backgroundColor: APP?.getOption?.("backgroundColor"),
+        backgroundColor: options.backgroundColor ?? APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
         // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
         // so playground/isolated viewers don't each consume a browser context slot.
-        sharedContextKey: "xopat-flex-renderer",
+        sharedContextKey: FLEX_SHARED_CONTEXT_KEY,
         interactive: true,
         htmlHandler: options.htmlHandler || (() => {}),
         htmlReset: options.htmlReset || (() => {}),
-        // The OSD navigator is created asynchronously; FlexRenderer.rebuild()
+        // The OSD navigator is created asynchronously; FlexDrawer.rebuild()
         // accesses `viewer.navigator.drawer.rebuild()` without a null guard
-        // (flex-renderer.js:10003), so any rebuild that fires before the navigator
+        // (flex-renderer.js:16001, filed in UPSTREAM.md), so any rebuild that fires before the navigator
         // drawer is wired crashes. We disable shader-mirroring into the navigator
         // for the playground (the navigator still renders the slide for navigation
         // — only the shader pipeline is not duplicated there). Toggle on once the
@@ -141,14 +149,14 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
     const explicitCache = APP?.getOption?.("maxImageCacheCount", null, false);
     if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
-    const merged = $ ? $.extend(
+    const merged = (OpenSeadragon as any).extend(
         true,
         {},
         perf,
         ENV?.openSeadragonConfiguration || {},
         ENV?.client?.osdOptions || {},
         viewerOptions
-    ) : Object.assign({}, perf, ENV?.openSeadragonConfiguration || {}, ENV?.client?.osdOptions || {}, viewerOptions);
+    );
 
     const viewer = OpenSeadragon(merged);
     (viewer as any).__renderingCapability = renderingCapability;
@@ -200,11 +208,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         }
     }
 
-    if ($ && viewer.element) {
-        $(viewer.element).on("contextmenu", (event: any) => {
-            event.preventDefault();
-        });
-    }
+    viewer.element?.addEventListener("contextmenu", (event: MouseEvent) => {
+        event.preventDefault();
+    });
     if (typeof viewer.addHandler === "function") {
         viewer.addHandler("navigator-scroll", (e: any) => {
             const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;

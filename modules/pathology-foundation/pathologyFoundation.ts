@@ -35,7 +35,8 @@
 // bundled with it, which is what makes it unit-testable without a viewer.
 import {
     boundsOfPolygons, centerOf, clampBoundsToSlide, countFilled, coverageOverRings,
-    cropMask, gridSplitTissue, padBounds, pointInRing, polygonArea, round,
+    coveredFraction, cropMask, gridSplitTissue, intersectBounds, mergeOverlappingBounds,
+    padBounds, pointInRing, polygonArea, readingOrder, round,
 } from "./lib/geometry";
 import {
     blobToBase64, builtinTissueMask, composeMontage, decodeBase64Mask, densityGrid,
@@ -45,19 +46,38 @@ import {
 import type { MontageCell, StainVectors } from "./lib/imaging";
 import { isTemplateEcho, keywordInterest, normalizeScore, parseOverviewVerdict } from "./lib/verdict";
 import {
-    fallbackChecklist, sanitizeChecklist, splitByResolution, unassessable, MAX_CHECKLIST_FEATURES,
+    fallbackChecklist, sanitizeChecklist, splitByResolution, unassessable, exceedsSlide,
+    markBelowRequested, MAX_CHECKLIST_FEATURES,
 } from "./lib/checklist";
-import { parseFieldAnswers } from "./lib/answers";
+import { aggregateFeatureAnswers, parseFieldAnswers } from "./lib/answers";
+import { ladderRungs } from "./lib/ladder";
 import { buildEvidence, renderEvidence } from "./lib/evidence";
 import {
-    canSpend, checklistGaps, createBudget, priority, rolloverSurveyBudget, shouldExpand, spend,
-    PriorityQueue,
+    accumulateBudget, canSpend, checklistGaps, createBudget, isRedundantRead, priority,
+    rolloverSurveyBudget, shouldExpand, spend, worthDrilling, PriorityQueue,
+    // The presentation ranking composes the same weights the priority queue scores with —
+    // see `_rankOverviewNodes`. They are imported rather than reimplemented because the
+    // reimplementation drifted, and a ranked list that contradicts the spend order is a bug
+    // nobody can see from either side alone.
+    areaWeight, cellularityWeight, confidenceWeight, fillWeight, pathPrior,
 } from "./lib/scheduler";
 import { runFieldPipeline } from "./lib/pipeline";
+import { applyPlanEdits, overlapPairs } from "./lib/plan";
 import type { OverviewBudget, SchedulableNode } from "./lib/scheduler";
-import type { Checklist, ChecklistFeature, FeatureAnswer } from "./lib/checklist";
+import type {
+    Checklist, ChecklistFallbackReason, ChecklistFeature, FeatureAnswer,
+} from "./lib/checklist";
 import type { EvidenceRow } from "./lib/evidence";
-import { fitDownsample, isMppExact, maskSampler, planFields, rasterSizeFor, FIELD_MAX_PIXELS } from "./lib/fields";
+import {
+    fieldRenderAttempt, fitDownsample, isMppExact, maskSampler, planFields, rasterSizeFor,
+    FIELD_MAX_PIXELS, FIELD_MPP_TOLERANCE,
+} from "./lib/fields";
+import {
+    isKeyOfSlide, normalizeScopeRect, pickSurvey, rememberBounded, resolveSurveyMpp,
+    shouldResegmentScope, surveyCacheKey, surveyPixelBudget,
+} from "./lib/scope";
+import type { CoverageScope } from "./lib/scope";
+import { clampNumber } from "./lib/types";
 import type { Bounds, MaskResult, Point } from "./lib/types";
 import type { OverviewVerdict, VerdictSource } from "./lib/verdict";
 import type { DensitySampler, Field, FieldPlan, MaskSampler } from "./lib/fields";
@@ -67,7 +87,9 @@ import type { DensitySampler, Field, FieldPlan, MaskSampler } from "./lib/fields
 export type { Bounds, MaskResult, Point } from "./lib/types";
 export type { OverviewVerdict, VerdictSource } from "./lib/verdict";
 export type { Field, FieldPlan } from "./lib/fields";
-export type { Checklist, ChecklistFeature, FeatureAnswer } from "./lib/checklist";
+export type {
+    Checklist, ChecklistFallbackReason, ChecklistFeature, FeatureAnswer,
+} from "./lib/checklist";
 export type { EvidenceRow, EvidenceCitation } from "./lib/evidence";
 export type { OverviewBudget } from "./lib/scheduler";
 
@@ -83,6 +105,11 @@ const t = (key: string, opts?: any): string => (window as any).$?.t?.(key, opts)
  * "region 3.1" once nested. `index`/`depth` stay 0-based array ranks — this string is the
  * ONLY form a user (or the assistant quoting a result) ever sees. Ranks restart per parent,
  * so the dotted ancestry path is what makes a nested region unambiguous.
+ *
+ * The numbers follow the SLIDE LAYOUT (rows top to bottom, left to right within a row — see
+ * {@link readingOrder}), not size or interest. A reviewer counts fragments off the glass, so
+ * a number that encoded size rank made every region link a lookup: "region 1" was the largest
+ * island, which is routinely the third core along.
  */
 const regionLabel = (path: number[]): string =>
     t("pathology.regionLabel", { number: path.map(i => i + 1).join(".") });
@@ -133,6 +160,26 @@ const OVERVIEW_FRAME_PADDING = 0.1;
  */
 const BACKGROUND_READ_TIMEOUT_MS = 15000;
 
+/**
+ * Slack between a render's OWN budgets and the wedge guard wrapped around it.
+ *
+ * A region render has TWO budgets, and the guard must sit above their sum:
+ *
+ * - `queueTimeoutMs` bounds the wait for a turn. Off-screen passes are serialized per viewer and
+ *   admitted through the background request scheduler, and neither wait used to be bounded or
+ *   counted. That is what made this guard fire on renders that had not started: its clock runs
+ *   from the CALL, the load budget's runs from admission, so the two measured different intervals
+ *   and every queued field reported "the region could not be rendered".
+ * - `timeoutMs` bounds the tile-load wait once the pass runs. On expiry it returns the partial
+ *   raster with `isComplete: false`, which is a USEFUL result — the caller is told what it got.
+ *
+ * The {@link withTimeout} around the call is a different thing from both: a wedge guard that
+ * REJECTS. Sizing it equal to a budget makes them fire together, converting a returnable partial
+ * into a throw. It therefore sits strictly above the sum, leaving room for the render itself
+ * (GPU pass + readback).
+ */
+const RENDER_GUARD_SLACK_MS = 4000;
+
 /** Target raster size for a tissue mask. See `_maskRenderSize`. */
 const MASK_TARGET_PIXELS = 2_000_000;
 
@@ -166,13 +213,146 @@ const DENSITY_CELL_PIXELS = 16;
 const PUBLISH_THROTTLE_MS = 250;
 
 /**
- * Tissue islands the survey pass will cover, beyond `breadth`.
+ * Tissue islands the survey pass will cover.
  *
  * The survey's job is coverage, so it is not bounded by the same number that bounds how
- * many children a focus expansion opens — using one knob for both is how "look at the
- * whole slide" ended up meaning "look at four things".
+ * many children a focus expansion opens (`breadth`) — using one knob for both is how "look
+ * at the whole slide" ended up meaning "look at four things".
  */
 const SURVEY_MAX_ROOTS = 12;
+
+/**
+ * Tile-load budgets, split by what the render is FOR.
+ *
+ * These became load-bearing when the renderer started actually waiting: before, every path shared
+ * one 15 s number that bounded nothing, and now it bounds a real wait. Off-screen passes are
+ * serialized per viewer (`runSerializedRegionTask`), so a single budget applied to a ~20-field walk
+ * is minutes of worst case.
+ *
+ * The survey is one render whose coverage decides the entire walk — it gets the generous budget,
+ * and reporting it incomplete costs far more than waiting. A field is planned to fit one raster, so
+ * it is a handful of tiles at the level it renders; there are many of them, and one that cannot
+ * finish is better flagged than waited out.
+ */
+const SURVEY_LOAD_TIMEOUT_MS = 15000;
+const FIELD_LOAD_TIMEOUT_MS = 6000;
+
+/**
+ * Budget for the wait BEFORE a render starts — queue position plus scheduler admission.
+ *
+ * Separate from the load budgets above because it is bounded by a different thing: how many
+ * passes are ahead of this one, not how many tiles this one needs. A walk legitimately queues
+ * (renders are serialized on purpose), so this is generous; it exists to give the wedge guard a
+ * number to sit above, and to fail a genuinely congested queue by name rather than as a
+ * render failure.
+ */
+const RENDER_QUEUE_TIMEOUT_MS = 20000;
+
+/**
+ * Attempts a field render gets before it is reported unread.
+ *
+ * The retry is not optimism, it is the cheapest thing available: the failed attempt already
+ * REQUESTED its tiles, and they keep arriving into the shared tile cache after the budget
+ * expired. A second attempt over a warm cache usually returns immediately. The third drops one
+ * pyramid level (~4x fewer tiles) and reports the coarser resolution it actually delivered, which
+ * the checklist splitter already knows how to handle. Beyond that the region is not slow, it is
+ * unreadable, and more attempts only spend the walk's wall-clock.
+ */
+const FIELD_RENDER_ATTEMPTS = 3;
+
+/**
+ * Coverage below which a WHOLE-SLIDE survey is treated as a failed read rather than a blank
+ * slide, when it also found at most one island.
+ *
+ * 0.1% of a slide is one small fragment. Real slides are either meaningfully covered or empty;
+ * the shape that says "the render only saw the tiles the user had loaded" is a trace of tissue
+ * plus a single island, which is exactly what a partial off-screen pass produces. Scoped runs
+ * are excluded: a caller who framed a rectangle of mostly glass gets an honest low number.
+ */
+const SURVEY_IMPLAUSIBLE_COVERAGE = 0.005;
+
+/**
+ * Surveys kept per slide, least-recently-used first out.
+ *
+ * Each one holds a ~2 MB mask, and scopes are unbounded — a user panning around and asking
+ * about "here" a dozen times would otherwise accumulate a dozen masks for the session. Four
+ * is enough to keep the whole-slide survey alongside the last few regions of interest, which
+ * is the pattern that actually repeats.
+ */
+const MAX_SURVEYS_PER_SLIDE = 4;
+
+/**
+ * Least tissue a planned tile must hold to be worth a vision call, as a fraction of the tile.
+ *
+ * A coverage decision, not a drill decision: this drops cells that are essentially glass
+ * before anything is rendered. Matches `gridSplitTissue`'s own floor so the two child sources
+ * agree about what counts as an empty cell.
+ */
+const TILE_MIN_FILL = 0.05;
+
+/**
+ * When a scoped survey's single region counts as "it just outlined the whole scope".
+ *
+ * Deliberately near 1: the case being caught is a contour that literally spans the rectangle,
+ * not a large island inside it. See {@link PathologyFoundation._resegmentCollapsedScope}.
+ */
+const SCOPE_COLLAPSED_SPAN = 0.9;
+
+/**
+ * Tissue coverage above which a scope IS one object and must not be re-segmented.
+ *
+ * Mirrors the full-rectangle contour guard in `_surveySlide`: a rectangle that is nearly all
+ * tissue legitimately traces as one region.
+ */
+const SCOPE_SOLID_TISSUE_COVERAGE = 0.9;
+
+/** Grid used to separate a collapsed scope; the same N `_subdivideRegion` splits a mass into. */
+const SCOPE_RESEGMENT_GRID = 3;
+
+/**
+ * When two region boxes stop being two regions.
+ *
+ * A region is the bounding box of a traced contour, and a contour that is not a compact
+ * blob — a curved biopsy strip, a folded core, a ribbon of mucosa — produces a box holding
+ * a great deal of its neighbour. Nothing downstream could tell: each box was rendered,
+ * sent to a vision model and reported as a separate finding, so the user saw a stack of
+ * examination markers over one piece of tissue and the budget paid for the same cells
+ * several times.
+ *
+ * The merge is on the BOXES because the box is what gets rendered: two contours sharing a
+ * rectangle cannot be read separately, so keeping them apart is a distinction the pipeline
+ * has no way to honour.
+ *
+ * Operators can retune or disable it with `ENV.modules.pathology-foundation.regionMerge`
+ * (`false`, or `{iou, containment}`). Deliberately deployment-level rather than a per-call
+ * option: it decides what a region IS, and the survey it shapes is cached per (slide,
+ * scope, budget) — a per-call flag would hand the next caller a survey segmented under
+ * rules it never asked for.
+ */
+const REGION_MERGE_IOU = 0.4;
+const REGION_MERGE_CONTAINMENT = 0.9;
+
+/** Plans kept per slide. Small: a plan is a decision point, not a history. */
+const MAX_PLANS_PER_SLIDE = 3;
+
+/**
+ * Smallest share of a frame the SECOND-largest island may hold and still make a split real.
+ *
+ * The islands are already filtered at 1% of the frame, so this is the line between "two
+ * objects" and "one object plus debris" — the only thing that should send a frame to the
+ * blind grid instead of to the separation the mask already found.
+ */
+const ISLAND_MIN_SIBLING = 0.05;
+
+/**
+ * Accepted `checklistFallbackReason` values.
+ *
+ * The reason reaches a locale string, and it arrives through a script the chat model wrote,
+ * so it is validated against a closed set rather than interpolated (AGENTS.md §0.2/§7).
+ */
+const CHECKLIST_FALLBACK_REASONS = new Set<ChecklistFallbackReason>([
+    "no-query", "no-model", "unparseable", "error",
+]);
 
 /**
  * Fields one montage may carry.
@@ -229,6 +409,23 @@ const SURVEY_MPP = 2.0;
  * vision model has to volunteer.
  */
 const OVERVIEW_RESOLUTION_SHORTFALL_FACTOR = 2;
+
+/**
+ * Rate-limit `fn`, with a `force` escape for the call that must not be dropped.
+ *
+ * The tree is published after every completed node so a cancel or a timeout keeps the work
+ * already paid for; without this that is a rank + evidence rebuild several times a second for a
+ * result nobody reads between model calls.
+ */
+function throttled(fn: () => void, minGapMs: number): (force?: boolean) => void {
+    let last = 0;
+    return (force = false) => {
+        const now = Date.now();
+        if (!force && now - last < minGapMs) return;
+        last = now;
+        fn();
+    };
+}
 
 /**
  * Reject `promise` if it has not settled within `ms`, naming the stage.
@@ -358,6 +555,31 @@ export interface RasterRead extends PixelSource {
      * to be device-sized, and assuming it is silently misplaces geometry.
      */
     scale: number;
+    /**
+     * False when the raster does NOT hold every tile it covers — INCLUDING when the render
+     * {@link stalled}. The renderer's own "fully loaded" flag can read true over permanently
+     * missing tiles, so it is ANDed with `!stalled` at the single point a raster is produced;
+     * consumers therefore only ever need this one flag.
+     *
+     * Every raster carries this, not just the off-screen ones ({@link RegionRaster} merely
+     * re-states it): a live-viewport read is incomplete exactly when the viewport was still
+     * streaming, and that case used to arrive as `undefined` — so `analyzeRegion` omitted the flag
+     * from its result and the model was shown blank slide with nothing said about it.
+     *
+     * Consumers must degrade closed on `false`: do not measure it, do not cache it, and do not
+     * describe it to a model as the region without saying it is provisional.
+     */
+    isComplete: boolean;
+    /**
+     * True when the render gave up because nothing more COULD arrive (a permanently missing tile is
+     * dropped from OSD's load candidates, so completeness can never flip) rather than because it
+     * ran out of budget.
+     *
+     * This is what tells a caller whether asking again is worth anything: `!isComplete && !stalled`
+     * is "slow, try a longer budget"; `stalled` is "these pixels are all this region will ever
+     * yield". Live-viewport reads, which do not wait at all, report false.
+     */
+    stalled: boolean;
 }
 
 /**
@@ -368,8 +590,6 @@ export interface RasterRead extends PixelSource {
  * the rendered region instead of device px).
  */
 export interface RegionRaster extends RasterRead {
-    /** False when the tile-load wait timed out and the raster holds partially loaded data. */
-    isComplete: boolean;
     /** Magnification the raster was actually rendered at (null when uncalibrated). */
     renderedMagnification: number | null;
     /** Map a raster pixel to PARENT-GLOBAL image coordinates (linear over the rendered bounds). */
@@ -415,6 +635,39 @@ export interface AnalyzeInput {
     /** PNG of the on-screen composite (may include the overlay). */
     imageBlob: Blob;
     prompt: string;
+    /**
+     * What this image IS — for the audit trail, never for the model.
+     *
+     * A remote driver ships the pixels to a server that has no idea which slide
+     * or which box they are; without this, a logged vision call is an anonymous
+     * PNG. It is carried alongside the image and used only for diagnostics: a
+     * driver must never put it into the prompt, because that would make an
+     * operator's logging configuration change what the model is asked.
+     */
+    context?: AnalysisContext;
+}
+
+/** Identity of one analyzed image: which slide, which box, how closely read. */
+export interface AnalysisContext {
+    /** The job this call serves: "analyze", "montage", … */
+    feature?: string;
+    /** Human-facing name of the region, counted from 1 ("region 2.1"). */
+    label?: string | null;
+    /** Parent-global level-0 pixels — WHAT left the browser. Null for a composite. */
+    region?: Bounds | null;
+    /**
+     * The boxes a COMPOSITE was assembled from, each with the label drawn on it.
+     *
+     * A montage is one image of many non-adjacent fields, so a single `region`
+     * cannot describe it — and "the model looked at twelve places" is exactly
+     * what an audit trail must not lose.
+     */
+    regions?: Array<{ label?: string | null; bounds: Bounds }> | null;
+    viewerId?: string | null;
+    /** Slide identity. Never a URL: DICOMweb shares one baseUrl across slides (§8). */
+    tileSourceId?: string | null;
+    /** µm per delivered raster pixel — how closely the image was actually read. */
+    deliveredMpp?: number | null;
 }
 
 export interface AnalyzeResult {
@@ -576,11 +829,24 @@ export interface InterrogationResult {
     answers: FeatureAnswer[];
     /**
      * Fraction of `region` actually looked at. Below 1 when the resolution asked for meant
-     * the region had to be sampled; a finding then speaks for the part that was read.
+     * the region had to be sampled, or when a field could not be rendered; a finding then
+     * speaks for the part that was read.
      */
     coveredFraction: number;
-    /** False when tiles were still streaming — the answers are provisional. */
+    /**
+     * False when tiles were still streaming, or when a field could not be rendered at all —
+     * the answers are provisional either way.
+     */
     isComplete: boolean;
+    /**
+     * What went wrong at the IMAGE level, in the reader's own words.
+     *
+     * Present only when something did. A checklist of `not-assessable` is ambiguous by
+     * construction — it looks the same whether the model examined the field and could not
+     * tell, or no field was ever produced — and a reader (human or chat model) that guesses
+     * wrong prescribes the wrong fix. This is where the run says which it was.
+     */
+    warnings?: string[];
     budget: { analyzeCalls: number };
 }
 
@@ -607,9 +873,17 @@ export interface MontageResult {
 
 /** One connected tissue island found during whole-slide orientation. */
 export interface SlideRegion {
-    /** 0-based array rank — INTERNAL. Never show it; use {@link SlideRegion.label}. */
+    /**
+     * 0-based reading-order rank among its siblings — INTERNAL. Never show it; use
+     * {@link SlideRegion.label}. It is NOT the array position: the array is in priority
+     * order (most tissue, best score), the number is where the region sits on the slide.
+     */
     index: number;
-    /** Human-facing name, counted from 1 ("region 1" is the largest island). */
+    /**
+     * Human-facing name, counted from 1 in SLIDE READING ORDER — rows top to bottom, left to
+     * right within a row. "region 1" is the first fragment on the glass, not the largest one;
+     * interest/size ranking lives in `rankScore` and the `ranked` list.
+     */
     label: string;
     /** Parent-global image-space bbox — pass to `viewer.frameImageRegion(bounds)`. */
     bounds: Bounds;
@@ -623,6 +897,24 @@ export interface SlideRegion {
      */
     isApproximate: true;
 }
+
+/**
+ * Where an exploration starts, and what it is allowed to cover.
+ *
+ * The walk used to be hardwired to the whole slide content rectangle, with the current view
+ * reachable only as a degraded fallback for sources that expose no dimensions. A scope is a
+ * HARD restriction: the survey raster covers exactly this rectangle (so a viewport scope buys
+ * a much finer mask for the same pixel budget), islands and every child drilled out of them
+ * are clamped to it, and the result says which scope produced it.
+ *
+ * - `"slide"` (default) — the whole slide, i.e. today's behaviour.
+ * - `"viewport"` — what the user is currently looking at.
+ * - an explicit rectangle in PARENT-GLOBAL level-0 image pixels (the same coordinate space
+ *   every `bounds` in this module speaks).
+ */
+export type ExplorationScope = "slide" | "viewport" | Bounds;
+
+export type { CoverageScope } from "./lib/scope";
 
 export interface SlideExploration {
     driver: string;
@@ -638,27 +930,34 @@ export interface SlideExploration {
     /** Fraction of the surveyed rectangle covered by tissue (0..1). */
     slideCoverage: number;
     /**
-     * What `slideCoverage`/`regions` refer to: "whole-slide" normally, or
-     * "current-view" in the fallback taken when the source exposes no slide
-     * dimensions (the survey then covers the live viewport, not the whole slide).
+     * What `slideCoverage`/`regions` refer to: "whole-slide" normally, "current-view" when
+     * the caller asked for `scope: "viewport"` (or in the fallback taken when the source
+     * exposes no slide dimensions), "region" for an explicit rectangle. Anything other than
+     * "whole-slide" means these numbers describe {@link scopeBounds}, NOT the slide.
      */
-    coverageScope: "whole-slide" | "current-view";
+    coverageScope: CoverageScope;
+    /** The rectangle actually surveyed, in parent-global image pixels. */
+    scopeBounds: Bounds;
     /**
      * False when the tile pyramid was still streaming when the overview was
      * captured (load wait timed out) — coverage/regions are then provisional and
      * likely UNDERSTATED; report them as such rather than asserting low coverage.
      */
     isComplete: boolean;
-    /** Tissue islands ranked by area (largest first). Empty when the slide looks blank. */
+    /**
+     * Tissue islands in slide reading order — the order their numbers count in, so a walk
+     * down this list is a walk down the slide. `areaFraction` is what to sort by when size
+     * is the question. Empty when the slide looks blank.
+     */
     regions: SlideRegion[];
     /** Coarse model-assisted overview note; present only when `hint` was requested and an analyze driver ran. */
     hint?: string | null;
 }
 
 export interface RegionReviewResult {
-    /** 0-based array rank of the reviewed region — INTERNAL; show {@link RegionReviewResult.label}. */
+    /** 0-based reading-order rank of the reviewed region — INTERNAL; show {@link RegionReviewResult.label}. */
     index: number;
-    /** Human-facing name of the reviewed region, counted from 1 ("region 2"). */
+    /** Human-facing name of the reviewed region, counted from 1 in slide reading order ("region 2"). */
     label: string;
     bounds: Bounds;
     /** Present when `feature: "analyze"` — the model's findings text (or null). */
@@ -756,12 +1055,13 @@ export interface NodeViewFacts {
  * and either drilled into (children) or pruned.
  */
 export interface OverviewNode {
-    /** 0-based rank among its siblings (largest tissue island first) — INTERNAL, not unique
-     * across the tree. Show {@link OverviewNode.label} instead. */
+    /** 0-based reading-order rank among its siblings — INTERNAL, not unique across the
+     * tree. Show {@link OverviewNode.label} instead. */
     index: number;
     /**
-     * Human-facing name, counted from 1 and carrying the ancestry path so it is unique:
-     * "region 2" at the top, "region 2.1" one level in. The only form to show a user.
+     * Human-facing name, counted from 1 in slide reading order and carrying the ancestry path
+     * so it is unique: "region 2" at the top, "region 2.1" one level in. The only form to
+     * show a user. It names WHERE the region is, never how interesting it is.
      */
     label: string;
     /** Recursion depth (0 = a whole-slide tissue island) — INTERNAL; humans count levels from 1. */
@@ -785,6 +1085,35 @@ export interface OverviewNode {
     /** Fraction of the framed box that is actually tissue (0..1); null when not measured. */
     bboxFillFraction: number | null;
     /**
+     * How much TISSUE the box holds, in µm² (level-0 px² on an uncalibrated slide).
+     *
+     * The absolute quantity behind {@link bboxFillFraction}, and the one the drill gate
+     * reads. A fraction cannot answer "is there anything in here worth another call?": a
+     * prostate core's island bbox is 93% glass by construction, and gating on that number
+     * closed the walk on every slide whose tissue is not rectangular.
+     */
+    tissueArea?: number | null;
+    /**
+     * Fields planned for this node and not yet read — INTERNAL, stripped from script results.
+     *
+     * A region that tiles into fifteen fields must not silently become the four a single
+     * expansion can afford. The remainder rides on the node, which goes back on the queue to
+     * compete for the next slot; whatever is still here when the run ends is reported as
+     * `budget.plannedNotRead`.
+     */
+    pendingTiles?: SlideRegion[];
+    /**
+     * Checklist hash this node's children were generated for — INTERNAL, stripped from results.
+     *
+     * `refineOverview` puts the WHOLE cached tree back on the frontier, including nodes that
+     * were already expanded to exhaustion. `_childrenOf` is deterministic over the same bounds
+     * and rung, so re-expanding one re-renders and re-analyzes identical children and appends
+     * them to `children` a second time — every refinement, compounding. This is how the walk
+     * tells "already done" from "worth asking again": a NEW checklist is a new question and
+     * genuinely re-opens the node, the same one is not.
+     */
+    expandedUnder?: string;
+    /**
      * Normalized nuclear density of this box (0..1), or null when no density map exists.
      *
      * A local measurement, not a model opinion. Lets a report say "low-cellularity area,
@@ -804,14 +1133,14 @@ export interface OverviewNode {
      */
     deliveredMpp?: number | null;
     /**
-     * Set when this node read ONE TILE of a larger region because the whole region could
-     * not be delivered at this rung's resolution in a single call. {@link bounds} is the
-     * tile, not the region: a finding here speaks for the tile alone.
-     */
-    tile?: { n: number; of: number; sampled: boolean };
-    /**
-     * @deprecated Structurally impossible for a planned field and always false. A true
-     * here means the render-size tripwire fired, i.e. a bug — not a property of the slide.
+     * True when this node's read landed COARSER than its ladder rung asked for.
+     *
+     * Not a bug and not a tripwire: a region too large to carry its rung in one call is read
+     * whole and coarse on purpose, and this flag is what says so — it routes the node's
+     * children to a lattice at the rung rather than to island splitting, and it tells the
+     * caller a leaf's findings were formed below the resolution the question wanted. It is a
+     * comparison of delivered against target µm/px, NOT "the lattice had more than one cell":
+     * a box that fits a single raster finer than its rung is not short of it.
      */
     resolutionShortfall?: boolean;
     /** The vision model's short description of this region (or null on failure). */
@@ -867,8 +1196,22 @@ export interface OverviewNode {
  * the result literal in `buildOverview`.
  */
 export interface OverviewResult {
-    /** Discriminates a completed walk from the adapter's "context-required" refusal. */
-    status: "ok";
+    /**
+     * Whether this is an examination at all, or an account of one that did not happen.
+     *
+     * `"incomplete"` means NOTHING here was read at a resolution that can answer the questions
+     * asked — the survey ran on a streaming pyramid, or the walk never found a region it would
+     * look at closely — and the caller must report that limitation instead of writing findings.
+     * `"ok"` means at least one question was settled; whether ALL of them were is
+     * {@link isComplete}, and the rows say which.
+     *
+     * It is the FIRST key of the object for a reason: the warnings said all of this before, and
+     * a result whose top-level fields still read `status: "ok"` / `isComplete: true` invited a
+     * reader to believe the optimistic half.
+     *
+     * (`"context-required"` is the adapter's separate refusal, before any walk starts.)
+     */
+    status: "ok" | "incomplete";
     driver: string;
     /** The feature query this overview was built for ("areas with X"), if any. */
     query?: string;
@@ -878,11 +1221,33 @@ export interface OverviewResult {
      */
     context: SlideContext;
     slide: SlideExploration["slide"];
-    /** Whole-slide tissue coverage (0..1). */
+    /** Tissue coverage (0..1) of {@link scopeBounds} — the whole slide unless the run was scoped. */
     slideCoverage: number;
-    coverageScope: "whole-slide";
-    /** False when the level-0 overview ran on partially-loaded tiles (provisional). */
+    /**
+     * Anything other than "whole-slide" means the walk covered {@link scopeBounds} only. A
+     * scoped run must never be reported as a whole-slide read; `warnings` says so too.
+     */
+    coverageScope: CoverageScope;
+    /** The rectangle the walk was confined to, in parent-global image pixels. */
+    scopeBounds: Bounds;
+    /**
+     * Was the tissue actually EXAMINED?
+     *
+     * False while any checklist feature is still unanswered or was only ever met at too coarse a
+     * resolution — which is the state a walk ends in when it never found a region it was willing
+     * to read closely. Do not write findings from a result with `isComplete: false`; say what
+     * could not be read.
+     *
+     * This used to report the survey RASTER's completeness, which is a different question with a
+     * different answer, and the two disagreeing is how a run that examined nothing was presented
+     * as a completed examination. That reading now lives in {@link surveyComplete}.
+     */
     isComplete: boolean;
+    /**
+     * False when the survey render ran on a partially-loaded tile pyramid: coverage and the
+     * island list are then provisional and UNDERSTATED, never evidence that a slide is blank.
+     */
+    surveyComplete: boolean;
     /** The checklist the run obeyed, and where it came from. */
     checklist: Checklist;
     /**
@@ -933,6 +1298,36 @@ export interface BuildOverviewOptions {
     /** Target feature to hunt for ("tumour", "necrosis", ...); absent = generic salience. */
     query?: string;
     /**
+     * Where to explore. `"slide"` (default) walks the whole slide; `"viewport"` confines the
+     * whole run — survey, islands and every drill — to what the user is currently looking at;
+     * an explicit parent-global rectangle confines it to that box. See {@link ExplorationScope}.
+     *
+     * A scoped run is not a cheaper whole-slide run: it covers less and sees it better, and
+     * `coverageScope` / `warnings` say so.
+     */
+    scope?: ExplorationScope;
+    /**
+     * Resolution (µm/px) of the orientation pass — the survey render AND the coarsest rung of
+     * the ladder, which are kept in step deliberately.
+     *
+     * Default {@link SURVEY_MPP} for a whole-slide run. For a scoped run the default is
+     * whichever is FINER of that and the resolution the scope already affords inside
+     * `surveyPixels` — forcing 2 µm/px on a viewport-sized box would spend the first rung on
+     * detail the box beats for free. An explicit value is honoured verbatim.
+     *
+     * Ignored on an uncalibrated slide: there is no physical scale to hit, and `surveyPixels`
+     * is then the honest budget.
+     */
+    surveyMpp?: number;
+    /** Raster budget for the survey render, in pixels (default 2 MP, ceiling 4 MP). */
+    surveyPixels?: number;
+    /** Tissue islands the survey pass covers (default 12). */
+    maxRoots?: number;
+    /** Slack left around each framed region, as a fraction of its size (default 0.1, max 0.5). */
+    framePadding?: number;
+    /** Raster budget for ONE vision call, in pixels (default 2 MP, ceiling 8 MP). */
+    fieldPixels?: number;
+    /**
      * What is known about the slide (stain, its signal class, site). Supply this: without
      * it the model is told the stain and site are unknown and is forbidden from naming
      * them, which is safe but much less useful. Must be already resolved — the engine
@@ -947,7 +1342,12 @@ export interface BuildOverviewOptions {
     progress?: boolean;
     /** Stop the walk early; the regions already described are kept and returned. */
     signal?: AbortSignal;
-    /** Max recursion depth (default 2). */
+    /**
+     * Max recursion depth. Defaults to the number of rungs on the run's ladder (at least 2),
+     * because one rung costs one level — a node reads its box at the rung it affords and its
+     * children read the same box at the next one. A smaller value caps the run ABOVE the
+     * finest resolution the ladder declares.
+     */
     maxDepth?: number;
     /** Regions explored per node (default 4). */
     breadth?: number;
@@ -961,14 +1361,14 @@ export interface BuildOverviewOptions {
     /** Drill only when the parsed interest score is at least this (default 0.5). */
     interestThreshold?: number;
     /**
-     * Minimum tissue fill (0..1) a box must have before an unresolvable view is allowed to
-     * spend budget drilling for detail (default 0.1). Stops the walk from chasing sharper
-     * pictures of background.
+     * Least tissue a box must hold before it is worth drilling, in µm² (level-0 px² on an
+     * uncalibrated slide). Defaults to ONE vision call's worth of tissue at the finest rung
+     * the run will reach — derived from `fieldPixels` and the ladder, not a constant.
      */
-    minDrillFill?: number;
-    /** Hard cap on vision calls for the whole run (default 18). */
+    minDrillTissue?: number;
+    /** Hard cap on vision calls for the whole run (default 28). */
     maxAnalyzeCalls?: number;
-    /** Hard cap on regions visited for the whole run (default 24). */
+    /** Hard cap on regions visited for the whole run (default 36). */
     maxNodes?: number;
     /**
      * The features the run should establish, each with the resolution it needs.
@@ -984,6 +1384,15 @@ export interface BuildOverviewOptions {
     features?: ChecklistFeature[];
     /** A whole checklist, as returned by a derivation step. Takes precedence over `features`. */
     checklist?: Checklist;
+    /**
+     * Why the caller could not supply a checklist, when it tried and failed.
+     *
+     * Derivation needs a chat model, so it lives in the scripting adapter, not here — which
+     * means the engine cannot observe its failure and used to report every fallback the same
+     * way. "The model is not reachable" and "you asked a vague question" are opposite
+     * diagnoses, and only one of them is the caller's to act on.
+     */
+    checklistFallbackReason?: ChecklistFallbackReason;
     /**
      * Traversal strategy. `"best-first"` (default) surveys the tissue, then spends what is
      * left on the globally most promising regions. `"dfs"` is the previous depth-first
@@ -1017,7 +1426,7 @@ interface ResolvedOverviewOptions {
     maxDepth: number;
     breadth: number;
     interestThreshold: number;
-    minDrillFill: number;
+    minDrillTissue: number;
     maxAnalyzeCalls: number;
     maxNodes: number;
     subdivide: "tissue";
@@ -1029,6 +1438,95 @@ interface ResolvedOverviewOptions {
     scheduler: "best-first" | "dfs";
     surveyFraction: number;
     concurrency: number;
+    /** Resolved once, so nothing downstream re-reads a module constant mid-walk. */
+    maxRoots: number;
+    framePadding: number;
+    fieldPixels: number;
+    /**
+     * The rectangle the run is confined to. Every framed region is clipped to it, so the
+     * padding a node gets for context cannot reach back outside the scope and hand the model
+     * tissue the survey never looked at. Equal to the slide's content rectangle on an
+     * unscoped run, where the clip is a no-op.
+     */
+    scopeBounds: Bounds;
+}
+
+/** Everything a walk obeys, settled once and shared by the plan and the run that executes it. */
+interface ResolvedOverviewRun {
+    scope: { bounds: Bounds; coverageScope: CoverageScope };
+    checklist: Checklist;
+    surveyMpp: number | null;
+    ladder: OverviewLadder;
+    opts: ResolvedOverviewOptions;
+}
+
+/**
+ * A walk that has been costed but not run.
+ *
+ * The expensive half of an overview is the vision walk; everything before it — one survey
+ * render, the tissue mask, the density prior, the checklist, the ladder — is cheap and
+ * already cached. Splitting the call at that seam is what lets the assistant see WHAT will
+ * be examined and WHAT it will be asked before minutes of model calls are committed, and
+ * lets it drop regions it can already tell are not worth reading.
+ *
+ * The survey is held by reference rather than re-derived at run time: the region list the
+ * caller edited must be the region list that runs, and a re-survey could legitimately
+ * return different islands.
+ */
+interface OverviewPlan {
+    planId: string;
+    slideKey: string;
+    run: ResolvedOverviewRun;
+    exploration: SlideExploration;
+    /** The caller options the plan was drawn up from; replayed verbatim by `runPlan`. */
+    options?: BuildOverviewOptions;
+    builtAtIso: string;
+}
+
+/** What a caller may strike off a plan before running it. */
+export interface OverviewPlanEdits {
+    /** Region labels to skip. */
+    drop?: string[];
+    /** Region labels to keep, to the exclusion of everything else. */
+    only?: string[];
+    /** Extra vision calls to allow beyond the plan's budget. */
+    addCalls?: number;
+    driver?: string;
+}
+
+/** A costed, not-yet-run walk. See {@link PathologyFoundation.planOverview}. */
+export interface OverviewPlanResult {
+    planId: string;
+    coverageScope: CoverageScope;
+    scopeBounds: Bounds;
+    checklist: Checklist;
+    ladder: { magnifications: Array<number | null>; targetMpp: Array<number | null> };
+    regions: Array<{
+        label: string;
+        bounds: Bounds;
+        areaFraction: number;
+        /** Tissue share of the box, from the cached mask. Null when no survey covers it. */
+        fill: number | null;
+        /** Nuclear density prior, 0..1. Null when the driver offers no density feature. */
+        cellularity: number | null;
+    }>;
+    /** Regions still sharing part of their box after merging — a judgement call left to the caller. */
+    overlapPairs: Array<{ a: string; b: string; iou: number }>;
+    /** Calls the coverage pass will spend. Depth is adaptive and deliberately not guessed at. */
+    estimatedSurveyCalls: number;
+    maxAnalyzeCalls: number;
+    slideCoverage: number;
+    surveyComplete: boolean;
+    /** Regions the root cap left out — coverage the run will not reach (no silent caps). */
+    regionsOmitted: number;
+    builtAtIso: string;
+}
+
+/** A plan that can no longer be run: the slide moved on, or the edits left nothing to read. */
+export interface OverviewPlanExpired {
+    status: "plan-expired";
+    planId: string;
+    reason?: "no-regions";
 }
 
 /**
@@ -1045,7 +1543,7 @@ interface SlideSurvey {
     surveyBounds: Bounds;
     slide: SlideExploration["slide"];
     slideCoverage: number;
-    coverageScope: "whole-slide" | "current-view";
+    coverageScope: CoverageScope;
     regions: SlideRegion[];
     /** Ref-local polygons of the detected islands, for `annotate`. */
     localPolys: Array<Point[]>;
@@ -1060,6 +1558,20 @@ interface SlideSurvey {
      */
     density?: DensityMap;
     driverId: string;
+}
+
+/** What `refineOverview` needs to continue a walk under the rules it originally ran under. */
+interface OverviewRunState {
+    opts: ResolvedOverviewOptions;
+    ladder: OverviewLadder;
+    /** Expansions performed under each root — the anti-starvation term, which must survive. */
+    expandedPerRoot: Map<string, number>;
+    /** Slide metadata and coverage, for republishing without re-surveying. */
+    exploration: SlideExploration;
+    /** Cumulative spend across the original run and every refinement of it. */
+    spent: OverviewBudget;
+    /** How many times this tree has been continued. */
+    refinements: number;
 }
 
 /** Per-depth render targets for one overview walk. See `_resolveLadder`. */
@@ -1174,6 +1686,11 @@ class VercelAnalyzeDriver implements FmDriver {
             prompt: input.prompt,
             imageBase64: base64,
             mediaType: "image/png",
+            // Diagnostics only — the server logs it beside the image and never
+            // puts it in the model's message. This is what turns a logged vision
+            // call from an anonymous PNG into "region 2.1 of this slide, read at
+            // 1.6 µm/px".
+            context: input.context,
         }, {
             // Yield connection slots to interactive tile loading — bounded per
             // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
@@ -1206,7 +1723,43 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     private _slideContexts: Map<string, SlideContext> = new Map();
     /**
-     * The whole-slide tissue survey, keyed the same way.
+     * What the work on this slide is currently ABOUT, keyed the same way.
+     *
+     * A conversation settles on a region and then stops naming it: "review core 3", "and the
+     * findings?", "do a deep scan". The last of those carries its target in the conversation, not
+     * in the sentence, and a walk that answered it slide-wide spent minutes examining the wrong
+     * tissue. So a region-scoped call records its region here, and a later call that names no
+     * scope inherits it.
+     *
+     * Not a hidden narrowing: a run that took the focus reports `coverageScope: "region"`,
+     * `scopeBounds`, and the scoped-coverage warning — the same three signals an explicit scope
+     * produces. `scope: "slide"` is the opt-out and clears it.
+     */
+    private _focusRegions: Map<string, { label?: string; bounds: Bounds }> = new Map();
+    /**
+     * Everything a stopped walk needs to be CONTINUED rather than restarted, keyed the same way.
+     *
+     * The tree is cached, but the tree alone cannot resume: the traversal also needs the resolved
+     * options it ran under, the ladder it climbed, and the per-root expansion counts the
+     * anti-starvation weight is computed from. Rebuilding those by guesswork would make a
+     * refinement rank by different rules than the run it continues.
+     */
+    private _overviewRuns: Map<string, OverviewRunState> = new Map();
+    /**
+     * Costed-but-unrun walks, keyed like the surveys and bounded the same way.
+     *
+     * A plan holds a survey by reference, so it is cheap to keep and expensive to lose — but
+     * it is also stale the moment the slide changes, which is what the slide-keyed bound
+     * takes care of. A caller whose plan has been evicted gets `plan-expired` and can plan
+     * again; nothing re-surveys behind their back.
+     */
+    private _overviewPlans: Map<string, OverviewPlan> = new Map();
+    private _planCounter = 0;
+    /**
+     * Tissue surveys, keyed by `tileSourceId` PLUS the rectangle and pixel budget they were
+     * derived at (see `surveyCacheKey`). A slide can now be surveyed at more than one scope — the
+     * whole slide coarsely, the current view finely — and serving one where the other was
+     * asked for would silently answer at the wrong resolution over the wrong box.
      *
      * A slide's tissue mask does not change, yet the walk used to re-derive it constantly:
      * once for orientation, once per node to measure fill, and once more per node to find
@@ -1325,7 +1878,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         for (const d of this._drivers.values()) {
             if (typeof d.features[feature] === "function") return d;
         }
-        throw new Error(`No pathology driver implements the "${feature}" feature.`);
+        // Name what IS here. A bare "feature X is missing" tells a caller nothing about what to
+        // do next, so an agent's only move is to guess at another call and spend a turn finding
+        // out that one is missing too — the inventory is what turns one dead end into a choice.
+        const available = [...new Set(this.listDrivers().flatMap(d => d.features))].sort();
+        throw new Error(
+            `No pathology driver implements the "${feature}" feature. `
+            + `Available features: ${available.join(", ") || "(none)"}.`
+        );
     }
 
     describeDriverForFeature(feature: PathologyFeature, driverId?: string | null): ResolvedDriverInfo {
@@ -1382,24 +1942,30 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * Whole-slide orientation. Renders the entire slide OFF-SCREEN (the user's
-     * viewport is never touched), detects tissue with the `tissue-mask` driver, and
-     * returns a ranked list of tissue islands (each with a parent-global bbox to
-     * navigate to) plus whole-slide coverage and slide metadata. The agent should
-     * call this FIRST so any follow-up work targets real tissue and never frames
-     * empty glass. The user can keep navigating freely the whole time.
+     * Orientation pass. Renders a rectangle of the slide OFF-SCREEN (the user's viewport is
+     * never touched), detects tissue with the `tissue-mask` driver, and returns a ranked list
+     * of tissue islands (each with a parent-global bbox to navigate to) plus that rectangle's
+     * tissue coverage and slide metadata. The agent should call this FIRST so any follow-up
+     * work targets real tissue and never frames empty glass. The user can keep navigating
+     * freely the whole time.
      *
-     * The overview is a low-resolution render, so `regions` bounds are approximate —
-     * follow up with `annotateTissue` (or a region-scoped `analyzeRegion`) for a
-     * high-resolution result.
+     * The rectangle is the whole slide by default and whatever `scope` says otherwise — and a
+     * scope is a real restriction, not a hint: the same pixel budget spread over a viewport
+     * instead of a whole slide is a far finer mask, which is the point of asking for one.
      *
+     * The survey is a low-resolution render, so `regions` bounds are approximate — follow up
+     * with `annotateTissue` (or a region-scoped `analyzeRegion`) for a high-resolution result.
+     *
+     * @param scope where to look: "slide" (default), "viewport", or a parent-global rectangle.
+     * @param surveyMpp resolution of the survey render, µm/px. See {@link BuildOverviewOptions.surveyMpp}.
+     * @param surveyPixels raster budget for the survey render (default 2 MP, ceiling 4 MP).
      * @param annotate draw the detected islands as polygon annotations (default off).
      * @param hint when true and an `analyze` driver exists, attach one coarse
      *   model-assisted overview note (a snapshot leaves the viewer — the scripting
      *   layer asks for consent).
      * @param minAreaFraction smallest island to report, as a fraction of the
-     *   overview (default 0.001; looser than `annotateTissue` because the overview
-     *   is coarse).
+     *   surveyed rectangle (default 0.001; looser than `annotateTissue` because the
+     *   survey is coarse).
      */
     async exploreSlide(
         viewer: any,
@@ -1407,6 +1973,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number;
             /** Re-derive the tissue survey instead of reusing the cached one. */
             refresh?: boolean;
+            scope?: ExplorationScope;
+            surveyMpp?: number;
+            surveyPixels?: number;
         }
     ): Promise<SlideExploration> {
         if (!viewer) throw new Error("exploreSlide() requires a viewer.");
@@ -1436,9 +2005,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             slide: survey.slide,
             slideCoverage: survey.slideCoverage,
             coverageScope: survey.coverageScope,
+            scopeBounds: survey.surveyBounds,
             // Only a COMPLETE survey is ever cached, so a cache hit is complete by construction.
             isComplete: raster ? raster.isComplete : true,
-            regions: survey.regions,
+            // Presented in slide reading order, which is what the numbering means. The cached
+            // `survey.regions` keeps its priority order for callers that take a prefix of it.
+            regions: survey.regions.slice().sort((a, b) => a.index - b.index),
             hint,
         };
     }
@@ -1479,6 +2051,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (!this._hasFeature("analyze", options?.driver)) {
             throw new Error("interrogateRegion needs an 'analyze' driver (e.g. a configured vision model).");
         }
+        // Naming a region is what makes it the subject; a later unqualified call follows it.
+        this.setFocusRegion(viewer, options.region);
 
         const checklist = this._interrogationChecklist(options);
         const slideMpp = this._micronsPerPixel(viewer);
@@ -1487,8 +2061,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const maxFields = Math.max(1, options.maxFields ?? 4);
         const context = this._normalizeContext(options.context ?? this.getSlideContext(viewer) ?? undefined);
 
-        const key = this._slideKey(viewer);
-        const survey = key ? this._surveys.get(key) : null;
+        const survey = this._surveyCovering(viewer, options.region);
         const slide = this._slideMeta(viewer, this._ref(viewer));
         const plan = planFields({
             bounds: options.region,
@@ -1517,9 +2090,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 label: t("pathology.captureInterrogate"),
             }),
             analyze: async (field, raster) => {
-                const { assessable, deferred } = splitByResolution(checklist, raster.deliveredMpp);
+                // `slideMpp` is what the scan holds. Asking for finer is a legitimate request
+                // this slide cannot meet — meeting it as far as possible and saying so beats
+                // returning a checklist of `not-assessable` and `analyzeCalls: 0`, which is a
+                // call that looked at nothing while reporting a verdict for every feature.
+                const { assessable, deferred } =
+                    splitByResolution(checklist, raster.deliveredMpp, undefined, slideMpp);
                 const answers: Record<string, FeatureAnswer> = {};
                 for (const f of deferred) answers[f.id] = unassessable(f.id, "resolution");
+                // A render that spent its budget or stalled hands back the tiles it did get.
+                // That is worth analyzing — but the result it produces is a read of part of the
+                // field, and saying so is the difference between a partial answer and a wrong one.
+                if (!raster.isComplete) isComplete = false;
 
                 let findings: string | null = null;
                 if (assessable.length) {
@@ -1547,6 +2129,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     });
                     const parsed = parseFieldAnswers(res?.findings, askedFor);
                     Object.assign(answers, parsed.answers);
+                    markBelowRequested(answers, assessable, raster.deliveredMpp);
                     findings = parsed.prose || res?.findings || null;
                     if (res?.isComplete === false) isComplete = false;
                 }
@@ -1558,14 +2141,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     findings,
                 };
             },
-            onError: (field, error) => ({
-                label: field.label,
-                bounds: field.bounds,
-                deliveredMpp: null,
-                answers: checklist.features.map(f => unassessable(f.id, "unparsed")),
-                findings: null,
-                error: (error as any)?.message || String(error),
-            }),
+            onError: (field, error) => {
+                // Nothing was rendered, so nothing was read: the result cannot claim to be
+                // complete, and the features are `unread` — not `unparsed`, which would let
+                // the aggregate report "the model could not tell" about an image the model
+                // was never shown.
+                isComplete = false;
+                return {
+                    label: field.label,
+                    bounds: field.bounds,
+                    deliveredMpp: null,
+                    answers: checklist.features.map(f => unassessable(f.id, "unread")),
+                    findings: null,
+                    error: (error as any)?.message || String(error),
+                };
+            },
             visionConcurrency: Math.max(1, options.concurrency ?? 4),
             renderWindow: Math.max(1, options.concurrency ?? 4),
             ...(options.signal ? { signal: options.signal } : {}),
@@ -1573,7 +2163,23 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             if (done) fields.push(done);
         }
 
-        const coveredArea = fields.reduce((sum, f) => sum + f.bounds.width * f.bounds.height, 0);
+        // Only fields that produced a raster COVER anything. Summing the planned bounds of a
+        // field that failed to render reported `coveredFraction: 1` for a run in which every
+        // field errored — a number that says "the whole region was examined" about a region
+        // nothing looked at.
+        const unread = fields.filter(f => f.error);
+        const coveredArea = fields.reduce(
+            (sum, f) => sum + (f.error ? 0 : f.bounds.width * f.bounds.height), 0
+        );
+        const warnings = unread.length
+            // Named as a rendering failure, because the aggregate answers alone read as a
+            // resolution problem and send the reader to zoom in — which cannot help.
+            ? [t("pathology.warnFieldsUnread", {
+                count: unread.length,
+                total: fields.length,
+                reason: unread[0]?.error ?? "",
+            })]
+            : [];
         return {
             region: options.region,
             checklist,
@@ -1583,6 +2189,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             answers: this._aggregateAnswers(fields, checklist),
             coveredFraction: Math.max(0, Math.min(1, coveredArea / regionArea)),
             isComplete,
+            ...(warnings.length ? { warnings } : {}),
             budget: { analyzeCalls },
         };
     }
@@ -1708,6 +2315,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const res = await driver.features["analyze"]!({
                 imageBlob: composite.blob,
                 prompt: [...this._contextPreamble(context, this._montageFacts(cellSizeUm, composite), 0, null), prompt].join(" "),
+                // A montage is many non-adjacent fields in one image, so there is no
+                // single region to name — every cell is listed instead, with the
+                // label that is drawn on it, so the record maps back to the slide.
+                context: this._analysisContext(viewer, "montage", {
+                    label: rendered.map(r => r.cellLabel).join(", ") || null,
+                    regions: rendered.map(r => ({ label: r.cellLabel, bounds: r.bounds })),
+                    deliveredMpp: rendered[0]?.deliveredMpp ?? null,
+                }),
             });
             text = res?.text ?? null;
         } finally {
@@ -1828,7 +2443,32 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * The whole-slide tissue survey behind `exploreSlide`, derived once per slide.
+     * Render the survey rectangle — the read every later decision rests on.
+     *
+     * ONE render, one generous budget. This used to re-issue the render up to three times because
+     * the vendored flex-renderer drew whatever tiles happened to be resident and never waited for
+     * the ones it scheduled, so the first whole-slide survey of a cold slide saw only the region
+     * the user had been looking at (a 21x50 mm biopsy came back as one 3 mm island at 0.1 %
+     * coverage, cached for the session because the raster claimed to be complete). The renderer now
+     * waits, so re-asking would just re-pay a budget the first pass already spent — and each retry
+     * re-queued through the background scheduler, where the tiles the previous attempt scheduled
+     * kept the pass out until the ~1500 ms starvation escape.
+     */
+    private async _renderSurveyRaster(
+        viewer: any,
+        surveyBounds: Bounds,
+        targetPixels: number
+    ): Promise<RegionRaster> {
+        return this._renderRegionRaster(viewer, surveyBounds, {
+            targetPixels,
+            layers: "background",
+            timeoutMs: this._budget("surveyLoadTimeoutMs", SURVEY_LOAD_TIMEOUT_MS),
+            label: t("pathology.captureSurvey"),
+        });
+    }
+
+    /**
+     * The tissue survey behind `exploreSlide`, derived once per (slide, scope, budget).
      *
      * Returns the freshly-rendered raster alongside the survey when this call did the work,
      * so a caller that also needs the pixels does not pay for a second render. A cache hit
@@ -1836,12 +2476,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     private async _surveySlide(
         viewer: any,
-        options?: { driver?: string; minAreaFraction?: number; refresh?: boolean }
+        options?: {
+            driver?: string; minAreaFraction?: number; refresh?: boolean;
+            scope?: ExplorationScope; surveyMpp?: number; surveyPixels?: number;
+        }
     ): Promise<{ survey: SlideSurvey; raster: RegionRaster | null }> {
-        const key = this._slideKey(viewer);
+        const slideKey = this._slideKey(viewer);
+        const { bounds: surveyBounds, coverageScope } = this._resolveScope(viewer, options?.scope);
+        // Resolve the rung BEFORE the budget: on a scoped run the rung is what decides how
+        // many pixels are worth asking for, and asking for the flat whole-slide budget over a
+        // small box is how a "closer look" came back at whole-slide coarseness.
+        const surveyMpp = this._resolveSurveyMpp(viewer, surveyBounds, coverageScope, options);
+        const targetPixels = this._surveyPixelBudget(viewer, surveyBounds, {
+            surveyMpp, surveyPixels: options?.surveyPixels,
+        });
+        const key = slideKey ? surveyCacheKey(slideKey, surveyBounds, targetPixels) : null;
+
         if (!options?.refresh && key) {
             const cached = this._surveys.get(key);
-            if (cached) return { survey: cached, raster: null };
+            // Re-insert on a hit so recency is real, not just insertion age.
+            if (cached) {
+                rememberBounded(this._surveys, key, slideKey!, cached, MAX_SURVEYS_PER_SLIDE);
+                return { survey: cached, raster: null };
+            }
         }
 
         const ref = this._ref(viewer);
@@ -1849,36 +2506,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const slideMeta = this._slideMeta(viewer, ref);
         const slideDimsKnown = slideMeta.width > 0 && slideMeta.height > 0;
 
-        // Survey rectangle in parent-global image coords. Normally the slide's whole
-        // content rectangle — no letterbox margins, no viewport framing: the raster
-        // IS the slide (for a virtual-region crop, the CROP expressed in parent-global
-        // coords). When the source exposes NO slide dimensions (some DICOM / custom
-        // sources), degrade to surveying the CURRENT VIEW so orientation still returns
-        // a best-effort overview instead of throwing — the result is then scoped
-        // "current-view", and regions can't be slide-clamped.
-        let surveyBounds: Bounds;
-        if (slideDimsKnown) {
-            const content = ref?.getContentSize?.();
-            const localBR: Point = { x: content?.x || slideMeta.width, y: content?.y || slideMeta.height };
-            const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
-            const pTL = toParent({ x: 0, y: 0 });
-            const pBR = toParent(localBR);
-            surveyBounds = {
-                x: Math.min(pTL.x, pBR.x),
-                y: Math.min(pTL.y, pBR.y),
-                width: Math.abs(pBR.x - pTL.x),
-                height: Math.abs(pBR.y - pTL.y),
-            };
-        } else {
-            const view = this._currentViewParentBounds(viewer, ref, cropped);
-            if (!view) throw new Error("The slide dimensions are unavailable; cannot build an overview.");
-            surveyBounds = view;
-        }
-        const raster = await this._renderRegionRaster(viewer, surveyBounds, {
-            targetPixels: MASK_TARGET_PIXELS,
-            layers: "background",
-            label: t("pathology.captureSurvey"),
-        });
+        const raster = await this._renderSurveyRaster(viewer, surveyBounds, targetPixels);
         const { driverId, mask } = await this._runTissueMask(viewer, options?.driver, raster);
 
         // Mask px → parent-global image coords: a pure linear map over the surveyed
@@ -1894,12 +2522,16 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
         const total = mask.width * mask.height;
         const minArea = Math.max(1, (options?.minAreaFraction ?? 0.001) * total);
-        const slideArea = slideMeta.width * slideMeta.height;
+        // The area a contour may legitimately span is the SURVEYED rectangle, which is the
+        // whole slide only on an unscoped run. Using the slide's area on a scoped one would
+        // never fire the degenerate-box guard, since no box inside the scope can approach it.
+        const surveyArea = surveyBounds.width * surveyBounds.height;
 
-        // The raster IS the whole slide here, so tissue/total is genuine whole-slide coverage
-        // (unlike annotateTissue's current-view coverage). Computed before the contour loop so
-        // the whole-slide-box guard below can tell a spurious full-rectangle outline (low
-        // coverage) from a legitimately all-tissue slide (high coverage).
+        // The raster IS the surveyed rectangle, so tissue/total is genuine coverage OF THAT
+        // RECTANGLE (unlike annotateTissue's current-view coverage) — the whole slide when the
+        // run is unscoped, the scope otherwise; `coverageScope` says which. Computed before
+        // the contour loop so the full-rectangle guard below can tell a spurious outline (low
+        // coverage) from a legitimately all-tissue rectangle (high coverage).
         const slideCoverage = total ? countFilled(mask.binaryMask) / total : 0;
 
         const localPolys: Array<Point[]> = [];
@@ -1912,17 +2544,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 const imagePoly = r.pts.map(p => mapParent(p.x, p.y));
                 const raw = boundsOfPolygons([imagePoly]);
                 if (!raw) return;
-                // Clamp to the slide (link targets must be real, on-slide) and drop a degenerate
-                // box that spans the whole slide ONLY when coverage is low (a spurious
-                // full-rectangle contour); an all-tissue slide genuinely yields a whole-slide
-                // region and must be kept, else exploreSlide reports blank on solid tissue.
-                // In the current-view fallback the slide extent is unknown, so keep the raw
-                // (already on-view) box unclamped.
+                // Clamp into the SURVEYED rectangle — that is the hard restriction a scope
+                // buys, and on an unscoped run it is the slide, so nothing changes there.
+                // Then clamp to the slide as well (link targets must be real, on-slide);
+                // in the current-view fallback the slide extent is unknown, so that step is
+                // skipped and the raw (already on-view) box stands.
+                const inScope = intersectBounds(raw, surveyBounds);
+                if (!inScope) return;
                 const bounds = slideDimsKnown
-                    ? clampBoundsToSlide(raw, slideMeta.width, slideMeta.height)
-                    : raw;
+                    ? clampBoundsToSlide(inScope, slideMeta.width, slideMeta.height)
+                    : inScope;
                 if (!bounds) return;
-                if (slideArea > 0 && bounds.width * bounds.height > 0.999 * slideArea && slideCoverage < 0.9) return;
+                // Drop a degenerate box spanning the whole surveyed rectangle ONLY when
+                // coverage is low (a spurious full-rectangle contour); an all-tissue view
+                // genuinely yields one and must be kept, else exploreSlide reports blank on
+                // solid tissue.
+                if (surveyArea > 0 && bounds.width * bounds.height > 0.999 * surveyArea && slideCoverage < 0.9) return;
                 localPolys.push(imagePoly.map(toLocal));
                 const index = regions.length;
                 regions.push({
@@ -1940,8 +2577,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             surveyBounds,
             slide: slideMeta,
             slideCoverage,
-            coverageScope: slideDimsKnown ? "whole-slide" : "current-view",
-            regions,
+            coverageScope,
+            // Merging and the collapsed-scope rescue both renumber positionally — they have
+            // to, since they rebuild the list. Reading-order numbering is applied ONCE, on
+            // whatever survives, so a label is never assigned twice from a different list.
+            regions: this._numberByReadingOrder(this._resegmentCollapsedScope(
+                this._mergeRegions(regions), mask, mapParent, surveyBounds, coverageScope, slideCoverage
+            )),
             localPolys,
             mask,
             sampler: maskSampler(mask, surveyBounds),
@@ -1961,8 +2603,61 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
         // A partial render understates coverage and misplaces islands. Caching one would
         // make a transient network state permanent for the rest of the session.
-        if (key && raster.isComplete) this._surveys.set(key, survey);
+        if (key && slideKey && raster.isComplete) {
+            rememberBounded(this._surveys, key, slideKey, survey, MAX_SURVEYS_PER_SLIDE);
+        }
         return { survey, raster };
+    }
+
+    /**
+     * Split a scoped survey that came back as ONE region spanning its own rectangle.
+     *
+     * A scope is drawn around tissue the reviewer cares about — typically several cores. At
+     * survey coarseness those cores are separated by a few mask pixels of glass, and outer
+     * contours are traced 8-connected, so one diagonal touch anywhere merges them into a
+     * single contour whose bounding box is the whole scope. `exploreSlide` then reports one
+     * region, the walk gets one root, and the assistant describes a four-core biopsy as "a
+     * single core" — from a box that is 90% glass (`bboxFillFraction` ~0.1 is the tell).
+     *
+     * The mask already says where the tissue is, so no extra render is needed: fall back to
+     * the same tissue-aware grid that {@link _subdivideRegion} uses for a contiguous mass.
+     * Every cell holds real tissue (`TILE_MIN_FILL`), so the walk gets several honest roots
+     * to spread its survey budget across instead of one rectangle to re-describe.
+     *
+     * Untouched when the run is unscoped (a whole-slide contour that spans the slide is
+     * already dropped upstream), when the survey found real structure, or when the rectangle
+     * genuinely IS solid tissue — there is nothing to separate in that case.
+     */
+    private _resegmentCollapsedScope(
+        regions: SlideRegion[],
+        mask: MaskResult,
+        mapParent: (px: number, py: number) => Point,
+        surveyBounds: Bounds,
+        coverageScope: CoverageScope,
+        slideCoverage: number
+    ): SlideRegion[] {
+        const first = regions[0];
+        const collapsed = shouldResegmentScope({
+            coverageScope,
+            regionCount: regions.length,
+            regionArea: first ? first.bounds.width * first.bounds.height : null,
+            surveyArea: surveyBounds.width * surveyBounds.height,
+            coverage: slideCoverage,
+            spanFraction: SCOPE_COLLAPSED_SPAN,
+            solidCoverage: SCOPE_SOLID_TISSUE_COVERAGE,
+        });
+        if (!collapsed) return regions;
+
+        const cells = gridSplitTissue(mask, mapParent, SCOPE_RESEGMENT_GRID, TILE_MIN_FILL);
+        if (cells.length < 2) return regions;
+        return cells.map((cell, index) => ({
+            index,
+            label: regionLabel([index]),
+            bounds: intersectBounds(cell.bounds, surveyBounds) || cell.bounds,
+            center: centerOf(cell.bounds)!,
+            areaFraction: cell.areaFraction,
+            isApproximate: true,
+        }));
     }
 
     /**
@@ -1995,11 +2690,19 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             throw new Error("reviewRegions does not support the point-driven 'segment' feature; use segmentAtPoint.");
         }
         let regions = options?.regions;
+        let ownRegions = false;
         if (!regions || !regions.length) {
             regions = (await this.exploreSlide(viewer, { driver: options?.driver })).regions;
+            ownRegions = true;
         }
         const max = Math.max(0, options?.max ?? 5);
-        const targets = regions.slice(0, max);
+        // "The top regions" means the most tissue, and `exploreSlide` now hands them back in
+        // slide reading order — so say which N are wanted rather than taking a prefix and
+        // hoping the order still means size. A caller-supplied list is their order to keep.
+        const ranked = ownRegions
+            ? regions.slice().sort((a, b) => (b.areaFraction ?? 0) - (a.areaFraction ?? 0))
+            : regions;
+        const targets = ranked.slice(0, max);
 
         // Reuse whatever is already established about the slide; never ask for it here —
         // a region walk should inherit the frame of reference, not open a new question.
@@ -2047,7 +2750,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 results.push({ index: region.index, label, bounds: region.bounds, error: e?.message || String(e) });
             }
         }
-        return results;
+        // Read back in slide order: the review picked the biggest regions, but a reader
+        // (and the links they follow) wants them in the order they sit on the glass.
+        return ownRegions ? results.sort((a, b) => a.index - b.index) : results;
     }
 
     /**
@@ -2068,17 +2773,177 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (!this._hasFeature("analyze", options?.driver)) {
             throw new Error("buildOverview needs an 'analyze' driver (e.g. a configured vision model).");
         }
+        const run = this._resolveOverviewRun(viewer, options);
+        // Everything the walk was told about the slide is now established for the slide, not
+        // just for this run: later drills reuse it instead of asking the user a second time.
+        this.setSlideContext(viewer, run.opts.context);
+
+        if (run.opts.reuse) {
+            const cached = this.getOverview(viewer);
+            if (cached) return cached;
+        }
+        return this._walkOverview(viewer, run, options);
+    }
+
+    /**
+     * Cost a walk without running one: survey the tissue, settle the questions, rank the
+     * regions — and stop there.
+     *
+     * A scan is minutes of vision calls, and the caller has, until now, had no way to see
+     * what it was about to spend them on. Everything this does is the cheap half of
+     * `buildOverview` (one survey render, already cached per slide/scope/budget) plus
+     * arithmetic, so the plan costs roughly nothing and is worth reading before committing.
+     *
+     * `overlapPairs` is reported rather than silently resolved: region merging (see
+     * {@link REGION_MERGE_IOU}) has already collapsed the boxes that ARE the same box, so what
+     * survives is genuine partial overlap — a judgement call about whether two boxes are one
+     * piece of tissue, which the caller is better placed to make than a threshold.
+     */
+    async planOverview(viewer: any, options?: BuildOverviewOptions): Promise<OverviewPlanResult> {
+        if (!viewer) throw new Error("planOverview() requires a viewer.");
+        const run = this._resolveOverviewRun(viewer, options);
+        this.setSlideContext(viewer, run.opts.context);
+
+        const exploration = await this.exploreSlide(viewer, {
+            driver: run.opts.driver,
+            ...(options?.scope !== undefined ? { scope: options.scope } : {}),
+            ...(run.surveyMpp != null ? { surveyMpp: run.surveyMpp } : {}),
+            ...(options?.surveyPixels != null ? { surveyPixels: options.surveyPixels } : {}),
+        });
+
+        // Which islands are walked is a size decision; the order they are LISTED in is the
+        // reviewer's, so the plan reads down the slide rather than down a size ranking.
+        const roots = this._byTissueFirst(exploration.regions).slice(0, run.opts.maxRoots);
+        const survey = this._surveyCovering(viewer, run.scope.bounds);
+        const regions = roots
+            .slice()
+            .sort((a, b) => a.index - b.index)
+            .map(region => ({
+                label: region.label,
+                bounds: region.bounds,
+                areaFraction: region.areaFraction,
+                fill: survey?.sampler ? survey.sampler.fill(region.bounds) : null,
+                cellularity: survey?.density ? survey.density.sample(region.bounds) : null,
+            }));
+
+        // What the survey pass alone will cost. Depth is best-first and adaptive, so a
+        // per-region depth estimate would be a fiction; the honest figures are "one call per
+        // root to cover the tissue" and "this many in total to spend after that".
+        const estimatedSurveyCalls = Math.min(regions.length, run.opts.maxAnalyzeCalls);
+        const plan: OverviewPlan = {
+            planId: this._nextPlanId(),
+            slideKey: this._slideKey(viewer) || "",
+            run,
+            exploration,
+            options,
+            builtAtIso: new Date().toISOString(),
+        };
+        if (plan.slideKey) {
+            rememberBounded(
+                this._overviewPlans, `${plan.slideKey}|plan|${plan.planId}`,
+                plan.slideKey, plan, MAX_PLANS_PER_SLIDE
+            );
+        }
+
+        return {
+            planId: plan.planId,
+            coverageScope: exploration.coverageScope,
+            scopeBounds: exploration.scopeBounds,
+            checklist: run.checklist,
+            ladder: { magnifications: run.ladder.magnifications, targetMpp: run.ladder.targetMpp },
+            regions,
+            overlapPairs: overlapPairs(regions),
+            estimatedSurveyCalls,
+            maxAnalyzeCalls: run.opts.maxAnalyzeCalls,
+            slideCoverage: exploration.slideCoverage,
+            surveyComplete: exploration.isComplete,
+            regionsOmitted: Math.max(0, exploration.regions.length - roots.length),
+            builtAtIso: plan.builtAtIso,
+        };
+    }
+
+    /**
+     * Execute a plan from {@link planOverview}, minus whatever the caller struck off it.
+     *
+     * The plan's own survey runs — not a fresh one. Re-surveying would pay for the render
+     * again and, worse, could return a different region list, so the boxes the caller
+     * approved would not be the boxes examined.
+     */
+    async runPlan(viewer: any, planId: string, edits?: OverviewPlanEdits): Promise<OverviewResult | OverviewPlanExpired> {
+        if (!viewer) throw new Error("runPlan() requires a viewer.");
+        if (!this._hasFeature("analyze", edits?.driver)) {
+            throw new Error("runPlan needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+        const slideKey = this._slideKey(viewer);
+        const plan = slideKey ? this._overviewPlans.get(`${slideKey}|plan|${planId}`) : undefined;
+        // Degrade closed: silently re-planning would charge the user for a survey they
+        // believe they already paid for, against a region list they never saw.
+        if (!plan) return { status: "plan-expired", planId };
+
+        const keep = applyPlanEdits(plan.exploration.regions, edits);
+        if (!keep.length) return { status: "plan-expired", planId, reason: "no-regions" };
+
+        const run: ResolvedOverviewRun = edits?.addCalls
+            ? {
+                ...plan.run,
+                opts: {
+                    ...plan.run.opts,
+                    maxAnalyzeCalls: clampNumber(
+                        plan.run.opts.maxAnalyzeCalls + edits.addCalls, plan.run.opts.maxAnalyzeCalls, 1, 512),
+                },
+            }
+            : plan.run;
+        this.setSlideContext(viewer, run.opts.context);
+        return this._walkOverview(viewer, run, plan.options, { ...plan.exploration, regions: keep });
+    }
+
+    /** Monotonic within a session; a plan is only ever looked up beside its slide key. */
+    private _nextPlanId(): string {
+        return `p${++this._planCounter}`;
+    }
+
+    /**
+     * Settle everything a walk obeys, without starting one.
+     *
+     * Shared by {@link buildOverview} and {@link planOverview} so a plan cannot be drawn up
+     * under different rules than the run that executes it — the knobs interlock (the scope
+     * decides the coarse rung, the checklist decides the ladder, the ladder's finest rung
+     * decides how much tissue is worth a call), and two copies of that dependency order
+     * would drift apart one default at a time.
+     */
+    private _resolveOverviewRun(viewer: any, options?: BuildOverviewOptions): ResolvedOverviewRun {
+        // Resolved first, in dependency order: the scope decides the coarse rung and the
+        // rectangle every framed region is clipped to; the checklist decides the ladder; and
+        // the ladder's finest rung decides how much tissue is worth a call. None of the knobs
+        // below can be settled before those three.
+        const scope = this._resolveScope(viewer, options?.scope);
+        // Sanitized even when it came from a caller: a script is untrusted input, and this
+        // text ends up inside a vision model's prompt (AGENTS.md §0.2/§7).
+        const checklist = this._resolveChecklist(options);
+        const surveyMpp = this._resolveSurveyMpp(viewer, scope.bounds, scope.coverageScope, options);
+        const ladder = this._resolveLadder(viewer, checklist, options?.magnificationLadder, surveyMpp);
+        const fieldPixels = Math.round(
+            clampNumber(options?.fieldPixels, FIELD_MAX_PIXELS, 1024, REGION_RENDER_MAX_PIXELS));
+
         const opts: ResolvedOverviewOptions = {
             query: options?.query,
             driver: options?.driver,
+            scopeBounds: scope.bounds,
             context: this._normalizeContext(options?.context),
             repairVerdict: options?.repairVerdict ?? true,
             measureFill: options?.measureFill ?? true,
             progress: options?.progress ?? true,
-            maxDepth: options?.maxDepth ?? 2,
+            // One ladder rung costs one depth level: a node reads its box at the rung it can
+            // afford and `_tileChildren` reads the SAME box at the next rung as its children.
+            // A flat 2 therefore capped every run two rungs above the finest resolution the
+            // ladder declares — the walk stopped at ~1 µm/px reporting that it could not see
+            // cell detail, which was true and entirely self-inflicted. The depth a run needs
+            // is a property of its ladder, so read it from there.
+            maxDepth: options?.maxDepth ?? Math.max(2, ladder.targetMpp.length),
             breadth: options?.breadth ?? 4,
             interestThreshold: options?.interestThreshold ?? 0.5,
-            minDrillFill: options?.minDrillFill ?? 0.1,
+            minDrillTissue: clampNumber(
+                options?.minDrillTissue, this._defaultMinDrillTissue(viewer, ladder, fieldPixels), 0, Infinity),
             // Raised with concurrency: four calls in flight means the same wall-clock buys
             // more of them, and the survey account needs room to cover the slide before
             // any of it is spent drilling.
@@ -2094,20 +2959,33 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             annotate: options?.annotate ?? false,
             synthesize: options?.synthesize ?? true,
             reuse: options?.reuse ?? false,
-            // Sanitized even when it came from a caller: a script is untrusted input, and
-            // this text ends up inside a vision model's prompt (AGENTS.md §0.2/§7).
-            checklist: this._resolveChecklist(options),
+            // Resolved once, and clamped: every one of these arrives through a script the
+            // chat model wrote, and a NaN breadth or a gigapixel field budget must degrade to
+            // a default rather than propagate into a render request (§0.2/§7).
+            maxRoots: Math.round(clampNumber(options?.maxRoots, SURVEY_MAX_ROOTS, 1, 64)),
+            framePadding: clampNumber(options?.framePadding, OVERVIEW_FRAME_PADDING, 0, 0.5),
+            fieldPixels,
+            checklist,
         };
-        const ladder = this._resolveLadder(viewer, opts.checklist, options?.magnificationLadder);
-        // Everything the walk was told about the slide is now established for the slide, not
-        // just for this run: later drills reuse it instead of asking the user a second time.
-        this.setSlideContext(viewer, opts.context);
+        return { scope, checklist, surveyMpp, ladder, opts };
+    }
 
-        if (opts.reuse) {
-            const cached = this.getOverview(viewer);
-            if (cached) return cached;
-        }
-
+    /**
+     * Run the walk itself, from a resolved run and an optional survey that is already in hand.
+     *
+     * `precomputed` is what {@link runPlan} passes: the plan already paid for the survey, and
+     * re-running it would both cost a render and re-derive the region list the user has since
+     * edited. Everything else — budget accounts, the cancellable progress dialog, the
+     * incremental publish, the continuation bookkeeping — is identical either way, which is
+     * exactly why it lives here once.
+     */
+    private async _walkOverview(
+        viewer: any,
+        run: ResolvedOverviewRun,
+        options?: BuildOverviewOptions,
+        precomputed?: SlideExploration
+    ): Promise<OverviewResult> {
+        const { scope, surveyMpp, ladder, opts } = run;
         const budget = createBudget(opts.maxAnalyzeCalls, opts.surveyFraction);
 
         // A walk is many slow model calls. Give the user something to watch and a way
@@ -2123,67 +3001,47 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // already paid for: getOverview() returns whatever has been described so far.
         const rootNodes: OverviewNode[] = [];
         let exploration: SlideExploration | null = null;
-        const publish = (): OverviewResult => {
-            // Rank BEFORE building the table: `buildEvidence` cites regions best-first and
-            // reads `rankScore`, which the ranking pass assigns. Reversing the two silently
-            // orders every citation list by nothing.
-            const ranked = this._rankOverviewNodes(rootNodes);
-            const evidence = buildEvidence(flattenNodes(rootNodes), opts.checklist);
-            // KEY ORDER IS LOAD-BEARING. A consumer that truncates this object keeps a
-            // PREFIX of it — the chat SDK caps a script result at a few thousand characters
-            // of pretty-printed JSON — and `root` is by far the largest field. With the
-            // tree first, the cut landed inside its second node and `evidence`/`ranked`
-            // never reached the model at all: it could see only the coarse island boxes it
-            // is told never to link, so it described regions without linking them.
-            //
-            // Everything small and decision-bearing therefore comes FIRST, and the tree
-            // last. `JSON.stringify` preserves insertion order, so this holds whatever
-            // limit a consumer applies.
-            const result: OverviewResult = {
-                status: "ok",
-                driver: this.describeDriverForFeature("analyze", opts.driver).id,
-                query: opts.query,
-                context: opts.context,
-                slide: exploration?.slide ?? { width: 0, height: 0, micronsPerPixel: null, magnification: null },
-                slideCoverage: exploration?.slideCoverage ?? 0,
-                coverageScope: "whole-slide",
-                isComplete: exploration?.isComplete ?? false,
-                checklist: opts.checklist,
-                evidence,
-                ranked,
-                summary: opts.synthesize
-                    ? renderEvidence(evidence, row => t("pathology.evidenceRow", {
-                        label: row.label,
-                        verdict: verdictWord(row.verdict),
-                        regions: row.citedBy.map(c => c.label).join(", ") || t("pathology.evidenceNoRegions"),
-                    })) || t("pathology.evidenceEmpty")
-                    : undefined,
-                cancelled: control.signal.aborted,
-                warnings: this._overviewWarnings(rootNodes, opts, budget, control.signal.aborted, ladder, evidence),
-                builtAtIso: new Date().toISOString(),
-                budget,
-                root: rootNodes,
-            };
-            this._storeOverview(viewer, result);
-            return result;
-        };
+        const publish = (): OverviewResult => this._publishOverview({
+            viewer, opts, ladder, budget, rootNodes,
+            exploration, fallbackScope: scope, cancelled: control.signal.aborted,
+        });
+        const expandedPerRoot = new Map<string, number>();
 
         try {
-            exploration = await this.exploreSlide(viewer, { driver: opts.driver });
+            exploration = precomputed ?? await this.exploreSlide(viewer, {
+                driver: opts.driver,
+                ...(options?.scope !== undefined ? { scope: options.scope } : {}),
+                ...(surveyMpp != null ? { surveyMpp } : {}),
+                ...(options?.surveyPixels != null ? { surveyPixels: options.surveyPixels } : {}),
+            });
             const slideArea = Math.max(1, exploration.slide.width * exploration.slide.height);
+
+            // Refuse to walk a survey that is not a reading of the slide. A vision budget spent
+            // on islands that are an artefact of which tiles were resident buys findings about a
+            // fragment, presented as a slide-wide examination — and the tree would then be cached
+            // under this slide's key. Degrade closed (AGENTS.md §7): publish the (empty) result,
+            // which carries `status: "incomplete"` and the warning that says what to do about it.
+            if (!exploration.isComplete || this._surveyImplausible(exploration)) {
+                return publish();
+            }
 
             if (opts.scheduler === "best-first") {
                 await this._walkBestFirst(
                     viewer, exploration, opts, ladder, budget, slideArea, control.signal, dialog,
-                    rootNodes, publish
+                    rootNodes, publish, expandedPerRoot
                 );
+                // Everything a continuation needs, kept beside the tree. A budget is a
+                // checkpoint, not a verdict — see `refineOverview`.
+                this._rememberRun(viewer, {
+                    opts, ladder, expandedPerRoot, exploration, spent: budget, refinements: 0,
+                });
                 return publish();
             }
 
             // Legacy depth-first traversal, kept for one release behind the `scheduler`
             // static-meta knob so a deployment that hits a problem with the new one can
             // revert without a rollback.
-            const roots = exploration.regions.slice(0, opts.breadth);
+            const roots = this._byTissueFirst(exploration.regions).slice(0, opts.breadth);
             for (const region of roots) {
                 // Cancellation is checked between nodes: a node in flight is parked on a
                 // model call we cannot recall, so we stop at the next boundary instead of
@@ -2196,6 +3054,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (node) rootNodes.push(node);
                 publish();
             }
+            // A depth-first tree is still a tree, and stopping short is still stopping short — so
+            // it must be continuable too. The continuation runs the best-first frontier over it,
+            // which is the only traversal that can resume at all.
+            this._rememberRun(viewer, {
+                opts, ladder, expandedPerRoot, exploration, spent: budget, refinements: 0,
+            });
             return publish();
         } finally {
             options?.signal?.removeEventListener("abort", onExternalAbort);
@@ -2203,6 +3067,267 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // called it, so a finished walk left "Exploring the slide" on screen forever. A
             // completed walk shows the bar full and auto-closes; a cancelled one has nothing to
             // celebrate and closes at once.
+            if (control.signal.aborted) dialog?.close?.();
+            else dialog?.done?.();
+        }
+    }
+
+    /**
+     * Assemble and cache the result for a tree as it currently stands.
+     *
+     * Shared by the first walk and by every refinement, because a continued run must publish
+     * through exactly the same code — the ranking, the evidence table and the caveats are derived
+     * from the tree, and a second implementation of that derivation would be a second set of
+     * answers to the same question.
+     */
+    private _publishOverview(args: {
+        viewer: any;
+        opts: ResolvedOverviewOptions;
+        ladder: OverviewLadder;
+        budget: OverviewBudget;
+        rootNodes: OverviewNode[];
+        exploration: SlideExploration | null;
+        /** Used only when there is no exploration to read the real scope from. */
+        fallbackScope: { bounds: Bounds; coverageScope: CoverageScope };
+        cancelled: boolean;
+    }): OverviewResult {
+        const { viewer, opts, ladder, budget, rootNodes, exploration, fallbackScope, cancelled } = args;
+        // Rank BEFORE building the table: `buildEvidence` cites regions best-first and
+        // reads `rankScore`, which the ranking pass assigns. Reversing the two silently
+        // orders every citation list by nothing.
+        const ranked = this._rankOverviewNodes(rootNodes);
+        const flat = flattenNodes(rootNodes);
+        const nativeMpp = this._micronsPerPixel(viewer);
+        const evidence = buildEvidence(flat, opts.checklist, nativeMpp);
+        // Recomputed on every publish so an incremental snapshot reports the same
+        // shortfall the final one does. Both are the difference between "the walk finished"
+        // and "the walk stopped", which `truncated` alone cannot express: a run that never
+        // found anything it would expand ends with its budget intact and looks complete.
+        budget.focusUnspent = Math.max(0, budget.focusBudget - budget.focusCalls);
+        budget.plannedNotRead = flat.reduce((n, node) => n + (node.pendingTiles?.length ?? 0), 0);
+        const coverageScope = exploration?.coverageScope ?? fallbackScope.coverageScope;
+        // The two completeness questions, kept apart. "Did the pixels all arrive?" is the
+        // survey's; "was the tissue examined?" is the run's, and it is the one a reader means.
+        // A row that is `underResolved` is a question this walk never got close enough to
+        // answer, so the examination is not finished no matter how the render went.
+        //
+        // A row that is `beyondSlide` is NOT one of those, and used to be. Its requirement is
+        // finer than the scan itself, so no walk of this slide can ever clear it — counting it
+        // here made `examined` permanently false, which led every result with "NOT AN
+        // EXAMINATION: no region was read at a resolution that can answer these questions"
+        // directly above rows reporting findings. A caveat that fires on every run of a slide,
+        // contradicting its own body, is one a reader learns to skip.
+        const surveyComplete = exploration?.isComplete ?? false;
+        const examined = evidence.length > 0 && evidence.every(row => !row.underResolved);
+        // `status` answers a coarser question than `isComplete`: is there anything here to
+        // report AT ALL? A run that settled five questions of six is an examination with a gap
+        // — `isComplete: false`, the per-row `underResolved` flags and the warnings all say so,
+        // and suppressing the five would be its own kind of dishonesty. A run that settled NONE
+        // is the failure this discriminator exists for.
+        const anythingRead = evidence.some(row => !row.underResolved);
+        // KEY ORDER IS LOAD-BEARING. A consumer that truncates this object keeps a
+        // PREFIX of it — the chat SDK caps a script result at a few thousand characters
+        // of pretty-printed JSON — and `root` is by far the largest field. With the
+        // tree first, the cut landed inside its second node and `evidence`/`ranked`
+        // never reached the model at all: it could see only the coarse island boxes it
+        // is told never to link, so it described regions without linking them.
+        //
+        // Everything small and decision-bearing therefore comes FIRST, and the tree
+        // last. `JSON.stringify` preserves insertion order, so this holds whatever
+        // limit a consumer applies.
+        const result: OverviewResult = {
+            status: anythingRead && surveyComplete ? "ok" : "incomplete",
+            driver: this.describeDriverForFeature("analyze", opts.driver).id,
+            query: opts.query,
+            context: opts.context,
+            slide: exploration?.slide ?? { width: 0, height: 0, micronsPerPixel: null, magnification: null },
+            slideCoverage: exploration?.slideCoverage ?? 0,
+            // What was ACTUALLY surveyed. This used to be the literal "whole-slide", which
+            // was already wrong for the no-dimensions fallback and would be a false claim
+            // of slide-wide coverage for every scoped run.
+            coverageScope,
+            scopeBounds: exploration?.scopeBounds ?? fallbackScope.bounds,
+            isComplete: examined,
+            surveyComplete,
+            checklist: opts.checklist,
+            evidence,
+            ranked,
+            summary: opts.synthesize
+                ? this._composeSummary(evidence, examined)
+                : undefined,
+            cancelled,
+            warnings: this._overviewWarnings(
+                rootNodes, opts, budget, cancelled, ladder, evidence, coverageScope,
+                { complete: surveyComplete, implausible: this._surveyImplausible(exploration) },
+                nativeMpp),
+            builtAtIso: new Date().toISOString(),
+            budget,
+            // The walk surveys the biggest islands first; a reader wants them in the order
+            // they sit on the slide, which is the order their numbers count in. A shallow
+            // copy — publish runs repeatedly while the walk is still pushing into these.
+            root: rootNodes.slice().sort((a, b) => a.index - b.index),
+        };
+        // An empty refusal is not an overview of this slide. Storing one would answer the next
+        // `getOverview` with it and make a transient loading state look like a cached finding.
+        if (rootNodes.length) this._storeOverview(viewer, result);
+        return result;
+    }
+
+    /**
+     * Does this survey look like a failed read rather than a sparse slide?
+     *
+     * The signature of a partial off-screen pass is a trace of tissue in ONE island: the render
+     * showed the tiles that happened to be resident, the mask found tissue exactly there, and
+     * the result claims that fragment is the slide. A genuinely sparse whole slide is possible,
+     * so this never asserts — it only makes the run say so out loud, and stops `buildOverview`
+     * from spending a vision budget walking a phantom.
+     *
+     * Whole-slide scopes only: a caller who framed a rectangle of mostly glass asked for exactly
+     * that number and must get it back unqualified.
+     */
+    private _surveyImplausible(exploration: SlideExploration | null): boolean {
+        if (!exploration || exploration.coverageScope !== "whole-slide") return false;
+        // Tissue was found but nothing was outlined. That is not a sparse slide, it is a survey
+        // that produced no reading at all — most often the whole-rectangle contour being dropped
+        // as degenerate, which leaves an empty region list behind a perfectly healthy-looking
+        // coverage figure. Coverage alone cannot catch it, because coverage is exactly the number
+        // that looks fine.
+        if (!exploration.regions.length && exploration.slideCoverage > 0) return true;
+        return exploration.slideCoverage < SURVEY_IMPLAUSIBLE_COVERAGE && exploration.regions.length <= 1;
+    }
+
+    /**
+     * The evidence table as one readable block — led by what the run could NOT do.
+     *
+     * A per-row table of "not assessable" is a true statement that reads, to anything
+     * summarizing it, like a set of negative findings. The header states the one thing that
+     * governs how every row beneath it may be used, in the same field, so a reader that quotes
+     * only `summary` still quotes the limitation.
+     */
+    private _composeSummary(evidence: EvidenceRow[], examined: boolean): string {
+        const rows = renderEvidence(evidence, row => t("pathology.evidenceRow", {
+            label: row.label,
+            verdict: verdictWord(row.verdict),
+            regions: row.citedBy.map(c => c.label).join(", ") || t("pathology.evidenceNoRegions"),
+        })) || t("pathology.evidenceEmpty");
+        return examined ? rows : `${t("pathology.summaryNotExamined")}\n${rows}`;
+    }
+
+    /** Keep (or update) the state a continuation of this slide's walk will need. */
+    private _rememberRun(viewer: any, state: OverviewRunState): void {
+        const key = this._slideKey(viewer);
+        if (key) this._overviewRuns.set(key, state);
+    }
+
+    /**
+     * Continue the cached walk instead of starting a new one.
+     *
+     * The budget is a checkpoint, not a verdict. A 28-call run that stops with a frontier still
+     * queued has described real tissue and left a plan for the rest; the only way to act on
+     * "keep going" used to be `buildOverview` again, which re-surveys the slide and pays a second
+     * time for every node already described. This resumes: Phase A is skipped, the frontier is
+     * rebuilt from the tree, and a fresh budget is spent entirely on depth.
+     *
+     * `region` concentrates the continuation on one part of the tree; `maxDepth` lifts the depth
+     * cap; `query` re-derives what the run is looking for, which re-scores the whole frontier
+     * because the checklist is what `shouldExpand` and `priority` read.
+     */
+    async refineOverview(viewer: any, options?: {
+        /** Vision calls to spend, all of them on depth. Defaults to the original budget. */
+        addCalls?: number;
+        /** Concentrate on the part of the tree covering this box. */
+        region?: Bounds;
+        /** Allow the walk another rung deeper than it was originally permitted. */
+        maxDepth?: number;
+        /** Re-focus the run: derives a new checklist and re-ranks the frontier against it. */
+        query?: string;
+        features?: ChecklistFeature[];
+        checklist?: Checklist;
+        progress?: boolean;
+        signal?: AbortSignal;
+        driver?: string;
+    }): Promise<OverviewResult> {
+        if (!viewer) throw new Error("refineOverview() requires a viewer.");
+        const key = this._slideKey(viewer);
+        const run = key ? this._overviewRuns.get(key) : null;
+        const cached = this.getOverview(viewer);
+        if (!run || !cached) {
+            // Deliberately not "start one instead": a walk is minutes of the user's time, and
+            // silently promoting a continuation into a fresh run is not a decision to make for
+            // them.
+            throw new Error(
+                "There is no overview to refine on this slide. Run buildOverview({ query, scope }) first."
+            );
+        }
+
+        const addCalls = Math.round(clampNumber(options?.addCalls, run.opts.maxAnalyzeCalls, 1, 500));
+        const checklist = (options?.query || options?.features || options?.checklist)
+            ? this._resolveChecklist(options)
+            : run.opts.checklist;
+        const opts: ResolvedOverviewOptions = {
+            ...run.opts,
+            ...(options?.driver ? { driver: options.driver } : {}),
+            ...(options?.query ? { query: options.query } : {}),
+            checklist,
+            maxDepth: Math.round(clampNumber(options?.maxDepth, run.opts.maxDepth, 1, 8)),
+            progress: options?.progress ?? run.opts.progress,
+            // The caps are per-run, and this run is the continuation: budget it in addition to
+            // what was already spent rather than against a total that is already used up.
+            maxAnalyzeCalls: addCalls,
+            maxNodes: run.spent.nodesVisited + addCalls,
+        };
+
+        // All of it on depth: the survey is cached, the roots are described, and there is no
+        // coverage pass to reserve for. `rolloverSurveyBudget` already means exactly that.
+        const budget = createBudget(addCalls, 0);
+        rolloverSurveyBudget(budget);
+
+        const control = new AbortController();
+        const onExternalAbort = () => control.abort();
+        options?.signal?.addEventListener("abort", onExternalAbort);
+        if (options?.signal?.aborted) control.abort();
+        const dialog = this._openOverviewProgress(viewer, opts, control);
+
+        const rootNodes = cached.root;
+        const all = flattenNodes(rootNodes);
+        const slideArea = Math.max(1, run.exploration.slide.width * run.exploration.slide.height);
+        // Cumulative from the first call, so the published figures answer "what did this
+        // examination cost?" rather than "what did the last increment cost?".
+        const publish = (): OverviewResult => this._publishOverview({
+            viewer, opts, ladder: run.ladder,
+            budget: accumulateBudget(run.spent, budget),
+            rootNodes, exploration: run.exploration,
+            fallbackScope: { bounds: opts.scopeBounds, coverageScope: cached.coverageScope },
+            cancelled: control.signal.aborted,
+        });
+
+        try {
+            const queue = this._frontierQueue(opts, all, run.expandedPerRoot);
+            // Everything the tree still holds that could be looked at again. `_expandFrontier`
+            // re-checks each one against the (possibly new) checklist and depth cap, so this is
+            // deliberately permissive — the queue is a candidate set, not a decision.
+            const frontier = all.filter(node =>
+                node.isComplete && !node.error
+                && (!options?.region || !!intersectBounds(node.bounds, options.region)));
+            if (!frontier.length) {
+                throw new Error(options?.region
+                    ? "No part of the cached overview covers that region. "
+                        + "Run buildOverview({ scope: region }) to examine it — it needs its own survey."
+                    : "The cached overview has nothing left to examine.");
+            }
+            queue.pushAll(frontier);
+
+            await this._expandFrontier(
+                viewer, queue, all, run.expandedPerRoot, opts, run.ladder, budget, slideArea,
+                control.signal, dialog, throttled(publish, PUBLISH_THROTTLE_MS)
+            );
+
+            this._rememberRun(viewer, {
+                ...run, opts, spent: accumulateBudget(run.spent, budget), refinements: run.refinements + 1,
+            });
+            return publish();
+        } finally {
+            options?.signal?.removeEventListener("abort", onExternalAbort);
             if (control.signal.aborted) dialog?.close?.();
             else dialog?.done?.();
         }
@@ -2233,29 +3358,20 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         signal: AbortSignal,
         dialog: any,
         rootNodes: OverviewNode[],
-        publish: () => OverviewResult
+        publish: () => OverviewResult,
+        expandedPerRoot: Map<string, number>
     ): Promise<void> {
-        const expandedPerRoot = new Map<string, number>();
         const all: OverviewNode[] = [];
-        // `maxArea` scales the area weight, and it grows as the walk sees bigger regions.
-        // Read through a closure rather than captured, so the queue's scores follow it.
-        const ctx = () => ({
-            checklist: opts.checklist,
-            maxArea: Math.max(...all.map(n => n.slideAreaFraction || 0), Number.EPSILON),
-            expandedPerRoot,
-        });
-        const queue = new PriorityQueue<OverviewNode>(node => priority(this._schedulable(node), ctx()));
-
-        let lastPublish = 0;
-        const publishThrottled = (force = false) => {
-            const now = Date.now();
-            if (!force && now - lastPublish < PUBLISH_THROTTLE_MS) return;
-            lastPublish = now;
-            publish();
-        };
+        const queue = this._frontierQueue(opts, all, expandedPerRoot);
+        const publishThrottled = throttled(publish, PUBLISH_THROTTLE_MS);
 
         // ---- Phase A: cover the tissue ----------------------------------------
-        const roots = exploration.regions.slice(0, Math.max(opts.breadth, SURVEY_MAX_ROOTS));
+        // `maxRoots` alone: how many islands the survey opens is a different question from how
+        // many children one expansion reads (`breadth`), and maxing the two let a raised
+        // `breadth` silently widen the survey, which no caller ever means by it.
+        // Most tissue first: `exploration.regions` is in slide reading order (that is what a
+        // region NUMBER means), so a bare prefix would cut the survey by slide layout.
+        const roots = this._byTissueFirst(exploration.regions).slice(0, opts.maxRoots);
         dialog?.setLabel?.(t("pathology.overviewProgressSurvey", { done: 0, total: roots.length }));
 
         let surveyed = 0;
@@ -2280,24 +3396,108 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         publishThrottled(true);
 
         // ---- Phase B: spend the rest on what matters most ----------------------
+        await this._expandFrontier(
+            viewer, queue, all, expandedPerRoot, opts, ladder, budget, slideArea, signal, dialog, publishThrottled
+        );
+    }
+
+    /**
+     * The priority queue the frontier lives in, scored against a context that keeps moving.
+     *
+     * `maxArea` and the per-root expansion counts both change as the walk proceeds, so the score
+     * is read through a closure rather than captured: a score frozen at insertion would order the
+     * queue by a world that no longer exists. Shared by the first walk and every refinement of it,
+     * so a resumed run ranks by exactly the same function the original did.
+     */
+    private _frontierQueue(
+        opts: ResolvedOverviewOptions,
+        all: OverviewNode[],
+        expandedPerRoot: Map<string, number>
+    ): PriorityQueue<OverviewNode> {
+        const ctx = () => ({
+            checklist: opts.checklist,
+            maxArea: Math.max(...all.map(n => n.slideAreaFraction || 0), Number.EPSILON),
+            expandedPerRoot,
+        });
+        return new PriorityQueue<OverviewNode>(node => priority(this._schedulable(node), ctx()));
+    }
+
+    /**
+     * Spend a focus budget on the frontier: pop the globally best node, expand it, queue the
+     * children, repeat.
+     *
+     * Lifted out of {@link _walkBestFirst} so that {@link refineOverview} continues a stopped walk
+     * through the SAME traversal rather than a second implementation of it. A budget is a
+     * checkpoint, not a verdict — a run that stops here must be resumable, and it only is if
+     * resuming is this function called again with a fresh budget and the same queue rebuilt.
+     */
+    private async _expandFrontier(
+        viewer: any,
+        queue: PriorityQueue<OverviewNode>,
+        all: OverviewNode[],
+        expandedPerRoot: Map<string, number>,
+        opts: ResolvedOverviewOptions,
+        ladder: OverviewLadder,
+        budget: OverviewBudget,
+        slideArea: number,
+        signal: AbortSignal,
+        dialog: any,
+        publishThrottled: (force?: boolean) => void
+    ): Promise<void> {
         while (!signal.aborted && canSpend(budget, "focus") && budget.nodesVisited < opts.maxNodes) {
             const node = queue.pop();
             if (!node) break;
             if (node.depth >= opts.maxDepth) continue;
             if (!node.isComplete) continue; // a partial render cannot be drilled honestly
-            if (!shouldExpand(this._schedulable(node), opts.checklist, opts)) continue;
+            if (!shouldExpand(this._schedulable(node, ladder), opts.checklist, opts)) continue;
+            // Already expanded for THIS question, with nothing left over: re-deriving children
+            // would produce the identical boxes at the identical rung and append a second copy
+            // of them. A different checklist is a different question and does re-open the node.
+            const exhausted = !node.pendingTiles?.length
+                && node.children.length > 0
+                && node.expandedUnder === opts.checklist.hash;
+            if (exhausted) continue;
 
-            const children = await this._subdivideRegion(viewer, node.bounds, opts.driver, node.label);
-            if (!children.length) { node.decision = "stop"; continue; }
+            // Fields left over from a previous expansion of this node come first: the planning
+            // decision was made when it last won the queue, and only the reading is left.
+            const children = node.pendingTiles?.length
+                ? node.pendingTiles
+                : await this._childrenOf(viewer, node, opts, ladder);
+            if (!children.length) { node.decision = "stop"; node.pendingTiles = undefined; continue; }
+
+            // Drop children whose tissue has already been read this closely. Tissue geometry
+            // overlaps — a lattice re-covers ground a sibling's box already held — and without
+            // this the same cells are rendered, sent to a vision model and reported twice.
+            // Measured against the reads themselves, so it costs nothing and cannot suppress a
+            // genuine drill: only nodes at the child's rung or finer count.
+            const childRung = this._rungOf(node.depth + 1, ladder);
+            const readSoFar = all
+                .filter(n => n.isComplete !== false && n.bounds)
+                .map(n => ({ bounds: n.bounds, rung: this._rungOf(n.depth, ladder) }));
+            const fresh = children.filter(region => {
+                if (!isRedundantRead({ bounds: region.bounds, rung: childRung }, readSoFar, coveredFraction)) return true;
+                budget.skippedRedundant++;
+                return false;
+            });
+            if (!fresh.length) { node.decision = "stop"; node.pendingTiles = undefined; continue; }
+
+            // One expansion reads at most `breadth` of them. The remainder stays ON the node,
+            // which goes back on the queue — so a region that tiles into fifteen fields is not
+            // silently four, and `noveltyWeight` still makes it earn each further slot against
+            // fresher regions instead of draining the budget in one pass.
+            const batch = fresh.slice(0, opts.breadth);
+            const rest = fresh.slice(opts.breadth);
+            node.pendingTiles = rest.length ? rest : undefined;
 
             const rootId = this._rootIdOf(node, all);
             expandedPerRoot.set(rootId, (expandedPerRoot.get(rootId) ?? 0) + 1);
             node.decision = checklistGaps(this._schedulable(node), opts.checklist).length ? "resolve" : "drill";
+            node.expandedUnder = opts.checklist.hash;
 
             dialog?.setLabel?.(t("pathology.overviewProgressFocus", { label: node.label }));
             for await (const child of this._analyzeFields(
                 viewer,
-                children.slice(0, opts.breadth).map(region => ({
+                batch.map(region => ({
                     region, path: [...(node.path || []), region.index],
                     depth: node.depth + 1, parent: node, rootId,
                 })),
@@ -2309,11 +3509,27 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 dialog?.tick?.(budget.nodesVisited);
                 publishThrottled();
             }
+            if (node.pendingTiles?.length) queue.push(node);
         }
 
-        // A node still worth expanding when the budget ran out is a leaf, not a dead end.
+        // Why the loop ended, which is not the same question as how much it spent.
+        //
+        // Every `continue` above drops its node WITHOUT re-queueing it, so the frontier strictly
+        // drains: an empty queue with budget still in hand means the walk ran out of tissue worth
+        // reading, not out of calls. That is the good outcome and the common one — the caps are
+        // ceilings — but until it was said out loud a run that spent 12 of 28 calls was
+        // indistinguishable from one that stalled, and got reported as partial.
+        budget.converged = !signal.aborted
+            && queue.size === 0
+            && canSpend(budget, "focus")
+            && budget.nodesVisited < opts.maxNodes;
+
+        // A node still worth expanding when the budget ran out is a leaf, not a dead end — and
+        // so is one holding fields that were planned and never read. Both mean the same thing to
+        // a caller: this tree can be CONTINUED, and `refineOverview` is how.
         for (const node of queue.peekAll()) {
-            if (node.decision === "leaf" && shouldExpand(this._schedulable(node), opts.checklist, opts)) {
+            if (node.pendingTiles?.length) { budget.truncated = true; continue; }
+            if (node.decision === "leaf" && shouldExpand(this._schedulable(node, ladder), opts.checklist, opts)) {
                 budget.truncated = true;
             }
         }
@@ -2369,8 +3585,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
     }
 
-    /** The scheduler's view of a node — structural, so the two types stay independent. */
-    private _schedulable(node: OverviewNode): SchedulableNode {
+    /**
+     * The scheduler's view of a node — structural, so the two types stay independent.
+     *
+     * `ladder` is what lets the scheduler terminate the "the model said it could not see"
+     * route: without the finest rung there is no way to tell "look closer" from "there is
+     * nowhere closer to look".
+     */
+    private _schedulable(node: OverviewNode, ladder?: OverviewLadder): SchedulableNode {
         return {
             id: node.label,
             rootId: node.rootId || node.label,
@@ -2379,12 +3601,36 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             confidence: node.verdict?.confidence ?? null,
             cellularity: node.cellularity ?? null,
             bboxFillFraction: node.bboxFillFraction,
+            tissueArea: node.tissueArea ?? null,
             slideAreaFraction: node.slideAreaFraction,
             deliveredMpp: node.deliveredMpp ?? null,
             answers: node.answers,
             ancestorInterests: node.ancestorInterests || [],
+            pendingTiles: node.pendingTiles?.length ?? 0,
+            resolvable: node.verdict?.resolvable ?? null,
+            finestMpp: this._finestRung(ladder),
             error: node.error,
         };
+    }
+
+    /** The finest µm/px a ladder targets, or null when the slide is uncalibrated. */
+    private _finestRung(ladder?: OverviewLadder): number | null {
+        const targets = (ladder?.targetMpp ?? []).filter(
+            (v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0);
+        return targets.length ? Math.min(...targets) : null;
+    }
+
+    /**
+     * Tissue held by a box, in µm² (level-0 px² when the slide is uncalibrated).
+     *
+     * Null when fill was never measured — the drill gate then declines to veto rather than
+     * treating an absent measurement as an empty box.
+     */
+    private _tissueAreaOf(viewer: any, bounds: Bounds, fillFraction: number | null): number | null {
+        if (fillFraction == null) return null;
+        const px = Math.max(0, fillFraction) * bounds.width * bounds.height;
+        const mpp = this._micronsPerPixel(viewer);
+        return mpp ? px * mpp * mpp : px;
     }
 
     private _rootIdOf(node: OverviewNode, all: OverviewNode[]): string {
@@ -2500,6 +3746,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             });
             if (clean) return clean;
         }
+        // A caller that TRIED to derive one tells us why it could not; a caller that never
+        // tried leaves this unset, and the reason is inferred from whether there was a
+        // question at all. Sanitized like any other caller input — it reaches a locale string.
+        const reason = CHECKLIST_FALLBACK_REASONS.has(options?.checklistFallbackReason as any)
+            ? options!.checklistFallbackReason
+            : (supplied ? "unparseable" : undefined);
         return fallbackChecklist({
             matchLabel: t("pathology.checklistFallbackMatchLabel"),
             match: t("pathology.checklistFallbackMatch", { query: options?.query || "" }),
@@ -2507,7 +3759,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             extent: t("pathology.checklistFallbackExtent"),
             qualityLabel: t("pathology.checklistFallbackQualityLabel"),
             quality: t("pathology.checklistFallbackQuality"),
-        }, options?.query);
+        }, options?.query, reason);
     }
 
     /** Caveats the caller must surface; derived locally, no model call. */
@@ -2517,9 +3769,33 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         budget: OverviewBudget,
         cancelled = false,
         ladder?: OverviewLadder,
-        evidence?: EvidenceRow[]
+        evidence?: EvidenceRow[],
+        coverageScope: CoverageScope = "whole-slide",
+        survey?: { complete: boolean; implausible: boolean },
+        /** The slide's own calibration — quoted when a feature asks for finer than it. */
+        nativeMpp?: number | null
     ): string[] {
         const warnings: string[] = [];
+        // BEFORE everything, including the scope note: if the pixels the survey was derived
+        // from never arrived, the island list is not a reading of the slide at all, and every
+        // statement below is about whatever tiles happened to be resident.
+        if (survey && !survey.complete) warnings.push(t("pathology.warnSurveyPartialRender"));
+        else if (survey?.implausible) warnings.push(t("pathology.warnSurveyImplausible"));
+        // FIRST, because it reframes every other number in the result. A reader assumes a
+        // slide walk covered the slide; a scoped one did not, and saying so afterwards is
+        // too late to stop "no tumour found" being read as a whole-slide negative.
+        if (coverageScope !== "whole-slide") warnings.push(t("pathology.warnScopedCoverage"));
+        // Also near the top, and for the same reason: a run that stopped with budget in hand
+        // and questions still open did not examine the tissue, and every number below reads as
+        // if it had. This is the shape the old fill veto produced — one call out of
+        // twenty-eight, `truncated: false`, everything "not-assessable".
+        const stalled = (evidence ?? []).some(r => r.underResolved);
+        if (budget.focusUnspent > 0 && stalled) {
+            warnings.push(t("pathology.warnNoProgress", { unspent: budget.focusUnspent }));
+        }
+        if (budget.plannedNotRead > 0) {
+            warnings.push(t("pathology.warnPlannedNotRead", { count: budget.plannedNotRead }));
+        }
         let unparsed = 0;
         let unresolved = 0;
         const walk = (n: OverviewNode) => {
@@ -2536,8 +3812,16 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (ladder && !ladder.derived) warnings.push(t("pathology.warnLadderUncalibrated"));
         // A generic checklist answers "does this look like what you asked about"; a derived
         // one names the features that decide it. The difference is large enough that the
-        // caller must know which one produced the evidence table.
-        if (opts.checklist?.source === "fallback") warnings.push(t("pathology.warnChecklistFallback"));
+        // caller must know which one produced the evidence table — AND which side is at
+        // fault: a fallback despite a real query means derivation FAILED, and telling the
+        // caller to "ask a more specific question" then sends them to fix the wrong thing.
+        if (opts.checklist?.source === "fallback") {
+            warnings.push(opts.query?.trim()
+                ? t("pathology.warnChecklistDerivationFailed", {
+                    reason: t(`pathology.checklistFallbackReason.${opts.checklist.fallbackReason || "error"}`),
+                })
+                : t("pathology.warnChecklistFallback"));
+        }
         // Coverage is the claim a reader will assume by default. If part of the tissue was
         // never looked at, that assumption is wrong and has to be corrected explicitly.
         if (budget.surveyIncomplete) warnings.push(t("pathology.warnSurveyIncomplete"));
@@ -2548,6 +3832,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             warnings.push(t("pathology.warnFeatureUnassessed", {
                 count: unassessed.length,
                 features: unassessed.map(r => r.label).join(", "),
+            }));
+        }
+        // Different advice, so a different warning. "Inspect them closer" is the wrong thing
+        // to tell a reader when the scan holds nothing closer — what they need to know is that
+        // these answers were formed at the slide's limit, below what the question asked for,
+        // and that no further reading will improve them.
+        const beyond = evidence?.filter(r => r.beyondSlide) ?? [];
+        if (beyond.length) {
+            warnings.push(t("pathology.warnFeatureBeyondSlide", {
+                count: beyond.length,
+                features: beyond.map(r => `${r.label} (${r.requiredMpp} µm/px)`).join(", "),
+                finest: nativeMpp ? round(nativeMpp, 3) : "?",
             }));
         }
         if (opts.context.source === "unknown" || !opts.context.stain || !opts.context.organ) {
@@ -2627,10 +3923,63 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (key) {
             this._overviews.delete(key);
             this._slideContexts.delete(key);
-            // The tissue survey goes too: "rebuild the overview" has to mean re-deriving
-            // what the walk stands on, not replaying it against the same cached mask.
-            this._surveys.delete(key);
+            // The resume state goes with the tree it belongs to: continuing a walk whose tree was
+            // dropped would extend nothing, and the focus is part of what "start over" means.
+            this._overviewRuns.delete(key);
+            this._focusRegions.delete(key);
+            // The tissue surveys go too — ALL of them for this slide, at every scope:
+            // "rebuild the overview" has to mean re-deriving what the walk stands on, not
+            // replaying it against the same cached masks.
+            for (const surveyKey of [...this._surveys.keys()]) {
+                if (isKeyOfSlide(surveyKey, key)) this._surveys.delete(surveyKey);
+            }
         }
+    }
+
+    /**
+     * The region the work on this slide is currently about, or null.
+     *
+     * Free and local. A caller that wants to know what an unqualified request would target should
+     * read this rather than guess — and a caller that wants the whole slide should say so with
+     * `scope: "slide"` rather than by omitting the scope.
+     */
+    getFocusRegion(viewer: any): { label?: string; bounds: Bounds } | null {
+        const key = viewer && this._slideKey(viewer);
+        return (key && this._focusRegions.get(key)) || null;
+    }
+
+    /**
+     * Record (or clear, with null) the region the work on this slide is about.
+     *
+     * Called automatically by every region-scoped entry point, so it rarely needs calling by
+     * hand — the exception is a caller that has established a region by some other means (a user
+     * selection, an annotation) and wants later unqualified calls to follow it.
+     */
+    setFocusRegion(viewer: any, bounds: Bounds | null, label?: string): void {
+        const key = viewer && this._slideKey(viewer);
+        if (!key) return;
+        if (!bounds) { this._focusRegions.delete(key); return; }
+        const rect = normalizeScopeRect(bounds, ...this._slideExtent(viewer));
+        if (rect) this._focusRegions.set(key, { bounds: rect, ...(label ? { label } : {}) });
+    }
+
+    /** Slide width/height as a tuple, for the clamping helpers. */
+    private _slideExtent(viewer: any): [number, number] {
+        const meta = this._slideMeta(viewer, this._ref(viewer));
+        return [meta.width, meta.height];
+    }
+
+    /**
+     * Dimensions, calibration and native power of the slide open in `viewer`.
+     *
+     * Public because "what detail does this scan actually hold?" is a question callers OUTSIDE
+     * the engine have to answer — the checklist derivation must not ask a model for a resolution
+     * the slide cannot produce, and a caller sizing a region needs the same figure. Reading it
+     * only as a by-product of a walk means it is unavailable exactly when it is needed: before
+     * the walk.
+     */
+    getSlideMeta(viewer: any): SlideExploration["slide"] {
+        return this._slideMeta(viewer, this._ref(viewer));
     }
 
     /** What has been established about the slide open in `viewer`, or null. */
@@ -2655,7 +4004,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * The per-depth render targets for a walk — derived from the CHECKLIST.
+     * The per-depth render targets for a walk — derived from the CHECKLIST when there is a
+     * real one; see {@link ladderRungs} for the arithmetic and for why a FALLBACK checklist
+     * is explicitly not one.
      *
      * The rungs are the resolutions the question actually needs, coarsest first, preceded
      * by a survey rung for orientation. That is the difference between a ladder and a
@@ -2664,16 +4015,23 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      *
      * A fixed ladder cannot do this. `[1.0, 0.5, 0.25]` climbed to nuclear resolution for
      * every question, including the ones that were answered two rungs earlier, and stopped
-     * there for the ones that needed more.
+     * there for the ones that needed more. It remains the default for a run that states no
+     * requirement, because "no stated requirement" is not the same as "architecture is enough".
      *
      * An explicit `magnificationLadder` from the caller is honoured verbatim — it is a
      * deliberate override, and second-guessing it would make the knob useless. `derived`
      * is false when neither calibration nor an override was available.
+     *
+     * `surveyMpp` is the resolution of the orientation rung the ladder is prefixed with. It
+     * comes from the caller (or from the scope, via `_resolveSurveyMpp`) rather than from a
+     * constant, so that the survey render and the rung the walk believes it opened at cannot
+     * disagree — a scoped run reads its region at a finer rung and must ladder from there.
      */
     private _resolveLadder(
         viewer: any,
         checklist?: Checklist | null,
-        explicit?: Array<number | null>
+        explicit?: Array<number | null>,
+        surveyMpp: number = SURVEY_MPP
     ): OverviewLadder {
         if (Array.isArray(explicit) && explicit.length) {
             return { magnifications: explicit, targetMpp: explicit.map(() => null), derived: true };
@@ -2683,26 +4041,19 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (!mpp || !nativeMag) {
             return { magnifications: [null, 10, 20], targetMpp: [null, null, null], derived: false };
         }
-        if (checklist?.features.length) {
-            // Coarsest first: the walk descends, and a rung finer than the finest feature
-            // needs would be budget spent on detail nothing in the run asks about.
-            const needed = [...new Set(checklist.features.map(f => f.requiredMpp))].sort((a, b) => b - a);
-            const rungs = [Math.max(needed[0], SURVEY_MPP), ...needed]
-                .filter((v, i, arr) => i === 0 || v !== arr[i - 1]);
-            const magFor = (target: number) => Math.max(1, Math.min(nativeMag, nativeMag * (mpp / target)));
-            return {
-                magnifications: rungs.map(magFor),
-                targetMpp: rungs,
-                derived: true,
-            };
-        }
         // objective power that samples the slide at `target` µm per raster pixel
         const magFor = (target: number) => Math.max(1, Math.min(nativeMag, nativeMag * (mpp / target)));
-        return {
-            magnifications: OVERVIEW_MPP_LADDER.map(magFor),
-            targetMpp: [...OVERVIEW_MPP_LADDER],
-            derived: true,
-        };
+        const rungs = ladderRungs({
+            requiredMpp: checklist?.features.map(f => f.requiredMpp),
+            source: checklist?.source,
+            surveyMpp,
+            defaultLadder: OVERVIEW_MPP_LADDER,
+            // A rung is a RENDER TARGET, and level 0 is the finest sampling that exists. A
+            // checklist may legitimately ask for finer (see `sanitizeChecklist`); the ladder
+            // is where that request meets the scan.
+            nativeMpp: mpp,
+        });
+        return { magnifications: rungs.map(magFor), targetMpp: rungs, derived: true };
     }
 
     /** Native objective power of the scan, or null when the slide carries no scalebar basis. */
@@ -2763,16 +4114,23 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const rung = Math.min(depth, ladder.magnifications.length - 1);
         const targetMpp = ladder.targetMpp[rung] ?? null;
         // Render the padded region OFF-SCREEN — the user's viewport is never moved.
-        // The padding matches what the prompt quotes (OVERVIEW_FRAME_PADDING).
-        const paddedBounds = this._padBoundsToSlide(viewer, region.bounds, OVERVIEW_FRAME_PADDING);
+        // The padding matches what the prompt quotes (both read `opts.framePadding`), and it
+        // is clipped back into the run's scope: padding is context around a region, never a
+        // way for a scoped walk to read tissue its survey never covered.
+        const paddedBounds = intersectBounds(
+            this._padBoundsToSlide(viewer, region.bounds, opts.framePadding), opts.scopeBounds
+        ) || region.bounds;
 
         // Plan the region as FIELDS rather than asking for one image of the whole box.
         // At this rung's resolution a region is usually bigger than a single vision call
         // can carry; the old path resolved that by downsampling until it fitted, which
         // is exactly how the walk came to describe nuclear features from architecture-
-        // scale pixels. The plan tiles instead, and this node takes the best-scoring
-        // tile — the rest become the frontier the best-first scheduler expands.
-        const { plan, shortOfRung } = this._planNodeFields(viewer, paddedBounds, rung, targetMpp, ladder);
+        // scale pixels. A box that DOES fit is read at the rung. A box that does not is
+        // read whole and coarse — coverage is the right trade for the node's own look,
+        // since that read is what ranks it against every other region — and `_tileChildren`
+        // is what then reads the same box AT the rung, one depth level down. That is why
+        // `maxDepth` must be at least as deep as the ladder is long.
+        const { plan, shortOfRung } = this._planNodeFields(viewer, paddedBounds, rung, targetMpp, ladder, opts.fieldPixels);
         const field = plan.fields[0];
         let raster: FieldRaster;
         try {
@@ -2827,7 +4185,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             areaFraction: region.areaFraction,
             slideAreaFraction: facts.slideAreaFraction,
             bboxFillFraction: facts.bboxFillFraction,
-            cellularity: this._densityFor(viewer)?.sample(viewBounds) ?? null,
+            tissueArea: this._tissueAreaOf(viewer, viewBounds, facts.bboxFillFraction),
+            cellularity: this._densityFor(viewer, viewBounds)?.sample(viewBounds) ?? null,
             fieldOfViewUm: facts.fieldOfViewUm,
             renderedMpp: raster.deliveredMpp,
             requestedMpp: raster.requestedMpp,
@@ -2864,7 +4223,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // honest answer, and the signal that sends the walk deeper.
             // `opts.checklist` is always present — `_resolveChecklist` falls back to a
             // generic one rather than returning nothing, so every run has the same schema.
-            const { assessable, deferred } = splitByResolution(opts.checklist, raster.deliveredMpp);
+            //
+            // The slide's own calibration is passed so "defer it to a finer read" is only
+            // said when a finer read exists. At the limit the feature is ASKED — a real
+            // answer at 0.504 µm/px beats a manufactured `not-assessable` for a 0.25 µm/px
+            // requirement no scan on this slide will ever meet.
+            const nativeMpp = this._micronsPerPixel(viewer);
+            const { assessable, deferred } =
+                splitByResolution(opts.checklist, raster.deliveredMpp, undefined, nativeMpp);
 
             const prompt = this._overviewPrompt(opts, facts, depth, parent, assessable);
             if (!scheduled?.charged) budget.analyzeCalls++;
@@ -2899,6 +4265,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
 
             node.answers = parsed.answers;
             for (const f of deferred) node.answers[f.id] = unassessable(f.id, "resolution");
+            // Mark what was answered below its own stated requirement, so the report can say
+            // "asked for 0.25, answered at 0.504" rather than either hiding the gap or
+            // treating the answer as if it had met the requirement.
+            markBelowRequested(node.answers, assessable, raster.deliveredMpp);
             if (parsed.prose) node.findings = parsed.prose;
 
             const verdict = parsed.verdict;
@@ -2927,19 +4297,15 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // a feature that is still open in a field that otherwise scores is a question
             // this rung could not settle, and the only way to settle it is to look closer.
             //
-            // Note the polarity. A feature answered "no" at a resolution that CAN see it is
-            // settled and is not a gap; `not-assessable` and `uncertain` are. Without that
-            // distinction the walk either stops on unread features or drills forever on
-            // settled ones.
-            const gaps = opts.checklist
-                ? opts.checklist.features.filter(f => {
-                    const present = node.answers?.[f.id]?.present ?? "not-assessable";
-                    return present !== "no" && present !== "yes"
-                        && f.requiredMpp < (raster.deliveredMpp ?? Infinity);
-                })
-                : [];
+            // Through the SAME helper the best-first scheduler uses, so the two schedulers
+            // cannot drift on what counts as a gap (the polarity — "no" at an adequate
+            // resolution is settled, `uncertain`/`not-assessable` are not — is stated once,
+            // there). `node.deliveredMpp` is `raster.deliveredMpp`, assigned above.
+            const gaps = opts.checklist ? checklistGaps(this._schedulable(node, ladder), opts.checklist) : [];
             const unresolved = gaps.length > 0 || verdict.resolvable === false || shortOfRung;
-            const mustResolve = unresolved && (facts.bboxFillFraction ?? 1) >= opts.minDrillFill;
+            // Same gate the best-first scheduler applies, through the same helper, so the two
+            // schedulers cannot disagree about what is worth drilling.
+            const mustResolve = unresolved && worthDrilling(this._schedulable(node), opts);
 
             const canDrill = depth < opts.maxDepth
                 && (wantsDrill || mustResolve)
@@ -2953,7 +4319,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 && !scheduled;
 
             if (canDrill) {
-                const children = await this._subdivideRegion(viewer, region.bounds, opts.driver, label);
+                const children = await this._childrenOf(viewer, node, opts, ladder);
                 if (children.length) {
                     node.decision = wantsDrill ? "drill" : "resolve";
                     for (const child of children.slice(0, opts.breadth)) {
@@ -2997,17 +4363,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         bounds: Bounds,
         rung: number,
         targetMpp: number | null,
-        ladder: OverviewLadder
+        ladder: OverviewLadder,
+        fieldPixels: number = FIELD_MAX_PIXELS
     ): { plan: FieldPlan; shortOfRung: boolean } {
         const slideMpp = this._micronsPerPixel(viewer);
         const slide = this._slideMeta(viewer, this._ref(viewer));
-        const key = this._slideKey(viewer);
-        const survey = key ? this._surveys.get(key) : null;
+        const survey = this._surveyCovering(viewer, bounds);
         const common = {
             bounds,
             rung,
             slideMpp,
-            maxRasterPixels: FIELD_MAX_PIXELS,
+            maxRasterPixels: fieldPixels,
             // Free priors: which tiles hold tissue, and which of those hold nuclei. Both
             // come from the survey, so they cost nothing and are consulted BEFORE a call.
             ...(survey ? { mask: survey.sampler } : {}),
@@ -3028,15 +4394,138 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const wanted = planFields({ ...common, mpp: targetMpp });
         if (wanted.fields.length <= 1) return { plan: wanted, shortOfRung: false };
 
-        // The region does not fit one call at this rung's resolution. Until the best-first
-        // scheduler can afford every tile, the walk keeps COVERAGE and gives up resolution:
-        // one field over the whole region at whatever µm/px it affords. That trade is fine;
-        // making it silently is not, so the shortfall is returned for the prompt to state
-        // and for the drill rule to act on.
+        // The region does not fit one call at this rung's resolution, so this READ keeps
+        // COVERAGE and gives up resolution: one field over the whole region at whatever µm/px
+        // it affords. That is the right trade for a node's own look — it is what produces the
+        // interest score that ranks the region against every other — and it is not the end of
+        // the story: `shortOfRung` is what sends the node to `_tileChildren`, which reads the
+        // same box AT the rung as a lattice. Making the trade silently is what was wrong;
+        // making it and then never recovering is what left every feature unassessable.
+        const plan = planFields({ ...common, single: true, downsample: fitDownsample(bounds, fieldPixels) });
+        // ...but "the lattice had more than one cell" is not the same question as "did this read
+        // land short of the rung". A box a hair wider than one tile still fits a single raster
+        // at a FINER µm/px than the rung asked for, and calling that a shortfall made the node
+        // report `resolutionShortfall` on a read that beat its own target — which then warned
+        // about unresolved leaves, and permanently routed `_childrenOf` down the tile path when
+        // the tissue wanted separating, not re-reading. Compare the resolutions.
+        const delivered = plan.deliveredMpp;
         return {
-            plan: planFields({ ...common, single: true, downsample: fitDownsample(bounds, FIELD_MAX_PIXELS) }),
-            shortOfRung: true,
+            plan,
+            shortOfRung: delivered == null || delivered > targetMpp * (1 + FIELD_MPP_TOLERANCE),
         };
+    }
+
+    /**
+     * How much tissue makes a box worth another call: enough to FILL a readable part of one
+     * field at the finest rung this run will reach.
+     *
+     * Derived rather than chosen. A constant would be wrong on the next slide — the same number
+     * is generous on a 40x scan and prohibitive on a 10x one — whereas "there is more here than
+     * a smear of tissue in a field" is the same statement about the work at any calibration.
+     * µm² when the slide is calibrated, level-0 px² when it is not, matching
+     * {@link OverviewNode.tissueArea}.
+     *
+     * The {@link TILE_MIN_FILL} factor is the whole point, and its absence was a bug: one field's
+     * area of SOLID tissue is unreachable for any box smaller than a field, and for any box whose
+     * tissue is not rectangular at any size. At 2 MP and 1 µm/px that demanded 2 mm² of tissue,
+     * so a 3.4 x 1.5 mm core holding 1.4 mm² was refused, the walk spent 1 of 28 calls, and every
+     * feature came back "not-assessable" on a run that reported itself complete — the same
+     * outcome the older bbox-fill floor at 0.1 produced, in different arithmetic. The gate's
+     * real job is only to refuse glass, and it is the same floor `planFields` already applies to
+     * a tile, so the two agree about what an empty box is.
+     */
+    private _defaultMinDrillTissue(viewer: any, ladder: OverviewLadder, fieldPixels: number): number {
+        const rungs = ladder.targetMpp.filter((m): m is number => typeof m === "number" && m > 0);
+        const finest = rungs.length ? Math.min(...rungs) : null;
+        return (finest ? fieldPixels * finest * finest : fieldPixels) * TILE_MIN_FILL;
+    }
+
+    /**
+     * Split a region into the fields that read it AT its next rung — the expansion that makes
+     * the ladder reachable.
+     *
+     * A region larger than one call at its rung used to have exactly one outcome: it was
+     * rendered as a single squashed image at whatever resolution fitted, every checklist
+     * feature was recorded unassessable because the delivered µm/px was coarser than any of
+     * them needed, and the only route to detail was tissue-island subdivision. On a
+     * contiguous core there are no sub-islands, so there was no route at all — a walk could
+     * spend one call out of twenty-eight and report itself finished.
+     *
+     * This is the missing route, and it is nearly free: `planFields` lays the lattice, the
+     * cached survey mask drops the glass cells with NO render, and the survivors come back
+     * ranked by tissue and cellularity. Nothing here touches the network.
+     */
+    private _tileChildren(
+        viewer: any,
+        bounds: Bounds,
+        depth: number,
+        opts: ResolvedOverviewOptions,
+        ladder: OverviewLadder
+    ): SlideRegion[] {
+        const rung = Math.min(depth + 1, ladder.magnifications.length - 1);
+        const targetMpp = ladder.targetMpp[rung] ?? null;
+        const slideMpp = this._micronsPerPixel(viewer);
+        const slide = this._slideMeta(viewer, this._ref(viewer));
+        const survey = this._surveyCovering(viewer, bounds);
+        const parentArea = Math.max(1, bounds.width * bounds.height);
+
+        const plan = planFields({
+            bounds,
+            rung,
+            slideMpp,
+            maxRasterPixels: opts.fieldPixels,
+            // Unlike a node's own read (where the box is already known to be worth reading, so
+            // minFill is 0), this IS the coverage decision: a cell of glass must cost nothing.
+            minFill: TILE_MIN_FILL,
+            ...(survey ? { mask: survey.sampler } : {}),
+            ...(survey?.density ? { density: survey.density } : {}),
+            ...(slide.width > 0 && slide.height > 0 ? { slide: { width: slide.width, height: slide.height } } : {}),
+            // Uncalibrated slides have no rung to hit, so "finer" is expressed the only way it
+            // can be: half the downsample the parent's single field settled for.
+            ...(slideMpp && targetMpp
+                ? { mpp: targetMpp }
+                : { downsample: Math.max(1, fitDownsample(bounds, opts.fieldPixels) / 2) }),
+        });
+
+        // Array order is the field SCORE order `planFields` returned — the walk takes the
+        // first `breadth` of these, so it must survive. Only the numbering is spatial.
+        return this._numberByReadingOrder(plan.fields
+            // A single field spanning the parent is a reframe, not progress — the caller then
+            // falls back to island subdivision rather than re-reading the same box.
+            .filter(f => f.bounds.width * f.bounds.height <= 0.9 * parentArea)
+            .map((f, index) => ({
+                index,
+                // Provisional: the walk relabels the child with its full ancestry path.
+                label: regionLabel([index]),
+                bounds: f.bounds,
+                center: centerOf(f.bounds)!,
+                areaFraction: (f.fill * f.bounds.width * f.bounds.height) / parentArea,
+                isApproximate: true,
+            })));
+    }
+
+    /**
+     * The children of a node, from whichever source fits why it is being expanded.
+     *
+     * A node short of its rung needs the SAME tissue read closer, which is a lattice. A node
+     * that reached its rung and is still interesting needs the tissue INSIDE it separated,
+     * which is islands. Each falls back to the other rather than to nothing: a contiguous
+     * mass has no islands, and a box already at its rung tiles into a reframe of itself.
+     */
+    private async _childrenOf(
+        viewer: any,
+        node: OverviewNode,
+        opts: ResolvedOverviewOptions,
+        ladder: OverviewLadder
+    ): Promise<SlideRegion[]> {
+        const tiles = () => this._tileChildren(viewer, node.bounds, node.depth, opts, ladder);
+        const islands = () => this._subdivideRegion(viewer, node.bounds, opts.driver, node.label);
+        if (node.resolutionShortfall) {
+            const planned = tiles();
+            return planned.length ? planned : islands();
+        }
+        const split = await islands();
+        return split.length ? split : tiles();
     }
 
     /**
@@ -3045,7 +4534,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * contiguous mass) it falls back to a tissue-aware N×N GRID so drilling always
      * yields genuinely SMALLER, higher-magnification children — never a reframe of
      * the same box. Children are clamped inside the parent and any that fail to
-     * shrink are dropped. Ranked largest-first.
+     * shrink are dropped. Returned in priority order (area weighted by density — the walk
+     * takes a `breadth` prefix), NUMBERED in reading order.
      *
      * The mask comes from the cached whole-slide survey whenever the region resolves to
      * enough of it to have a shape. Only a region too small for that — deep in a drill —
@@ -3065,7 +4555,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const toParent = (p: Point): Point => p;
 
         // Tissue islands within the framed view (parent coords, ranked largest-first).
-        const islands = this._traceOuterContours(mask)
+        const traced = this._traceOuterContours(mask)
             .map(pts => ({ pts, area: polygonArea(pts) }))
             .filter(r => r.area >= 0.01 * total)
             .sort((a, b) => b.area - a.area)
@@ -3075,10 +4565,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 return b ? { bounds: b, areaFraction: r.area / total } : null;
             })
             .filter((c): c is { bounds: Bounds; areaFraction: number } => !!c);
+        // Collapse islands whose BOXES are the same box before anything judges the split.
+        // Two contours sharing a rectangle become one child either way — the only question
+        // is whether the pipeline notices, and un-merged they read as separate regions,
+        // get separate vision calls, and are reported as separate findings.
+        const mergeOptions = this._regionMergeOptions();
+        const islands = mergeOptions ? mergeOverlappingBounds(traced, mergeOptions) : traced;
 
-        // Genuine multi-island split needs ≥2 islands with no single one dominating
-        // the frame; otherwise grid-split the contiguous mass into smaller cells.
-        const candidates = (islands.length >= 2 && islands[0].areaFraction <= 0.6)
+        // Genuine multi-island split needs ≥2 islands of which at least two are real OBJECTS;
+        // otherwise grid-split the contiguous mass into smaller cells.
+        //
+        // The test used to be "no single island dominates" (`islands[0] <= 0.6`), which asks
+        // about the largest island when the question is about the SECOND — a big core beside a
+        // small one is two cores, and routing that to a blind grid throws away the separation
+        // the mask already found. What disqualifies a split is one mass surrounded by specks,
+        // and a floor on the runner-up says exactly that.
+        const candidates = (islands.length >= 2 && islands[1].areaFraction >= ISLAND_MIN_SIBLING)
             ? islands
             : gridSplitTissue(mask, mapPoint);
 
@@ -3086,7 +4588,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // The walk takes the first `breadth` of them, so this ordering decides what gets a
         // vision call and what never gets read at all — and area alone rates a large bland
         // fragment above a small dense one. The density prior is free, so consult it.
-        const density = this._densityFor(viewer);
+        const density = this._densityFor(viewer, parentBounds);
         if (density) {
             candidates.sort((a, b) =>
                 b.areaFraction * (0.5 + 0.5 * density.sample(b.bounds)) -
@@ -3116,7 +4618,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 isApproximate: true,
             });
         }
-        return regions;
+        // Ranked order stays (it decides which children get read); numbering goes spatial.
+        return this._numberByReadingOrder(regions);
     }
 
     /**
@@ -3139,8 +4642,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         label?: string,
         minMaskPixels = 4096
     ): Promise<{ mask: MaskResult; bounds: Bounds }> {
-        const key = this._slideKey(viewer);
-        const survey = key ? this._surveys.get(key) : null;
+        const survey = this._surveyCovering(viewer, bounds);
         if (survey) {
             const crop = cropMask(survey.mask, survey.surveyBounds, bounds);
             if (crop && crop.mask.width * crop.mask.height >= minMaskPixels) return crop;
@@ -3165,6 +4667,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * tissue the box actually holds. Raw `interest` is preserved untouched; the weights
      * are exposed via `rankScore` so a caller can explain the order.
      *
+     * The weights come from `lib/scheduler` — the SAME functions the priority queue scores
+     * with. They were reimplemented here once, with quietly different constants, so the list a
+     * reader was shown could disagree with the order the budget had actually been spent in.
+     * Only the terms differ, deliberately: `noveltyWeight` and `checklistGapWeight` shape where
+     * a run should look NEXT, which is not a statement about what it found.
+     *
      * Returns CHILDLESS views of the nodes. `rankScore` is still written onto the originals
      * (the evidence table reads it back off the tree), but the returned entries must not
      * carry `children`: they are the same objects `root` already holds, and `JSON.stringify`
@@ -3173,9 +4681,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * duplication alone was several times the size of everything else in the result.
      */
     private _rankOverviewNodes(roots: OverviewNode[]): OverviewNode[] {
-        const flat: Array<{ node: OverviewNode; pathPrior: number }> = [];
+        const flat: Array<{ node: OverviewNode; prior: number }> = [];
         const walk = (n: OverviewNode, ancestors: number[]) => {
-            flat.push({ node: n, pathPrior: this._pathPrior(ancestors) });
+            flat.push({ node: n, prior: pathPrior(ancestors) });
             const next = n.interest != null ? [...ancestors, n.interest] : ancestors;
             n.children.forEach(c => walk(c, next));
         };
@@ -3184,12 +4692,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const described = flat.filter(e => e.node.findings && e.node.bounds && !e.node.error);
         const maxArea = Math.max(...described.map(e => e.node.slideAreaFraction || 0), Number.EPSILON);
 
-        for (const { node, pathPrior } of described) {
+        for (const { node, prior } of described) {
+            const s = this._schedulable(node);
             node.rankScore = node.interest == null
                 ? -1 // unknown interest — sorts last, never treated as a real 0
-                : node.interest * pathPrior * this._confidenceWeight(node)
-                    * this._areaWeight(node, maxArea) * this._fillWeight(node)
-                    * this._cellularityWeight(node);
+                : node.interest * prior * confidenceWeight(node.verdict?.confidence)
+                    * areaWeight(s, maxArea) * fillWeight(s) * cellularityWeight(s);
         }
 
         return described
@@ -3198,47 +4706,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             .slice(0, 12)
             // Shallow copy AFTER sorting, so the sort still reads the live `rankScore`.
             .map(node => ({ ...node, children: [] as OverviewNode[] }));
-    }
-
-    /** Geometric mean of the ancestors' interest; neutral (0.5) at the root or when unscored. */
-    private _pathPrior(ancestors: number[]): number {
-        if (!ancestors.length) return 1;
-        const product = ancestors.reduce((acc, v) => acc * Math.max(v, 0.01), 1);
-        return Math.pow(product, 1 / ancestors.length);
-    }
-
-    /** A model that hedged should not outrank one that did not. */
-    private _confidenceWeight(node: OverviewNode): number {
-        switch (node.verdict?.confidence) {
-            case "low": return 0.5;
-            case "medium": return 0.85;
-            case "high": return 1;
-            default: return 0.85;
-        }
-    }
-
-    /** Mild, never dominant: a large region is favoured, but area alone cannot win. */
-    private _areaWeight(node: OverviewNode, maxArea: number): number {
-        const ratio = (node.slideAreaFraction || 0) / maxArea;
-        return Math.max(0.35, Math.min(1, Math.sqrt(ratio)));
-    }
-
-    /** A box that is mostly background earned its score on very little tissue. */
-    private _fillWeight(node: OverviewNode): number {
-        if (node.bboxFillFraction == null) return 1;
-        return node.bboxFillFraction >= 0.15 ? 1 : 0.6;
-    }
-
-    /**
-     * A locally-measured second opinion on the model's score.
-     *
-     * Deliberately gentle and never zero: nuclear density is a prior about where findings
-     * TEND to be, not evidence about this one, and a genuine finding in sparse tissue
-     * (a small focus, an acellular process) must still be able to top the list. It breaks
-     * ties and nudges; it does not overrule. Neutral when no density map exists.
-     */
-    private _cellularityWeight(node: OverviewNode): number {
-        return node.cellularity == null ? 1 : 0.8 + 0.4 * node.cellularity;
     }
 
     /**
@@ -3256,7 +4723,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         parent: OverviewNode | null,
         assessable?: ChecklistFeature[]
     ): string {
-        const preamble = this._contextPreamble(opts.context, facts, depth, parent);
+        const preamble = this._contextPreamble(opts.context, facts, depth, parent, opts.framePadding);
 
         // With a checklist, the questions ARE the prompt. Only the features this field's
         // resolution can actually answer are asked — the rest are recorded as unassessable
@@ -3290,7 +4757,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         ctx: SlideContext,
         facts: NodeViewFacts,
         depth: number,
-        parent: OverviewNode | null
+        parent: OverviewNode | null,
+        /**
+         * Slack the framing left around the region, so the model is told about the margin it
+         * is actually looking at. A walk passes its resolved knob; the ad-hoc callers below
+         * frame nothing themselves and keep the default.
+         */
+        framePadding: number = OVERVIEW_FRAME_PADDING
     ): string[] {
         const lines: string[] = [t("pathology.ctxIntro")];
 
@@ -3349,7 +4822,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
 
         const geometryArgs = {
-            paddingPercent: Math.round(OVERVIEW_FRAME_PADDING * 100),
+            // The framing knob, not the constant: a caller that widened or removed the padding
+            // must not have the model told about a slack that is no longer there.
+            paddingPercent: Math.round(framePadding * 100),
             slideAreaFraction: round(facts.slideAreaFraction * 100, 2),
         };
         lines.push(facts.bboxFillFraction != null
@@ -3429,13 +4904,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         };
     }
 
-    /**
-     * Tissue fraction of a parent-global box, read out of the cached survey mask.
-     *
-     * Null when there is no survey for this slide yet, or when the box maps to too few
-     * survey pixels to mean anything — a handful of pixels can say "there is tissue here"
-     * but the resulting ratio is noise, and a fill figure feeds a drill decision.
-     */
     /** The checklist an interrogation will ask, from `features`, `questions`, or neither. */
     private _interrogationChecklist(options: {
         features?: ChecklistFeature[]; questions?: string[]; mpp?: number;
@@ -3462,23 +4930,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     /**
      * One answer per feature across every field that was read.
      *
-     * Same asymmetric polarity as the evidence table, for the same reason: the fields are
-     * a sample of the region, so one positive is a finding while many negatives are not
-     * proof of absence.
+     * The rule itself is pure and lives with the other answer logic in `lib/answers.ts`
+     * (`aggregateFeatureAnswers`), where it can be tested without a viewer.
      */
     private _aggregateAnswers(fields: InterrogationField[], checklist: Checklist): FeatureAnswer[] {
-        return checklist.features.map(feature => {
-            const seen = fields
-                .map(f => f.answers.find(a => a.id === feature.id))
-                .filter((a): a is FeatureAnswer => !!a);
-            const pick = (p: FeatureAnswer["present"]) => seen.find(a => a.present === p);
-            const winner = pick("yes") || pick("uncertain") || pick("no");
-            if (winner) return { ...winner, id: feature.id };
-            // Everything unassessable: report WHY, since "too coarse" and "the model could
-            // not tell" send a reader to different next steps.
-            const byResolution = seen.some(a => a.reason === "resolution");
-            return unassessable(feature.id, byResolution ? "resolution" : (seen.length ? "model" : "unparsed"));
-        });
+        return aggregateFeatureAnswers(fields, checklist.features);
     }
 
     /** Per-cell answers from a montage reply, keyed by the grid labels drawn on the image. */
@@ -3540,15 +4996,26 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         };
     }
 
-    /** The cached nuclear-density map for this slide, or null when none was derived. */
-    private _densityFor(viewer: any): DensityMap | null {
-        const key = this._slideKey(viewer);
-        return (key && this._surveys.get(key)?.density) || null;
+    /**
+     * The cached nuclear-density map covering `bounds`, or null when none was derived.
+     *
+     * `bounds` picks WHICH survey answers: a scoped run leaves a finer density map over its
+     * region, and sampling the whole-slide one there would rate a hot spot by the average of
+     * a much bigger cell.
+     */
+    private _densityFor(viewer: any, bounds?: Bounds): DensityMap | null {
+        return this._surveyCovering(viewer, bounds)?.density || null;
     }
 
+    /**
+     * Tissue fraction of a parent-global box, read out of the cached survey mask.
+     *
+     * Null when there is no survey for this slide yet, or when the box maps to too few
+     * survey pixels to mean anything — a handful of pixels can say "there is tissue here"
+     * but the resulting ratio is noise, and a fill figure feeds a drill decision.
+     */
     private _fillOf(viewer: any, bounds: Bounds, minMaskPixels = 64): number | null {
-        const key = this._slideKey(viewer);
-        const survey = key ? this._surveys.get(key) : null;
+        const survey = this._surveyCovering(viewer, bounds);
         if (!survey) return null;
         const px = (bounds.width / Math.max(1e-9, survey.surveyBounds.width)) * survey.mask.width;
         const py = (bounds.height / Math.max(1e-9, survey.surveyBounds.height)) * survey.mask.height;
@@ -3649,6 +5116,31 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         } catch {
             return null;
         }
+    }
+
+    /**
+     * Identity of an image that is about to leave the browser.
+     *
+     * Carried beside the pixels for the audit trail — WHICH slide, WHICH box, how
+     * closely read — so a logged vision call is a reviewable record rather than an
+     * anonymous PNG on a server. It is diagnostics only: a driver passes it
+     * through to be logged and must never put it in the prompt, or an operator's
+     * logging configuration would change what the model is asked.
+     */
+    private _analysisContext(
+        viewer: any,
+        feature: string,
+        extra?: Partial<AnalysisContext>
+    ): AnalysisContext {
+        return {
+            feature,
+            viewerId: viewer?.uniqueId ?? null,
+            tileSourceId: this._slideKey(viewer),
+            deliveredMpp: null,
+            region: null,
+            label: null,
+            ...(extra || {}),
+        };
     }
 
     private _storeOverview(viewer: any, result: OverviewResult): void {
@@ -3835,6 +5327,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         let prompt = options?.prompt || "";
         let coveredFraction: number | undefined;
         if (options?.region || options?.preRead) {
+            // Naming a region is what makes it the subject; a later unqualified call follows it.
+            // `preRead` alone does not: the walk's own nodes come through here, and every field
+            // it reads would otherwise re-point the focus at whatever it looked at last.
+            if (options.region && !options.preRead) this.setFocusRegion(viewer, options.region);
             const layers = options?.source === "background" ? "background" : "active";
             let raster: RegionRaster;
             if (options.preRead) {
@@ -3871,21 +5367,39 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 prompt = await this._groundPrompt(viewer, options.context, raster, options.driver, prompt);
             }
         } else {
-            imageBlob = options?.source === "background"
-                ? await (await this._readBackground(viewer, { label: t("pathology.captureAnalyze") })).toBlob()
-                : (await this.captureViewportImage(viewer, t("pathology.captureAnalyze")))?.blob;
+            // No region named: this reads the LIVE viewport, which never waits for tiles. It is
+            // still incomplete exactly when the view was mid-stream, and that must reach the caller
+            // — leaving `isComplete` undefined here is what dropped the flag from the result and
+            // let a half-loaded frame be reported as a finished read.
+            if (options?.source === "background") {
+                const bg = await this._readBackground(viewer, { label: t("pathology.captureAnalyze") });
+                imageBlob = await bg.toBlob();
+                isComplete = bg.isComplete;
+            } else {
+                const shot = await this.captureViewportImage(viewer, t("pathology.captureAnalyze"));
+                imageBlob = shot?.blob;
+                isComplete = shot?.isComplete;
+            }
         }
         if (!imageBlob) throw new Error("Failed to capture the viewport image.");
 
         // `region` completes the audit trail: it says WHICH part of the slide left the
         // browser, which the `region-capture` event alone cannot (a `preRead` raster is
         // captured under a different call).
-        this.raiseEvent("analysis-started", {
-            driver: driver.id, feature: "analyze",
-            region: options?.region ?? options?.preRead?.renderedBounds ?? null,
+        // `scale` is level-0 px per raster px, so slide µm/px times it IS the
+        // delivered resolution — the number that says whether this image could
+        // carry cell-level detail at all. Derived rather than read off the raster
+        // because a plain `RegionRaster` does not carry one (only a planned
+        // `FieldRaster` does).
+        const slideMppNow = this._micronsPerPixel(viewer);
+        const preRead = options?.preRead;
+        const context = this._analysisContext(viewer, "analyze", {
+            region: options?.region ?? preRead?.renderedBounds ?? null,
+            deliveredMpp: slideMppNow && preRead ? round(slideMppNow * preRead.scale, 3) : null,
         });
+        this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: context.region });
         try {
-            const res = await driver.features["analyze"]!({ imageBlob, prompt });
+            const res = await driver.features["analyze"]!({ imageBlob, prompt, context });
             return {
                 driver: driver.id,
                 findings: res?.text ?? null,
@@ -4050,28 +5564,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         });
     }
 
-    /**
-     * Resolve once every tiled image has finished streaming so a current-view
-     * capture reads a fully-painted background (settling the springs is not
-     * enough — a zoom change reloads the pyramid). Returns immediately when already
-     * loaded; a hard timeout keeps it from hanging on a stalled tile source.
-     *
-     * @returns true when the viewer really finished loading; false when the wait
-     *   timed out (or no load signal exists) and any capture that follows reads
-     *   partially-streamed tiles — callers surface this as `isComplete: false`.
-     */
-    private _waitForFullyLoaded(viewer: any, timeoutMs = 10000): Promise<boolean> {
-        if (viewer?.getFullyLoaded?.()) return Promise.resolve(true);
-        return new Promise<boolean>(resolve => {
-            let done = false;
-            const finish = (loaded: boolean) => { if (done) return; done = true; clearTimeout(timer); resolve(loaded); };
-            const timer = setTimeout(() => finish(false), timeoutMs);
-            if (typeof viewer?.whenFullyLoaded === "function") viewer.whenFullyLoaded(() => finish(true));
-            else if (typeof viewer?.addOnceHandler === "function") viewer.addOnceHandler("fully-loaded-change", () => finish(true));
-            else finish(false);
-        });
-    }
-
     /** The virtual-region crop source of a tiled image (region↔parent mapping), or null. */
     private _croppedSourceOf(item: any): any {
         const s = item?.source;
@@ -4089,10 +5581,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     }
 
     /**
-     * The current viewport as a parent-global image rectangle, or null when the
-     * viewer can't map it. Used only by the exploreSlide fallback for sources that
-     * expose no slide dimensions: the survey then covers what the user is looking at
-     * rather than the whole slide.
+     * The current viewport as a parent-global image rectangle, or null when the viewer can't
+     * map it. Backs `scope: "viewport"`, and the fallback for sources that expose no slide
+     * dimensions — where the survey covers what the user is looking at because nothing else
+     * is knowable, rather than because it was asked for.
      */
     private _currentViewParentBounds(viewer: any, ref: any, cropped: any): Bounds | null {
         const vp = viewer?.viewport;
@@ -4109,6 +5601,138 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         } catch (_e) {
             return null;
         }
+    }
+
+    /**
+     * Resolve an {@link ExplorationScope} into the parent-global rectangle a survey will
+     * cover, plus what that rectangle means for the result's coverage claim.
+     *
+     * The rectangle form arrives from a script the chat model wrote, so it is treated as
+     * hostile input (AGENTS.md §0.2/§7): every field must be a finite number, the box must
+     * have area, and it is clamped into the slide rather than trusted to be on it. A box that
+     * misses the slide entirely is an error, not an empty survey — silently surveying nothing
+     * would be reported as "this slide looks blank".
+     */
+    private _resolveScope(viewer: any, scope?: ExplorationScope): { bounds: Bounds; coverageScope: CoverageScope } {
+        const resolved = this._resolveScopeBounds(viewer, scope);
+        // The single decision point for what the work is about, so every entry point that takes a
+        // scope keeps the focus current without each of them remembering to. Only an EXPLICIT
+        // scope moves it: an omitted one is already following the focus, and the no-dimensions
+        // fallback to the current view is a degradation rather than a statement of intent.
+        if (scope === "slide") this.setFocusRegion(viewer, null);
+        else if (scope != null) this.setFocusRegion(viewer, resolved.bounds);
+        return resolved;
+    }
+
+    private _resolveScopeBounds(viewer: any, scope?: ExplorationScope): { bounds: Bounds; coverageScope: CoverageScope } {
+        const ref = this._ref(viewer);
+        const cropped = this._croppedSourceOf(ref);
+        const meta = this._slideMeta(viewer, ref);
+        const slideDimsKnown = meta.width > 0 && meta.height > 0;
+
+        const currentView = (): Bounds => {
+            const view = this._currentViewParentBounds(viewer, ref, cropped);
+            if (!view) throw new Error("The current view could not be mapped onto the slide.");
+            // Clamped when the slide extent is known: the viewport routinely extends past the
+            // slide edge, and a survey of glass beyond it is budget spent on nothing.
+            return (slideDimsKnown ? clampBoundsToSlide(view, meta.width, meta.height) : view) || view;
+        };
+
+        if (scope === "viewport") return { bounds: currentView(), coverageScope: "current-view" };
+
+        // An omitted scope follows the region the work is already about. The alternative — a
+        // silent whole-slide default — is what turned "do a deep scan" into minutes of examining
+        // the wrong tissue after two turns spent on one core. `scope: "slide"` is how a caller
+        // demands the slide, and it is the only thing that clears the focus.
+        if (scope == null) {
+            const focus = this._focusRegions.get(this._slideKey(viewer) || "");
+            if (focus) return { bounds: focus.bounds, coverageScope: "region" };
+        }
+
+        if (scope && scope !== "slide") {
+            const rect = normalizeScopeRect(scope, meta.width, meta.height);
+            if (!rect) {
+                throw new Error(
+                    "An exploration scope must be a rectangle {x, y, width, height} of image pixels, on the slide."
+                );
+            }
+            return { bounds: rect, coverageScope: "region" };
+        }
+
+        // "slide" / omitted. The slide's whole content rectangle — no letterbox margins, no
+        // viewport framing: the raster IS the slide (for a virtual-region crop, the CROP
+        // expressed in parent-global coords). When the source exposes NO slide dimensions
+        // (some DICOM / custom sources), degrade to the CURRENT VIEW so orientation still
+        // returns a best-effort overview instead of throwing — the result is then scoped
+        // "current-view", and regions can't be slide-clamped.
+        if (!slideDimsKnown) {
+            const view = this._currentViewParentBounds(viewer, ref, cropped);
+            if (!view) throw new Error("The slide dimensions are unavailable; cannot build an overview.");
+            return { bounds: view, coverageScope: "current-view" };
+        }
+        const content = ref?.getContentSize?.();
+        const localBR: Point = { x: content?.x || meta.width, y: content?.y || meta.height };
+        const toParent = (p: Point): Point => (cropped ? cropped.toParentImageCoordinates(p) : p);
+        const pTL = toParent({ x: 0, y: 0 });
+        const pBR = toParent(localBR);
+        return {
+            bounds: {
+                x: Math.min(pTL.x, pBR.x),
+                y: Math.min(pTL.y, pBR.y),
+                width: Math.abs(pBR.x - pTL.x),
+                height: Math.abs(pBR.y - pTL.y),
+            },
+            coverageScope: "whole-slide",
+        };
+    }
+
+    /**
+     * Raster budget for a survey of `bounds`.
+     *
+     * `surveyMpp` states a RESOLUTION, which is what a caller actually means by "look closer
+     * at this area"; it is converted here into the pixel budget the render path already
+     * takes, so there is one render entry point rather than two. Uncalibrated slides have no
+     * physical scale to hit and fall back to the flat budget.
+     */
+    private _surveyPixelBudget(viewer: any, bounds: Bounds, options?: { surveyMpp?: number; surveyPixels?: number }): number {
+        return surveyPixelBudget(
+            bounds, this._micronsPerPixel(viewer), options || {}, MASK_TARGET_PIXELS, MASK_MAX_PIXELS
+        );
+    }
+
+    /**
+     * The µm/px the orientation rung aims at.
+     *
+     * An explicit value wins verbatim — the same contract `magnificationLadder` has. Otherwise
+     * {@link SURVEY_MPP} for a whole-slide run, but never coarser than what the scope already
+     * affords inside its own pixel budget: on a viewport-sized box, 2 µm/px would throw away
+     * resolution the render was going to deliver for free.
+     */
+    private _resolveSurveyMpp(
+        viewer: any,
+        bounds: Bounds,
+        coverageScope: CoverageScope,
+        options?: { surveyMpp?: number; surveyPixels?: number }
+    ): number | undefined {
+        return resolveSurveyMpp(
+            bounds, this._micronsPerPixel(viewer), coverageScope, options || {}, SURVEY_MPP, MASK_TARGET_PIXELS
+        );
+    }
+
+    /** This slide's cached surveys, in least-recently-used order. */
+    private *_surveysOf(slideKey: string): Generator<SlideSurvey> {
+        for (const [key, survey] of this._surveys) {
+            if (isKeyOfSlide(key, slideKey)) yield survey;
+        }
+    }
+
+    /**
+     * The best cached survey for `bounds` on this slide: the one that covers the box at the
+     * finest mask resolution over it. See `pickSurvey`.
+     */
+    private _surveyCovering(viewer: any, bounds?: Bounds): SlideSurvey | null {
+        const slideKey = this._slideKey(viewer);
+        return slideKey ? pickSurvey(this._surveysOf(slideKey), bounds) : null;
     }
 
     /** Whole-slide (parent-global) dimensions, calibration, and native magnification. */
@@ -4139,9 +5763,15 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // (e.g. after viewer.frameImageRegion, which does not await its animation),
         // the capture and the mapping would use different transforms — yielding a
         // correctly-shaped but MIS-PLACED result. Wait for the view to settle so
-        // both use the same transform. (Tiles still streaming after settle are a
-        // separate concern, not handled here.)
+        // both use the same transform.
         await this._waitForViewerSettled(viewer);
+        // Settling is the only thing worth waiting for here. This reads the view the USER is
+        // looking at, so it is faithful by construction — if tiles are missing they are missing on
+        // screen too, and waiting would return a view the user never saw (and one that no longer
+        // matches where they have navigated to since). Measure instead, and report it: a mask over
+        // blanks still must not be treated as the slide, because a hole reads as background and
+        // silently shrinks every tissue island in it.
+        const viewerLoaded = viewer?.getFullyLoaded?.() === true;
 
         const viz = this._visualizationApiFor(viewer);
         if (!viz?.renderCurrentBackgroundPixels) {
@@ -4150,13 +5780,15 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const canvas = viewer?.drawer?.canvas;
         const deviceWidth = canvas?.width || 0, deviceHeight = canvas?.height || 0;
         const size = this._rasterRenderSize(deviceWidth, deviceHeight, readOpts);
-        const res = await withTimeout<RawPixelsResult>(
+        const res = await withTimeout<RawPixelsResult & { isComplete?: boolean }>(
             viz.renderCurrentBackgroundPixels({
                 maxPixels: readOpts?.targetPixels ? MASK_MAX_PIXELS : 64_000_000,
                 pixelFormat: "typed",
                 ...(readOpts?.label ? { label: readOpts.label } : {}),
                 ...(size ? { width: size.width, height: size.height } : {}),
             }),
+            // This path reads the LIVE viewport and never waits for tiles, so there is no internal
+            // budget to sit above — the guard is purely a wedge guard here.
             BACKGROUND_READ_TIMEOUT_MS,
             "read the slide background"
         );
@@ -4171,6 +5803,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             pixels,
             scale: deviceWidth ? deviceWidth / width : 1,
             toBlob: () => (blobPromise ||= pixelsToPngBlob(pixels, width, height)),
+            // Both must hold, and both degrade closed: `viewerLoaded` is this call's own measurement
+            // before the read, `res.isComplete` is the core's at read time (a core too old to report
+            // it counts as incomplete). Either being false means pixels that must not be measured,
+            // cached, or described to a model as the slide.
+            isComplete: viewerLoaded && res.isComplete === true,
+            // Nothing waited, so nothing gave up: a live-viewport read is never "stalled".
+            stalled: false,
         };
     }
 
@@ -4209,6 +5848,111 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     private _padBoundsToSlide(viewer: any, bounds: Bounds, padding: number): Bounds {
         const meta = this._slideMeta(viewer, this._ref(viewer));
         return padBounds(bounds, padding, meta.width, meta.height);
+    }
+
+    /**
+     * The ladder rung a node at `depth` is read at — the depth, floored at the finest rung
+     * the ladder has. The one place that arithmetic lives, because the redundancy gate and
+     * the field planner must agree on what "as closely" means.
+     */
+    private _rungOf(depth: number, ladder: OverviewLadder): number {
+        return Math.min(Math.max(0, depth), ladder.magnifications.length - 1);
+    }
+
+    /**
+     * The merge thresholds this deployment segments regions by, or null when an operator
+     * turned the merge off. See {@link REGION_MERGE_IOU} for why it lives in static meta.
+     */
+    private _regionMergeOptions(): { iou: number; containment: number } | null {
+        const configured = this.getStaticMeta("regionMerge", undefined) as
+            | boolean | { iou?: number; containment?: number } | undefined;
+        if (configured === false) return null;
+        const from = (configured && typeof configured === "object") ? configured : {};
+        return {
+            iou: clampNumber(from.iou, REGION_MERGE_IOU, 0, 1),
+            containment: clampNumber(from.containment, REGION_MERGE_CONTAINMENT, 0, 1),
+        };
+    }
+
+    /**
+     * Number a set of SIBLING regions the way a reviewer reads the slide.
+     *
+     * The array order is left alone: it is priority order, and it decides what gets rendered,
+     * what gets a vision call and what a `slice(0, n)` keeps. This rewrites only `index` and
+     * `label` — the region's identity for the user, for a region link and for every
+     * label-addressed lookup (`_rootIdOf`, `applyPlanEdits`).
+     *
+     * Nothing indexes these arrays by `region.index`; it is copied onto nodes and pushed into
+     * `path`, which is what makes the two orders separable at all.
+     */
+    private _numberByReadingOrder(regions: SlideRegion[]): SlideRegion[] {
+        if (regions.length < 2 || this._regionOrderMode() !== "reading") return regions;
+        const ranks = readingOrder(regions);
+        return regions.map((region, at) => ({
+            ...region,
+            index: ranks[at],
+            label: regionLabel([ranks[at]]),
+        }));
+    }
+
+    /**
+     * The same regions, most tissue first.
+     *
+     * Every "take the top N islands" in this module used to be a prefix of a list that
+     * happened to be area-sorted. Numbering is spatial now and `exploreSlide` hands its list
+     * back in that order, so a prefix would silently mean "the leftmost N" — which is a
+     * budget decision made by slide layout. Callers that mean size now say so.
+     */
+    private _byTissueFirst(regions: SlideRegion[]): SlideRegion[] {
+        return regions.slice().sort((a, b) => (b.areaFraction ?? 0) - (a.areaFraction ?? 0));
+    }
+
+    /**
+     * How region numbers are assigned — a DEPLOYMENT knob, like `regionMerge`.
+     *
+     * It shapes every label the cached survey and the whole traversal carry, and labels are
+     * what a plan edit and a region link address, so a session bundle must not be able to
+     * change it (AGENTS.md §7). `"area"` restores the legacy size-rank numbering.
+     */
+    private _regionOrderMode(): "reading" | "area" {
+        return this.getStaticMeta("regionOrder", "reading") === "area" ? "area" : "reading";
+    }
+
+    /**
+     * A render budget, in ms, overridable per deployment.
+     *
+     * The defaults are guesses about tile latency made on one network. A WAN-hosted DICOMweb
+     * store invalidates all of them at once, and the symptom — every field reported unread — is
+     * indistinguishable from a broken slide unless an operator can move the number. Static meta,
+     * not `getOption`: this decides how long the viewer waits on a backend, so a session bundle
+     * must not be able to set it (AGENTS.md §7).
+     *
+     * Clamped rather than trusted: a zero or negative budget would make every render fail
+     * instantly, and an unbounded one would let the walk wedge for the scripting layer's hour.
+     */
+    private _budget(key: string, fallback: number): number {
+        return clampNumber(this.getStaticMeta(key, undefined) as number | undefined, fallback, 500, 300_000);
+    }
+
+    /**
+     * Collapse region boxes describing the same tissue, then renumber.
+     *
+     * Renumbering is not cosmetic: `label` is the only identity a region has for the user
+     * and for a region link, and `index` addresses the array. A merge that left "region 1,
+     * region 3, region 4" behind would put a gap in the user's numbering and a stale index
+     * on every child path derived from it.
+     */
+    private _mergeRegions(regions: SlideRegion[]): SlideRegion[] {
+        const options = this._regionMergeOptions();
+        if (!options || regions.length < 2) return regions;
+        const merged = mergeOverlappingBounds(regions, options);
+        if (merged.length === regions.length) return regions;
+        return merged.map((region, index) => ({
+            ...region,
+            index,
+            label: regionLabel([index]),
+            center: centerOf(region.bounds)!,
+        }));
     }
 
     /**
@@ -4285,46 +6029,89 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      *   THROWS above it, so this turns a limiter into a tripwire: a clamp that should be
      *   impossible fails loudly rather than degrading the resolution behind the prompt.
      * - **The delivered resolution is measured and checked**, never assumed.
+     *
+     * ## Attempts
+     *
+     * A failed render is retried, up to {@link FIELD_RENDER_ATTEMPTS}, because the common failure
+     * is a slow tile server rather than an unreadable region — and a walk that turns one slow
+     * region into `not-assessable` reports a clinical-sounding non-answer for an infrastructure
+     * problem. The escalation and its stopping rules are in {@link _attemptFieldRender}.
      */
     private async _renderField(
         viewer: any,
         field: Field,
         opts?: { layers?: "background" | "active"; timeoutMs?: number; label?: string }
     ): Promise<FieldRaster> {
-        const { region, nativeMag } = this._regionRenderGeometry(viewer, field.bounds);
         const slideMpp = this._micronsPerPixel(viewer);
+        let lastError: any = null;
 
-        // The planner sized against parent-global bounds; a virtual-region crop can map
-        // them to a slightly different local extent, so re-derive from what will be sent.
-        const size = rasterSizeFor(region, field.downsample);
+        for (let attempt = 0; attempt < FIELD_RENDER_ATTEMPTS; attempt++) {
+            // What this attempt asks for — the field as planned, or one rung coarser once
+            // retrying at full resolution has stopped helping. See `fieldRenderAttempt`.
+            const asked = fieldRenderAttempt(field, attempt);
+            const requestedMpp = asked.mpp;
 
-        const raster = await this._renderRegionAt(viewer, field.bounds, region, nativeMag, {
-            outWidth: size.width,
-            outHeight: size.height,
-            // +1 row of slack absorbs the renderer's own rounding without admitting a clamp.
-            maxPixels: size.width * size.height + size.width + 1,
-            layers: opts?.layers,
-            timeoutMs: opts?.timeoutMs,
-            label: opts?.label,
-        });
+            // Re-derived per attempt: `_regionRenderGeometry` reads the live world, and a
+            // virtual-region crop can map the same parent-global bounds to a different local
+            // extent than the planner sized against.
+            const { region, nativeMag } = this._regionRenderGeometry(viewer, field.bounds);
+            const size = rasterSizeFor(region, asked.downsample);
 
-        const deliveredMpp = slideMpp ? slideMpp * raster.scale : null;
-        const mppExact = isMppExact(region, raster.width, slideMpp, field.mpp);
-        if (!mppExact) {
-            // Not a warning to pass to the model — a defect in the planner or the render
-            // path. Loud, with the numbers needed to tell which.
-            console.error("[pathology-foundation] field resolution drift", {
-                field: field.id, requestedMpp: field.mpp, deliveredMpp,
-                planned: size, delivered: { width: raster.width, height: raster.height },
-            });
+            let raster: RegionRaster;
+            try {
+                raster = await this._renderRegionAt(viewer, field.bounds, region, nativeMag, {
+                    outWidth: size.width,
+                    outHeight: size.height,
+                    // +1 row of slack absorbs the renderer's own rounding without admitting a clamp.
+                    maxPixels: size.width * size.height + size.width + 1,
+                    layers: opts?.layers,
+                    timeoutMs: opts?.timeoutMs,
+                    label: opts?.label,
+                });
+            } catch (e) {
+                lastError = e;
+                if (!this._shouldRetryRender(e, attempt)) throw e;
+                continue;
+            }
+
+            const deliveredMpp = slideMpp ? slideMpp * raster.scale : null;
+            const mppExact = isMppExact(region, raster.width, slideMpp, requestedMpp);
+            if (!mppExact) {
+                // Not a warning to pass to the model — a defect in the planner or the render
+                // path. Loud, with the numbers needed to tell which.
+                console.error("[pathology-foundation] field resolution drift", {
+                    field: field.id, requestedMpp, deliveredMpp,
+                    planned: size, delivered: { width: raster.width, height: raster.height },
+                });
+            }
+            return {
+                ...raster,
+                requestedMpp,
+                deliveredMpp,
+                downsample: raster.scale,
+                mppExact,
+            };
         }
-        return {
-            ...raster,
-            requestedMpp: field.mpp,
-            deliveredMpp,
-            downsample: raster.scale,
-            mppExact,
-        };
+        throw lastError ?? new Error("Failed to render the requested slide region.");
+    }
+
+    /**
+     * Whether a failed field render is worth attempting again.
+     *
+     * Two failures are deliberately NOT retried:
+     *
+     * - A queue timeout. The pass never started because passes ahead of it are still running;
+     *   re-submitting adds to the very queue that rejected it, and delays everything behind it.
+     * - The last attempt, obviously — but stated as a rule so the caller cannot loop.
+     *
+     * A `stalled` render is a third non-retryable case, but it never reaches here: `stalled`
+     * comes back as a RESULT (`isComplete: false`), not a throw, and the field reports it as the
+     * partial read it is. See `_renderRegionAt`.
+     */
+    private _shouldRetryRender(error: any, attempt: number): boolean {
+        if (attempt >= FIELD_RENDER_ATTEMPTS - 1) return false;
+        if (error?.name === "QueueTimeoutError") return false;
+        return true;
     }
 
     /**
@@ -4378,7 +6165,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             throw new Error("The visualization API is unavailable; cannot render the slide region.");
         }
         const refIndex = this._worldIndexOf(viewer, this._ref(viewer));
-        const res = await withTimeout<RawPixelsResult & { isComplete?: boolean }>(
+        // The render's own tile-load budget — a REAL wait now, so the default is the bounded one.
+        // A caller that knows its render is worth more (the survey, whose coverage decides the whole
+        // walk) opts into a longer budget explicitly; everything else, including any call site added
+        // later, gets the value that keeps a serialized multi-field walk from running for minutes.
+        const loadBudgetMs = opts.timeoutMs ?? this._budget("fieldLoadTimeoutMs", FIELD_LOAD_TIMEOUT_MS);
+        // The wait for a TURN at rendering, which the core owns (it owns the queue and the
+        // scheduler) and now bounds on request. Before it existed this wait was unbounded and
+        // uncounted, and the wedge guard below — whose clock starts here, not at admission —
+        // was firing on renders that had not begun.
+        const queueBudgetMs = this._budget("renderQueueTimeoutMs", RENDER_QUEUE_TIMEOUT_MS);
+        const res = await withTimeout<RawPixelsResult & { isComplete?: boolean; stalled?: boolean }>(
             viz.renderRegionPixels({
                 region,
                 size: {
@@ -4390,9 +6187,13 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 pixelFormat: "typed",
                 maxPixels: opts.maxPixels ?? 64_000_000,
                 ...(opts.label ? { label: opts.label } : {}),
-                ...(typeof opts.timeoutMs === "number" ? { timeoutMs: opts.timeoutMs } : {}),
+                timeoutMs: loadBudgetMs,
+                queueTimeoutMs: queueBudgetMs,
             }),
-            opts.timeoutMs ?? BACKGROUND_READ_TIMEOUT_MS,
+            // Strictly above BOTH budgets — see RENDER_GUARD_SLACK_MS. Sized against either one
+            // alone, the guard measures an interval the core is not bounding, and a fully-spent
+            // budget becomes a throw that discards the partial it earned.
+            queueBudgetMs + loadBudgetMs + RENDER_GUARD_SLACK_MS,
             "render the slide region"
         );
         if (!res?.width || !res?.height || !res?.data) {
@@ -4408,7 +6209,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // Level-0 image pixels per raster pixel (of the rendered region).
             scale: width ? region.width / width : 1,
             toBlob: () => (blobPromise ||= pixelsToPngBlob(pixels, width, height)),
-            isComplete: res.isComplete !== false,
+            // The core contract (visualization-api: "fullyLoaded alone can be true over holes")
+            // says only `isComplete && !stalled` is a faithful read of the region. Folded in HERE,
+            // at the one place a raster is produced, so every consumer degrades closed without each
+            // of them having to remember. `stalled` stays on the object for the retry decision.
+            isComplete: res.isComplete !== false && res.stalled !== true,
+            stalled: res.stalled === true,
             renderedMagnification: nativeMag ? (width / region.width) * nativeMag : null,
             mapPoint: (px: number, py: number) => ({
                 x: bounds.x + (px / width) * bounds.width,
@@ -4517,12 +6323,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * Includes the visualization overlay — used only where that is desirable
      * (the `analyze` feature). Tissue/segment read the raw background instead
      * (see {@link _readBackground}). The SAM plugin also delegates here.
+     *
+     * Settles the view and then WAITS for the pyramid, because this reads the on-screen canvas:
+     * whatever is painted at that instant is the entire capture. A frame grabbed mid-stream is
+     * blank where tiles have not landed, and sending that to a vision model as the view is how a
+     * model came to describe empty canvas as tissue. `isComplete` reports the outcome — false when
+     * the wait timed out and the blob really does hold partially-streamed tiles.
      */
-    async captureViewportImage(viewer: any, label?: string): Promise<{ blob: Blob; width: number; height: number } | null> {
+    async captureViewportImage(
+        viewer: any,
+        label?: string
+    ): Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null> {
         const sourceCanvas = viewer?.drawer?.canvas;
         if (!sourceCanvas || sourceCanvas.width < 1) {
             console.error("[pathology-foundation] no viewport canvas available to capture.");
             return null;
+        }
+
+        // Settle the springs — a capture mid-flight reads the wrong PLACE, which no flag can
+        // describe. Then measure, do not wait: what is painted is what the user is looking at.
+        await this._waitForViewerSettled(viewer);
+        const isComplete = viewer?.getFullyLoaded?.() === true;
+        if (!isComplete) {
+            console.warn("[pathology-foundation] viewport capture holds partially loaded tiles.");
         }
 
         // This path reads the on-screen canvas directly instead of going through the
@@ -4556,7 +6379,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             ctx.drawImage(sourceCanvas, 0, 0);
         }
 
-        return new Promise<{ blob: Blob; width: number; height: number } | null>(resolve => {
+        return new Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null>(resolve => {
             ctx!.canvas.toBlob(blob => {
                 if (!blob) {
                     console.error("[pathology-foundation] failed to capture viewport image.");
@@ -4565,19 +6388,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     return;
                 }
                 announce("end", true);
-                resolve({ blob, width, height });
+                resolve({ blob, width, height, isComplete });
             }, "image/png");
         });
     }
 
-    /** All non-inner (outer) contours of a binary mask, in mask pixel space. */
+    /**
+     * All non-inner (outer) contours of a binary mask, in mask pixel space.
+     *
+     * `bounds` is INCLUSIVE here — magic-wand's own producers set `maxX = xr - 1` and its
+     * `prepareMask` loops `x < maxX + 1`. Passing the exclusive `mask.width` made it read
+     * `data[y * width + width]`, which is the FIRST PIXEL OF THE NEXT ROW, and paint it into
+     * the padded mask's right-hand border column — the column the tracer requires to be
+     * empty. Tissue at the left edge of row y+1 therefore bridged row y down the right edge,
+     * silently merging components that share no boundary at all. On a scoped biopsy that is
+     * enough to turn several cores into one contour spanning the whole scope.
+     */
     private _traceOuterContours(mask: MaskResult): Point[][] {
         this.MagicWand = this.MagicWand || OSDAnnotations.makeMagicWand();
         const contours = this.MagicWand.traceContours({
             data: mask.binaryMask,
             width: mask.width,
             height: mask.height,
-            bounds: { minX: 0, minY: 0, maxX: mask.width, maxY: mask.height },
+            bounds: { minX: 0, minY: 0, maxX: mask.width - 1, maxY: mask.height - 1 },
         });
         return contours.filter((c: any) => !c.inner).map((c: any) => c.points);
     }

@@ -43,12 +43,13 @@ export { makePostDataSink, makeHttpRestSink, makeSessionMemorySink, withRetry };
 export { makeStorageDriver, makeMemoryDriver, makeCookiesDriver, makePostDataKVDriver };
 
 /**
- * Create the IO pipeline and register the four built-in sinks:
- * `file-download`, `file-upload`, `post-data`, and a default `http-rest`
- * (the latter pulls per-deployment overrides from
- * `ENV.client.io.sinkOverrides['http-rest']`). Custom HTTP sinks with
- * distinct ids can be registered later via
- * `IO_PIPELINE.registerSink(makeHttpRestSink({ id: '...', getOptions }))`.
+ * Create the IO pipeline and register the five built-in sinks:
+ * `post-data`, `file-download`, `file-upload`, `http-rest` (which pulls
+ * per-deployment overrides from `ENV.client.io.sinkOverrides['http-rest']`),
+ * and `session-memory`. Custom HTTP sinks with distinct ids can be registered
+ * later via `IO_PIPELINE.registerSink(makeHttpRestSink({ id, getOptions }))`.
+ *
+ * Writing your own sink: `src/IO_SINK_AUTHORING.md`.
  */
 export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
     const pipeline = new IOPipeline(opts);
@@ -59,10 +60,16 @@ export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
     pipeline.registerSink(makePostDataSink({ POST_DATA: opts.POST_DATA }));
     pipeline.registerSink(fileDownloadSink);
     pipeline.registerSink(fileUploadSink);
-    pipeline.registerSink(makeHttpRestSink({
+    // Retry-wrapped: this is the sink a deployment binds first when it points
+    // xOpat at its own backend, and it is the one talking to a network. Without
+    // the wrapper a single dropped connection lost the write outright, which
+    // reads to the user as "Save worked" (the outbox drained) with nothing
+    // stored. Defaults only retry `*_THREW` and 5xx — a 4xx is the upstream
+    // saying no, and repeating it just delays the refusal.
+    pipeline.registerSink(withRetry(makeHttpRestSink({
         id: "http-rest",
         getOptions: () => pipeline.sinkOverrides("http-rest"),
-    }));
+    })));
     // Default fallback for slide-aware bundle owners (bundleScope:
     // "per-viewer-background" / "all"). post-data is a single global slot
     // and cannot hold one bundle per (viewer, background); session-memory
@@ -107,8 +114,8 @@ export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
     registerWebStorage("local-storage", "localStorage", "localStorage");
     registerWebStorage("session-storage", "sessionStorage", "sessionStorage");
 
-    // Cookies probe themselves (js-cookie may also be absent entirely).
-    pipeline.registerKVDriver(makeCookiesDriver());
+    // Cookies probe themselves — `document.cookie` throws in an opaque origin.
+    pipeline.registerKVDriver(makeCookiesDriver("cookies", opts.cookieAttributes));
     if (typeof window !== "undefined" && !XOpatStorageAvailability.cookies) degradedIds.push("cookies");
 
     // `kv:data` is unaffected — POST_DATA is an in-page object, not a browser API.

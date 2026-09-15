@@ -180,9 +180,7 @@ class MultiPanelMenu extends Menu {
      * @return {MenuTab|Dropdown}
      */
     addTab(item, componentId=undefined) {
-        if (!(item.id && item.icon && item.title)) {
-            throw new Error("Item for menu needs every property set.");
-        }
+        item = Menu.normalizeItem(item, this._design);
         let tab = new MultiPanelMenuTab(item, this);
         this.tabs[item.id] = tab;
 

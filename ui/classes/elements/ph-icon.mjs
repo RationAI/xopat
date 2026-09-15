@@ -1,6 +1,5 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
-import { FAIcon } from "./fa-icon.mjs";
 import { ImageIcon } from "./image-icon.mjs";
 
 const { i } = van.tags;
@@ -8,12 +7,11 @@ const { i } = van.tags;
 /**
  * @class PhIcon
  * @extends BaseComponent
- * @description Phosphor (Light) icon component. Prefer this for new code; FAIcon
- * remains for legacy Font Awesome call sites.
+ * @description Phosphor (Light) icon component — the only icon font xOpat ships.
  * @example
  * const settingsIcon = new PhIcon({ name: "ph-gear" });
  *
- * // Use the native Phosphor name (no "fa-" prefix). Browse names at
+ * // Browse names at
  * // https://phosphoricons.com (Light weight) or src/libs/phoshor-icons/style.css.
  */
 class PhIcon extends BaseComponent {
@@ -60,20 +58,17 @@ window["workspaceItem"].attachTo(document.getElementById("workspace"));
 }
 
 /**
- * Pick the right icon component for a string name: PhIcon for `ph-*`,
- * FAIcon otherwise. Use this in pass-through components so callers can pass
- * either family without the component caring which one. Callers that already
- * hold a BaseComponent instance should bypass this helper.
+ * Wrap a string icon name in its component. Kept as a named helper so
+ * pass-through components do not have to know which class to instantiate;
+ * callers that already hold a BaseComponent instance should bypass it.
  */
 function iconComponentFor(name) {
-    return String(name ?? '').trim().startsWith('ph-')
-        ? new PhIcon({ name })
-        : new FAIcon({ name });
+    return new PhIcon({ name });
 }
 
 /**
  * The `icon` value of a plugin/module `include.json` record, as a component.
- * Accepts an icon class (`ph-*`, `fa-*`) or an image URL - the two forms that
+ * Accepts a Phosphor class (`ph-*`) or an image URL - the two forms that
  * survive everywhere an icon can be mounted; markup strings are not supported
  * (they would render as literal text through the string path of `toNode`).
  * @param {string|BaseComponent} value icon class, image URL, or a ready component
@@ -86,8 +81,8 @@ function componentIconNode(value, options = {}) {
     const name = typeof value === "string" ? value.trim() : "";
     if (!name) return undefined;
     // an icon font value is a class name: anything else is a picture URL
-    if (!/^(ph|fa)[-\s]/.test(name)) return new ImageIcon({ name, ...options });
-    return name.startsWith("ph-") ? new PhIcon({ name, ...options }) : new FAIcon({ name, ...options });
+    if (!/^ph[-\s]/.test(name)) return new ImageIcon({ name, ...options });
+    return new PhIcon({ name, ...options });
 }
 
 export { PhIcon, ImageIcon, iconComponentFor, componentIconNode };

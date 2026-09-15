@@ -26,6 +26,14 @@ interface SlideProtocolHttpClientOptions {
         types?: string[];
         refreshOn401?: boolean;
         /**
+         * Statuses treated as "credential missing or rejected" for that refresh.
+         * @default [401]
+         *
+         * Widen only for an upstream that reports a MISSING credential with
+         * something else (FastAPI's bearer scheme answers 403).
+         */
+        refreshOnStatuses?: number[];
+        /**
          * Warn when no credential is available at request time, and — unless
          * `awaitContext` says otherwise — hold requests until the context has
          * finished authenticating, so the boot burst does not race the login.

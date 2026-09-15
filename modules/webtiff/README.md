@@ -69,6 +69,13 @@ the library can serve bytes from the host without a xOpat-side pool at all
 `decode.proxy.worker.mjs` are the adapter — both built on public API, neither
 patching the bundle.
 
+Requests against the vendored bundle that are still open are written down in
+[`UPSTREAM.md`](../../UPSTREAM.md) at the repo root, not here. Two that were —
+JPEG/YCbCr decoding to subsampled planes, and the tile source indexing its own
+level array absolutely — landed in web-tiff 0.1.0, which is what `dist/` now
+carries; the bundle exports `VERSION`, so which copy is loaded is checkable at
+runtime rather than by diffing the `.wasm`.
+
 ## What a tile arrives as
 
 The bundle's own tile source decodes every tile to 8-bit RGBA and hands OSD an
@@ -283,6 +290,47 @@ Note that `promises.ready` is a *deferred* (`{promise, resolve, reject}`), not a
 promise. `await`-ing the deferred itself is a no-op — await
 `promises.ready.promise`.
 
+### Steering it per slide
+
+A slide's `options` block — `data[i].options`, merged with the background entry's
+own, entry-wins — is honoured. `decoderOptionsFrom` (`tile-source.mjs`) validates
+it against an allowlist and drops everything else, because that block is session
+data and therefore untrusted (§7):
+
+| key | value | effect | applied |
+|---|---|---|---|
+| `planeIndex` | integer ≥ 0 | read this plane only, instead of stacking | construction |
+| `pyramid` | `"auto"` \| `"ifd"` \| `"subifd"` | which pyramid the levels come from | construction |
+| `channels` | `number[]` \| `"all"` | decode only these channels | per tile |
+| `interpretation` | `"auto"` \| `"image"` \| `"data"` | override the photometric decision | per tile |
+
+`planeIndex` is the opt-out from channel stacking, so it is not a default with a
+harmless zero: unset, every same-size directory is read as a channel of one tile;
+`planeIndex: 0` reads plane 0 and drops the other four of a five-channel slide.
+(A `layout` key is dropped — the decoder's old `layout.prefer` is gone, because a
+pyramid and a plane stack stopped being alternatives.)
+
+The split matters. The first two choose the level pyramid, which is resolved
+once when the header is read — and that read starts in the tile source's own
+constructor, before the registry's `setSourceOptions` call can arrive. So the
+protocol factory and the layout probe both resolve the options themselves and pass
+them to the constructor, and `setSourceOptions` reports a layout key that arrives
+too late rather than ignoring it. The last two are read parameters and take effect
+from the next tile.
+
+Because a layout option changes *what the file is*, it is part of the slide's
+identity: `slideKeyFor` appends it to both the source-cache key and
+`tileSourceId`, so two backgrounds naming one URL with two different
+`planeIndex` values are two sources and two descriptors. A slide with no options
+keys exactly as the bare URL, so nothing that already caches by `tileSourceId`
+loses its entries.
+
+`channels: "all"` is accepted and means "no selection", which is already the
+default. It has no effect here, but it is WSI-Service's spelling of it
+(`image_channels=all`) and a session that says so should mean the same thing
+whichever protocol serves the slide rather than being silently inert on one of
+them.
+
 ## Slide handles are reused, and bounded
 
 A source owns the parsed header, the level pyramid and — in each worker that
@@ -477,11 +525,17 @@ flat RGB picture is the right answer — `osd_tools` prefers the real pyramid
 whenever the background resolves to a channel-aware shader configuration — so a
 six-channel slide still previews as what the viewport will show.
 
-The source sets `__noPreviewLevel = true`: the synthetic preview level
-(`src/classes/preview-level.ts`) triggers on `getThumbnail()` and renumbers the
-pyramid, while `downloadTileStart` indexes the decoder's own levels. There is
-nothing to win either way — a TIFF pyramid's coarsest level is already the single
-small tile that the synthetic level exists to fabricate.
+The source also participates in the **synthetic preview level**
+(`src/classes/preview-level.ts`), which triggers on `getThumbnail()` and prepends
+a single-tile OSD level 0 so first paint costs one request. That renumbering used
+to be unsafe here — the decoder's base class indexed its own level array by the
+raw OSD level, so every real level silently read one step too coarse, and the
+module opted out with `__noPreviewLevel`. web-tiff ≥ 0.1.0 indexes relative to
+`maxLevel` (`_decoderLevel`), so the shift is harmless and the opt-out is gone.
+
+`getTilePrecision()` is the other gate the injector reads: the synthetic tile is
+an 8-bit raster and must not stand in for half-float packs, so a slide whose
+precision is `float16` is refused the preview level rather than previewed wrongly.
 
 ## Verifying a change
 
@@ -501,7 +555,7 @@ configures the deprecated `geotiff` module).
   spans a *file*, not a tile stream, so a WSI-Service TIFF session pays more per
   tile than a native `tiff`-protocol slide. A persistent per-slide handle keyed by
   tile-source identity would fix it; not done yet.
-- The decoder emits `encoding_channel_0_of_0` ("no sample encoding … using an
+- The decoder emits `tiffEncoding_channel_0_of_0` ("no sample encoding … using an
   identity transform") on every data-mode tile, although the packs it returns do
   carry the right `scale`/`offset`. It is a decoder-side false alarm — reproduced
   with no xOpat code in the path — and `index.mjs` reports each warning code once
@@ -514,8 +568,22 @@ configures the deprecated `geotiff` module).
   TIFF has no rescue path today.
 - Pixel size (`XResolution`/`ResolutionUnit`) is not surfaced to the scalebar —
   the decoder's metadata does not report it yet. Upstream item.
-- Channel **names** and **colours** are only used when a source reports them
-  (`TiffSampleEncoding.name` / `.color`); OME-XML and QPTIFF channel metadata are
-  not parsed, so multi-channel slides get fallback tints.
+- Channel **names** and **colours** come from OME-XML (`Name=` / `Color=`) when the
+  file carries it; QPTIFF channel metadata is still unparsed, so those slides get
+  fallback tints. Upstream item.
+- **A plane stack has bounds.** A file storing each channel as its own full-size
+  IFD — the common OME-TIFF layout, e.g. the five 34560 × 24960
+  `SamplesPerPixel = 1` directories of `test/fixtures/data/slides/LuCa-7color_Scan1.ome.tiff` —
+  is read as one N-channel tile, but: at most 32 planes stack (`MAX_PLANES`) and the
+  rest are dropped with a warning; planes group by size *and* sample format, so a
+  file mixing 8-bit and 16-bit planes stacks only the group its full-resolution
+  directory belongs to; a SubIFD level that not every plane has is dropped from the
+  pyramid, again with a warning; and `options.planeIndex` opts out entirely by
+  pinning one plane. A stack is always `interpretation: "data"`, whatever plane 0's
+  photometric tag says.
+- **`rgba8` over a stack is a preview, not the data.** A read asked for in 8-bit
+  RGBA resolves as an image: the first three channels plus an opaque alpha lane.
+  That is what the slide-list card and a canvas-only deployment get; the packed
+  `gpuTextureSet` path is the one that carries every channel.
 - The `dist/webtiff-mt.*` pair (~2.1 MB) is only loadable on a cross-origin
   isolated page. A deployment that will never be one can delete both files.

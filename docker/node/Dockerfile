@@ -3,7 +3,7 @@
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 # Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
-FROM node:20 AS viewer-git
+FROM node:24 AS viewer-git
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en

@@ -10,6 +10,7 @@
     "auth": "MLflow rejected the credential. Check the server-side token's validity and the proxy's auth verifier chain.",
     "notFound": "The MLflow experiment or run was not found. Check the experiment template and the proxy's upstream URL.",
     "http": "MLflow could not be reached. Check that the server proxy alias is configured and the MLflow host is up.",
+    "httpStatus": "MLflow refused the request (HTTP {{status}}). Check the proxy alias's upstream URL and the MLflow server's log.",
     "experimentDenied": "Writing to the MLflow experiment \"{{experiment}}\" is not permitted by this deployment.",
     "runDenied": "Writing to the MLflow run \"{{run}}\" is not permitted by this deployment.",
     "artifactDenied": "The MLflow artifact path \"{{path}}\" is outside the location this deployment permits.",

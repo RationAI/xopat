@@ -11,6 +11,15 @@
     "slide-info.mjs"
   ],
   "modules": ["menu-pages"],
+  // UI gating only — whether the "Download slide" action is offered at all.
+  // The backend still authorizes the fetch itself.
+  "capabilities": [
+    {
+      "id": "slide-info.download-slide",
+      "default": "allow",
+      "label": "%capabilities.downloadSlide%"
+    }
+  ],
   "slideSwitching": true,
   "slideBrowser": true,
   "io": {

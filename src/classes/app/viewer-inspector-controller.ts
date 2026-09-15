@@ -34,6 +34,12 @@ export class ViewerInspectorController {
     }
 
     registerUtilities() {
+        // Not inspector-specific: any consumer rendering "overlays only" needs
+        // the same background/visualization boundary (e.g. the annotation
+        // viewport-segmentation offscreen pass).
+        window.UTILITIES.getBackgroundShaderSplitIndex = (viewer: OpenSeadragon.Viewer) =>
+            this.getBackgroundShaderSplitIndex(viewer);
+
         window.UTILITIES.toggleVisualizationInspector = (enabled?: boolean) => {
             const next = enabled === undefined
                 ? !this.appContext.getOption("visualizationInspectorEnabled")
@@ -300,6 +306,23 @@ export class ViewerInspectorController {
 
         const selected = activeBackgroundSelection[viewerIndex];
         return Number.isInteger(selected) ? [selected as number] : [];
+    }
+
+    /**
+     * Number of leading entries in the viewer's shader-layer order that belong
+     * to the active background(s). `assembleRenderOutput` emits backgrounds
+     * before visualizations, so this index IS the background/visualization
+     * boundary: `getShaderLayerOrder().slice(splitIndex)` is exactly the
+     * visualization stack.
+     *
+     * Public because it is the only supported way to tell the two apart.
+     * Renderer ids are namespaced per viewer (`v<viewer.id>_`) and sanitized,
+     * so matching config background ids against the live order silently
+     * matches nothing — position is the reliable signal, not the id.
+     * Exposed as `UTILITIES.getBackgroundShaderSplitIndex`.
+     */
+    getBackgroundShaderSplitIndex(viewer: OpenSeadragon.Viewer): number {
+        return this.getViewerInspectorShaderSplitIndex(viewer);
     }
 
     private getViewerInspectorShaderSplitIndex(viewer: OpenSeadragon.Viewer): number {

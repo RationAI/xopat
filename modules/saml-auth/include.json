@@ -10,7 +10,6 @@
     "categories": ["auth"],
     "keywords": ["saml", "sso", "shibboleth", "adfs", "login"],
     "docsUrl": "https://github.com/RationAI/xopat/blob/master/modules/saml-auth/README.md",
-    "stability": "experimental",
     "sessionCompatible": false,
     "requires": []
 }

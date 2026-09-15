@@ -30,6 +30,9 @@ class Menu extends BaseComponent {
      * @param {keyof typeof Menu.SCROLL} [options.bodyScroll] - The body scroll behavior
      * @param {keyof typeof Menu.DESIGN} [options.design] - The design of the menu
      * @param {keyof typeof Menu.ROUNDED} [options.rounded] - The rounded corners of the menu
+     * @param {(tabId: string) => boolean} [options.initialOpenResolver] - Decides whether a tab boots
+     *   open. Defaults to the user's cached `<tabId>-open` toggle; owners whose panels follow
+     *   deployment/session config pass their own (see `resolveSideMenuTabOpen`).
      * @param {boolean} [options.namespacedTabs] - Whether to namespace tabs
      * @param {string} [options.defaultNamespace] - The default namespace for tabs
      * @param {Array<object>} [options.namespaces] - An array of namespaces to be registered
@@ -62,6 +65,13 @@ class Menu extends BaseComponent {
         this._configMenuPlacement = options?.configMenuPlacement || "auto";
         this._configSections = [];
         this._configMenu = undefined;
+
+        // Initial open/closed state of a tab. Default is the user's cached
+        // toggle; an owner that sources it from deployment/session config (the
+        // per-viewer side menu) injects a resolver so EVERY entry point —
+        // the owner's own boot loop, append(), appendExtended() — agrees.
+        this._initialOpenResolver = typeof options?.initialOpenResolver === "function"
+            ? options.initialOpenResolver : null;
 
         this._namespacedTabs = options?.namespacedTabs === true || Array.isArray(options?.namespaces);
         this.defaultNamespace = options?.defaultNamespace || Menu.NAMESPACE.SYSTEM;
@@ -237,6 +247,31 @@ class Menu extends BaseComponent {
     }
 
     /**
+     * Validate & complete a menu item before a tab is built from it.
+     *
+     * An icon is an affordance, not a requirement: a tab is identifiable as long
+     * as it has an id and something to show (icon or title). Only icon-only
+     * designs have no text to fall back on, so a neutral glyph is substituted
+     * there — otherwise the header button would render blank and unclickable.
+     *
+     * @param {UINamedItem} item
+     * @param {string} [design] the owner's `_design` key ("ICONONLY" | "TITLEONLY" | "TITLEICON")
+     * @return {UINamedItem} item, or a completed copy of it
+     */
+    static normalizeItem(item, design = undefined) {
+        if (!item?.id || !(item.icon || item.title)) {
+            throw new Error("Item for menu needs an id and at least an icon or a title.");
+        }
+        // `_design` is the string key on Menu, but TabsMenu stores the
+        // Menu.DESIGN function itself — its inferred `name` is the same key.
+        const designKey = typeof design === "function" ? design.name : design;
+        if (!item.icon && designKey === "ICONONLY") {
+            return { ...item, icon: Menu.FALLBACK_ICON };
+        }
+        return item;
+    }
+
+    /**
      * @param {Dropdown|object} item. If object, DropDown contructor params are accepted, which among other include support for:
      *   sections: [
      *     { id: "actions" },
@@ -297,9 +332,7 @@ class Menu extends BaseComponent {
             return this.addDropdown(item, componentId);
         }
 
-        if (!(item.id && item.icon && item.title)) {
-            throw new Error("Item for menu needs every property set.");
-        }
+        item = Menu.normalizeItem(item, this._design);
         let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
         this._applyNamespaceToTab(tab, item);
 
@@ -686,7 +719,19 @@ class Menu extends BaseComponent {
         this._syncLayout();
     }
 
-    append(title, titleItem, item, id, pluginId, bg=undefined) {
+    /**
+     * Initial open state of a tab. Defaults to the user's persisted toggle;
+     * owners that pass `options.initialOpenResolver` decide it themselves
+     * (see `resolveSideMenuTabOpen` in mixins/utils.mjs).
+     * @param {string} id tab id
+     * @return {boolean}
+     */
+    _initialTabOpen(id) {
+        if (this._initialOpenResolver) return !!this._initialOpenResolver(id);
+        return APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true);
+    }
+
+    append(title, titleItem, item, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
                 div(
@@ -698,17 +743,17 @@ class Menu extends BaseComponent {
                 )
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo implement focus manager, similar to visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else {
             this.tabs[id]._removeFocus();
         }
     }
 
-    appendExtended(title, titleItem, item, hiddenItem, id, pluginId, bg=undefined) {
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
@@ -728,10 +773,10 @@ class Menu extends BaseComponent {
                 ),
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo move to focus manager like visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else{
             this.tabs[id]._removeFocus();
@@ -839,6 +884,9 @@ Menu.DESIGN = {
         this._syncLayout();
     }
 };
+
+// Stand-in glyph for icon-less items mounted into an icon-only menu.
+Menu.FALLBACK_ICON = "ph-dot-outline";
 
 Menu.ROUNDED = {
     ENABLE: function () { ui.Join.ROUNDED.ENABLE.call(this.header); },

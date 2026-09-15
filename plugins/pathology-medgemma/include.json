@@ -4,7 +4,6 @@
   "author": "RationAI",
   "version": "1.0.0",
   "description": "%meta.description%",
-  "stability": "experimental",
   "categories": ["Pathology"],
   "keywords": ["medgemma", "vision", "ai", "analysis"],
   "icon": "ph-brain",

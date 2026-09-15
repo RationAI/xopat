@@ -41,7 +41,8 @@ module.exports = function(grunt) {
         options = options || {};
         options.stdio = "inherit";
         options.shell = process.platform === "win32"
-        return exec(`${grunt.util.getPath(binPath)} ${cmd}`, options);
+        // quote: the repository path may contain spaces (e.g. a OneDrive folder)
+        return exec(`"${grunt.util.getPath(binPath)}" ${cmd}`, options);
     };
 
     /**

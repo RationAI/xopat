@@ -1,0 +1,58 @@
+{
+  "$meta": {
+    "description": "Chat providers registered with NO server key — every user brings their own",
+    "dimension": "chat"
+  },
+  /**
+   * Providers still register (a plugin registers its type and managed instance
+   * even without a key), so the picker lists them with no usable model until a
+   * user stores their own: chat settings → "Providers & API keys" → the "key
+   * required" badge → enter key → models populate and turns run with THEIR key.
+   *
+   * Keys are stored server-side (`ChatUserSecretsStore`), scoped to
+   * `user:<id>` when logged in or `sess:<id>` when not. Nothing lands in
+   * browser storage. Note `kv:secrets` is declared sensitivity "secret", so it
+   * refuses to bind to a persistent driver — users re-enter after a restart
+   * unless the operator explicitly opts in.
+   *
+   * The absence of `apiKey` is the whole point: the provider type's
+   * `configSchema` still declares the secret field, which is what makes it
+   * BYOK-capable in the UI.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-openai-compatible": {
+            "providerDefaults": {
+              "label": "Cerit Provider (bring your own key)",
+              "baseUrl": "<% CERIT_BASE_URL:-https://llm.ai.e-infra.cz/v1 %>",
+              "requiresLogin": false
+            }
+          },
+          "chat-anthropic": {
+            "providerDefaults": {}
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-openai-compatible": {
+      "enabled": true,
+      "permaLoad": true,
+      "authMode": "none",
+      "authContext": null
+    },
+    "chat-anthropic": {
+      "enabled": true,
+      "permaLoad": true,
+      "authMode": "none",
+      "authContext": null
+    },
+    "chat-openai": { "enabled": false }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": true }
+  }
+}

@@ -1,9 +1,16 @@
 /**
  * The `secure` project: the default deployment, with secure mode on.
  *
- * `$base` keeps this to its one difference. That matters more here than
- * tidiness — a project that also changed which plugins load, or which slide
- * protocol is default, could not attribute a failure to `secureMode`.
+ * There is nothing here but the layer list, on purpose — `flags/secure-mode` is
+ * the same fragment an operator layers with `npm run up -- default flags/secure-mode`,
+ * so what this project tests and what a deployment can actually be composed into
+ * are one thing rather than two copies.
+ *
+ * `base/core` + `data/wsi-service` is byte-equivalent to `env/env.default.json`
+ * (asserted in `test/suites/unit/env-compose.test.mjs`), so this differs from the
+ * `default` project in exactly one layer. That matters more here than tidiness:
+ * a project that also changed which plugins load, or which slide protocol is
+ * default, could not attribute a failure to `secureMode`.
  *
  * `secureMode` is reachable only from a deployment: it lives at
  * `core.client.<active_client>.secureMode`, reaches the client as
@@ -12,12 +19,5 @@
  * any attempt to set it from a session bundle or URL params.
  */
 {
-  "$base": "env/env.default.json",
-  "core": {
-    "client": {
-      "localhost": {
-        "secureMode": true
-      }
-    }
-  }
+  "$base": ["base/core", "data/wsi-service", "flags/secure-mode"]
 }

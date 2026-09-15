@@ -1,0 +1,83 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "viz-flex-grid"
+  },
+  "data": [
+    "slides/slide.tif",
+    {
+      "dataID": "generated/grid/mask-grid.json",
+      "protocol": "demo-static",
+      "imageSmoothingEnabled": false,
+      "pixelScale": 512
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "One pixel per prediction square",
+      "shaders": {
+        "prediction": {
+          "name": "Prediction score",
+          "type": "colormap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "use_channel0": "r",
+            "color": {
+              "type": "colormap",
+              "default": "YlOrRd",
+              "steps": 4
+            },
+            "threshold": {
+              "type": "advanced_slider",
+              "breaks": [
+                0.15,
+                0.4,
+                0.7
+              ]
+            },
+            "connect": true
+          }
+        },
+        "detection": {
+          "name": "Detection score",
+          "type": "heatmap",
+          "visible": 0,
+          "fixed": false,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "use_channel0": "g"
+          }
+        },
+        "grid": {
+          "name": "Prediction grid (512 px)",
+          "type": "grid",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            0
+          ],
+          "params": {
+            "color": "#ffffff",
+            "cell_x": 512,
+            "cell_y": 512,
+            "line_width": 1,
+            "adaptive_lod": false
+          }
+        }
+      }
+    }
+  ]
+}

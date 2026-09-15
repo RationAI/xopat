@@ -39,14 +39,18 @@ class Toolbar extends BaseComponent {
             extraClasses: { tabs: "tabs", style: "tabs-boxed", events: "pointer-events-auto" }
         });
 
+        // Plain container, not a `.join`: it holds one content Div per tab, and
+        // as a join its first/last-child radius rules would reach through those
+        // wrappers and flatten every button group inside into a single pill.
+        // No `boxed2` either — that class carries its own padding + margin, which
+        // is the padding the toolbar was carrying around its groups for nothing.
         this.body = new ToolbarGroup(
             {
                 id: this.id + "-body",
+                join: false,
                 extraClasses: {
                     height: "h-full",
                     width: "w-full",
-                    style: "boxed2",
-                    margin: "m-0",
                     events: "pointer-events-auto"
                 }
             },
@@ -170,8 +174,12 @@ class Toolbar extends BaseComponent {
         // Only wrap if there are multiple *components* (keep old HTML/string usage working)
         const allComponents = content.every(c => c instanceof BaseComponent);
         if (allComponents && content.length > 1) {
+            // `join: false`: this wrapper only holds the real groups and the
+            // separators between them. As a `.join` it would swallow them all
+            // into one pill (DaisyUI's first/last-child radius rules reach
+            // through wrappers), destroying the per-group grouping.
             const rootGroup = new ToolbarGroup(
-                { id: `${this.id}-rootgroup-${item.id}` },
+                { id: `${this.id}-rootgroup-${item.id}`, join: false },
                 ...content
             );
             content = [rootGroup];
@@ -214,17 +222,17 @@ class Toolbar extends BaseComponent {
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
                     onclick: () => this._toggle_body()
-                }, i({ class: "fa-auto fa-eye-slash" })),
+                }, i({ class: "ph-light ph-eye-slash" })),
                 */
 
                 // --- Handle (Simplified) ---
                 // Removed fixed width styles and large badge classes for a cleaner look
                 div({
                         // DaisyUI-themed drag handle (visible across themes)
-                        class: "handle pointer-events-auto self-center px-2 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
+                        class: "handle toolbar-handle-slim pointer-events-auto self-center rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
                         style: "touch-action: none;"
                     },
-                    i({ class: "fa-solid fa-grip-lines text-base-content" })
+                    i({ class: "ph-light ph-dots-six text-base-content" })
                 ),
 
                 // Dock + close stacked vertically next to the drag handle so the
@@ -245,11 +253,14 @@ class Toolbar extends BaseComponent {
                             title: $.t("toolbar.hide"),
                             onclick: () => this._requestClose(),
                         },
-                        i({ class: "fa-solid fa-xmark" })
+                        i({ class: "ph-light ph-x" })
                     )
                 )
             ),
-            div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-1 rounded-md" }, this.body.create())
+            // No padding: the frosted box hugs the button groups. Padding here
+            // only inflated the toolbar's footprint — the groups already carry
+            // their own rounding and the separators the spacing.
+            div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-0 rounded-md" }, this.body.create())
         );
 
         this._rootWrap = this._outerEl.querySelector("[data-toolbar-root]");
@@ -438,6 +449,23 @@ class Toolbar extends BaseComponent {
         root.style.display = this._managedVisible ? "" : "none";
     }
 
+    /**
+     * Width of the toolbar's content box when laid out horizontally, in px —
+     * what it would occupy inside a host bar (the drag handle / dock / close
+     * chrome is hidden when embedded and is deliberately not counted).
+     *
+     * Returns 0 while the toolbar is laid out vertically: a column's width says
+     * nothing about its horizontal footprint, and guessing would be worse than
+     * letting the caller fall back to its own cached measurement.
+     *
+     * @return {number}
+     */
+    getHorizontalContentWidth() {
+        const wrap = this._rootWrap;
+        if (!wrap || wrap.classList.contains("flex-col")) return 0;
+        return Math.ceil(wrap.scrollWidth || wrap.getBoundingClientRect().width || 0);
+    }
+
     _applyEmbeddedStyles() {
         const root = this.getRootNode();
         const wrap = this._rootWrap;
@@ -465,7 +493,7 @@ class Toolbar extends BaseComponent {
         // Drop the toolbar's own frosted box when embedded — the host bar (and
         // the app bar itself) already provides the chrome; doubling it makes the
         // toolbar taller than the 35px bar and adds a nested border.
-        wrap.classList.remove("glass", "p-1", "rounded-md");
+        wrap.classList.remove("glass", "p-0", "rounded-md");
     }
 
     // Resolve where this toolbar should be placed when entering floating mode.
@@ -534,7 +562,7 @@ class Toolbar extends BaseComponent {
 
         wrap.classList.remove("max-w-full");
         // Restore the floating toolbar's own frosted box.
-        wrap.classList.add("glass", "p-1", "rounded-md");
+        wrap.classList.add("glass", "p-0", "rounded-md");
     }
 
     _ensureFloatingRegistration() {

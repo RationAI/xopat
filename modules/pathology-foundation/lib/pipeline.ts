@@ -13,6 +13,14 @@
  * analysis overlaps the NEXT field's render, and three more analyses can be in flight
  * while a fourth field is being rendered.
  *
+ * "Serially" is ENFORCED here (`renderConcurrency`, default 1), not merely relied upon. It used
+ * to be neither: the top-up loop launched a window's worth of fields at once and each one's first
+ * act was to call `render`, so the whole window landed in the core's queue simultaneously. The
+ * core absorbed that correctly — but a render carries a wall-clock guard, and a guard whose clock
+ * starts at submission measures the queue instead of the render. Every field past the first then
+ * failed a deadline it never got a chance to meet, and reported that as "the region could not be
+ * read". Submitting one at a time makes the guard measure the thing it is guarding.
+ *
  * ## Why there is a render window at all
  *
  * Nothing stops the render loop from running far ahead of the analyses, and each raster it
@@ -37,6 +45,14 @@ export interface PipelineOptions<TField, TRaster, TResult> {
     onError?: (field: TField, error: unknown) => TResult | null;
     /** Rasters allowed in flight or waiting. Default `visionConcurrency + 1`. */
     renderWindow?: number;
+    /**
+     * Renders SUBMITTED at once. Default 1 — see the header: the core serializes them anyway,
+     * so submitting more only moves the wait somewhere the caller cannot see or bound.
+     *
+     * Raise it only for a `render` that is not a core off-screen pass (the overview walk passes
+     * a no-op render and does its own work in `analyze`).
+     */
+    renderConcurrency?: number;
     /** Matches the inference RPC's own concurrency cap. */
     visionConcurrency?: number;
     signal?: AbortSignal;
@@ -69,9 +85,25 @@ export async function* runFieldPipeline<TField, TRaster, TResult>(
     // to the server where this side can no longer see it.
     const vision = createSemaphore(visionConcurrency);
 
+    // Renders are serialized by the core, and this is what makes the SUBMISSION match that.
+    // Without it the window's worth of fields all call `render` at t=0 and queue inside the
+    // core, where the wait is invisible: any wall-clock guard the render carries then measures
+    // the queue rather than the render, and every field past the first fails a guard it was
+    // never given a chance to meet. See `_renderRegionAt`'s guard sizing.
+    const renders = createSemaphore(Math.max(1, opts.renderConcurrency ?? 1));
+
     const startOne = async (field: TField): Promise<TResult | null> => {
         try {
-            const raster = await opts.render(field);
+            const releaseRender = await renders.acquire();
+            let raster: TRaster;
+            try {
+                // Checked after the permit, not before: a field that waited behind others for
+                // its turn must not render into a run the caller has already cancelled.
+                if (opts.signal?.aborted) return null;
+                raster = await opts.render(field);
+            } finally {
+                releaseRender();
+            }
             if (opts.signal?.aborted) return null;
             const release = await vision.acquire();
             try {

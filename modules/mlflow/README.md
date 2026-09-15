@@ -108,6 +108,25 @@ const text = await ml.artifacts.downloadText(runId, "notes/hello.txt");
 Artifacts inherit the parent's `proxy`/`auth` unless the deployment routes them
 elsewhere (`artifacts.proxy` / `artifacts.auth`).
 
+**How a run is addressed.** The mlflow-artifacts REST service has no `run_id`
+parameter — it addresses a file by its path under the tracking server's artifact
+root. So `uploadBytes(runId, …)` first resolves the run's root from
+`runs/get` → `info.artifact_uri` (memoized per client) and PUTs to
+`/artifacts/<root>/<path>`. A successful upload answers **200 with an empty
+body**, so the adapter reads it as text; asking for JSON makes a write that
+already happened look like a transport failure.
+
+This only works when the deployment serves artifacts through the tracking server
+(`artifact_uri` of the form `mlflow-artifacts:/…`, which is `mlflow server`'s
+default). A run whose `artifact_uri` is `file://` / `s3://` / `gs://` is the
+deployment saying clients should reach the storage backend directly; the adapter
+refuses with that reason rather than writing to a path that would look valid.
+
+**Binary payloads are not usable yet.** `HttpClient` serializes any non-string
+body with `JSON.stringify` (`src/classes/http-client.ts:485`), so a `Uint8Array`
+arrives as `{"0":137,"1":80,…}`. Text artifacts (JSON bundles) are fine; a
+recording or a PNG needs `HttpClient` to pass binary bodies through first.
+
 If your server errors with **415 Unsupported Media Type**, switch to a
 multipart/form-data upload — behavior differs by vendor and version. Supply a
 custom adapter:

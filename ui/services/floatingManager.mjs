@@ -9,7 +9,39 @@
  * @property {string|function=} onOutsideClick  // method name on owner OR a function
  * @property {string|function=} onEscape        // method name on owner OR a function
  * @property {number} z
+ * @property {number} floor  // lowest z this element may take (its anchor's stacking context + 1)
  */
+
+/**
+ * The z-index an element must exceed to paint above `anchor`'s stacking
+ * context: the largest numeric `z-index` of `anchor` and its positioned
+ * ancestors, plus one. `0` when nothing on the way up sets one.
+ *
+ * Why it exists: the manager hands out z from a band (100–899). A popup that
+ * portals to `document.body` but belongs to a control inside a DaisyUI
+ * `.modal` (`z-index: 999`) therefore landed *under* the modal and its scrim —
+ * the class picker in a dialog opened, invisibly, behind it. Raising the whole
+ * band above modals is wrong (modals must cover floating windows); the popup
+ * alone has to be lifted, and only as far as its own anchor requires.
+ *
+ * @param {Element|null|undefined} anchor
+ * @returns {number}
+ */
+export function stackingFloor(anchor) {
+    let floor = 0;
+    let node = anchor;
+    const view = anchor?.ownerDocument?.defaultView || (typeof window !== "undefined" ? window : null);
+    if (!view?.getComputedStyle) return 0;
+    while (node && node.nodeType === 1) {
+        const cs = view.getComputedStyle(node);
+        const z = Number.parseInt(cs?.zIndex, 10);
+        if (Number.isFinite(z) && cs.position && cs.position !== "static") {
+            floor = Math.max(floor, z + 1);
+        }
+        node = node.parentElement;
+    }
+    return floor;
+}
 
 export class FloatingManager {
     constructor() {
@@ -57,9 +89,12 @@ export class FloatingManager {
      * @param {string|function=} opts.onOutsideClick
      * @param {string|function=} opts.onEscape
      * @param {ClampOptions=} opts.clamp
+     * @param {Element=} opts.anchor  the control this popup belongs to; the popup is
+     *   never painted below that control's stacking context (see {@link stackingFloor}).
+     *   Pass it for anything portaled to `document.body` from inside a modal.
      * @returns {FloatingToken}
      */
-    register({ el, owner, onOutsideClick, onEscape, clamp }) {
+    register({ el, owner, onOutsideClick, onEscape, clamp, anchor }) {
         const token = {};
         this._tokens.add(token);
 
@@ -67,9 +102,11 @@ export class FloatingManager {
             elRef: new WeakRef(el),
             ownerRef: owner ? new WeakRef(owner) : undefined,
             onOutsideClick, onEscape,
-            z: this._getZIndex(),
+            floor: stackingFloor(anchor),
+            z: 0,
             clamp: this._normClamp(clamp),
         };
+        entry.z = Math.max(this._getZIndex(), entry.floor);
         el.style.zIndex = String(entry.z);
 
         this._byToken.set(token, entry);
@@ -101,7 +138,7 @@ export class FloatingManager {
     bringToFront(token) {
         const e = this._byToken.get(token); if (!e) return;
         const el = e.elRef.deref(); if (!el) return;
-        el.style.zIndex = String(e.z = this._getZIndex());
+        el.style.zIndex = String(e.z = Math.max(this._getZIndex(), e.floor || 0));
     }
 
     /** Manual unregistration. Safe to call multiple times. */
@@ -361,7 +398,8 @@ export class FloatingManager {
 
         let z = 100;
         for (const [entry, el] of live) {
-            entry.z = z++;
+            // Order is preserved; an anchored popup still may not sink below its floor.
+            entry.z = Math.max(z++, entry.floor || 0);
             el.style.zIndex = String(entry.z);
         }
         this._zTop = z;

@@ -1,0 +1,36 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "viz-flex-mask-coarse"
+  },
+  "data": [
+    "slides/slide.tif",
+    "generated/pyramid/mask-a.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Truncated-pyramid mask",
+      "shaders": {
+        "mask": {
+          "name": "Prediction (1945 px, 3 levels)",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "use_channel0": "r"
+          }
+        }
+      }
+    }
+  ]
+}

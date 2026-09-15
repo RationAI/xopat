@@ -12,7 +12,6 @@ define('ABS_PLUGINS', ABSPATH . 'plugins/');
 //Relative Paths For the Viewer
 defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
 define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
-define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
 define('UI_SOURCES', PROJECT_ROOT . 'ui/');
 define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
 define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');

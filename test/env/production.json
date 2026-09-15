@@ -1,6 +1,12 @@
 /**
  * The `production` project: the default deployment, built as production.
  *
+ * Nothing here but the layer list — `flags/production` is the same fragment an
+ * operator layers with `npm run up -- default flags/production`, so the shape
+ * this project tests is the shape that ships. `base/core` + `data/wsi-service`
+ * is byte-equivalent to `env/env.default.json`, so this differs from the
+ * `default` project in exactly one layer.
+ *
  * Not cosmetic — a different server code path. The parsed configuration is
  * memoized in `_productionCoreCache` instead of being re-read per request, and
  * per-element assets (locales, scripting declarations) are baked into the
@@ -12,12 +18,5 @@
  * `production` rather than letting a test assert against stale config.
  */
 {
-  "$base": "env/env.default.json",
-  "core": {
-    "client": {
-      "localhost": {
-        "production": true
-      }
-    }
-  }
+  "$base": ["base/core", "data/wsi-service", "flags/production"]
 }

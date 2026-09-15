@@ -1,4 +1,6 @@
 /// <reference path="../../src/types/globals.d.ts" />
+import { renewDelayMs } from "./renew-window";
+
 // Client glue for the SAML provider. Registers a "saml" broker into the core
 // auth broker (APPLICATION_CONTEXT.auth). It never sees the IdP certificate, the
 // SP private key or the token signing secret — it just pulls the current
@@ -43,8 +45,17 @@ class SamlAuth extends XOpatModuleSingleton {
      */
     private static readonly POPUP_CEILING_MS = 10 * 60 * 1000;
 
+    /**
+     * Longest lead time before expiry at which the renew timer fires. Clamped per
+     * context against the token's own lifetime (see {@link _scheduleRenew}) so a
+     * short-TTL deployment cannot arm a timer in the past.
+     */
+    private static readonly RENEW_LEAD_SEC = 60;
+
     private _flags = new Map<string, SamlContextFlags>();
     private _handlerBound = new Set<string>();
+    /** Pending renew timer per context. One at a time — arming replaces, never stacks. */
+    private _renewTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private _adoptInFlight = new Map<string, Promise<{ ok: boolean; transportFailed: boolean }>>();
     private _adoptMemo = new Map<string, { at: number; result: { ok: boolean; transportFailed: boolean } }>();
     /** `_configured` flips true ONLY after contexts are actually applied; `_inflight`
@@ -77,8 +88,16 @@ class SamlAuth extends XOpatModuleSingleton {
         } catch (e) { return {}; }
     }
 
-    private _applyToken(contextId: string, token: string | null | undefined): boolean {
-        if (!token) return false;
+    private _applyToken(contextId: string, token: string | null | undefined,
+                        expiresIn?: number | null): boolean {
+        if (!token) {
+            // Nothing to hold and nothing to renew: the SAML session itself is over
+            // (saml-flow `currentToken` returns null once `sessionExpiresAt` passes).
+            // Re-arming here would poll our own server forever for a session that
+            // cannot come back without an interactive login.
+            this._cancelRenew(contextId);
+            return false;
+        }
         const user = (window as any).XOpatUser.instance();
         const p = this._decodeJwtPayload(token);
         const subject = p.sub || "user";
@@ -92,7 +111,47 @@ class SamlAuth extends XOpatModuleSingleton {
             user.login(subject, name, "", contextId);
         }
         user.setSecret(token, "jwt", contextId);
+        this._scheduleRenew(contextId, expiresIn);
         return true;
+    }
+
+    /** Drop any pending renew for a context. Idempotent. */
+    private _cancelRenew(contextId: string): void {
+        const pending = this._renewTimers.get(contextId);
+        if (pending === undefined) return;
+        clearTimeout(pending);
+        this._renewTimers.delete(contextId);
+    }
+
+    /**
+     * Renew ahead of expiry instead of waiting for a request to fail.
+     *
+     * The server already renews correctly — `saml-flow.currentToken` re-mints from the
+     * stored assertion claims before handing one out — and it already tells us when
+     * this one dies (`getToken` returns `{token, expiresIn}`). Until now the client
+     * discarded that, so nothing asked for a new token until something 401'd: one
+     * failed request per token lifetime, per context, forever. Bounded and self-healing,
+     * but a real 401 in the logs and one wasted slot of the core rejection streak
+     * (src/AUTH.md).
+     *
+     * Deliberately conservative: no hint, or a lifetime too short to schedule inside,
+     * arms nothing and leaves the reactive `secret-needs-update` path exactly as it was.
+     * That path stays the backstop regardless — a background tab throttles timers, and
+     * a late renew is covered by the 401 it was trying to avoid.
+     */
+    private _scheduleRenew(contextId: string, expiresIn?: number | null): void {
+        this._cancelRenew(contextId);
+        const delayMs = renewDelayMs(expiresIn, SamlAuth.RENEW_LEAD_SEC);
+        if (delayMs === null) return;
+
+        this._renewTimers.set(contextId, setTimeout(() => {
+            this._renewTimers.delete(contextId);
+            // `force`: a timer knows the answer changed, so the memo from the boot
+            // burst must not be reused. A success re-enters `_applyToken` and re-arms;
+            // a dead session cancels instead (see above). Reuses the one adopt path so
+            // coalescing, the transport retry and the 120s forced bound all still apply.
+            void this._adoptServerSession(contextId, { force: true });
+        }, delayMs));
     }
 
     /**
@@ -113,7 +172,10 @@ class SamlAuth extends XOpatModuleSingleton {
         } catch (e) {
             return { ok: false, transportFailed: true };
         }
-        return { ok: this._applyToken(contextId, res && res.token), transportFailed: false };
+        return {
+            ok: this._applyToken(contextId, res && res.token, res && res.expiresIn),
+            transportFailed: false,
+        };
     }
 
     /**
@@ -444,6 +506,11 @@ class SamlAuth extends XOpatModuleSingleton {
                 return this._isAuthenticated(contextId);
             },
             logout: async (contextId: string) => {
+                // Before anything else: a signed-out context must stop renewing. A
+                // pending timer would otherwise fire mid-sign-out and adopt the very
+                // session we are tearing down.
+                this._cancelRenew(contextId);
+
                 const wantsSlo = !!this._flags.get(contextId)?.sloEnabled;
                 const viaPopup = wantsSlo && this._flags.get(contextId)?.flow !== "redirect";
 

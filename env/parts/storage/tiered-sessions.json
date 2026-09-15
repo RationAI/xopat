@@ -1,0 +1,40 @@
+{
+  "$meta": {
+    "description": "Chat transcripts and browser sessions survive a server restart",
+    "dimension": "storage"
+  },
+  /**
+   * `core.kv:sessions` is the step people miss. A record is reachable only by
+   * its owner PRINCIPAL, and for a user who has not logged in that principal is
+   * `sess:<browser-session-id>`. Leave it on `memory` and a restart mints a new
+   * session id — the transcripts persist to disk and become permanently
+   * invisible, present but owned by a principal that no longer exists.
+   *
+   * `tiered` = bounded memory cache in front of durable files, so eviction is
+   * not deletion and state stays coherent across cluster workers. Attachments
+   * go straight to `file`: they are bytes, and a memory tier in front of them
+   * is exactly the residency the blob store exists to avoid.
+   *
+   * NOT listed, on purpose: `kv:secrets` (BYOK keys) and `kv:sessions-secure`
+   * (OIDC/SAML state) are declared sensitivity "secret", so binding them to a
+   * persistent driver is refused at boot unless the operator sets
+   * `allowPersistentSecrets`. Users re-authenticate after a restart.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "storage": {
+          "bindings": {
+            "core": { "kv:sessions": ["tiered"] },
+            "vercel-ai-chat-sdk": {
+              "kv:sessions": ["tiered"],
+              "log:messages": ["tiered"],
+              "log:attachment-index": ["tiered"],
+              "blob:attachments": ["file"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -148,3 +148,57 @@ test("renderEvidence leaves the wording to the caller", { tag: ["@unit"] }, () =
     expect(renderEvidence(rows, r => `${r.label}=${r.verdict}`))
         .toBe("Stromal invasion=yes\nNuclear atypia=not-assessable");
 });
+
+// ---- "we never got close enough" vs "the scan does not hold it" ------------------------
+//
+// `underResolved` is advice: go and look closer. On a 0.504 µm/px scan a feature asking for
+// 0.25 can never clear it, so every run of that slide reported itself unexamined — `examined`
+// and `anythingRead` both read `!underResolved`, so the summary was led by "NOT AN
+// EXAMINATION: no region was read at a resolution that can answer these questions" directly
+// above rows saying "Malignant Mass: found". A caveat that fires on every run of a slide and
+// contradicts its own body is one a reader learns to skip, and the reader here is a model.
+
+/** The lung slide: 20x, 0.504 µm/px. `atypia` asks 0.25 — finer than the scan holds. */
+const LUNG_MPP = 0.504;
+
+test("a requirement finer than the scan is beyondSlide, not underResolved", { tag: ["@unit"] }, () => {
+    const rows = buildEvidence([node({ invasion: "no" }, { deliveredMpp: LUNG_MPP })],
+        CHECKLIST, LUNG_MPP);
+    const atypia = rows.find(r => r.id === "atypia");
+
+    expect(atypia.beyondSlide, "0.25 on a 0.504 scan").toBe(true);
+    expect(atypia.underResolved, "there is nothing closer to look at — do not ask for it")
+        .toBe(false);
+});
+
+test("a run whose only gap is beyondSlide counts as examined", { tag: ["@unit"] }, () => {
+    // `examined` is `every(row => !row.underResolved)`; this is the arithmetic that used to
+    // make it permanently false on this slide.
+    const rows = buildEvidence([node({ invasion: "no" }, { deliveredMpp: LUNG_MPP })],
+        CHECKLIST, LUNG_MPP);
+
+    expect(rows.every(r => !r.underResolved), "nothing is still owed a closer read").toBe(true);
+});
+
+test("a reachable requirement nobody got to is still underResolved", { tag: ["@unit"] }, () => {
+    // The other half: on the SAME slide, `invasion` asks 0.5, which 0.504 can meet — so a run
+    // that only ever read at 2.0 genuinely did stop short, and must still say so.
+    const coarse = node(
+        { invasion: { present: "not-assessable", reason: "resolution" } },
+        { deliveredMpp: 2.0 },
+    );
+    const rows = buildEvidence([coarse], CHECKLIST, LUNG_MPP);
+    const invasion = rows.find(r => r.id === "invasion");
+
+    expect(invasion.underResolved, "0.5 is reachable here — looking closer is real advice")
+        .toBe(true);
+    expect(invasion.beyondSlide).toBe(false);
+});
+
+test("without nativeMpp nothing is beyondSlide", { tag: ["@unit"] }, () => {
+    // An uncalibrated slide makes no claim about what it holds, and every existing caller
+    // that omits the figure must keep the rows it had.
+    const rows = buildEvidence([node({ invasion: "yes" })], CHECKLIST);
+
+    for (const r of rows) expect(r.beyondSlide, r.id).toBe(false);
+});

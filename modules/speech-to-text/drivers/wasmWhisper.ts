@@ -66,6 +66,8 @@ export class WasmWhisperDriver implements TranscriptionDriver {
     readonly id: string;
     readonly label = "In-browser Whisper (WASM)";
     readonly local = true;
+    /** Always known here — the WASM driver ships its own default. @see TranscriptionDriver */
+    get modelId(): string { return this._cfg.model || DEFAULT_MODEL; }
 
     private _cfg: WasmWhisperConfig;
     private _pipelinePromise: Promise<any> | null = null;
@@ -174,7 +176,7 @@ export class WasmWhisperDriver implements TranscriptionDriver {
         const model = this._cfg.model || DEFAULT_MODEL;
         const dtype = this._cfg.dtype || DEFAULT_DTYPE;
         const build = (device: string, dt?: string) => {
-            console.info(`[speech-to-text] loading ${model} on device=${device}${dt ? ` dtype=${dt}` : ""}`);
+            APPLICATION_CONTEXT.log("module.speech-to-text:driver").info({model, device, dtype: dt || undefined}, "loading local whisper model");
             this._bumpProgress(); // reset the stall clock at the start of each attempt
             return lib.pipeline("automatic-speech-recognition", model, {
                 device,
@@ -189,7 +191,7 @@ export class WasmWhisperDriver implements TranscriptionDriver {
             try {
                 return await this._raceStall(build("webgpu", dtype), this._loadTimeoutMs());
             } catch (e) {
-                console.warn("[speech-to-text] WebGPU pipeline load failed/stalled, falling back to WASM:", e);
+                APPLICATION_CONTEXT.log("module.speech-to-text:driver").warn(e, "WebGPU pipeline load failed/stalled, falling back to WASM");
             }
         }
 

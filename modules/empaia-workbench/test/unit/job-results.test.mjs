@@ -83,3 +83,153 @@ test("no jobs means no query at all, never 'everything'", async () => {
     expect(results).toEqual({ primitives: [], pixelmaps: [], annotations: [], lockedInputs: [] });
     expect(spy.annotations).toBe(undefined);
 });
+
+// ── a failed query is not an empty result ───────────────────────────────────
+
+/** A runner whose three result queries can be made to reject individually. */
+function failingRunner({ primitives, pixelmaps, annotations } = {}) {
+    const client = {
+        queryPrimitives: async () => { if (primitives) throw primitives; return []; },
+        queryPixelmaps: async () => { if (pixelmaps) throw pixelmaps; return []; },
+        queryAnnotations: async () => {
+            if (annotations) throw annotations;
+            return { items: [], item_count: 0 };
+        },
+        countAnnotations: async () => { throw new Error("countAnnotations must not be called"); },
+    };
+    return new JobRunner({
+        getClient: () => client,
+        getEad: () => undefined,
+        getSlideId: () => "slide-1",
+        getMode: () => "standalone",
+        pollMs: () => 3000,
+        onJobsChanged: () => {},
+    });
+}
+
+test("a rejected query is named in `failed`, not silently emptied", async () => {
+    const runner = failingRunner({ annotations: Object.assign(new Error("nope"), { statusCode: 422 }) });
+    const results = await runner.loadResults(["job-1"], "slide-1");
+
+    // Before this, a 4xx produced `annotations: []` — byte-identical to a
+    // finished, empty analysis — and the caller then recorded the job as
+    // permanently empty, so a reload was the only way to see the result.
+    expect(results.failed).toEqual(["annotations"]);
+    expect(results.annotations).toEqual([]);
+});
+
+test("each query is named independently", async () => {
+    const runner = failingRunner({
+        primitives: new Error("a"),
+        pixelmaps: new Error("b"),
+    });
+    const results = await runner.loadResults(["job-1"], "slide-1");
+    expect(results.failed.sort()).toEqual(["pixelmaps", "primitives"]);
+});
+
+test("a successful read carries no `failed` key at all", async () => {
+    const runner = failingRunner();
+    const results = await runner.loadResults(["job-1"], "slide-1");
+    expect("failed" in results).toBe(false);
+});
+
+// ── the size gate rides the first page ──────────────────────────────────────
+
+test("the budget is decided from the first page, with no separate count call", async () => {
+    const seen = [];
+    const client = {
+        queryPrimitives: async () => [],
+        queryPixelmaps: async () => [],
+        queryAnnotations: async (body, opts) => {
+            seen.push(opts);
+            // The server says there are far more than the budget allows.
+            return { items: [{ id: "a", creator_id: "job-1" }], item_count: 10_000 };
+        },
+        countAnnotations: async () => { throw new Error("countAnnotations must not be called"); },
+    };
+    const runner = new JobRunner({
+        getClient: () => client,
+        getEad: () => undefined,
+        getSlideId: () => "slide-1",
+        getMode: () => "standalone",
+        pollMs: () => 3000,
+        onJobsChanged: () => {},
+    });
+
+    const results = await runner.loadResults(["job-1"], "slide-1", { budget: 100 });
+    expect(results.annotationsWithheld).toBe(true);
+    expect(results.annotationCount).toBe(10_000);
+    expect(results.annotations).toEqual([]);
+    // Exactly one annotation request: `item_count` came back on it, so asking a
+    // separate count route first was a whole extra round trip per result read.
+    expect(seen.length).toBe(1);
+    // And `skip: 0` is omitted, keeping the first request's wire shape unchanged.
+    expect(seen[0].skip).toBe(undefined);
+    expect(seen[0].limit).toBe(500);
+});
+
+test("`force` bypasses the budget and fetches anyway", async () => {
+    const client = {
+        queryPrimitives: async () => [],
+        queryPixelmaps: async () => [],
+        queryAnnotations: async () => ({
+            items: [{ id: "a", creator_id: "job-1" }], item_count: 1,
+        }),
+        countAnnotations: async () => { throw new Error("must not be called"); },
+    };
+    const runner = new JobRunner({
+        getClient: () => client,
+        getEad: () => undefined,
+        getSlideId: () => "slide-1",
+        getMode: () => "standalone",
+        pollMs: () => 3000,
+        onJobsChanged: () => {},
+    });
+
+    const results = await runner.loadResults(["job-1"], "slide-1", { budget: 0, force: true });
+    expect(results.annotationsWithheld).toBe(undefined);
+    expect(results.annotations.length).toBe(1);
+});
+
+test("an annotation output that came back empty reports no count at all", async () => {
+    // `my_cells: 0` was rendered from `annotationCount: 0`, stating as fact what
+    // the module had not established — the run had in fact written 24 690 points
+    // that were not queryable yet. `missing` carries the same information without
+    // asserting a number, and the panel decides what to say about it.
+    const { JobRunner } = await import("../../job-runner.ts");
+    const ead = {
+        io: {
+            my_wsi: { type: "wsi" },
+            my_rects: { type: "collection", items: { type: "rectangle", reference: "io.my_wsi" } },
+            my_cells: {
+                type: "collection",
+                items: {
+                    type: "collection", reference: "io.my_rects.items",
+                    items: { type: "point", reference: "io.my_wsi" },
+                },
+            },
+        },
+        modes: { standalone: { inputs: ["my_wsi", "my_rects"], outputs: ["my_cells"] } },
+    };
+    const client = {
+        scopeId: "scope-1",
+        async queryAnnotations() { return { items: [], item_count: 0, low_npp_centroids: null }; },
+        async queryPrimitives() { return []; },
+        async queryPixelmaps() { return []; },
+        async getCollection() { return undefined; },
+        async queryCollectionItems() { return []; },
+    };
+    const runner = new JobRunner({
+        getClient: () => client, getEad: () => ead,
+        getSlideId: () => "slide-1", getMode: () => "standalone",
+        pollMs: () => 1000, onJobsChanged: () => {},
+    });
+
+    const job = { id: "job-1", mode: "STANDALONE", status: "COMPLETED",
+        inputs: { my_wsi: "slide-1" }, outputs: { my_cells: "coll-1" } };
+    const results = await runner.loadResolvedResults(job, "slide-1", "standalone");
+    const cells = results.outputs.find(o => o.spec.key === "my_cells");
+
+    expect(cells.annotationCount).toBe(undefined);
+    expect(cells.missing).toBe(true);
+});
