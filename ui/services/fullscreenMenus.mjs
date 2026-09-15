@@ -534,7 +534,9 @@ export class FullscreenMenus {
     }
 
     getHeaderBrand() {
-        const version = APPLICATION_CONTEXT?.env?.version || APPLICATION_CONTEXT?.env?.VERSION || "dev";
+        // Served by the backend on the ENV object. A deployment that reports no usable
+        // version shows no badge at all - "vdev" / "vundefined" reads like a real build.
+        const version = APPLICATION_CONTEXT?.env?.version;
         return div({ class: "flex items-center gap-3 self-start rounded-2xl border border-base-300 bg-base-100 px-3 py-2 shadow-sm" },
             img({
                 src: `${APPLICATION_CONTEXT.url}src/assets/logos/xopat-logo.png`,
@@ -544,7 +546,7 @@ export class FullscreenMenus {
             }),
             div({ class: "flex flex-col leading-tight" },
                 span({ class: "text-sm font-semibold" }, "Viewer"),
-                span({ class: "text-xs opacity-70" }, `v${version}`)
+                version ? span({ class: "text-xs opacity-70" }, `v${version}`) : null
             )
         );
     }

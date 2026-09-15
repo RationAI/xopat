@@ -22,11 +22,12 @@
  *    a translated string carrying `<ul><li>` markup, straight into the DOM.
  *    Reasons are now plain strings rendered as real nodes, so a locale file
  *    cannot inject markup and translators stop having to hand-write HTML.
- *  - **No buttons.** An OSD overlay sits under the annotation canvas, so
- *    pointer events do not reach it — `plugins/slide-info` has a commented-out
- *    "Open Slide Manager" button and a TODO saying exactly this. A retry
- *    control that silently does nothing is worse than prose telling the user
- *    what to do, so this stays informational until the overlay is clickable.
+ *  - **No buttons here.** The page is no longer an OSD overlay — `loader.ts`
+ *    mounts it as a screen-fixed layer in the viewer container, so clicks do
+ *    reach it now (`plugins/slide-info` puts a real "Open Slide Manager"
+ *    button on the empty-viewer variant). This core variant stays
+ *    informational because there is no action it could offer: the failure
+ *    case has already retried, and the demo case has nothing to open.
  *
  * Styling leans on inline styles plus the handful of utility classes already
  * used at this call site: the shipped Tailwind build is purge-minimised, so a
@@ -73,68 +74,118 @@ export function collectFailedSources(viewer: any): DemoOverlayFailedSource[] {
     return out;
 }
 
-/** A `<ul>` of plain strings — no markup crosses the locale boundary. */
+/**
+ * The shell every variant shares: one centred card, capped width, its own
+ * pointer events (the host layer is click-through so the canvas keeps
+ * working — the card opts back in so the error text can be selected/copied).
+ *
+ * Inline styles, not utilities: the shipped Tailwind build is purge-minimised
+ * and a class that is not already used elsewhere may simply not exist (§8).
+ */
+const card = (id: string, ...children: any[]) => {
+    const { div } = van.tags;
+    return div({
+        id,
+        class: "bg-base-100 border border-base-300 rounded-2xl shadow-lg",
+        style: "pointer-events:auto;max-width:34rem;width:100%;"
+            + "padding:2rem 2.25rem;text-align:center;"
+            + "display:flex;flex-direction:column;align-items:center;"
+    }, ...children);
+};
+
+const cardIcon = (name: string, extraStyle = "") => {
+    const { i } = van.tags;
+    return i({
+        class: `ph-light ${name}`,
+        style: "font-size:3.5rem;line-height:1;margin-bottom:0.75rem;" + extraStyle,
+    });
+};
+
+const cardTitle = (text: string) => van.tags.h1({
+    style: "font-size:1.375rem;font-weight:700;margin:0 0 0.5rem;",
+}, text);
+
+const cardLead = (text: string) => van.tags.p({
+    class: "opacity-70",
+    style: "margin:0;font-size:0.95rem;line-height:1.45;",
+}, text);
+
+/**
+ * A `<ul>` of plain strings — no markup crosses the locale boundary.
+ *
+ * Left-aligned inside the centred card: a bulleted list centred item by item
+ * is unreadable, the bullets stop forming a column.
+ */
 const reasonList = (keys: string[]) => {
     const { ul, li } = van.tags;
     return ul(
-        { style: "margin:0.5rem 0 0 1.25rem;list-style:disc;" },
-        keys.map(key => li({ style: "margin-bottom:0.15rem;" }, $.t(key))),
+        {
+            class: "opacity-70",
+            style: "margin:1rem 0 0;padding-left:1.25rem;list-style:disc;"
+                + "text-align:left;font-size:0.9rem;align-self:stretch;",
+        },
+        keys.map(key => li({ style: "margin-bottom:0.2rem;" }, $.t(key))),
     );
 };
 
 const brandBanner = () => {
-    const { p, img } = van.tags;
-    return [
-        p({ class: "text-small mx-6 text-center", style: "margin-top:2rem;" },
+    const { p, img, div } = van.tags;
+    return div({
+        class: "border-t border-base-300",
+        style: "margin-top:1.75rem;padding-top:1.25rem;align-self:stretch;",
+    },
+        p({ class: "opacity-60", style: "margin:0 0 0.75rem;font-size:0.8rem;" },
             $.t("error.demoPage.tagline")),
         img({
             src: "docs/assets/xopat-banner-v3.png",
             alt: "",
-            style: "width:80%;display:block;margin:0 auto;",
+            style: "width:70%;max-width:18rem;display:block;margin:0 auto;opacity:0.85;",
         }),
-    ];
-};
-
-/** Nothing was requested: this is a landing page, not an error. */
-const buildDemo = (id: string) => {
-    const { h1, p, div } = van.tags;
-    return div({ id },
-        h1($.t("error.demoPage.title")),
-        p($.t("error.demoPage.demoLead")),
-        reasonList(["error.demoPage.reason.invalidLink", "error.demoPage.reason.sessionLost"]),
-        ...brandBanner(),
     );
 };
 
+/** Nothing was requested: this is a landing page, not an error. */
+const buildDemo = (id: string) => card(id,
+    cardIcon("ph-images", "opacity:0.25;"),
+    cardTitle($.t("error.demoPage.title")),
+    cardLead($.t("error.demoPage.demoLead")),
+    reasonList(["error.demoPage.reason.invalidLink", "error.demoPage.reason.sessionLost"]),
+    brandBanner(),
+);
+
 /** Something was requested and none of it opened. */
 const buildFailure = (id: string, failed: DemoOverlayFailedSource[]) => {
-    const { h1, h2, p, div, i, span, code } = van.tags;
+    const { h2, p, div, span, code } = van.tags;
 
     const detail = failed.length
-        ? div({ style: "margin-top:1.5rem;max-width:44rem;" },
-            h2({ style: "font-size:1rem;font-weight:600;margin-bottom:0.5rem;" },
+        ? div({
+            style: "margin-top:1.5rem;align-self:stretch;text-align:left;",
+        },
+            h2({ class: "opacity-70", style: "font-size:0.8rem;font-weight:600;"
+                + "text-transform:uppercase;letter-spacing:0.04em;margin:0 0 0.5rem;" },
                 $.t("error.demoPage.whatFailed")),
             ...failed.map(source => div({
-                style: "margin-bottom:0.5rem;padding:0.5rem 0.75rem;"
-                    + "border-left:3px solid currentColor;opacity:0.85;",
+                class: "bg-base-200 border-error rounded-md",
+                style: "margin-bottom:0.5rem;padding:0.5rem 0.75rem;border-left-width:3px;"
+                    + "border-left-style:solid;",
             },
-                div({ style: "font-weight:600;" }, source.name),
+                div({ style: "font-weight:600;font-size:0.9rem;" }, source.name),
                 source.error
                     // The upstream error verbatim: it is the only thing that
                     // distinguishes "wrong id" from "server down" from "CORS",
                     // and it is what a bug report needs to carry.
-                    ? code({ style: "font-size:0.85em;word-break:break-word;" }, source.error)
-                    : span({ style: "font-size:0.85em;opacity:0.7;" }, $.t("error.demoPage.noDetail")),
+                    ? code({ class: "opacity-80", style: "font-size:0.8rem;word-break:break-word;" },
+                        source.error)
+                    : span({ class: "opacity-60", style: "font-size:0.8rem;" },
+                        $.t("error.demoPage.noDetail")),
             )),
         )
         : null;
 
-    return div({ id },
-        h1({ style: "display:flex;align-items:center;gap:0.5rem;" },
-            i({ class: "ph-light ph-warning-circle", style: "font-size:1.2em;" }),
-            span($.t("error.demoPage.failureTitle")),
-        ),
-        p($.t("error.demoPage.failureLead")),
+    return card(id,
+        cardIcon("ph-warning-circle", "color:var(--fallback-er,oklch(var(--er)/1));opacity:0.9;"),
+        cardTitle($.t("error.demoPage.failureTitle")),
+        cardLead($.t("error.demoPage.failureLead")),
         reasonList([
             "error.demoPage.reason.invalidLink",
             "error.demoPage.reason.notExist",
@@ -142,7 +193,7 @@ const buildFailure = (id: string, failed: DemoOverlayFailedSource[]) => {
             "error.demoPage.reason.serverDown",
         ]),
         detail,
-        p({ style: "margin-top:1.5rem;opacity:0.7;font-size:0.9em;" },
+        p({ class: "opacity-60", style: "margin:1.25rem 0 0;font-size:0.85rem;" },
             $.t("error.demoPage.failureHint")),
     );
 };

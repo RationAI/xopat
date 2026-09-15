@@ -510,6 +510,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     // 4) Label thumbnail — pushed to the right with margin-left:auto.
     const LABEL_BOX = { width: "56px", height: "26px" };
     const LABEL_SCALE_HOVER = 4.5;
+    const LABEL_SCALE_HOVER_COLLAPSED = 6;
 
     const labelEl = document.createElement("div");
     labelEl.className = "rounded-md bg-base-200 overflow-hidden flex items-center justify-center cursor-zoom-in";
@@ -523,10 +524,45 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     header.appendChild(labelEl);
     scalebar._ui.labelEl = labelEl;
 
+    /**
+     * Collapsed the strip is a single row, so a 56px label pushes the
+     * quick-zoom stops off the edge. There it becomes a square `join-item`
+     * welded onto the right of the SYNC button — which also gives that button
+     * the right-hand sibling its `join` rounding already assumes — and the
+     * full label is reachable by hovering it. Expanded, it floats right of
+     * the row at full width as before.
+     */
+    const placeLabel = () => {
+        const c = !!scalebar._ui.collapsed;
+        if (c) {
+            if (labelEl.parentNode !== syncGroup) syncGroup.appendChild(labelEl);
+            labelEl.classList.add("join-item");
+            labelEl.classList.remove("rounded-md");
+            labelEl.style.width = LABEL_BOX.height;
+            labelEl.style.height = "";
+            labelEl.style.alignSelf = "stretch";
+            // Grow right + up on hover: left is the SYNC button, below is the
+            // metric bar; the free space is the canvas above and beside.
+            labelEl.style.transformOrigin = "left bottom";
+            // A dashed "no label" box is pure noise in a one-row strip.
+            labelEl.style.display = scalebar._ui.hasLabel ? "" : "none";
+        } else {
+            if (labelEl.parentNode !== header) header.appendChild(labelEl);
+            labelEl.classList.remove("join-item");
+            labelEl.classList.add("rounded-md");
+            labelEl.style.width = LABEL_BOX.width;
+            labelEl.style.height = LABEL_BOX.height;
+            labelEl.style.alignSelf = "";
+            labelEl.style.transformOrigin = "left center";
+            labelEl.style.display = scalebar._ui.labelReady ? "" : "none";
+        }
+    };
+    scalebar._ui.placeLabel = placeLabel;
+
     labelEl.addEventListener("mouseenter", () => {
-        if (scalebar._ui.collapsed) return;
         if (labelEl.style.pointerEvents === "none") return;
-        labelEl.style.transform = `scale(${LABEL_SCALE_HOVER})`;
+        labelEl.style.transform = `scale(${scalebar._ui.collapsed
+            ? LABEL_SCALE_HOVER_COLLAPSED : LABEL_SCALE_HOVER})`;
         labelEl.style.position = "relative";
         labelEl.style.zIndex = "40";
     });
@@ -552,7 +588,9 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         span.textContent = window.$.t('main.scalebar.noLabel');
         labelEl.appendChild(span);
         labelEl.title = window.$.t('main.scalebar.noLabelTitle');
-        if (!scalebar._ui.collapsed) labelEl.style.display = "";
+        scalebar._ui.hasLabel = false;
+        scalebar._ui.labelReady = true;
+        placeLabel();
         scalebar.refreshHandler?.();
     };
 
@@ -574,7 +612,9 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
                 });
             }
             scalebar._ui.labelObjectUrl = rendered.objectUrl || null;
-            if (!scalebar._ui.collapsed) labelEl.style.display = "";
+            scalebar._ui.hasLabel = true;
+            scalebar._ui.labelReady = true;
+            placeLabel();
             scalebar.refreshHandler?.();
         }).catch(() => { showLabelPlaceholder(); });
     } else {
@@ -602,8 +642,8 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         labelEl.style.transform = "";
         labelEl.style.position = "";
         labelEl.style.zIndex = "";
-        // Collapsed mode hides everything except the chevron + SYNC.
-        labelEl.style.display = c ? "none" : "";
+        // Collapsed mode hides everything except the chevron + SYNC + label.
+        placeLabel();
         updateSyncMenuVisibility();
         if (c) {
             // The header flows as a normal child of the container so the

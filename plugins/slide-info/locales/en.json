@@ -48,7 +48,9 @@
   },
   "demo": {
     "title": "No Slide Loaded",
-    "hint": "Please select a slide from the Slide Manager. If not visible, slide manager can be opened via View menu."
+    "hint": "Pick a slide to start viewing. The Slide Manager lists everything available to you.",
+    "open": "Open Slide Manager",
+    "menuHint": "You can reopen it any time from the View menu."
   },
   "info": {
     "title": "Slide Information",

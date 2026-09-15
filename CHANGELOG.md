@@ -2,6 +2,67 @@
 
 ### Unreleased
 
+* **The transcription biasing prompt never left the browser, and the documented knob to
+  allow it reached nothing.** A 09-13 dictation came back with a third of its words wrong
+  (`atelectatic` → `adulated`, `Trichrome` → `Thison`, `Architectural` → `Natural`) and the
+  trace showed `contextChars: 0` on every segment: both prompt gates default to 0, and the
+  server one — `transcriptionPromptMaxChars`, documented since the whisper-large-v3
+  measurement — was read from the provider's resolved config while both shipped adapters
+  built that config from an explicit key list that did not include it. Setting it in
+  `providerDefaults` changed nothing. The adapters now copy it into `fixedConfig`
+  (deployer-only on purpose: `configSchema` keys are RPC-writable `configOverrides`, which
+  outrank `fixedConfig`, so listing it would let a caller raise its own cap); the read side
+  is the pure `shared/transcriptionPrompt.ts`, unit-tested. Two more things stood between an
+  opened gate and a useful prompt: the client ceiling was 700 while the composed prompt
+  (glossary + report terms + context tail) is longer, and the module cuts an over-long
+  prompt from the END — where the report's own terms sit — so the generic glossary evicted
+  them. The ceiling is 1000 (parity with the server) and the chat composer now fits its
+  parts into `voice.promptBudget` with the terms first and the glossary trimmed. The default
+  stays **off**; `env/parts/voice/openai-4o-transcribe.json` is the composition for OpenAI's
+  `gpt-4o-mini-transcribe`, where `prompt` is the documented vocabulary channel (bare model
+  ids only — the pinned `@ai-sdk/openai` sends `response_format: json` for exactly two ids).
+  The stale "inherits the UI locale" sentences in the speech-to-text README are gone too.
+
+* **A dictation ended by duplicating three sentences it had already transcribed.** The
+  capture's final flush segment bypasses the voiced-content floor so that a manual stop
+  cannot cut off a trailing utterance. With the rolling context prompt now enabled, a flush
+  carrying `voicedMs: 0` and `maxPeak: 0.06` — silence by both the Silero verdict and the
+  meter — went to the recognizer with a 153-character context tail attached and came back
+  with a tidied rewrite of that tail, which the prompt-echo stripper could not match
+  because it matches text and this was a paraphrase. The three sentences landed in the
+  transcript a second time, and the guard then (correctly, from where it stood) refused the
+  corrector's attempt to delete them. A flush with no voiced audio at all is no longer a
+  bypass: there is no trailing utterance to save, only silence carrying a prompt. Zero is
+  the only case taken back — a flush with any voiced audio still skips the threshold — and
+  the rule is now the pure `bypassesVoicedFloor` in `speechGate.ts`, with the field
+  segment's own numbers as a test.
+
+* **Nothing was ever learned from an accepted correction.** `_learnCorrections` admits a
+  pair only when the corrected side is vocabulary the report form defines, and the form's
+  vocabulary was indexed as whole phrases (`"architectural destruction"`) while a
+  correction is one word (`Architecture` → `Architectural`). A dictation whose every
+  accepted suggestion was a single word learned zero pairs, so the learned-confusions
+  escape hatch the guard leans on stayed permanently empty. Authored labels now also index
+  their individual words, at the guard's own four-letter floor; the privacy property is
+  unchanged, since the source is still the schema rather than free text.
+
+* **The correction guard refused the two corrections it should have let through, and the
+  vocabulary chain had no word for either.** `adiolated` → `atelectatic` and `Thison` →
+  `Trichrome` are 8 and 6 edits apart; no character bound and — checked — no phonetic key
+  calls them close. What makes them right is role, not shape: the source is a non-word and
+  the target is a domain term. The guard now accepts a one-for-one **lexicon swap** — target
+  in the lexicon, source not, neither an option label, same initial, about the same number
+  of beats (`isLexiconSwap`; `mild` → `marked` and label injection stay refused). The lexicon
+  is `extraction_hints.lexicon` (schema-authored, so MIXTURE extends it without a client
+  release) plus the `asr_confusions` canonicals plus the report plugin's shipped ILD list
+  (`lexicon.mjs`), and it feeds all three consumers that used to see only the form's labels:
+  the recognizer prompt, the guard, and the learnable-confusions set (authored words only,
+  so the privacy property holds). Also fixed in the plugin: three callers each pushed their
+  own prompt-term list through a setter that *replaces*, so a later learned-pairs load threw
+  away the form's selection — one `_pushVoicePromptTerms` merges them; the tail audit's
+  corrector runs with the session language like the review pass; and re-arming the
+  microphone no longer re-hydrates a chat session that is already the active one.
+
 * **The earlier-dictation banner announced a non-event, and offered the wrong thing.** Once
   the mixture report's resume offer was declined — or simply overtaken by pressing Start —
   the row stayed up saying *"The earlier dictation from … is not part of this report"* beside
@@ -62,6 +123,17 @@
   guard refused the loopback hop with a 502. The slash is restored explicitly (it cannot
   carry an origin) and both halves are pinned by
   `test/suites/integration/proxy-path.test.mjs`.
+
+* **The report form's vocabulary, in the dictation's language.** A Japanese dictation decoded
+  well except for the domain terms, which came back as plausible homophones (気腔 → 空港,
+  器質化 → 基礎化, びまん性 → 二番性) — and the corrector only knew the English form, while the
+  guard called any longer kanji fix a rewrite. The form's terms are now translated once per
+  language by the extraction model and cached per deployment and schema signature
+  (`modules/mixture-interface/vocabulary.mjs`, `vocabulary` trace record); they lead the
+  corrector's reference, extend the guard's label list, admit non-English learned corrections,
+  and — only where a deployment enables the transcription prompt — replace the English glossary
+  in the recognizer's prompt. The guard accepts a CJK replacement of similar length as a
+  respelling; additions, deletions and label injection are still refused.
 
 * `runVisionInference` now retries an empty reply once with a larger output cap 
   (`XOPAT_PATHOLOGY_VISION_MAX_OUTPUT_TOKENS_CEILING`, default 16384)

@@ -140,20 +140,6 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 this.menu?.visibilityManager.on();
             };
 
-            // TODO: does not work, OSD overlays are hidden behind another canvas - either annotations
-            // const openBtn = new UI.Button({
-            //     onClick: showExplorer,
-            //     extraClasses: "btn-primary btn-lg shadow-lg",
-            // }, "Open Slide Manager").create();
-            //
-            // new OpenSeadragon.MouseTracker({
-            //     element: openBtn,
-            //     handler: (event) => {
-            //         // This prevents OSD from panning the viewer when you click the button
-            //         event.preventDefaultAction = true;
-            //     }
-            // });
-
             // Reactive, because this handler runs at BOOT and the locale bundle
             // is fetched asynchronously (`this._localeReady`, seeded in the
             // constructor). Reading a key before its bundle is registered gets
@@ -166,19 +152,48 @@ addPlugin('slide-info', class extends XOpatPlugin {
             // first paint of a cold boot needs the fill-in below.
             const title = van.state(this.t('demo.title'));
             const hint = van.state(this.t('demo.hint'));
+            const openLabel = van.state(this.t('demo.open'));
+            const menuHint = van.state(this.t('demo.menuHint'));
 
+            // The page is no longer an OSD overlay (it used to sit under the
+            // annotation canvas, unclickable and anchored in viewport
+            // coordinates, which is why it drifted off-centre on an empty
+            // viewer). `loader.ts` mounts it as a screen-fixed, centred layer
+            // whose host is click-through, so this button works and no
+            // MouseTracker is needed to stop the viewer from panning.
+            const openBtn = van.tags.button({
+                class: "btn btn-primary btn-sm",
+                onclick: (ev) => { ev.stopPropagation(); showExplorer(); },
+            },
+                new UI.PhIcon({ name: "ph-folder-open" }).create(),
+                openLabel,
+            );
+
+            // Inline styles over utilities: the shipped Tailwind build is
+            // purge-minimised (AGENTS §8), and the card mirrors the core
+            // `viewer-demo-overlay` shell so both variants read as one screen.
             const demoUI = van.tags.div({
                     id: e.id,
-                    class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
+                    class: "bg-base-100 border border-base-300 rounded-2xl shadow-lg",
+                    style: "pointer-events:auto;max-width:28rem;width:100%;"
+                        + "padding:2rem 2.25rem;text-align:center;display:flex;"
+                        + "flex-direction:column;align-items:center;",
                 },
-                van.tags.div({ class: "mb-6 opacity-20" },
-                    new UI.PhIcon({ name: "ph-images", extraClasses: "text-9xl" }).create()
-                ),
+                new UI.PhIcon({
+                    name: "ph-images",
+                    extraClasses: "opacity-20",
+                    // `style` is not a top-level option — BaseComponent only
+                    // forwards `extraProperties` onto the node.
+                    extraProperties: {
+                        style: "font-size:3.5rem;line-height:1;margin-bottom:0.75rem;",
+                    },
+                }).create(),
                 // Bound as text, not through a node-returning derivation: van
                 // patches the text node in place instead of swapping the subtree.
-                van.tags.h2({ class: "text-2xl font-bold mb-2" }, title),
-                van.tags.p({ class: "max-w-md mb-6 opacity-70" }, hint),
-                // openBtn
+                van.tags.h2({ style: "font-size:1.375rem;font-weight:700;margin:0 0 0.5rem;" }, title),
+                van.tags.p({ class: "opacity-70", style: "margin:0 0 1.25rem;font-size:0.95rem;line-height:1.45;" }, hint),
+                openBtn,
+                van.tags.p({ class: "opacity-50", style: "margin:0.75rem 0 0;font-size:0.8rem;" }, menuHint),
             );
 
             // Synchronously, and NOT after awaiting the locale: `show-demo-page`
@@ -190,6 +205,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
             this._localeReady.then(() => {
                 title.val = this.t('demo.title');
                 hint.val = this.t('demo.hint');
+                openLabel.val = this.t('demo.open');
+                menuHint.val = this.t('demo.menuHint');
             });
         });
 

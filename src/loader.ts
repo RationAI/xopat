@@ -5368,19 +5368,39 @@ form.submit();
              * @param enable
              * @param [explainErrorHtml=undefined]
              */
-            // OSD's addOverlay dedupes by element identity, not DOM id, and each
-            // enable builds a fresh element — so track the mounted overlay here
-            // to keep the toggle idempotent (repeated enables replace, disable
-            // removes the actual element, never a stale getElementById match).
-            let currentDemoOverlay: Element | null = null;
+            // NOT an OSD overlay. `addOverlay(el, new Rect(0, 0, 1, 1))` anchors
+            // the element in *viewport* coordinates, so an empty viewer — which
+            // has no world to fit and therefore an arbitrary viewport — rendered
+            // the "no slide" page off-centre and at a zoom-dependent scale, and
+            // put it under the annotation canvas where no click could reach it.
+            // The page is chrome, not content: it is mounted into the viewer
+            // container as a screen-fixed, always-centred layer instead. The
+            // layer itself is click-through (`pointer-events:none`) so the
+            // canvas keeps working; interactive children opt back in.
+            let demoHost: HTMLElement | null = null;
+
+            const unmountDemoPage = () => {
+                demoHost?.remove();
+                demoHost = null;
+            };
+
+            const mountDemoPage = (content: Element) => {
+                unmountDemoPage();
+                const host = document.createElement("div");
+                host.className = "xopat-demo-page";
+                host.style.cssText = "position:absolute;inset:0;display:flex;"
+                    + "align-items:center;justify-content:center;overflow:auto;"
+                    + "padding:1.5rem;pointer-events:none;z-index:30;";
+                host.appendChild(content);
+                (viewer.container || viewer.element).appendChild(host);
+                demoHost = host;
+            };
+
             viewer.toggleDemoPage = (enable: boolean, explainErrorHtml: string | undefined = undefined) => {
                 const id = "demo-ad-" + viewer.id;
 
                 if (enable) {
-                    if (currentDemoOverlay) {
-                        viewer.removeOverlay(currentDemoOverlay);
-                        currentDemoOverlay = null;
-                    }
+                    unmountDemoPage();
                     // `explainErrorHtml` is the legacy signal for "this is a
                     // failure, not an empty viewer". Its *content* is no longer
                     // rendered — the overlay builds its own structured markup and
@@ -5390,8 +5410,7 @@ form.submit();
                     let toSet: Element | null = buildDemoOverlay(viewer, id, Boolean(explainErrorHtml));
                     const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
-                        currentDemoOverlay = overlay || toSet;
-                        viewer.addOverlay(currentDemoOverlay, new OpenSeadragon.Rect(0, 0, 1, 1));
+                        mountDemoPage(overlay || toSet);
                         toSet = null;
                     };
 
@@ -5406,10 +5425,9 @@ form.submit();
 
                     doOverlay(undefined);
                 } else {
-                    if (currentDemoOverlay) {
-                        viewer.removeOverlay(currentDemoOverlay);
-                        currentDemoOverlay = null;
-                    }
+                    unmountDemoPage();
+                    // Legacy path: an older build could leave the page mounted as
+                    // a real OSD overlay. Clean that up too, once.
                     const overlay = document.getElementById(id);
                     if (overlay) viewer.removeOverlay(overlay);
                 }
