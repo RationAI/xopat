@@ -47,11 +47,27 @@ type ScoreRecord = {
 
 const BUNDLE_VERSION = 1;
 
-/** Slide identity. `tileSourceId` first — DICOMweb shares `baseUrl` across slides. */
+/**
+ * Slide identity, in the order the rest of the app resolves it
+ * (`viewer-faulty-source-registry.ts`, `viewer-demo-overlay.ts`).
+ *
+ * `tileSourceId` first — DICOMweb shares `baseUrl` across slides, so a URL key
+ * collides. But it is only the *app-wide* convention, not a universal one:
+ * tile sources set it themselves (webtiff, empaia, mixture, the generic
+ * protocol path in `slide-protocols.ts`) and the WSI-Service source does not —
+ * it carries the service's own slide id as `fileId` instead, the dual
+ * convention `viewer-depth-controller.ts` already reconciles. Without `fileId`
+ * here every wsi-service deployment — which is most of them, `default`
+ * included — refused every score as having no stable identity.
+ */
 function slideIdOf(viewer: any): string | undefined {
     const item = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
     const source = item?.source;
-    return source?.tileSourceId || source?.url || undefined;
+    const id = source?.tileSourceId || source?.fileId || source?.url || item?.__xopatLoadKey;
+    // Coerced: `fileId` is whatever the service returned as `data.id`, and
+    // `validate` refuses a non-string slideId — a numeric id would be rejected
+    // by our own guard on the way out.
+    return id === undefined || id === null || id === "" ? undefined : String(id);
 }
 
 /** Composite slot key. Mirrors how the pipeline keys per-viewer-background bundles. */
