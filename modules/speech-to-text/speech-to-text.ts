@@ -11,6 +11,7 @@ import {createRepetitionLock} from "./repetitionLock";
 import {stripPromptEcho} from "./promptEcho";
 import {trimOverlap} from "./joinSegments";
 import {LanguagePin, primaryLanguage} from "./languagePin";
+import {bypassesVoicedFloor} from "./speechGate";
 import {MicButton, MicButtonOptions} from "./ui/MicButton";
 import {CaptionOverlay} from "./ui/CaptionOverlay";
 
@@ -377,10 +378,13 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * → the full transcript; a 60-char prompt → full; 120 chars → text thinning; 200 chars →
      * the first 30 s gone; the 495-char base glossary → the last third gone; glossary plus
      * report terms (~870 chars) → 30 s of the middle and nothing else. Every "dropped
-     * content" symptom of the last field rounds was this. Vocabulary belongs to the
-     * post-hoc corrector, not to the recognizer's prompt.
+     * content" symptom of the last field rounds was this. That measurement is why the
+     * DEFAULT is off, not why the ceiling is low: OpenAI's `gpt-4o-transcribe` family shows
+     * no such pathology, and the composed prompt (glossary + report terms + context tail)
+     * needs the room. The ceiling matches the server's (`TRANSCRIBE_MAX_PROMPT_CHARS`), so
+     * the per-provider `transcriptionPromptMaxChars` is the only cap a deployment reasons about.
      */
-    private static readonly MAX_PROMPT_CHARS = 700;
+    private static readonly MAX_PROMPT_CHARS = 1000;
     /** Effective prompt cap for this deployment (see MAX_PROMPT_CHARS); 0 = never send one. */
     private _promptMaxChars: number;
 
@@ -580,12 +584,14 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
 
     /** Effective biasing prompt (call override, else module default), length-capped. */
     private _resolvePrompt(prompt?: string): string | undefined {
-        const p = (prompt ?? this._defaults.prompt);
+        // The module's own default glossary is English; handed to a recognizer decoding
+        // another language it is a pull toward English output, not vocabulary help. A
+        // caller's prompt is its own responsibility (the chat composes one in the
+        // session's language).
+        const fallback = this._nonEnglishSession() ? undefined : this._defaults.prompt;
+        const p = (prompt ?? fallback);
         const s = String(p ?? "").trim();
         if (!s || this._promptMaxChars <= 0) return undefined;
-        // The glossary is English. Handed to a recognizer decoding another language it
-        // is a pull toward English output, not vocabulary help.
-        if (this._nonEnglishSession()) return undefined;
         return SpeechToTextModule._cutAtWord(s, this._promptMaxChars);
     }
 
@@ -605,9 +611,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      * stripping treats the two parts differently (see {@link _stripPromptEcho}).
      */
     private _composePrompt(glossary: string | undefined, transcript: string, contextChars: number): { prompt?: string; context?: string } {
-        // See _resolvePrompt: no English glossary into a non-English decode. The context
-        // tail is the transcript's own language and still goes when enabled.
-        const base = this._nonEnglishSession() ? "" : String(glossary || "").trim();
+        const base = String(glossary || "").trim();
         const cap = this._promptMaxChars;
         if (cap <= 0) return {};
         const cut = SpeechToTextModule._cutAtWord;
@@ -1393,8 +1397,10 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     // an empty result so the ordered drain still consumes its index.
                     // Probe / fail-open / final-flush segments bypass the gate — the
                     // whole point is to let the text filters judge them (the VAD
-                    // verdict is suspect or overridden by explicit user intent).
-                    const bypassGate = !!(meta?.probe || meta?.failOpen || meta?.flush);
+                    // verdict is suspect or overridden by explicit user intent). The one
+                    // exception, a flush with no voiced audio at all, is the rule and the
+                    // reason in `bypassesVoicedFloor`.
+                    const bypassGate = bypassesVoicedFloor(meta);
                     const metrics: SegmentMetrics = {
                         index,
                         audioMs: meta?.durationMs,

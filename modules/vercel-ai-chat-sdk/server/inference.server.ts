@@ -3,6 +3,11 @@ import { ChatServerRegistry, resolveUserScope, normalizeContexts, isProviderAcce
 import type { TranscriptionModelV4 } from '@ai-sdk/provider';
 import { createTimeoutLinkedSignal, errorText } from './abort-utils';
 import { compareProviderCandidates, isOperatorRecord } from '../shared/providerRef';
+// The biasing-prompt allowance (default 0 = dropped) and why: see the module's own doc.
+// The shipped adapters copy `providerDefaults.transcriptionPromptMaxChars` into the
+// type's `fixedConfig`; before that plumbing existed the key documented here reached
+// nothing, and every deployment silently ran without a prompt.
+import { promptCapFor } from '../shared/transcriptionPrompt';
 import { chatLog } from './tuning';
 import { logVisionCall } from './vision-log';
 
@@ -360,23 +365,6 @@ export interface RunTranscriptionInput {
      * text; length-capped server-side before it is forwarded to the endpoint.
      */
     prompt?: string | null;
-}
-
-/**
- * Hard ceiling on the biasing prompt forwarded upstream. The DEFAULT is zero — no prompt
- * at all — because on the deployment's own Whisper endpoint the prompt made the decoder drop
- * whole stretches of audio, in proportion to its length: measured on one 93 s dictation,
- * no prompt → the full text; a 495-char glossary → the last third gone; ~870 chars (glossary
- * + report terms) → 30 s of the middle and nothing else. A provider opts in per instance with
- * `transcriptionPromptMaxChars` (≤ 60 measured safe there), never above this ceiling.
- */
-const TRANSCRIBE_MAX_PROMPT_CHARS = 1000;
-
-/** The prompt cap this provider allows: its `transcriptionPromptMaxChars`, else 0 (off). */
-function promptCapFor(config: any): number {
-    const raw = Number(config?.transcriptionPromptMaxChars);
-    if (!Number.isFinite(raw) || raw <= 0) return 0;
-    return Math.min(Math.floor(raw), TRANSCRIBE_MAX_PROMPT_CHARS);
 }
 
 /** A usable string, or '' — never a stringified object. */

@@ -354,15 +354,16 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
 
 ```jsonc
 "speech-to-text": {
-  "language": "en",          // BCP-47; unset → inherits the live UI locale ($.i18n.language)
+  "language": "en",          // BCP-47; unset → "auto": detect, then pin (never the UI locale)
   "prompt": "histology, immunohistochemistry, mitosis, stroma, carcinoma",
+  "promptMaxChars": 0,       // composed-prompt cap; 0 = no prompt is sent at all (default)
   "contextPromptChars": 0,   // rolling previous-transcript context per segment; 0 = off (default)
 }
 ```
 
 **The prompt is OFF by default (`promptMaxChars: 0`) — nothing is sent.** It was the
-cause of every "dropped content" symptom in the MIXTURE field rounds. Measured on the
-deployment's own endpoint (`whisper-large-v3`, one 93 s dictation, the same blob each
+cause of every "dropped content" symptom in the MIXTURE field rounds on a self-hosted
+`whisper-large-v3`. Measured on that endpoint (one 93 s dictation, the same blob each
 time, `verbose_json`, `temperature=0`):
 
 | prompt sent | result |
@@ -380,20 +381,31 @@ context tail (`contextPromptChars`) was the same effect through a different prom
 Vocabulary belongs to the post-hoc corrector (the report flow's `learnedCorrections`
 already feed it), not to the recognizer.
 
-A deployment that has measured a gain on its own backend opts in with a cap:
+That finding is about **that backend**. OpenAI's `gpt-4o-transcribe` /
+`gpt-4o-mini-transcribe` document `prompt` as the vocabulary-bias channel and show no
+such pathology — but measure on your own dictations before trusting a high value (same
+audio, prompt 0 / 60 / 200 / 700 / 1000, look for dropped spans, not just word errors).
+
+A deployment opts in with a cap, and **both** gates have to open — the client one here
+and the server one on the provider:
 
 ```jsonc
-"speech-to-text": { "promptMaxChars": 60 }   // ≤ 60 measured safe on the endpoint above; hard ceiling 700
+"speech-to-text": { "promptMaxChars": 60 }     // ≤ 60 measured safe on whisper-large-v3 above; hard ceiling 1000
+"speech-to-text": { "promptMaxChars": 1000 }   // OpenAI gpt-4o-transcribe family (env/parts/voice/openai-4o-transcribe.json)
 ```
 
-The server applies the same rule per provider (`transcriptionPromptMaxChars` on the
-provider config, default 0), so no client can re-enable it by accident. When enabled
-the prompt is cut on a word boundary.
+The server applies its own per-provider cap (`providerDefaults.transcriptionPromptMaxChars`
+in the chat provider plugin's secure config, default 0, ceiling 1000), so no client can
+re-enable the prompt by accident. It is deliberately not an admin-panel field: panel fields
+are RPC-writable, and a caller must not be able to raise its own cap. When enabled the
+prompt is cut on a word boundary — from the END, so the composed prompt's order matters:
+the chat composer (`voice.promptBudget`, see below) trims its generic glossary first and
+keeps the report's terms whole.
 
 - **`language`** pins the model's language instead of letting it free-detect one
   per utterance (the drift behind e.g. an English clause read as another tongue).
-  When unconfigured, the module inherits the live app locale so it follows a UI
-  language switch automatically.
+  Unconfigured it is `"auto"`: detected, then pinned once two consecutive segments
+  agree — never the UI locale (see "Language" below).
 - **`prompt`** is Whisper's vocabulary bias (`prompt` / whisper.cpp
   `initial_prompt`, ~224-token soft hint): seed it with the terms/spellings the
   transcript should favour so homophones resolve toward the domain ("histology",
@@ -484,11 +496,14 @@ Under the chat module's `voice` block (all optional):
 | `noValidContentMs` | — | **Deprecated, ignored.** Turns are no longer force-ended on quiet users; superseded by `idleAutoOffMs`. |
 
 The chat composer builds the biasing `prompt` automatically: a translatable
-pathology glossary (`voice.transcriptionPrompt` in `modules/vercel-ai-chat-sdk/locales/en.json`) plus the labels of any
-loaded `pathology-foundation` domain tools, rebuilt at each capture. `voice.prompt`
-*extends* that base rather than replacing it. Only generic domain vocabulary is
-sent — never slide/patient identity, which must not egress to the transcription
-endpoint. `voice.language` unset means `"auto"` (detect, then pin — never the UI locale).
+pathology glossary (`voice.transcriptionPrompt` in `modules/vercel-ai-chat-sdk/locales/en.json`),
+the deployment's `voice.prompt`, and the terms a consumer such as the report plugin
+supplies (`setVoicePromptTerms`), rebuilt at each capture. The three are fitted into
+`voice.promptBudget` (default 1000) with the consumer's terms first and the generic
+glossary trimmed to what is left — this module cuts an over-long prompt from the end,
+and the terms sit at the end. Only generic domain vocabulary is sent — never
+slide/patient identity, which must not egress to the transcription endpoint.
+`voice.language` unset means `"auto"` (detect, then pin — never the UI locale).
 
 ## Language
 
@@ -506,9 +521,14 @@ what the pathologist speaks — pinning transcription to it is how a Japanese di
 back as "I'm … and the … I think" (Whisper decoding Japanese audio into English filler).
 
 Each segment's `metrics` carry `language` (what the recognizer reported, primary subtag) and
-`languageHint` (what the request said; undefined = detected). A deployment that enables the
-glossary prompt (`promptMaxChars`) never sends it into a non-English session: an English
-glossary is a pull toward English output, not vocabulary help.
+`languageHint` (what the request said; undefined = detected). The module's own default glossary
+(`prompt` static meta) is English and is never sent into a non-English session; a caller's
+prompt is its own responsibility — the chat composer drops its English glossary once the
+language is pinned and sends only the consumer's terms, which the MIXTURE plugin sets in the
+dictation's language from its translated vocabulary. The prompt stays **off by default**
+(`promptMaxChars` 0; it was measured to truncate output on the CERIT backend when long). To try
+it for a language: set `promptMaxChars: 120` on a test deployment, dictate, and compare the raw
+homophone rate in `voice-segment` texts with and without it.
 
 The text filters are script-agnostic: word counting, seam trimming, repetition and echo
 detection tokenise with `Intl.Segmenter` (`textWords.ts`), so a sentence written without

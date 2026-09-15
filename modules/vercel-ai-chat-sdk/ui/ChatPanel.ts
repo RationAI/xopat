@@ -260,6 +260,8 @@ export class ChatPanel extends BaseComponent {
     // Consumer-supplied vocabulary appended to the transcription bias prompt — e.g.
     // terms a report plugin has learned are mis-heard here. See setVoicePromptTerms.
     _voicePromptTerms: string[] = [];
+    /** The dictation's language once pinned (`voice-language`); "" until then. Gates the English glossary. */
+    _voiceSessionLanguage = '';
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
@@ -880,13 +882,21 @@ export class ChatPanel extends BaseComponent {
         // live viewer terms. Base glossary is translatable; deployment can extend it
         // via `voice.prompt`. Only generic domain-tool vocabulary is added — never
         // slide/patient identity, which must not egress to the transcription endpoint.
+        // The composed prompt's size. The speech-to-text module cuts an over-long prompt
+        // from the END, and the consumer's terms sit at the end — so without a budget
+        // here a long glossary silently evicted the one part that was specific to the
+        // report being dictated. The module's own cap (`promptMaxChars`, default 0 =
+        // off) and the server's per-provider cap still apply after this.
+        const promptBudget = Math.max(0, Math.floor(Number(voiceCfg.promptBudget) || 1000));
         const buildVoicePrompt = (): string | undefined => {
-            const parts: string[] = [];
-            const base = _t('voice.transcriptionPrompt');
-            if (base && base !== 'transcriptionPrompt') parts.push(String(base));
-            if (typeof voiceCfg.prompt === 'string' && voiceCfg.prompt.trim()) {
-                parts.push(voiceCfg.prompt.trim());
-            }
+            // The base glossary and the deployment prompt are English. Once the session
+            // is known to be in another language they would pull the recognizer toward
+            // English; only the consumer's terms (set in that language) go.
+            const lang = String(this._voiceSessionLanguage || '').toLowerCase().split(/[-_]/)[0];
+            const englishSession = !lang || lang === 'en';
+            const rawBase = _t('voice.transcriptionPrompt');
+            const base = englishSession && rawBase && rawBase !== 'transcriptionPrompt' ? String(rawBase).trim() : '';
+            const deployment = englishSession && typeof voiceCfg.prompt === 'string' ? voiceCfg.prompt.trim() : '';
             // Driver LABELS are deliberately not added. A transcription prompt biases
             // the recognizer's vocabulary, and a UI control name ("Built-in tissue
             // detector") is not vocabulary anyone dictates into a report — but Whisper
@@ -897,8 +907,16 @@ export class ChatPanel extends BaseComponent {
             // of the prompt is the strongest bias — and preventing the mistake beats
             // correcting it afterwards. Only correct spellings are ever added; feeding
             // the mis-heard form back would teach the recognizer the error.
-            if (this._voicePromptTerms.length) parts.push(this._voicePromptTerms.join(', '));
-            const joined = parts.join('. ').trim();
+            const terms = this._voicePromptTerms.length ? this._voicePromptTerms.join(', ') : '';
+            // Precedence when the budget is short: the report's terms, then the
+            // deployment's own prompt, and the generic glossary takes what is left. The
+            // generic list is the part every deployment can spare.
+            const sep = '. ';
+            const tail = [deployment, terms].filter(Boolean);
+            const tailLen = tail.join(sep).length;
+            const room = promptBudget - tailLen - (tail.length && base ? sep.length : 0);
+            const glossary = base && room > 0 ? ChatPanel._cutAtWord(base, room) : '';
+            const joined = [glossary, ...tail].filter(Boolean).join(sep).trim();
             return joined || undefined;
         };
         this._voiceController = new ChatVoiceController({
@@ -934,7 +952,10 @@ export class ChatPanel extends BaseComponent {
                 this._emit("voice-state", { ...state });
             },
             // The dictation's language, once the speech-to-text module has pinned it.
-            onLanguage: (info) => this._emit("voice-language", { ...info }),
+            onLanguage: (info) => {
+                this._voiceSessionLanguage = String(info?.language || '');
+                this._emit("voice-language", { ...info });
+            },
             onTranscribing: (state) => this._emit("voice-transcribing", { ...state }),
             // A recovering session is not an error state — the microphone is coming
             // back and the composer keeps working; painting it red would be a lie.
@@ -3396,6 +3417,14 @@ export class ChatPanel extends BaseComponent {
         this._voicePromptTerms = Array.isArray(terms)
             ? terms.map((t) => String(t || '').trim()).filter(Boolean)
             : [];
+    }
+
+    /** Cut `s` to at most `cap` characters on a word boundary — half a word biases toward nonsense. */
+    private static _cutAtWord(s: string, cap: number): string {
+        if (s.length <= cap) return s;
+        const cut = s.slice(0, cap);
+        const space = cut.lastIndexOf(' ');
+        return (space > cap / 2 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, '').trim();
     }
 
     /** Background-transcribed dictation windows so far, in seal order. */

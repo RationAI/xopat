@@ -170,3 +170,31 @@ export class SpeechGate {
 export function pickVadEngine(i: { requested: VadEngine; supported: boolean; load: "idle" | "loading" | "ready" | "failed" }): VadEngine {
     return i.requested === "silero" && i.supported && i.load === "ready" ? "silero" : "amplitude";
 }
+
+/**
+ * May a captured segment skip the voiced-content floor and reach a driver anyway?
+ *
+ * Three kinds of segment are allowed past it, each because the VAD's verdict is either
+ * suspect or overridden: a `probe` (the discard ladder testing whether the gate is
+ * misjudging a quiet speaker), a `failOpen` session (the gate already proved wrong), and
+ * the capture's final `flush` (a manual stop must not cut off the trailing utterance).
+ * An untracked segment has no verdict to bypass in the first place.
+ *
+ * The flush case has one exception, learned from a dictation that ended with a duplicated
+ * paragraph. The bypass is there to save trailing SPEECH; a flush carrying `voicedMs: 0`
+ * has none — it is silence being uploaded with a biasing prompt attached, which is the
+ * exact condition under which a recognizer answers by reciting that prompt back. It came
+ * back as a tidied rewrite of the rolling context tail, so the prompt-echo stripper (which
+ * matches text, not meaning) passed it through, and three sentences of already-transcribed
+ * speech were appended to a medical transcript a second time.
+ *
+ * Zero is the only case taken back, because zero is the only unambiguous one: a flush with
+ * any voiced audio at all still bypasses the threshold, and nothing a speaker said is lost.
+ */
+export function bypassesVoicedFloor(
+    meta: { probe?: boolean; failOpen?: boolean; flush?: boolean; tracked?: boolean; voicedMs?: number } | null | undefined,
+): boolean {
+    if (!meta) return false;
+    if (meta.flush && meta.tracked && !(Number(meta.voicedMs) > 0)) return false;
+    return !!(meta.probe || meta.failOpen || meta.flush);
+}

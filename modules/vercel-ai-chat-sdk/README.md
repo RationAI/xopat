@@ -435,6 +435,15 @@ Client-facing RPCs (`server/inference.server.ts`):
   `metadata.transcriptionModelId` → the instance/type `defaultModelId` → `whisper-1`. The two
   transcription-specific keys exist because a provider shared with the chat agent has a *chat*
   `defaultModelId`, which `/audio/transcriptions` rejects.
+
+  The `prompt` is sliced to `promptCapFor(runtime.config)` (`shared/transcriptionPrompt.ts`):
+  the provider's `transcriptionPromptMaxChars`, **default 0 = dropped**, ceiling 1000. An
+  adapter that wants the knob copies it from its secure `providerDefaults` into the type's
+  `fixedConfig`, as both shipped plugins do — and keeps it **out of `configSchema`**, because
+  schema keys are what an RPC caller may write into `configOverrides`, which outrank
+  `fixedConfig`. The drop is logged at `debug` on `module.vercel-ai-chat-sdk:transcription`
+  (`biasing prompt dropped: provider allows none`), which is the line to look for when a
+  deployment's terminology "is not recognised".
 - `listTranscriptionProviders(ctx)` → `{ providers: [{ id, typeId, label, description?,
   defaultModelId, hidden? }] }` — instances whose adapter supports transcription. Unlike the chat
   `listProviders`, `metadata.hidden` instances are **included** (dedicated transcription providers

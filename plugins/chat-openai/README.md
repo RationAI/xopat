@@ -97,7 +97,31 @@ specific one:
 tie-break (it grants nothing — capability and access checks are unchanged).
 
 Whisper hints (`language`, `prompt`) are forwarded via providerOptions
-under the `openai` namespace. A dedicated transcription-only deployment
+under the `openai` namespace. The `prompt` — the vocabulary bias the chat
+composer assembles from its glossary and the report plugin's terms — is
+**dropped unless the provider allows it**:
+
+````json
+"providerDefaults": {
+  "defaultTranscriptionModelId": "gpt-4o-mini-transcribe",
+  "transcriptionDefault": true,
+  "transcriptionPromptMaxChars": 1000
+}
+````
+
+`transcriptionPromptMaxChars` defaults to 0 (ceiling 1000) because a
+self-hosted whisper-large-v3 dropped audio in proportion to prompt length
+(`modules/speech-to-text/README.md`, prompt-length table); OpenAI's
+`gpt-4o-transcribe` family documents `prompt` as the intended channel. It
+is deliberately **not** a `configSchema` field — panel/RPC config writes are
+intersected with the schema and outrank `fixedConfig`, so listing it would
+let a caller raise its own cap. The client has a matching gate,
+`speech-to-text.promptMaxChars` (also default 0); both must open. Use the
+bare model ids: the pinned `@ai-sdk/openai` sends `response_format: json`
+only for exactly `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`, and a dated
+snapshot id gets `verbose_json`, which those models reject once a hint is
+present. `env/parts/voice/openai-4o-transcribe.json` is the working
+composition. A dedicated transcription-only deployment
 can set `providerDefaults.hidden: true` — the provider stays out of the
 chat picker but remains resolvable for transcription (it is still listed
 by the chat SDK's `listTranscriptionProviders` RPC, flagged `hidden`, and

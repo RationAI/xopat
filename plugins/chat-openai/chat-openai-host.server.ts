@@ -230,6 +230,12 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
     // (`vercel` driver in auto mode). It only wins the tie-break — the real gates
     // stay adapter capability and getProviderRuntime. Deployer-only, like `hidden`.
     const transcriptionDefault = pick(defaults.transcriptionDefault, false) === true;
+    // Biasing-prompt allowance for transcription. 0 (default) drops the prompt server-side.
+    // Deployer-only and deliberately NOT in `configSchema`: schema keys are what an RPC
+    // caller may write into `configOverrides`, which outrank `fixedConfig` — listing it
+    // would let a client draft raise its own cap. The ceiling is enforced again where it
+    // is read (`promptCapFor`, vercel-ai-chat-sdk/shared/transcriptionPrompt.ts).
+    const transcriptionPromptMaxChars = Math.max(0, Math.floor(Number(pick(defaults.transcriptionPromptMaxChars, 0)) || 0));
     const providerMetadata: Record<string, unknown> = {
         ...(hidden ? { hidden: true } : {}),
         ...(transcriptionDefault ? { role: "transcription-default" } : {}),
@@ -248,6 +254,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
             modelsPath,
             defaultModelId,
             defaultTranscriptionModelId,
+            transcriptionPromptMaxChars,
         },
         fixedSecrets: {
             apiKey,
