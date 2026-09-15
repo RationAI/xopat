@@ -460,7 +460,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
 
     core.VERSION = CORE["version"] || defaults.version || "dev";
-    core["version"] = CORE.VERSION;
+    // The browser reads the version off the SERVED env (`APPLICATION_CONTEXT.env.version`,
+    // i.e. this `CORE` object): the deployment-key fingerprint, the `engines.xopat` gate
+    // and the settings header all do. `config.json` ships `version: null` as an "inherit
+    // from package.json" sentinel, so the resolved value has to be written back here or
+    // `env.version` is `undefined` client-side and every one of those degrades silently.
+    CORE["version"] = core.VERSION;
+    core["version"] = core.VERSION;
     core.GATEWAY = CORE["gateway"];
     core.CORE = CORE;
     core.ENV = ENV;

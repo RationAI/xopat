@@ -32,7 +32,7 @@ const c = {
  * else is attached. Dimensions not listed here are asked afterwards, so a new
  * one still gets a question.
  */
-const DIMENSION_ORDER = ["data", "transport", "auth", "roles", "chat", "io", "storage", "logging"];
+const DIMENSION_ORDER = ["data", "transport", "auth", "roles", "chat", "voice", "io", "storage", "logging"];
 
 const LABEL = {
     data: "Where do slides come from?",
@@ -40,6 +40,7 @@ const LABEL = {
     auth: "How do users log in?",
     roles: "Role-based capability gating?",
     chat: "Which assistant?",
+    voice: "Dictation (speech-to-text)?",
     io: "Where does saved state go?",
     storage: "Server-side persistence?",
     logging: "Session logging?",

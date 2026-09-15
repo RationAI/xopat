@@ -30,9 +30,14 @@ module.exports = function (grunt, message) {
     grunt.registerTask('html', 'Compile Static Server (HTML viewer).', function() {
 
         grunt.log.writeln('Parsing core configuration...');
+        // Same version default the Node server passes (server/node/index.js
+        // readStartupVersion): package.json is the single source of truth and
+        // config.json ships `version: null` as the inherit sentinel. Without it the
+        // whole static build reported "dev" and stamped every asset `?v=dev`.
+        const pkg = JSON.parse(grunt.file.read("package.json"));
         const core = getCore("", PROJECT_PATH, grunt.file.isFile, grunt.file.read, key => {
             return process.env[key];
-        });
+        }, true, { version: pkg.version || "dev" });
         throwIfError(core, "Failed to parse the CORE inicialization!");
 
         core.CORE.server.name = "static";

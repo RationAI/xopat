@@ -258,6 +258,10 @@ if (empty($__version)) {
     $__pkg = @json_decode(@file_get_contents(ABSPATH . 'package.json'), true);
     $__version = (is_array($__pkg) && !empty($__pkg['version'])) ? $__pkg['version'] : 'dev';
 }
+// Written back onto $CORE: it is served to the browser as `APPLICATION_CONTEXT.env`,
+// and the deployment-key fingerprint, the `engines.xopat` gate and the settings header
+// all read `env.version` from there.
+$CORE["version"] = $__version;
 define('VERSION', $__version);
 define('GATEWAY', $CORE["gateway"]);
 
