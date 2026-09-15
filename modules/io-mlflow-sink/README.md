@@ -211,6 +211,13 @@ names and `artifactPathPrefix` bounds artifact paths (which land in an upload
 URL). Leaving `experimentAllow` unset logs a one-time warning — allow-all may be
 deliberate, but it should never be invisible.
 
+**Write `artifactPathPrefix` without a trailing slash.** The comparison is
+against `sanitizeArtifactPath(prefix)`, which rewrites the empty segment a
+trailing slash produces into `_`: `"xopat/"` becomes `"xopat/_"` and then denies
+`xopat/anything.json` — every path the `bundle-artifact` template emits. Use
+`"xopat"`. A denial is reported as `W_MLFLOW_ARTIFACT_DENIED`, so this fails
+loudly rather than silently, but it fails on a value that looks correct.
+
 Placeholders for `experimentTemplate` / `runTemplate` (resolved by
 `IO_PIPELINE.formatPath`, shared with every other sink): `{ownerId}`
 `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` `{capabilityGroup}`

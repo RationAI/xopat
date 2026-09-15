@@ -226,6 +226,58 @@ test("the image-proxy preset reaches the upstream only through the alias @unit",
     expect(env.plugins["rationai-wsi-file-browser"].proxy).toBe("image-server");
 });
 
+test("the mlflow presets shape each capability per binding, not per sink @unit", () => {
+    // Both presets bind ONE `mlflow` sink. What differs is the per-binding
+    // `config.template`, because the templates are not interchangeable: the
+    // `slide-scoring` mapper reads a numeric `value` off a single record, so
+    // handing it a whole bundle makes it decline cleanly and write NOTHING.
+    // That silent no-op is what these vectors exist to prevent coming back.
+    const bundleArtifact = (binding) => {
+        expect(binding).toHaveLength(1);
+        expect(binding[0].sink).toBe("mlflow");
+        expect(binding[0].config.template).toBe("bundle-artifact");
+    };
+
+    for (const preset of ["mlflow", "mlflow-annotations"]) {
+        const { env } = composeEnv([preset], {});
+        const io = env.core.client.localhost.io;
+        // The metric path stays on the default template — a bare sink id.
+        expect(io.bindings["slide-scoring"]["crud:score"], preset).toEqual(["mlflow"]);
+        bundleArtifact(io.bindings["slide-scoring"]["bundle-export"]);
+        bundleArtifact(io.bindings["slide-scoring"]["bundle-import"]);
+
+        // `bundle-artifact` refuses with W_MLFLOW_NO_ARTIFACTS unless the
+        // adapter is configured, so binding it without this is a dead binding.
+        const sink = env.modules["io-mlflow-sink"].mlflow;
+        expect(sink.artifacts.type, preset).toBe("mlflow-artifacts");
+        // Artifacts must ride the same alias — the browser never reaches the
+        // tracking server directly.
+        expect(sink.artifacts.proxy ?? sink.proxy, preset).toBe("mlflow");
+        expect(io.sinkOverrides.mlflow.experimentAllow, preset).toEqual(["xopat-*"]);
+    }
+
+    // Only the annotations preset adds the second owner.
+    expect(composeEnv(["mlflow"], {}).env
+        .core.client.localhost.io.bindings.annotations).toBeUndefined();
+    const annotations = composeEnv(["mlflow-annotations"], {}).env;
+    bundleArtifact(annotations.core.client.localhost.io.bindings.annotations["bundle-export"]);
+    bundleArtifact(annotations.core.client.localhost.io.bindings.annotations["bundle-import"]);
+    expect(annotations.modules.annotations.enabled).toBe(true);
+    expect(annotations.plugins.gui_annotations.enabled).toBe(true);
+});
+
+test("artifactPathPrefix admits the paths the bundle template emits @unit", () => {
+    // The prefix is compared against `sanitizeArtifactPath(prefix)`, which turns
+    // the empty segment a trailing slash produces into `_`. So "xopat/" becomes
+    // "xopat/_" and denies every path `bundle-artifact` writes — a value that
+    // looks right and refuses everything. Pin the working spelling.
+    const { env } = composeEnv(["mlflow"], {});
+    const prefix = env.modules["io-mlflow-sink"].mlflow.artifactPathPrefix;
+    expect(prefix).toBe("xopat");
+    expect(prefix.endsWith("/")).toBe(false);
+    expect(`${prefix}/vosd0_0.json`.startsWith(prefix)).toBe(true);
+});
+
 test("storage-persistent enables the module whose namespaces it binds @unit", () => {
     // `storage/persistent-30d` binds and retains `vercel-ai-chat-sdk` namespaces
     // only, so composing it with `chat/off` configured durability for a disabled

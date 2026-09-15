@@ -253,11 +253,11 @@
     },
 
     "keycloak-oidc": {
-      "description": "Local Keycloak login over OIDC, three roles, OpenAI chat on the viewer's own identity",
+      "description": "Local Keycloak login over OIDC, three roles, OpenAI chat on the viewer's own identity, gpt-4o dictation",
       "layers": [
         "base/core", "data/wsi-service",
         "auth/keycloak-oidc", "roles/guest-pathologist-researcher",
-        "chat/openai-server-key", "storage/tiered-sessions"
+        "chat/openai-server-key", "voice/openai-4o-transcribe", "storage/tiered-sessions"
       ],
       "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" },
       "override": {

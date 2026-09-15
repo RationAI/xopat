@@ -65,7 +65,27 @@ class MlFlowClient {
             baseURL: artifacts.baseURL,
             auth: artifacts.auth ?? auth,
             ...http,
-        }));
+        }), (run_id) => this._runArtifactRoot(run_id));
+    }
+
+    /**
+     * A run's artifact root, as the artifacts REST service addresses it.
+     *
+     * The tracking API is the only thing that knows it (`runs/get` →
+     * `info.artifact_uri`), and the artifacts API has no `run_id` concept at
+     * all, so the two have to be bridged here rather than inside an adapter
+     * that holds no tracking client.
+     *
+     * Memoized per client: a run's artifact root never moves, and a bundle
+     * export uploading several files would otherwise re-fetch the run each time.
+     */
+    async _runArtifactRoot(run_id) {
+        this._artifactRoots ??= new Map();
+        if (this._artifactRoots.has(run_id)) return this._artifactRoots.get(run_id);
+        const res = await this.runs.get(run_id);
+        const root = ArtifactAdapters.artifactRootFromUri(res?.run?.info?.artifact_uri);
+        this._artifactRoots.set(run_id, root);
+        return root;
     }
 
     /** Convenience to end a run */

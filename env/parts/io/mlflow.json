@@ -113,8 +113,13 @@
         /* Bounds every mapper-emitted artifact path. The shipped bundle-artifact
            template writes `xopat/…`; a mapper registered at runtime cannot
            escape the prefix (W_MLFLOW_ARTIFACT_DENIED). Trusted config —
-           keep it set for the same reason as experimentAllow. */
-        "artifactPathPrefix": "xopat/",
+           keep it set for the same reason as experimentAllow.
+
+           NO TRAILING SLASH. The check compares against
+           `sanitizeArtifactPath(prefix)`, which rewrites the empty segment a
+           trailing slash produces into `_` — so "xopat/" becomes "xopat/_" and
+           denies every path the template actually emits. */
+        "artifactPathPrefix": "xopat",
         "auth": null
       }
     },

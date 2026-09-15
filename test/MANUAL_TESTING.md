@@ -335,6 +335,25 @@ npm run up:dev -- mlflow
 
 Verify: a score submitted from the viewer appears as an MLflow run.
 
+The scoring control is **not** a menu entry. `slide-scoring` renders a floating
+button bar — one per viewer cell, bottom-centre, one button per
+`scoreSchema.labels` key (`negative` / `uncertain` / `positive`). If no bar is
+visible the plugin did not mount; that is the failure, not a missing menu.
+
+### `mlflow-annotations` — scores *and* annotation bundles to the same server
+
+Same server, same setup as `mlflow`.
+
+```bash
+npm run up:dev -- mlflow-annotations
+```
+
+Verify: scoring still behaves as above, **and** an annotation export lands as a
+run artifact under `xopat/`. The point of the preset is that both travel one
+sink instance and one proxy alias — only the per-binding `template` differs
+(`slide-scoring` for the metric, `bundle-artifact` for the bundle). A second
+sink id would defeat the test.
+
 ---
 
 ## Tier 3 — container plus an identity provider

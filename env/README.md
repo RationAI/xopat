@@ -80,7 +80,7 @@ origin belongs to `core.server.secure.proxies.<alias>.baseUrl`. Leaving both set
 composes `/proxy/image-server/http://localhost:9002/v3/…`, which is what shipped
 before the check existed.
 
-Fragments also declare a **dimension** — `data`, `auth`, `chat`, `io`,
+Fragments also declare a **dimension** — `data`, `auth`, `chat`, `voice`, `io`,
 `storage`, … — and two fragments in one dimension conflict even when their keys
 never overlap, because two data sources or two auth brokers is a
 misconfiguration however it is spelled.
