@@ -65,7 +65,10 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
     return {
         id: options.id ?? inner.id,
         label: inner.label,
-        supports: inner.supports.slice(),
+        // `supports` is either the legacy kind array or the full
+        // `IOSinkSupport` descriptor — clone whichever the inner sink used so
+        // the wrapper inherits its owner/capability/resource restrictions.
+        supports: Array.isArray(inner.supports) ? inner.supports.slice() : { ...inner.supports },
         accepts: inner.accepts ? inner.accepts.bind(inner) : undefined,
 
         writeBundle: wrapMethod(inner.writeBundle?.bind(inner)),

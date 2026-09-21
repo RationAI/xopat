@@ -4,6 +4,7 @@ sidebar_label: Developer Setup
 ---
 
 import DemoFrame from '@site/src/components/DemoFrame';
+import {devSetupSessions, AVAILABLE_DATA} from '@site/src/data/devSetupSessions';
 
 # Developer Setup Playground
 
@@ -14,9 +15,71 @@ is the live `/dev_setup` endpoint of the demo deployment.
 
 <DemoFrame path="dev_setup" height="80vh" />
 
-:::tip
-The configs on the [Summer School Demos](./summer-school-demo) page are exactly
-the kind of session JSON this form produces — expand **View session
-configuration** under each demo there to see a ready-made example you can paste
-in here.
+:::tip Start from a working example
+The `/dev_setup` editor opens on a bare template with placeholder data
+(`"data-to-fetch-1"`) — that will **not** load anything on its own. Pick one of
+the ready-made sessions below instead: hit **Open the demo in a new tab** to
+launch it, or expand **View session configuration** and paste the JSON into the
+editor above, then press **Ready!**.
 :::
+
+## Data available on this demo
+
+A session only loads if its `data` entries exist on the server it points at.
+The public demo deployment serves just the summer-school sample set below — the
+examples on this page reference only these. Point a session at anything else and
+it will 404 here (a real deployment exposes its own slide catalogue).
+
+<div className="overflow-x-auto">
+  <table>
+    <thead>
+      <tr><th><code>dataID</code></th><th>What it is</th></tr>
+    </thead>
+    <tbody>
+      {AVAILABLE_DATA.map((d) => (
+        <tr key={d.dataID}>
+          <td><code>{d.dataID}</code></td>
+          <td>{d.role}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+## Ready-made example sessions
+
+Each card launches a real viewer with the JSON shown beneath it. They start
+minimal and add one concept at a time — background only, a single overlay, a
+signed (bipolar) map, a colormap, stacked layers, a multi-channel TIFF, and
+switchable visualizations. Copy any of them into the editor above as a starting
+point.
+
+<div className="alert alert--info" role="alert">
+The examples keep the full viewer UI so you can explore the Layers panel,
+navigator, and toolbar. In your own sessions, trim the chrome via
+<code>params.ui</code> — see the <strong>Core <code>params</code>
+Configuration</strong> table rendered inside the <code>/dev_setup</code> page
+above.
+</div>
+
+{devSetupSessions.map((s) => (
+  <div key={s.key}>
+    <h3 id={s.key}>{s.title}</h3>
+    <p>{s.blurb}</p>
+    <DemoFrame config={s.config} height="480px" scale={0.75} />
+  </div>
+))}
+
+:::note The `options` block is server-specific
+In the multi-channel example, `options` is **not** a generic xOpat field — it is
+forwarded verbatim to the server's tile-source integration. The
+`{ "format", "channels", "plugin" }` shape is what the **wsi-service** backend
+expects. Other image servers may auto-detect channels and need no `options`, or
+recognise a different schema — always check the integration API of the server
+you point xOpat at.
+:::
+
+For heavier, tutorial-guided configurations built on the same data, see the
+[Summer School Demos](./summer-school-demo) page. For a session that enables the
+AI assistant in bring-your-own-key mode, see the
+[BYOK AI Chat Demo](./byok-chat-demo).

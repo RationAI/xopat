@@ -1,0 +1,86 @@
+{
+    "name": "Tutorial App 13 v3",
+    "name_short": "TA13v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_13.v3.0",
+    "io": {
+        "input_wsi": {
+            "type": "wsi"
+        },
+        "particles": {
+            "type": "collection",
+            "items": {
+                "type": "polygon",
+                "reference": "io.input_wsi",
+                "classes": [
+                    "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.tissue"
+                ]
+            }
+        },
+        "particle_classes": {
+            "type": "collection",
+            "items": {
+                "type": "class",
+                "reference": "io.particles.items"
+            }
+        },
+        "number_of_tissue_particles": {
+            "type": "integer",
+            "reference": "io.input_wsi"
+        },
+        "tissue_ratio": {
+            "type": "float",
+            "reference": "io.input_wsi"
+        },
+        "tissue_nuclei_map": {
+            "type": "nominal_pixelmap",
+            "reference": "io.input_wsi",
+            "channel_classes": [
+                "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.tissue",
+                "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.cell_nuclei"
+            ],
+            "element_classes": [
+                "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.background",
+                "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.tissue",
+                "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.cell_nuclei"
+            ]
+        }
+    },
+    "modes": {
+        "preprocessing": {
+            "inputs": [
+                "input_wsi"
+            ],
+            "outputs": [
+                "particles",
+                "particle_classes",
+                "number_of_tissue_particles",
+                "tissue_ratio",
+                "tissue_nuclei_map"
+            ]
+        }
+    },
+    "rendering": {
+        "annotations": [
+            {
+                "class_value": "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.tissue",
+                "color": "#00FF00",
+                "color_hover": "#64FF64",
+                "color_selection": "#C8FFC8"
+            }
+        ],
+        "nominal_pixelmaps": [
+            {
+                "class_value": "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.tissue",
+                "color": "#00FF00",
+                "color_hover": "#64FF64",
+                "color_selection": "#C8FFC8"
+            },
+            {
+                "class_value": "org.empaia.vendor_name.tutorial_app_13.v3.0.classes.cell_nuclei",
+                "color": "#FFFF00",
+                "color_hover": "#FFFF64",
+                "color_selection": "#FFFFC8"
+            }
+        ]
+    }
+}

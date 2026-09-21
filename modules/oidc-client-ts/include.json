@@ -2,11 +2,11 @@
     "id": "oidc-client-ts",
     "name": "OIDC Client for JavaScript",
     "description": "Library to provide OpenID Connect (OIDC) and OAuth2 protocol support for client-side, browser-based JavaScript client applications. Also included is support for user session and access token management.",
-    "version": "2.4.0",
+    "version": "2.5.0",
     "includes" : [
         "oidc-client-ts.js",
-        "oidc-auth.js"
+        "oidc-auth.js",
+        "auth-broker.js"
     ],
-    "requires": ["jwt-decode"],
-    "permaLoad": false
+    "requires": ["jwt-decode"]
 }

@@ -33,10 +33,38 @@ const linkMap = buildLinkMap();
 
 // Known include.json keys; everything else is component-specific configuration.
 const KNOWN_KEYS = new Set([
-  'id', 'name', 'description', 'author', 'version', 'icon', 'includes',
+  'id', 'name', 'description', 'longDescription', 'author', 'version', 'icon', 'includes',
   'modules', 'requires', 'permaLoad', 'enabled', 'hidden', 'requiredConfig',
-  'capabilities', 'io', 'sessionCompatible',
+  'capabilities', 'io', 'sessionCompatible', 'stability', 'categories', 'keywords',
+  'homepage', 'repository', 'bugs', 'docsUrl', 'license', 'engines',
 ]);
+
+// Metadata that may be a "%key%" reference into the component's own locale bundle.
+const LOCALIZABLE_KEYS = ['name', 'description', 'longDescription'];
+
+/**
+ * Resolve "%key%" metadata against the component's English locale bundle — the
+ * same source the viewer reads at runtime, English being the i18next fallback
+ * language. An unresolvable reference is left as-is so it shows up as a defect.
+ */
+function localizeMeta(meta, kind, dir) {
+  if (!LOCALIZABLE_KEYS.some((k) => typeof meta[k] === 'string' && meta[k].startsWith('%'))) return;
+
+  let bundle = {};
+  try {
+    bundle = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, kind, dir, 'locales', 'en.json'), 'utf8'));
+  } catch {
+    console.warn(`[catalogue] ${kind}/${dir} uses %key% metadata but has no readable locales/en.json`);
+    return;
+  }
+  for (const key of LOCALIZABLE_KEYS) {
+    const value = meta[key];
+    if (typeof value !== 'string' || !value.startsWith('%') || !value.endsWith('%')) continue;
+    const resolved = value.slice(1, -1).split('.').reduce((node, part) => node?.[part], bundle);
+    if (typeof resolved === 'string') meta[key] = resolved;
+    else console.warn(`[catalogue] ${kind}/${dir}: ${value} missing from locales/en.json`);
+  }
+}
 
 /** @returns {{dir:string, meta:any, readme:string|null}[]} */
 function scan(kind) {
@@ -71,6 +99,7 @@ function scan(kind) {
     }
     meta.id = meta.id || dir;
     meta.name = meta.name || dir;
+    localizeMeta(meta, kind, dir);
     const readmePath = path.join(REPO_ROOT, kind, dir, 'README.md');
     components.push({
       dir,
@@ -104,8 +133,25 @@ function badges(c) {
   if (c.meta.permaLoad) b('primary', 'always loaded');
   if (c.meta.hidden) b('secondary', 'hidden');
   if (c.meta.enabled === false) b('warning', 'disabled by default');
-  if (/experimental/i.test(c.dir) || /experimental/i.test(c.meta.id)) b('danger', 'experimental');
+  if (c.meta.stability === 'experimental') b('danger', 'experimental');
+  if (c.meta.stability === 'deprecated') b('danger', 'deprecated');
   return out.join(' ');
+}
+
+/**
+ * Renders a declared URL as a markdown link, or nothing when it is not an
+ * absolute http(s) address — the same rule the viewer applies before rendering
+ * these links.
+ */
+function externalUrl(value) {
+  if (typeof value !== 'string' || !value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    return `[${url.host}${url.pathname === '/' ? '' : url.pathname}](${url.href})`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Renders a dependency id as a link to its module page when it exists locally. */
@@ -126,13 +172,26 @@ function componentPage(kind, c, position) {
   const badgeRow = badges(c);
   if (badgeRow) lines.push(badgeRow, '');
   if (c.meta.description) lines.push(String(c.meta.description), '');
+  if (c.meta.longDescription) lines.push(String(c.meta.longDescription), '');
 
   lines.push('| | |', '|---|---|');
   lines.push(`| ID | \`${c.meta.id}\` |`);
   if (c.meta.version) lines.push(`| Version | ${tableCell(c.meta.version)} |`);
   if (c.meta.author) lines.push(`| Author | ${tableCell(c.meta.author)} |`);
+  if (c.meta.categories?.length) lines.push(`| Categories | ${tableCell(c.meta.categories.join(', '))} |`);
+  if (c.meta.license) lines.push(`| License | ${tableCell(c.meta.license)} |`);
+  if (c.meta.engines?.xopat) lines.push(`| Requires xOpat | \`${c.meta.engines.xopat}\` |`);
+  for (const [key, label] of [['homepage', 'Homepage'], ['repository', 'Repository'],
+    ['bugs', 'Issues'], ['docsUrl', 'Documentation']]) {
+    const url = externalUrl(c.meta[key]);
+    if (url) lines.push(`| ${label} | ${url} |`);
+  }
   lines.push(`| Source | [\`${kind}/${c.dir}\`](${GITHUB_TREE}${kind}/${c.dir}) |`);
   lines.push('');
+
+  if (c.meta.keywords?.length) {
+    lines.push(`**Keywords:** ${c.meta.keywords.map((k) => `\`${k}\``).join(' · ')}`, '');
+  }
 
   const deps = kind === 'plugins' ? c.meta.modules : c.meta.requires;
   if (deps?.length) {
@@ -214,17 +273,31 @@ function indexPage(kind, components) {
   const lines = [
     `xOpat ships with the following ${kind}. Pages are generated from each component's \`include.json\`; availability in a concrete deployment depends on the server configuration.`,
     '',
-    `| ${label} | ID | Version | Description | |`,
-    '|---|---|---|---|---|',
   ];
+
+  // Group by the declared primary category; anything undeclared lands in a
+  // trailing bucket, so adding `categories` to a component is what moves it.
+  const groups = new Map();
   for (const c of components) {
-    lines.push(
-      `| [${tableCell(c.meta.name || c.meta.id)}](catalogue/${c.dir}.md) ` +
-      `| \`${c.meta.id}\` ` +
-      `| ${tableCell(c.meta.version || '—')} ` +
-      `| ${tableCell(c.meta.description || '—')} ` +
-      `| ${badges(c)} |`
-    );
+    const category = c.meta.categories?.[0] || 'Uncategorized';
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(c);
+  }
+  const ordered = [...groups.entries()].sort((a, b) =>
+    a[0] === 'Uncategorized' ? 1 : b[0] === 'Uncategorized' ? -1 : a[0].localeCompare(b[0]));
+
+  for (const [category, group] of ordered) {
+    lines.push(`## ${category}`, '', `| ${label} | ID | Version | Description | |`, '|---|---|---|---|---|');
+    for (const c of group) {
+      lines.push(
+        `| [${tableCell(c.meta.name || c.meta.id)}](catalogue/${c.dir}.md) ` +
+        `| \`${c.meta.id}\` ` +
+        `| ${tableCell(c.meta.version || '—')} ` +
+        `| ${tableCell(c.meta.description || '—')} ` +
+        `| ${badges(c)} |`
+      );
+    }
+    lines.push('');
   }
   return withFrontmatter(lines.join('\n') + '\n', {
     title: `${label} Catalogue`,

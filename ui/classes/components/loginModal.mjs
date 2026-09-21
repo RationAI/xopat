@@ -33,7 +33,13 @@ export class LoginModal extends BaseComponent {
             ...options.labels,
         };
 
-        this._modeState = van.state(options.mode === LoginModal.MODE.SIGNUP ? LoginModal.MODE.SIGNUP : LoginModal.MODE.LOGIN);
+        // Sign-up is meaningless for auth methods that only ever verify existing
+        // credentials (HTTP Basic, LDAP, a corporate directory). Hide the tab strip
+        // rather than rendering a tab that cannot do anything.
+        this.showSignup = options.showSignup !== false;
+
+        this._modeState = van.state(options.mode === LoginModal.MODE.SIGNUP && this.showSignup
+            ? LoginModal.MODE.SIGNUP : LoginModal.MODE.LOGIN);
         this._submitLabelState = van.state(this.labels.submit);
         this._errorState = van.state("");
         this._created = false;
@@ -98,6 +104,9 @@ export class LoginModal extends BaseComponent {
     }
 
     _buildHeader() {
+        if (!this.showSignup) {
+            return div({ class: "text-xl font-light text-primary pb-2" }, this.labels.login);
+        }
         const tabClass = (mode) => van.derive(
             () => `tab tab-bordered text-xl font-light ${this._modeState.val === mode ? "tab-active text-primary" : "opacity-50"}`,
         );

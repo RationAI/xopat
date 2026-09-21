@@ -12,7 +12,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^2.0.35",
-    "ai": "^6.0.116"
+    "@ai-sdk/provider": "^4.0.7",
+    "ai": "^7.0.66"
   }
 }

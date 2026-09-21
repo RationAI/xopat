@@ -17,6 +17,7 @@ const PROJECT_PATH = "";
 
 const {getCore} = require("../templates/javascript/core");
 const {loadPlugins} = require("../templates/javascript/plugins");
+const {jsonForScript} = require("../node/utils");
 
 module.exports = function (grunt, message) {
     function throwIfError(core) {
@@ -29,9 +30,14 @@ module.exports = function (grunt, message) {
     grunt.registerTask('html', 'Compile Static Server (HTML viewer).', function() {
 
         grunt.log.writeln('Parsing core configuration...');
+        // Same version default the Node server passes (server/node/index.js
+        // readStartupVersion): package.json is the single source of truth and
+        // config.json ships `version: null` as the inherit sentinel. Without it the
+        // whole static build reported "dev" and stamped every asset `?v=dev`.
+        const pkg = JSON.parse(grunt.file.read("package.json"));
         const core = getCore("", PROJECT_PATH, grunt.file.isFile, grunt.file.read, key => {
             return process.env[key];
-        });
+        }, true, { version: pkg.version || "dev" });
         throwIfError(core, "Failed to parse the CORE inicialization!");
 
         core.CORE.server.name = "static";
@@ -52,29 +58,34 @@ module.exports = function (grunt, message) {
 ${core.requireCore("env")}
 ${core.requireLibs()}
 ${core.requireOpenseadragon()}
-${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}`;
 
                 case "app":
                     grunt.log.write(' app');
+                    // EVERY value below goes through `jsonForScript`, not bare
+                    // JSON.stringify / quoted interpolation: `JSON.stringify`
+                    // does not escape `<`, so any string containing `</script>`
+                    // (an include.json field, a locale entry, a folder name)
+                    // closes the tag and the rest is parsed as HTML. Same
+                    // invariant as the Node renderer — see AGENTS.md §7.
                     return `
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
     initXOpat(
-        ${JSON.stringify(core.PLUGINS)},
-        ${JSON.stringify(core.MODULES)},
-        ${JSON.stringify(core.CORE)},
+        ${jsonForScript(core.PLUGINS)},
+        ${jsonForScript(core.MODULES)},
+        ${jsonForScript(core.CORE)},
         {},
-        '${core.PLUGINS_FOLDER}',
-        '${core.MODULES_FOLDER}',
-        '${core.VERSION}',
+        ${jsonForScript(core.PLUGINS_FOLDER)},
+        ${jsonForScript(core.MODULES_FOLDER)},
+        ${jsonForScript(core.VERSION)},
         //i18next init config
         {
             resources: {
-                [lang] : ${grunt.file.read("src/locales/en.json")}
+                [lang] : ${jsonForScript(JSON.parse(grunt.file.read("src/locales/en.json")))}
             },
             lng: lang,
         }
@@ -83,11 +94,15 @@ ${core.requireCore("app")}`;
 
                 case "modules":
                     grunt.log.write(' modules');
-                    return core.requireModules();
+                    // Honor production so static exports get one min file per
+                    // item too. requireCore/requireUI read production internally.
+                    // NOTE: run `grunt minify` before the static build so the
+                    // min artifacts exist; missing ones degrade to raw per-file.
+                    return core.requireModules(core.CORE?.client?.production);
 
                 case "plugins":
                     grunt.log.write(' plugins');
-                    return core.requirePlugins();
+                    return core.requirePlugins(core.CORE?.client?.production);
 
                 default:
                     grunt.log.write(` [unknown template key ${p1}]`);

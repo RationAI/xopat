@@ -231,8 +231,10 @@ export const ioMethods = {
 
     setExportScope(scope) {
         this.exportOptions.scope = scope === 'selected' ? 'selected' : 'all';
-        $('#export-scope-all-radio').prop('checked', this.exportOptions.scope === 'all');
-        $('#export-scope-selected-radio').prop('checked', this.exportOptions.scope === 'selected');
+        const allRadio = document.getElementById('export-scope-all-radio');
+        if (allRadio) allRadio.checked = this.exportOptions.scope === 'all';
+        const selectedRadio = document.getElementById('export-scope-selected-radio');
+        if (selectedRadio) selectedRadio.checked = this.exportOptions.scope === 'selected';
     },
 
     RightSideMenuVisibleControls() {

@@ -3,7 +3,7 @@
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 # Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
-FROM node:20 AS viewer-git
+FROM node:24 AS viewer-git
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -50,8 +50,29 @@ USER root
 
 COPY --chown=node:node . /app
 
+# `--chown` sets ownership but not mode; a Windows/OneDrive build context arrives
+# with directories at 0555, so the build below cannot write its own artifacts
+# (`Unable to write "modules/annotations/index.min.js" (Error code: EACCES)`).
+RUN chmod -R u+rwX /app
+
 USER node
 
-RUN npm ci && npm run build
+# `ci` (default): reproducible and lockfile-strict
+# `install`: runs a fresh install
+ARG NPM_INSTALL_MODE=ci
 
-ENTRYPOINT ["/usr/bin/tini", "--", "npm", "run", "s-node"]
+# `minify` is a superset of `build` (workspaceBuild + buildUI + buildCore) plus
+# prepMinify + uglify + bundleModules, so the image ships the production min
+# artifacts (index.min.js / index.min.mjs / index.workspace.min.js /
+# src/dist/xopat-core.min.js / ui/index.min.js). They are only *served* when the
+# deployment sets client.production: true, so this is safe for dev images too.
+RUN npm "$NPM_INSTALL_MODE" && npm run minify
+
+# Setting XOPAT_WORKERS selects the cluster supervisor; unset stays single-process.
+#
+# `exec node ...` rather than `npm run ...`: npm sits between tini and node as an
+# extra process that does not forward SIGTERM reliably, which would defeat the
+# graceful drain (in-flight NDJSON streams, pending session write-backs). With
+# exec, tini's direct child IS node and the signal lands where the handler is.
+ENTRYPOINT ["/usr/bin/tini", "--", "sh", "-c", \
+    "if [ -n \"$XOPAT_WORKERS\" ]; then exec node server/node/cluster-index.js \"$@\"; else exec node index.js \"$@\"; fi", "--"]

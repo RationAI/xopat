@@ -36,8 +36,8 @@ export const MANIFEST = [
   {src: 'docs/web/deployment.md', dest: 'generated/deployment/overview.md', title: 'Deployment Overview', label: 'Overview'},
   {src: 'docs/web/image_server_deployment.md', dest: 'generated/deployment/image-server.md', title: 'Image Server Deployment'},
   {src: 'docs/web/xopat_deployment.md', dest: 'generated/deployment/xopat-deployment.md', title: 'xOpat Deployment'},
-  {src: 'docs/web/jupyter_deployment.md', dest: 'generated/deployment/jupyter.md', title: 'Jupyter Integration'},
-  {src: 'docs/web/collab_notebook_deployment.md', dest: 'generated/deployment/collab-notebook.md', title: 'Collaboratory Notebook Integration', label: 'Collaboratory Notebook'},
+  {src: 'docs/web/jupyter_deployment.md', dest: 'generated/deployment/jupyter.md', title: 'Run from a Notebook (Jupyter)', label: 'Notebook / Jupyter'},
+  {src: 'docs/web/collab_notebook_deployment.md', dest: 'generated/deployment/collab-notebook.md', title: 'Google Colab', label: 'Google Colab'},
   {src: 'docs/web/generic_deployment.md', dest: 'generated/deployment/generic.md', title: 'Generic Deployment'},
   {src: 'INTEGRATION.md', dest: 'generated/deployment/integration.md', title: 'Administration & Integration', label: 'Administration & Integration'},
 
@@ -54,6 +54,7 @@ export const MANIFEST = [
   {src: 'src/STORAGE.md', dest: 'generated/developer-guides/storage.md', title: 'Storage'},
   {src: 'src/HTTP_CLIENT.md', dest: 'generated/developer-guides/http-client.md', title: 'HTTP Client'},
   {src: 'src/MULTI_VIEWPORTS.md', dest: 'generated/developer-guides/multi-viewports.md', title: 'Multi-Viewports'},
+  {src: 'src/ZSTACK.md', dest: 'generated/developer-guides/zstack.md', title: 'Z-Stack (Focal Planes)'},
   {src: 'src/SCRIPTING.md', dest: 'generated/developer-guides/scripting.md', title: 'Scripting'},
   {src: 'src/TUTORIALS.md', dest: 'generated/developer-guides/tutorials.md', title: 'Tutorials API'},
   {src: 'src/USER_ROLES.md', dest: 'generated/developer-guides/user-roles.md', title: 'Users, Roles & Capabilities'},

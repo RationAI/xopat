@@ -1,0 +1,101 @@
+{
+    "meta": {
+        "name": "EMPAIA Workbench Client",
+        "description": "Runs xOpat as an EMPAIA Workbench v3 vendor app UI: reads the scope, token and backend URL from the workbench client, opens the examination's slides, syncs annotations with the workbench data API, and drives app jobs."
+    },
+    "error": {
+        "notEmbedded": "The EMPAIA Workbench client is not available: this viewer is not embedded in a workbench.",
+        "notV3App": "This app does not provide an EMPAIA App Description v3 (no 'io'/'modes' block). Only workbench v3 apps are supported.",
+        "noSession": "The EMPAIA workbench session is not ready yet.",
+        "handshakeTimeout": "The EMPAIA Workbench client did not send a scope, token and backend URL in time.",
+        "tokenUnrecoverable": "The EMPAIA Workbench stopped issuing access tokens for this app, so this session can no longer reach the workbench. Close the app and open it again from the Workbench to continue.",
+        "batchNotReady": "There is no staged run for this slide.",
+        "modeNotRunnable": "This analysis cannot be started from here."
+    },
+    "io": {
+        "notReady": "The EMPAIA workbench session is not ready — changes were not sent.",
+        "createFailed": "Could not save the annotation to the EMPAIA workbench.",
+        "updateFailed": "Could not update the annotation in the EMPAIA workbench.",
+        "deleteFailed": "Could not delete the annotation from the EMPAIA workbench.",
+        "readFailed": "Could not load annotations from the EMPAIA workbench.",
+        "bundleFailed": "Could not upload annotations to the EMPAIA workbench.",
+        "badBundle": "The annotation payload could not be read.",
+        "unrepresentable": "A \"{{type}}\" annotation has no EMPAIA equivalent and cannot be stored in this examination.",
+        "unrepresentableLocal": "\"{{type}}\" annotations have no EMPAIA equivalent: they stay in this browser only and are lost on reload.",
+        "storageWriteFailed": "Could not save data to the EMPAIA app storage.",
+        "storageReadFailed": "Could not load data from the EMPAIA app storage."
+    },
+    "roi": {
+        "presetName": "Region of interest",
+        "presetNameApp": "{{app}} ROI"
+    },
+    "presets": {
+        "classMetaName": "EMPAIA class",
+        "outputNameApp": "{{app}} {{output}}",
+        "outputName": "{{output}}",
+        "outputNameAppGeneric": "{{app}} results",
+        "outputNameGeneric": "Analysis results"
+    },
+    "overlay": {
+        "pixelmap": "Pixel map",
+        "visualizationName": "EMPAIA results"
+    },
+    "slideInfo": {
+        "title": "EMPAIA slide",
+        "unavailable": "Slide unavailable",
+        "dimensions": "Dimensions",
+        "tileSize": "Tile size",
+        "levels": "Pyramid levels",
+        "pixelSize": "Pixel size",
+        "slideId": "Slide ID",
+        "format": "Format",
+        "channels": "Channels",
+        "bitDepth": "Bit depth",
+        "focalPlanes": "Focal planes"
+    },
+    "pixelmapInfo": {
+        "title": "Pixel map",
+        "type": "Type",
+        "elementType": "Element type",
+        "channels": "Channels",
+        "tileSize": "Tile size",
+        "valueRange": "Value range"
+    },
+    "ead": {
+        "blocked": {
+            "noApp": "The app description has not been read yet.",
+            "platformRun": "Preprocessing analyses are started by the platform when the examination opens — their results are shown here, but there is nothing to start.",
+            "nonContainerized": "This app performs this step inside its own interface, so it cannot be started from this viewer.",
+            "wsiCollection": "This app analyses several slides in one run, which this viewer cannot do.",
+            "nestedRoiCollection": "This app groups its regions of interest into nested collections, which this viewer cannot build.",
+            "roiShape": "This app asks for a region shape this viewer cannot draw ({{type}}).",
+            "inputType": "This app needs a \"{{type}}\" input ({{key}}) that this viewer cannot supply.",
+            "unreadableInput": "The app declares an input ({{key}}) this viewer cannot read.",
+            "noWsi": "This app declares no slide input for this step.",
+            "singleAndMulti": "This app mixes single region inputs with region collection inputs.",
+            "sameInputTypes": "This app declares several inputs of the same region type.",
+            "noSourceJob": "This step is built on an earlier analysis, and none has finished on this slide yet.",
+            "noSourceJobPlatform": "This step is built on the results of the {{mode}} analysis, which the workbench starts by itself when the examination opens. None has run on this slide yet.",
+            "noSourceJobRun": "Run the {{mode}} analysis on this slide first — this step is built on its results.",
+            "sourceJobPending": "The {{mode}} analysis this step is built on is {{status}}. This step can be started once it has finished.",
+            "sourceJobFailed": "The {{mode}} analysis this step is built on {{status}}, so there are no results to build on. Open the analyses window for its messages."
+        },
+        "mode": {
+            "standalone": "standalone",
+            "preprocessing": "preprocessing",
+            "postprocessing": "postprocessing"
+        },
+        "status": {
+            "NONE": "not started",
+            "ASSEMBLY": "being assembled",
+            "READY": "ready to start",
+            "SCHEDULED": "scheduled",
+            "RUNNING": "still running",
+            "COMPLETED": "completed",
+            "FAILED": "failed",
+            "TIMEOUT": "timed out",
+            "ERROR": "ended in an error",
+            "INCOMPLETE": "ended incomplete"
+        }
+    }
+}

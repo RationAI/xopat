@@ -68,10 +68,53 @@
         return count / n;
     }
 
+    /**
+     * Otsu's method: the threshold in [0,255] that maximizes between-class
+     * variance of the intensity distribution — i.e. the natural signal/
+     * background split for THIS region. Removes the need for a hand-tuned
+     * fixed threshold that never fits arbitrary stains / colormaps.
+     * Returns NaN when the values are empty or single-valued (no split).
+     *
+     * Returns the FIRST FOREGROUND level, not the last background one. The
+     * search accumulates level `t` into the background class before scoring it,
+     * so the maximizing `t` belongs to the background; every consumer here tests
+     * `value >= threshold`, so returning `t` counted the whole background class
+     * as signal. On a clean bimodal region that is literally 100% positive — and
+     * the connected-component mask (measurement-engine `computeComponents`)
+     * labelled background blobs too. `t + 1` makes `>=` mean foreground, and
+     * keeps one convention for auto and hand-set thresholds alike.
+     */
+    function otsuThreshold(values) {
+        const n = values.length;
+        if (!n) return NaN;
+        const hist = new Float64Array(256);
+        for (let i = 0; i < n; i++) {
+            let v = values[i] | 0;
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            hist[v]++;
+        }
+        let total = n, sum = 0;
+        for (let t = 0; t < 256; t++) sum += t * hist[t];
+        let sumB = 0, wB = 0, maxVar = -1, threshold = NaN;
+        for (let t = 0; t < 256; t++) {
+            wB += hist[t];
+            if (wB === 0) continue;
+            const wF = total - wB;
+            if (wF === 0) break;
+            sumB += t * hist[t];
+            const mB = sumB / wB;
+            const mF = (sum - sumB) / wF;
+            const between = wB * wF * (mB - mF) * (mB - mF);
+            if (between > maxVar) { maxVar = between; threshold = t; }
+        }
+        return Number.isFinite(threshold) ? threshold + 1 : NaN;
+    }
+
     NS.stats = {
         mean: meanOf,
         median: medianOf,
         histogram,
         percentPositive,
+        otsuThreshold,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

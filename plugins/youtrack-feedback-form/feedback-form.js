@@ -5,25 +5,40 @@ addPlugin(
       super(id);
       this.url = this.getStaticMeta("youtrackURL");
       this.formUUID = this.getStaticMeta("formUUID");
-      this.includeTrace = true;
+      // Optional SRI hash for the YouTrack form bundle (AGENTS.md §7: no
+      // third-party script without integrity or a hard allowlist). Left unset
+      // by deployments that track upstream's rolling bundle; when set, a
+      // tampered bundle is refused by the browser.
+      this.scriptIntegrity = this.getStaticMeta("youtrackScriptIntegrity");
+      // The app trace can carry slide ids, user actions and error payloads, and
+      // it leaves the deployment inside a third-party ticket. Attaching it is
+      // therefore opt-IN: the user ticks the box when the log is relevant.
+      this.includeTrace = false;
 
       this.observer = null;
     }
 
-    pluginReady() {
+    async pluginReady() {
+      await this.loadLocale();
       try {
-        attachScript(
-          this.id,
-          {
-            src:
-              this.url +
-              (this.url.endsWith("/") ? "" : "/") +
-              "static/simplified/form/form-entry.js?auto=false",
-          },
-          () => {
-            this.loadForm();
-          }
-        );
+        // Only https: the bundle executes with full page privileges, so a
+        // plaintext origin is an injection point on any hostile network.
+        if (!/^https:\/\//i.test(this.url || "")) {
+          console.warn(this.id, ": youtrackURL must be an https:// origin; refusing to load the form script.");
+          this.loadForm();
+          return;
+        }
+        const props = {
+          src:
+            this.url +
+            (this.url.endsWith("/") ? "" : "/") +
+            "static/simplified/form/form-entry.js?auto=false",
+          crossOrigin: "anonymous",
+        };
+        if (this.scriptIntegrity) props.integrity = this.scriptIntegrity;
+        attachScript(this.id, props, () => {
+          this.loadForm();
+        });
       } catch (e) {
         console.warn(this.id, ": failed to load youtrack form script!");
         this.loadForm();
@@ -35,42 +50,40 @@ addPlugin(
         UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
-          "Feedback Form",
+          this.t("menu.title"),
           `
 <div id="youtrack-rationai-feedback"></div>`,
-          "feedback"
+          "ph-megaphone"
         );
-        YTFeedbackForm.renderInline(
-          document.getElementById("youtrack-rationai-feedback"),
-          {
-            backendURL: this.url,
-            formUUID: this.formUUID,
-            //theme: APPLICATION_CONTEXT.getOption('theme'),
-            language: APPLICATION_CONTEXT.getOption("locale"),
-          }
-        );
-        // hide 'Plugins' title
-        const pluginsButton = document.getElementById("add-plugins");
-        pluginsButton.children[1].style.display = "none";
+        const container = document.getElementById("youtrack-rationai-feedback");
+        if (!container) {
+          console.warn(this.id, ": feedback menu body not mounted, form not rendered.");
+          return;
+        }
+        YTFeedbackForm.renderInline(container, {
+          backendURL: this.url,
+          formUUID: this.formUUID,
+          //theme: APPLICATION_CONTEXT.getOption('theme'),
+          language: APPLICATION_CONTEXT.getOption("locale"),
+        });
 
-        //todo a bit hacky, we should ensure each plugin does not damage dom by this procedure, e.g. it is reversible, we use ${pluginId}-plugin-root which gets trimmed
-        const formNode =
-          $(`<span id="add-plugins" class="btn-pointer py-2 pr-1 ${this.id}-plugin-root" onclick="UI.Services.FullscreenMenus.openMenu('${this.id}');" data-i18n="[title]main.bar.explainPlugins">
-                <span class="material-icons pr-0" style="font-size: 22px;">feedback</span>
-                <span class="pl-1">Feedback</span>
-            </span>`);
+        // The menu is reachable from the Plugins fullscreen namespace already
+        // (setMenu registers it). Expose it additionally as a pinnable quick
+        // action instead of rewriting core app-bar DOM: the old code replaced
+        // the v2 `#add-plugins` button, an element the v3 app bar no longer
+        // renders, so it threw and aborted the rest of this method.
+        USER_INTERFACE.AppBar?.Actions?.register(`${this.id}.open`, {
+          label: this.t("menu.title"),
+          icon: "ph-megaphone",
+          invoke: () => UI.Services.FullscreenMenus.openSubmenu(this.id, "youtrack-feedback"),
+        });
 
-        pluginsButton.parentNode.insertBefore(formNode[0], pluginsButton);
-
-        const nextPos = pluginsButton.nextSibling.nextSibling;
-        pluginsButton.parentNode.insertBefore(nextPos, pluginsButton);
         this.modifyForm();
 
         if (this.observer) {
           this.observer.disconnect();
         }
 
-        const container = document.getElementById("youtrack-rationai-feedback");
         this.observer = new MutationObserver((mutationsList, observer) => {
           for (const mutation of mutationsList) {
             if (mutation.type === "childList" || mutation.type === "subtree") {
@@ -84,16 +97,20 @@ addPlugin(
         });
         this.observer.observe(container, { childList: true, subtree: true });
       } else {
+        const unavailable = document.createElement("div");
+        const heading = document.createElement("h2");
+        heading.textContent = this.t("menu.title");
+        const text = document.createElement("p");
+        text.textContent = this.t("menu.unavailable");
+        unavailable.appendChild(heading);
+        unavailable.appendChild(text);
+
         UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
-          "Feedback Form",
-          `
-<h2>Feedback Form</h2>
-The feedback form does not work for domains that are not configured in the YouTrack.
-An authorized person needs to enable the form for this domain.
-`,
-          "feedback"
+          this.t("menu.title"),
+          unavailable,
+          "ph-megaphone"
         );
       }
     }
@@ -115,6 +132,7 @@ An authorized person needs to enable the form for this domain.
     modifyForm() {
       YTFeedbackForm.getClientJSApi(this.formUUID).then((form) => {
         const container = document.getElementById("youtrack-rationai-feedback");
+        if (!container) return;
 
         if (container.dataset.modified) {
           console.warn(
@@ -150,7 +168,7 @@ An authorized person needs to enable the form for this domain.
     injectHTMLOptions() {
       const form = document
         .getElementById("youtrack-rationai-feedback")
-        .querySelector("form");
+        ?.querySelector("form");
       if (!form) {
         console.warn("Feedback form element not found");
         return;
@@ -181,7 +199,7 @@ An authorized person needs to enable the form for this domain.
         });
 
         const labelText = document.createElement("span");
-        labelText.textContent = "Attach app logs to the feedback form";
+        labelText.textContent = this.t("form.attachLogs");
 
         label.appendChild(checkbox);
         label.appendChild(labelText);

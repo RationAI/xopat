@@ -2,34 +2,36 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 
-const { div } = van.tags;
+const { div, details, summary } = van.tags;
 
 /**
  * Collapse
  *
+ * Rendered as a native `<details>`/`<summary>` (DaisyUI `details.collapse`) so it
+ * toggles on click with zero JS and survives being re-serialized through
+ * `innerHTML` (the menu-pages `renderUIFromJson` path). The older `<div tabindex>`
+ * focus-method was unreliable — it needs the element to hold focus and auto-closed
+ * on blur.
+ *
  * options:
- *  - title: string | Node | (children[0] can override)
- *  - open: boolean (default false)   // initial state (checkbox/radio checked)
+ *  - title | label: string | Node    // summary text (children[0] can override)
+ *  - open | startOpen: boolean (default false)   // initial expanded state
  *  - icon: "arrow" | "plus" | "none" (default "arrow")
- *  - accordionName: string | null    // when set, uses <input type="radio" name=...> (accordion)
  *  - extraClasses: { base?, title?, content? }   // class overrides
- *  - on: { toggle?: (open:boolean)=>void }       // callback on open/close
  *
  * children:
- *  - [0]: custom title node (optional)
- *  - [1..n]: custom content nodes (optional, overrides `content`)
+ *  - [1..n]: content nodes
  */
 export class Collapse extends BaseComponent {
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
 
-        this._open = !!options.open;
+        // Accept both the canonical (title/open) and the legacy guess-builder
+        // (label/startOpen) option names.
+        this._open = !!(options.open ?? options.startOpen);
         this._icon = options.icon ?? "arrow";        // "arrow" | "plus" | "none"
+        this._title = options.title ?? options.label ?? null;
 
-        // content sources
-        this._title = options.title ?? null;
-
-        // class maps
         // daisyUI base tokens; you can override via extraClasses
         this.classMap.base = "collapse bg-base-200";
         if (this._icon === "arrow") this.setClass("style", "collapse-arrow");
@@ -37,11 +39,12 @@ export class Collapse extends BaseComponent {
     }
 
     create() {
-        // Title & content
-        const titleEl = div({ class: "collapse-title text-sm font-medium" }, this._title || "Details");
+        const summaryEl = summary({ class: "collapse-title text-sm font-medium" }, this._title || "Details");
         const contentEl = div({ class: "collapse-content text-sm" }, ...this.children);
 
-        return div({ ...this.commonProperties, ...this.extraProperties, tabindex: "0" }, titleEl, contentEl);
+        const props = { ...this.commonProperties, ...this.extraProperties };
+        if (this._open) props.open = true;
+        return details(props, summaryEl, contentEl);
     }
 }
 

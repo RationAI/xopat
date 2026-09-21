@@ -14,21 +14,11 @@ function server_forwarded($key, $fallback = null) {
     return $_SERVER[$k] ?? $fallback;
 }
 
-function detect_public_scheme() {
-    // honor X-Forwarded-Proto when present
-    $xfp = server_forwarded('X-Forwarded-Proto');
-    if ($xfp) return strtolower(explode(',', $xfp)[0]) . '://';
-    if (
-        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
-        (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
-    ) return 'https://';
-    return 'http://';
-}
-
-function detect_public_host() {
-    // prefer X-Forwarded-Host, fallback to Host
-    return server_forwarded('X-Forwarded-Host', $_SERVER['HTTP_HOST'] ?? 'localhost');
-}
+// There is deliberately no `detect_public_scheme()` / `detect_public_host()`.
+// The viewer domain is trusted config (it is the root of every derived URL,
+// including the proxy base), and `Host` / `X-Forwarded-Host` / `X-Forwarded-Proto`
+// are request input. An unset `core.client.<active>.domain` resolves to the
+// `__ORIGIN__` sentinel instead — see the domain block further down.
 
 function detect_public_basepath() {
     // 1) explicit header from ingress (recommended)
@@ -253,7 +243,26 @@ if (!$client || !isset($CORE["client"][$client])) {
 }
 $CORE["client"] = $C;
 
-define('VERSION', $CORE["version"]);
+// Coerce the production flag to a real boolean at the client-flatten boundary,
+// so every downstream check is correct even if it arrived as a string (e.g.
+// "false" from an env var, which is truthy under !empty()).
+if (is_array($CORE["client"])) {
+    $CORE["client"]["production"] = filter_var($CORE["client"]["production"] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
+// Version source of truth is package.json (same as the Node server, see
+// server/node/index.js readStartupVersion). config.json `version` stays null so
+// there is a single place to bump; fall back to package.json when it is unset.
+$__version = $CORE["version"] ?? null;
+if (empty($__version)) {
+    $__pkg = @json_decode(@file_get_contents(ABSPATH . 'package.json'), true);
+    $__version = (is_array($__pkg) && !empty($__pkg['version'])) ? $__pkg['version'] : 'dev';
+}
+// Written back onto $CORE: it is served to the browser as `APPLICATION_CONTEXT.env`,
+// and the deployment-key fingerprint, the `engines.xopat` gate and the settings header
+// all read `env.version` from there.
+$CORE["version"] = $__version;
+define('VERSION', $__version);
 define('GATEWAY', $CORE["gateway"]);
 
 /*
@@ -264,23 +273,40 @@ if ($C["path"] == null) {
     $CORE["client"]["path"] = PROJECT_ROOT;
 }
 if ($C["domain"] == null) {
-    //https://stackoverflow.com/questions/4503135/php-get-site-url-protocol-http-vs-https
-    if (isset($_SERVER['HTTPS']) &&
-        ($_SERVER['HTTPS'] == 'on' || $_SERVER['HTTPS'] == 1) ||
-        isset($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
-        $_SERVER['HTTP_X_FORWARDED_PROTO'] == 'https') {
-        $protocol = 'https://';
-    }
-    else {
-        $protocol = 'http://';
-    }
-    $protocol = detect_public_scheme();
-    $host     = detect_public_host();
-    $basePath = detect_public_basepath();
+    // Defer the domain to the browser instead of deriving it from the request.
+    //
+    // `domain` is the root of every derived URL — `APPLICATION_CONTEXT.url` and
+    // with it the `/proxy/<alias>` base — so it is trusted config. Building it
+    // from `X-Forwarded-Host` / `Host` let the *request* write a trusted value:
+    // a `Host: evil.example` request (or a cached response for one) pointed a
+    // subsequent viewer's derived URLs at an attacker-chosen origin. Those
+    // headers are attacker-settable unless an ingress rewrites them, and there
+    // is no way here to tell whether one did. (AGENTS.md §7)
+    //
+    // `__ORIGIN__` is the documented deferred-resolution sentinel: `src/app.ts`
+    // replaces it with `window.location.origin` at boot. For a legitimate
+    // request that is the same value the header path produced, and it cannot be
+    // poisoned or cached across origins. The Node renderer refuses a missing
+    // domain outright (`server/templates/javascript/core.js`); deferring is the
+    // same refusal to guess, with a working default.
+    $CORE["client"]["domain"]  = "__ORIGIN__";
+    // Path prefix only — no host in it, so the ingress hint is harmless here.
+    // `baseURL` is deliberately not set: it cannot be assembled without a host,
+    // and nothing in the client reads it (`APPLICATION_CONTEXT.url` is built
+    // from `domain` + `path`).
+    $CORE["client"]["basePath"] = detect_public_basepath();
+}
 
-    $CORE["client"]["domain"]  = $protocol . $host;
-    $CORE["client"]["basePath"] = $basePath;
-    $CORE["client"]["baseURL"]  = $protocol . $host . $basePath;
+// An explicitly configured domain must carry a protocol: the domain is the root
+// of every derived URL, and a scheme-less value yields silently relative ones —
+// the deployment then presents as unexplained request failures rather than a
+// configuration error. "__ORIGIN__" is the documented deferred-resolution
+// sentinel (see src/app.ts), so it stays legal. Mirrors the Node core template.
+$__domain = $CORE["client"]["domain"] ?? null;
+if (is_string($__domain) && trim($__domain) !== "" && $__domain !== "__ORIGIN__"
+    && !preg_match('#^[a-z][a-z0-9.+-]*://#i', $__domain)) {
+    trigger_error("Viewer domain \"$__domain\" has no protocol: use e.g. \"https://host/\", "
+        . "or \"__ORIGIN__\" to resolve it from the browser at boot.", E_USER_WARNING);
 }
 
 if (isset($CORE["server"]["secure"])) {
@@ -288,6 +314,17 @@ if (isset($CORE["server"]["secure"])) {
     // that gets json_encoded into the HTML template.
     $GLOBALS['CORE_SECURE'] = $CORE["server"]["secure"];
     unset($CORE["server"]["secure"]);
+}
+
+// `server.auth` is ALSO a secret-read path, and stripping only `server.secure`
+// left it shipping to the browser: the JWT verifier falls back to
+// `server.auth.jwt` (inc/auth.php), which accepts a literal `secret` — so an
+// operator who configured it there, as the schema allows, was publishing an
+// HMAC signing key in the page source. Mirror of the Node strip in
+// server/templates/javascript/core.js.
+if (isset($CORE["server"]["auth"])) {
+    $GLOBALS['CORE_AUTH'] = $CORE["server"]["auth"];
+    unset($CORE["server"]["auth"]);
 }
 
 // Author-tier server-only config: populated by plugins.php / modules.php
@@ -349,6 +386,35 @@ function require_openseadragon() {
     echo "    <script src=\"{$CORE["openSeadragonPrefix"]}{$CORE["openSeadragon"]}?v=$version\"></script>\n";
 }
 
+// Render the <title> + favicon <link>s from ENV core.setup.branding
+// (operator-controlled = trusted, per AGENTS.md §7). Values are HTML-escaped
+// via htmlspecialchars so a stray quote/angle bracket in config cannot break
+// the head or inject markup. Unset keys fall back to the stock xOpat assets,
+// so existing deployments render identically without config. Mirrors
+// requireBrandingHead() in server/templates/javascript/core.js.
+function require_branding_head() {
+    global $CORE;
+    $b = (isset($CORE["setup"]["branding"]) && is_array($CORE["setup"]["branding"]))
+        ? $CORE["setup"]["branding"] : [];
+    $val = function($key, $dflt) use ($b) {
+        return (isset($b[$key]) && $b[$key] !== "") ? $b[$key] : $dflt;
+    };
+    $esc = function($s) { return htmlspecialchars((string)$s, ENT_QUOTES); };
+
+    $title = $esc($val("title", "Visualization"));
+    $apple = $esc($val("appleTouchIcon", "src/assets/apple-touch-icon.png"));
+    $icon32 = $esc($val("icon32", "src/assets/favicon-32x32.png"));
+    $icon16 = $esc($val("icon16", "src/assets/favicon-16x16.png"));
+    $mask = $esc($val("maskIcon", "src/assets/safari-pinned-tab.svg"));
+    $maskColor = $esc($val("maskIconColor", "#5bbad5"));
+
+    echo "    <title>$title</title>\n";
+    echo "    <link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"$apple\">\n";
+    echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"$icon32\">\n";
+    echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"$icon16\">\n";
+    echo "    <link rel=\"mask-icon\" href=\"$mask\" color=\"$maskColor\">\n";
+}
+
 function require_lib($name) {
     global $CORE;
     if (isset($CORE["css"]["libs"][$name])) print_css_single($CORE["css"]["libs"][$name], LIBS_ROOT);
@@ -361,23 +427,132 @@ function require_libs() {
     print_js($CORE["js"]["libs"], LIBS_ROOT);
 }
 
-function require_external() {
+/**
+ * Robust truthiness for the `production` client flag. Uses
+ * FILTER_VALIDATE_BOOLEAN so a string "false" / "0" / "" (e.g. injected from an
+ * environment variable) is correctly treated as false — unlike `!empty()`, for
+ * which any non-empty string (including "false") is truthy. Mirrors parseBool()
+ * in the Node core template.
+ */
+function xopat_is_production(): bool {
     global $CORE;
-    print_css($CORE["css"]["external"], EXTERNAL_SOURCES);
-    print_js($CORE["js"]["external"], EXTERNAL_SOURCES);
+    if (!is_array($CORE) || !isset($CORE["client"]) || !is_array($CORE["client"])) return false;
+    return filter_var($CORE["client"]["production"] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
+/**
+ * Exact mirror of parseBool() in the Node core template: `true`/`false` for a
+ * boolean, for the strings "true"/"false" (case-insensitive), and for a number
+ * by its truthiness; NULL ("undecidable") for anything else.
+ *
+ * The element loaders must not use PHP's loose `!=` on the raw value: `"false"`
+ * is a non-empty string and therefore truthy, so an `enabled: "false"` block
+ * kept a plugin in PHP while dropping it in Node. server/README.md requires the
+ * emitted PLUGINS keys to agree byte-for-byte between backends.
+ */
+function xopat_parse_bool($x) {
+    if (is_bool($x)) return $x;
+    if (is_string($x)) {
+        $l = strtolower($x);
+        if ($l === "false") return false;
+        if ($l === "true") return true;
+        return null;
+    }
+    if (is_int($x) || is_float($x)) return (bool)$x;
+    return null;
+}
+
+/**
+ * Is a built bundle at least as new as everything it was built from?
+ *
+ * Mirrors isBundleFresh in the Node template. Selection used to be "the artifact
+ * exists", and only the production build ever regenerates these — so a source
+ * edit left a stale bundle in place and production silently served the OLD code,
+ * with nothing in the page or the logs to say so. A stale bundle is skipped,
+ * falling back to the raw per-file includes.
+ */
+function xopat_bundle_is_fresh(string $artifact, array $sources, string $item): bool {
+    $built_at = @filemtime($artifact);
+    if ($built_at === false) return false;
+
+    $source_at = 0;
+    foreach ($sources as $source) {
+        $t = @filemtime($source);
+        if ($t !== false && $t > $source_at) $source_at = $t;
+    }
+    // No readable source: nothing to compare against, so trust the artifact.
+    if ($source_at === 0 || $built_at >= $source_at) return true;
+
+    trigger_error("[build] '$item': " . basename($artifact) . " is older than its sources ("
+        . "built " . gmdate('c', $built_at) . ", newest source " . gmdate('c', $source_at) . "). "
+        . "Serving the raw includes instead — run `npm run build` to refresh it.", E_USER_WARNING);
+    return false;
+}
+
+/**
+ * Freshness for the core bundle. Compared against the per-file `src/dist/*.js`
+ * outputs the dev watcher maintains — artifact against artifact, because they are
+ * the honest reference and a source-tree walk on every render would cost more
+ * than it catches.
+ */
+function xopat_core_bundle_is_fresh(): bool {
+    $dist = VIEWER_SOURCES_ABS_ROOT . "dist/";
+    $sources = [];
+    foreach (glob($dist . "*.js") ?: [] as $file) {
+        if (str_ends_with($file, ".min.js")) continue;
+        $sources[] = $file;
+    }
+    return xopat_bundle_is_fresh($dist . "xopat-core.min.js", $sources, "src/dist");
+}
+
+/** Freshness for the UI bundle, against the esbuild output the watcher rebuilds. */
+function xopat_ui_bundle_is_fresh(): bool {
+    return xopat_bundle_is_fresh(ABSPATH . "ui/index.min.js", [ABSPATH . "ui/index.js"], "ui");
 }
 
 function require_core($type) {
     global $CORE;
+    static $bundleEmitted = false;
+
+    // In production, serve the whole core JS (loader + deps + app groups) as one
+    // minified bundle (src/dist/xopat-core.min.js), emitted once on the first
+    // core JS group requested; per-group CSS is preserved and `env` goes
+    // per-file. Falls back to per-file dev serving when the bundle isn't built.
+    $production = xopat_is_production();
+    if ($production && in_array($type, ["loader", "deps", "app"], true)
+        && file_exists(VIEWER_SOURCES_ABS_ROOT . "dist/xopat-core.min.js")
+        && xopat_core_bundle_is_fresh()) {
+        if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
+        if (!$bundleEmitted) {
+            $bundleEmitted = true;
+            $version = VERSION;
+            echo "    <script src=\"" . PROJECT_SOURCES . "dist/xopat-core.min.js?v=$version\"></script>\n";
+        }
+        return;
+    }
+
     if (isset($CORE["css"]["src"][$type])) print_css_single($CORE["css"]["src"][$type], PROJECT_SOURCES);
     if (isset($CORE["js"]["src"][$type])) print_js_single($CORE["js"]["src"][$type], PROJECT_SOURCES);
 }
 
 function require_ui() {
     global $CORE;
+    // In production, serve the prebuilt single UI bundle (ui/index.min.js),
+    // preserving any UI CSS. Falls back to the ESM index.js otherwise.
+    if (xopat_is_production() && file_exists(ABSPATH . "ui/index.min.js")
+        && xopat_ui_bundle_is_fresh()) {
+        if (isset($CORE["css"]["ui"])) print_css($CORE["css"]["ui"], UI_SOURCES);
+        $version = VERSION;
+        echo "    <script src=\"" . UI_SOURCES . "index.min.js?v=$version\"></script>\n";
+        return;
+    }
     print_js($CORE["js"]["ui"], UI_SOURCES);
 }
 
 if ($parse_exception !== null) {
     throw new Exception("Unable to parse ENV configuration file: is it a valid JSON?");
 }
+
+// CORE now exists, so the config-dependent half of the header policy can be
+// emitted (frame-ancestors / CSP / HSTS / CORP). See inc/init.php.
+xo_apply_configured_security_headers();

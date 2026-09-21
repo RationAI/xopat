@@ -1,0 +1,21 @@
+{
+  "$meta": {
+    "description": "secureMode — refuse remote tile sources, scripting and other dangerous-by-default paths"
+  },
+  /**
+   * Deliberately minimal, and it must stay that way: a test asserting on
+   * secure-mode behaviour has to differ from the baseline deployment in this
+   * one respect, or a failure cannot be attributed to it.
+   *
+   * `secureMode` cannot be set from a session bundle or URL params — that is
+   * the point of it (AGENTS.md §7) — so composing it here is the only way to
+   * reach the mode at all.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "secureMode": true
+      }
+    }
+  }
+}

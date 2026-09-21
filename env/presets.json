@@ -1,0 +1,413 @@
+{
+  /**
+   * Named deployments, each an ordered list of layers from `env/parts/`.
+   *
+   * A preset is not a shortcut for a file — it is the *statement* of a
+   * deployment: what data, which login, which assistant, where state lives.
+   * Anything a preset needs that is not in the ENV file (a value the server
+   * reads before any config exists) goes in its `env` block; anything that is
+   * one-off and does not deserve a fragment goes in `override`, which is
+   * exempt from conflict detection because it is the deliberate last word.
+   *
+   *   npm run up -- <name>              run it
+   *   npm run up:check -- <name>        what it needs, what collides
+   *   npm run up -- <name> flags/secure-mode   layer more on top
+   */
+  "presets": {
+    "default": {
+      "description": "The shipped standalone deployment: wsi-service on localhost, no login",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off"]
+    },
+
+    "synthetic": {
+      /**
+       * The only deployment with NO external dependency at all — no image
+       * server, no container, no downloaded slide, no key. Generate the pyramid
+       * once and run it:
+       *
+       *     npm run fixtures:synthetic
+       *     npm run up:dev -- synthetic
+       *     open http://localhost:9000/?slides=synthetic.dzi
+       *
+       * Reach for it first when something is broken and you need to know
+       * whether it is the viewer or the data. It is also the deployment the
+       * `synthetic` and `errors` Playwright projects run against, via
+       * `test/env/synthetic.json` — same layers, one definition.
+       */
+      "description": "Generated DeepZoom pyramid served by the viewer itself — zero external dependencies",
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off"]
+    },
+
+    "webtiff": {
+      /**
+       * Raw TIFF off a static file server, decoded in the browser by `webtiff`.
+       * This is the deployment behind most of `test/fixtures/sessions/`.
+       *
+       *     npm run fixtures:fetch     # once
+       *     npm run up:dev -- webtiff
+       *     npm run fixtures:urls -- --deployment webtiff   # or read the startup banner
+       *
+       * No second file server: the fragment opts `test/fixtures/data` into
+       * `core.server.media`, so the viewer serves the slides itself with
+       * `Range` support. `npm run fixtures:serve` is only for data outside the
+       * repository, which a media root may not reach.
+       */
+      "description": "Static-file TIFF decoded by the webtiff module — the session fixture library's deployment",
+      "layers": ["base/core", "data/tiff-webtiff", "auth/none", "chat/off"]
+    },
+
+    "geotiff": {
+      /* The other decoder, same data. Worth running when a TIFF renders wrong
+         under one of them: whether `geotiff` agrees is the first bisection. */
+      "description": "The same static-file TIFF, decoded by the geotiff module instead",
+      "layers": ["base/core", "data/tiff-geotiff", "auth/none", "chat/off"]
+    },
+
+    "dicom-idc": {
+      "description": "Public NCI Imaging Data Commons DICOMweb — needs no credentials at all",
+      "layers": ["base/core", "data/dicomweb-idc", "auth/none", "chat/off"]
+    },
+
+    "dicom-idc-chat": {
+      "description": "IDC DICOM with the Anthropic assistant and persistent transcripts",
+      /* Deliberately NOT `extends: "dicom-idc"`: that preset answers the chat
+         question with `chat/off`, and two fragments in the `chat` dimension is
+         a conflict, not an override. Restate the layers instead. */
+      "layers": [
+        "base/core", "data/dicomweb-idc", "auth/none",
+        "chat/anthropic-server-key", "chat/medgemma-vision", "storage/tiered-sessions"
+      ],
+      "env": {
+        /* MedGemma defaults to a loopback endpoint, and the SSRF guard refuses
+           private upstreams unless the operator allowlists them. */
+        "XOPAT_SSRF_ALLOWED_HOSTS": "localhost"
+      }
+    },
+
+    "dicom-regress": {
+      /**
+       * One deployment for the DICOM WSI regression slides; WHICH slide is a
+       * link, not a preset.
+       *
+       * A slide used to be four near-identical presets differing only in
+       * `plugins.dicom-browser.studyUID` — which is the pile this file exists to
+       * avoid. The session travels in the URL hash instead
+       * (`parse-input.js` parses `#<json>` locally, so refresh and share stay
+       * stable, unlike `?visualization=` which self-POSTs and drops out of the
+       * address bar). The four links, and what each one stresses, are in
+       * `plugins/dicom/README.md` § "Regression slides".
+       *
+       * Note `?slides=` does NOT work here: it builds string data IDs, and the
+       * `dicom` protocol strictly requires `{studyUID, seriesUID}`. The hash
+       * carries the DataOverride shape the plugin itself emits.
+       *
+       * `studyUID: null` because the deployment must open nothing on its own —
+       * otherwise the boot default races the link.
+       *
+       * These prove the DENSE path did not regress. IDC holds no sparse and no
+       * concatenated level: the whole corpus was swept
+       * (`plugins/dicom/tools/find-idc-sparse.mjs` — 391,932 instances, 76,299
+       * series, 73 collections, end of collection reached), and every level is
+       * TILED_FULL with frames exactly covering its grid.
+       */
+      "description": "IDC DICOM with no boot slide — open the regression slides by link (plugins/dicom/README.md)",
+      "layers": ["base/core", "data/dicomweb-idc", "auth/none", "chat/off"],
+      "override": {
+        /* Its own boot state, since it differs from `dicom-idc` only in
+           per-element config, which the derived cache key does not fingerprint
+           (env/README.md § Deployment cache key). */
+        "core": { "client": { "localhost": { "cacheKey": "dicom-regress" } } },
+        "plugins": { "dicom-browser": { "studyUID": null, "seriesUID": null } }
+      }
+    },
+
+    "annotations-lab": {
+      /**
+       * The deployment for annotations + annotation-measurements +
+       * pathology-foundation, which in practice are one feature: draw a
+       * region, measure what is under it, bound the sample by a tissue mask.
+       *
+       *     npm run fixtures:fetch              # once
+       *     npm run up:dev -- annotations-lab
+       *
+       * `data/tiff-webtiff` rather than `synthetic`: the tissue detector and
+       * the measurement sampler both need real stained tissue, and a generated
+       * pyramid has none — a tissue mask over it is uniformly everything or
+       * uniformly nothing, which proves the plumbing and nothing else. The
+       * fixture slide is a real H&E, its sessions declare `microns`, and the
+       * viewer serves it itself over `core.server.media`.
+       *
+       * Nothing external: the built-in tissue detector needs no key, no model
+       * and no network. Add `annotations-lab-vision` for the `analyze` feature.
+       */
+      "description": "Annotations, measurements and pathology over a real H&E slide — quick-draw keys bound, no external service",
+      "layers": [
+        "base/core", "data/tiff-webtiff", "demo/annotations-pathology",
+        "auth/none", "chat/off"
+      ],
+      "override": {
+        "core": { "client": { "localhost": {
+          /* Differs from a plain `webtiff` deployment only in per-element
+             config, which the derived deployment key does not fingerprint — so
+             without an explicit key the two share boot caches and a session
+             captured under one replays under the other. Same reasoning as
+             `dicom-regress` and `viz-flex-demo`. */
+          "cacheKey": "annotations-lab"
+        }}}
+      }
+    },
+
+    "annotations-lab-vision": {
+      /**
+       * The same lab with the `analyze` feature: `chat/medgemma-vision`
+       * registers the MedGemma driver on `pathology-foundation`, so
+       * `pathology.analyzeRegion(...)` and the chat agent's vision step work
+       * against a region instead of only the local tissue/cellularity priors.
+       *
+       * Not `extends: "annotations-lab"`: that preset answers the chat
+       * dimension with `chat/off`, which also disables `vercel-ai-chat-sdk` —
+       * the module MedGemma's driver goes through. Two fragments in the chat
+       * dimension is a conflict, not an override, so the layers are restated
+       * with a real provider, exactly as `dicom-idc-chat` does. The layer
+       * shape is `roles-dev-vision` minus the roles.
+       *
+       * Needs more than the base lab: a CERIT key for the agent
+       * (`CERIT_BASE_URL` defaults to the public endpoint) and a MedGemma
+       * endpoint (`MEDGEMMA_BASE_URL`, default loopback Ollama). MedGemma's
+       * `runVisionInference` also requires a logged-in session — under
+       * `auth/none` the analyze call is refused upstream, which is a correct
+       * refusal and not a broken deployment. Compose an `auth/*` fragment over
+       * this when testing that path.
+       */
+      "description": "The annotations lab plus the MedGemma vision driver — adds the `analyze` pathology feature",
+      "layers": [
+        "base/core", "data/tiff-webtiff", "demo/annotations-pathology",
+        "auth/none", "chat/openai-compatible-cerit", "chat/medgemma-vision",
+        "storage/tiered-sessions"
+      ],
+      /* MedGemma defaults to a loopback endpoint, and the SSRF guard refuses
+         private upstreams unless the operator allowlists them. */
+      "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" },
+      "override": {
+        "core": { "client": { "localhost": { "cacheKey": "annotations-lab-vision" } } }
+      }
+    },
+
+    "roles-dev": {
+      "description": "Role gating exercised by hand: five roles, no login, switch them in the user menu",
+      /* `flags/…` is deliberately absent — debugMode comes from `--dev`
+         (`npm run up:dev`), which is also what reveals the role switcher. */
+      "layers": [
+        "base/core", "data/wsi-service", "auth/none",
+        "roles/dev-all", "chat/off", "storage/tiered-sessions"
+      ]
+    },
+
+    "roles-dev-chat": {
+      "description": "The role matrix with the Anthropic assistant, for producing data with the LLM and then gating it",
+      /* Deliberately NOT `extends: "roles-dev"`: that preset answers the chat
+         question with `chat/off`, and two fragments in the `chat` dimension is
+         a conflict, not an override. Restate the layers instead — the same
+         reasoning as `dicom-idc-chat`.
+
+         The assistant writes annotations through the scripting API, which
+         `core.scripting.run` gates: create the data as `admin`, then switch
+         roles in the user menu to watch the IO gates apply to it. */
+      "layers": [
+        "base/core", "data/wsi-service", "auth/none",
+        "roles/dev-all", "chat/anthropic-server-key", "storage/tiered-sessions"
+      ]
+    },
+
+    "roles-dev-chat-cerit": {
+      "description": "The role matrix with the CERIT OpenAI-compatible assistant instead of Anthropic",
+      /* Same deployment as `roles-dev-chat`, different provider — the chat
+         dimension holds one fragment, so this is a separate preset rather than
+         a layer on top. `CERIT_BASE_URL` defaults to the public endpoint; point
+         it at a local vLLM/Ollama and add `XOPAT_SSRF_ALLOWED_HOSTS`, since the
+         guard refuses private upstreams. */
+      "layers": [
+        "base/core", "data/wsi-service", "auth/none",
+        "roles/dev-all", "chat/openai-compatible-cerit", "storage/tiered-sessions"
+      ]
+    },
+
+    "roles-dev-vision": {
+      "description": "The role matrix with CERIT chat AND the MedGemma vision provider",
+      /* `chat/medgemma-vision` is dimensionless — it answers vision inference,
+         not conversation — so it stacks with a chat provider instead of
+         replacing one. Swap `chat/openai-compatible-cerit` for
+         `chat/anthropic-server-key` and this still holds.
+
+         The preset exists rather than leaving you to layer it ad hoc only
+         because of the `env` block: MedGemma defaults to a loopback endpoint,
+         and the SSRF guard refuses private upstreams unless the operator
+         allowlists them. Pointing `MEDGEMMA_BASE_URL` at a remote host makes
+         that line unnecessary. */
+      "layers": [
+        "base/core", "data/wsi-service", "auth/none",
+        "roles/dev-all", "chat/openai-compatible-cerit",
+        "chat/medgemma-vision", "storage/tiered-sessions"
+      ],
+      "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" }
+    },
+
+    "keycloak-oidc": {
+      "description": "Local Keycloak login over OIDC, three roles, OpenAI chat on the viewer's own identity, gpt-4o dictation",
+      "layers": [
+        "base/core", "data/wsi-service",
+        "auth/keycloak-oidc", "roles/guest-pathologist-researcher",
+        "chat/openai-server-key", "voice/openai-4o-transcribe", "storage/tiered-sessions"
+      ],
+      "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" },
+      "override": {
+        /* The chat rides `core`, the VIEWER's identity: one login covers the
+           viewer, the roles derived from its `groups` claim, and the chat.
+           `authMode: "jwt"` is what makes the provider report `requiresLogin`;
+           the auth fragment's `rpcVerifiers.core` entry enforces it. */
+        "plugins": {
+          "chat-openai": { "authMode": "jwt", "authContext": "core" }
+        }
+      }
+    },
+
+    "keycloak-saml": {
+      "description": "The same deployment reached over SAML instead of OIDC — the auth indirection, demonstrated",
+      "layers": [
+        "base/core", "data/wsi-service",
+        "auth/keycloak-saml", "roles/guest-pathologist-researcher",
+        "chat/openai-server-key", "storage/tiered-sessions"
+      ],
+      "env": {
+        "XOPAT_SSRF_ALLOWED_HOSTS": "localhost",
+        /* Dev signing key. A real deployment supplies its own; the ENV names
+           the variable, never the value. */
+        "XOPAT_SAML_JWT_SECRET": "xopat-dev-saml-secret-not-for-production"
+      },
+      "override": {
+        "plugins": {
+          "chat-openai": { "authMode": "jwt", "authContext": "core" }
+        }
+      }
+    },
+
+    "googledicom": {
+      "description": "Google Healthcare DICOMweb with the confidential server-side Google login",
+      "layers": ["base/core", "data/dicomweb-google", "auth/google-oidc-server", "chat/off"]
+    },
+
+    "byok-chat": {
+      "description": "Chat with no server key — exercises the per-user key issuance UI",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/byok", "storage/tiered-sessions"]
+    },
+
+    "annotations-github": {
+      "description": "Annotation bundles round-tripping to a GitHub repository",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/github"]
+    },
+
+    "mlflow": {
+      /* The other IO destination: slide-scoring results to an MLflow tracking
+         server. `io/github` and `io/mlflow` both claim the `io` dimension, so
+         they cannot be layered as peers — a fragment that wants both states one
+         as its `$base`, the way `io/mlflow-annotations` does. */
+      "description": "Slide-scoring results persisted to an MLflow tracking server",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow"]
+    },
+
+    "mlflow-annotations": {
+      /* Both MLflow record shapes in one deployment: a score is a metric on a
+         per-slide run, an annotation bundle is an artifact on a per-viewer run.
+         Same sink, same proxy alias — only the per-binding `template` differs,
+         which is the thing worth seeing work. */
+      "description": "Slide scores as MLflow metrics and annotation bundles as MLflow artifacts",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow-annotations"]
+    },
+
+    "image-proxy": {
+      /* Tiles routed through the server's `image-server` proxy alias instead of
+         straight to the image server. The thing to verify is that nothing in the
+         deployment reaches the image server directly — tiles and the WSI file
+         browser listing both travel the viewer origin. */
+      "description": "The default deployment with tiles routed through the image-server proxy alias",
+      "layers": ["base/core", "data/wsi-service", "transport/proxy-image-server", "auth/none", "chat/off"],
+      /* `data/wsi-service` states the upstream origin as the client `baseURL`; in
+         proxy mode that origin lives server-side in `proxies.image-server.baseUrl`
+         and the client `baseURL` is the path AFTER `/proxy/<alias>/` — i.e.
+         nothing. A layer cannot delete a key an earlier layer wrote (the merge
+         has no removal sentinel), so the preset states the last word. Without
+         this the composed client asks for
+         `/proxy/image-server/http://localhost:9002/v3/...` and every slide 404s. */
+      "override": {
+        "core": { "client": { "localhost": { "slide_protocols": { "wsi_service": { "baseURL": null } } } } }
+      }
+    },
+
+    "storage-persistent": {
+      /* Server-side state that survives a restart, with a retention window.
+         `storage/persistent-30d` and `storage/tiered-sessions` both answer the
+         storage question, so they are alternatives rather than layers.
+
+         Chat is layered in because it is what the storage fragment actually
+         binds: every namespace in `persistent-30d` (`kv:sessions`,
+         `log:messages`, `blob:attachments`) belongs to `vercel-ai-chat-sdk`, so
+         with `chat/off` this preset configured durability for a module it
+         disabled — there was nothing to restart over. `chat/all-providers`
+         registers all three and needs no key to boot: set whichever of
+         `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CERIT_API_KEY` you hold in
+         `env/.env`, or enter one per user in the chat settings. */
+      "description": "Durable server-side storage with a 30-day retention window, exercised by the assistant",
+      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/all-providers", "storage/persistent-30d"]
+    },
+
+    "chat-logging": {
+      "description": "Cerit chat with the full transcript/vision session log written to env/logs/",
+      "layers": [
+        "base/core", "data/wsi-service", "auth/none",
+        "chat/openai-compatible-cerit", "chat/medgemma-vision",
+        "storage/tiered-sessions", "logging/chat-transcript"
+      ],
+      "env": { "XOPAT_SSRF_ALLOWED_HOSTS": "localhost" }
+    },
+
+    "viz-flex-demo": {
+      "description": "Visualization flexibility showcase: multichannel TIFF, GeoJSON, MVT and three mask geometries over one real H&E slide",
+      /**
+       * Needs two commands first:  npm run fixtures:derive  &&  npm run fixtures:serve
+       * (the second serves test/fixtures/data with range support, which the core static
+       * handler does not do). See docs/site/docs/visualization-flexibility.mdx.
+       *
+       * ONE TIFF DECODER: `webtiff` owns `tiff` and reads everything — the H&E
+       * slides and the mask pyramids alike.
+       *
+       * This used to compose TWO. The H&E slides are JPEG-compressed with
+       * `PhotometricInterpretation = 6` (YCbCr) and 2x2 chroma subsampling, and
+       * the vendored web-tiff build did not apply the YCbCr -> RGB conversion
+       * for them, so `geotiff` had to own `tiff` while `webtiff` was kept under
+       * a second protocol id for the masks — it is the only one of the two
+       * implementing `getThumbnail()`, which is what the synthetic preview level
+       * is built on. web-tiff 0.1.0 fixes the conversion, so the split is gone
+       * and the demo composes as its fragment always said it should.
+       */
+      "layers": [
+        "base/core", "data/tiff-webtiff", "demo/visualization-flexibility",
+        "auth/none", "chat/off"
+      ],
+      /* No `env` block: the TIFF_FILESERVER default now comes from the
+         fragments, and points at the viewer's own `core.server.media` route. */
+      "override": {
+        "core": {
+          "client": {
+            "localhost": {
+              /* This differs from a plain tiff-webtiff deployment only in
+                 per-element config, which the derived deployment key does not
+                 fingerprint — so without an explicit key the two would share
+                 boot caches. Same reasoning as `dicom-regress`. */
+              "cacheKey": "viz-flex-demo"
+            }
+          }
+        }
+      }
+    }
+  }
+}

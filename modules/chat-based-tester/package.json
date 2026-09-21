@@ -1,0 +1,13 @@
+{
+  "name": "chat-based-tester",
+  "version": "1.0.0",
+  "description": "Development chat harness built on top of vercel-ai-chat-sdk for viewer testing",
+  "keywords": [
+    "chat",
+    "testing",
+    "viewer",
+    "dev"
+  ],
+  "buildEntry": "chat-dev.ts",
+  "author": "OpenAI"
+}

@@ -1,6 +1,33 @@
+/* ==================================================================
+ * Layer sentinels for the dev watcher.
+ *
+ * `grunt twinc` compiles ONE Tailwind chunk per changed file and merges
+ * the chunks onto a cached baseline. Each chunk is a full build of THIS
+ * file scoped to one content file, so it re-emits preflight and the whole
+ * DaisyUI component layer. Concatenating chunks therefore used to put a
+ * chunk's `@layer components` AFTER the baseline's `@layer utilities`,
+ * where `.btn` (0,1,0) beats `px-2` / `text-*` (0,1,0) on source order -
+ * black text on dark buttons, `.btn`'s 1rem padding winning over `p-0`.
+ *
+ * These markers let `postcssMergeAndMinify` (server/utils/grunt/tasks/
+ * realtime-compile.js) split every chunk into base / components /
+ * utilities and merge segment-wise instead. Every `@layer x { ... }`
+ * block below is hoisted by Tailwind into its matching `@tailwind x`
+ * position, so the segments carry the custom rules with them.
+ *
+ * Plain comments on purpose - NOT bang comments. The production build
+ * passes `--minify`, whose cssnano keeps bang comments and drops plain
+ * ones, so these never reach a client. The dev chunks are unminified at
+ * CLI level, so they survive exactly where they are needed. Do not add a
+ * bang, and do not reorder or drop them without updating splitLayers().
+ * ================================================================== */
+/* twinc-layer:base */
 @tailwind base;
+/* twinc-layer:components */
 @tailwind components;
+/* twinc-layer:utilities */
 @tailwind utilities;
+/* twinc-layer:end */
 
 @layer base {
     /* Text-like inputs + select + textarea → DaisyUI .input */
@@ -106,13 +133,15 @@
         @apply relative inline-block;
     }
 
-    /* Shared styles for the pseudo-element */
+    /* Shared styles for the pseudo-element. Pinned to the corner: the button is
+       padding-free in the toolbar, so any inset pushed the badge over the glyph
+       instead of beside it. */
     .thumb-add::after,
     .thumb-remove::after {
         content: '';
         position: absolute;
-        bottom: 0.25rem;
-        right: 0.25rem;
+        bottom: 0;
+        right: 0;
         width: 1.5rem;
         height: 1.5rem;
         display: inline-flex;
@@ -128,5 +157,321 @@
 
     .thumb-remove::after {
         content: '−';
+    }
+}
+
+/* ==================================================================
+ * flex-renderer shader controls (.er-control*)
+ *
+ * The library (src/libs/flex-renderer/flex-renderer.js) emits its own
+ * BEM markup and puts NO DaisyUI class on the actual <input>/<select>/
+ * <button>. Only Icon (~:9948) and the library's own ShaderConfigurator
+ * (~:27266) were migrated; the basic controls were not. And there is no
+ * hook to add one from the call site either: renderControl(type, title,
+ * body, classes, columns, extra) (~:6173) lands `classes` on the OUTER
+ * .er-control wrapper only. See UPSTREAM.md -> "flex-renderer - basic UI
+ * controls carry no DaisyUI classes, and no hook to add them".
+ *
+ * So the elements reach the @layer base block above as BARE elements,
+ * where `@apply input-bordered w-full` gives them a border COLOUR on top
+ * of the `border-width: 0` preflight already set - no width, no radius,
+ * no height, no background. That is the "half-styled" look.
+ * input[type=checkbox] matches nothing at all up there.
+ *
+ * DELIBERATELY UNSCOPED. The identical markup is rendered by the shader
+ * side menu (ui/classes/components/shaderLayer.mjs) and by the library's
+ * ShaderConfigurator; both should look the same, so a marker class passed
+ * through toHtml(classes) would be the wrong lever even if it could reach
+ * the input, which it cannot.
+ *
+ * Rules live here rather than in style.css because they need @apply.
+ * Tailwind tree-shakes custom @layer components CSS by class name; every
+ * selector class below is pinned in tailwind.config.js `safelist`.
+ *
+ * THREE TRAPS, in case you edit this:
+ *
+ * 1. Specificity. `.er-control__body > :is(input, select, ...,
+ *    .er-control__input, ...)` in style.css:667 computes to (0,2,0) -
+ *    :is() takes its most specific argument - and style.css loads AFTER
+ *    tailwind.min.css (src/config.json:724-734). A rule here that must
+ *    beat its `width: 100%` needs THREE classes; hence the duplicated
+ *    `.er-control__body > .er-control__input....` forms below.
+ *
+ * 2. @apply copies EVERY rule whose selector mentions the applied class,
+ *    states and modifier compounds included. That is good for state
+ *    (`.select:focus`, `.checkbox:checked` come along, so no state has to
+ *    be re-implemented) and bad for size: `@apply btn` drags DaisyUI's
+ *    whole `.btn.btn-primary:hover` / `.btn.glass:hover` matrix along -
+ *    measured at 20.8 KB for two selectors that will never carry a
+ *    `btn-*` modifier. So: @apply for the components whose look is hard
+ *    to reproduce (select, input, textarea, checkbox, file-input), hand
+ *    written declarations for the button. Size modifiers stay
+ *    hand-written regardless, because `.checkbox-sm` is
+ *    `[type="checkbox"].checkbox-sm` and `.select-sm` ships a
+ *    `[dir="rtl"]` companion.
+ *
+ * 3. @apply output lands at the position of the @apply, so every
+ *    hand-written override MUST come after it inside the rule.
+ * ================================================================== */
+@layer components {
+
+    /* ---- row label -------------------------------------------------
+     * No `truncate`: titles like "Connect breaks:" have to wrap in the
+     * 30% label column rather than become "Connect bre...". */
+    .er-control__title {
+        @apply text-xs opacity-80;
+        line-height: 1.15;
+        overflow-wrap: break-word;
+    }
+
+    /* ---- select ----------------------------------------------------- */
+    .er-control__input--select,
+    .er-control__input--colormap {
+        @apply select select-bordered w-full;
+        height: 1.5rem;
+        min-height: 1.5rem;
+        padding-inline-start: 0.5rem;
+        /* DaisyUI paints the caret at `calc(100% - 20px)` / `calc(100% - 16px)`
+         * from the BASE `.select` rule (no size modifier is applied here), so
+         * the end padding cannot go below ~1.75rem without the label running
+         * under the caret. */
+        padding-inline-end: 1.75rem;
+        font-size: 0.75rem;
+    }
+
+    /* ---- colormap select -------------------------------------------
+     * Taller than the plain select because the bottom 0.5rem becomes the
+     * palette strip; line-height is decoupled from height so the option
+     * label centres in what is left, above the strip. */
+    .er-control__input--colormap {
+        height: 1.75rem;
+        min-height: 1.75rem;
+        padding-top: 0;
+        padding-bottom: 0.45rem;
+        line-height: 1rem;
+    }
+
+    /* ColorMap.updateColormapUI (~:7498) and ColorMap.set (~:7615) write
+     * `node.style.background = cssGradient(...)` straight onto the
+     * element. An inline declaration outranks every stylesheet rule, so
+     * !important is the only lever - and it is the correct one here:
+     * this is exactly "override a style attribute you do not own".
+     *
+     * `background-image` is deliberately NOT overridden. That IS the
+     * palette, and the library rewrites it on every palette/steps
+     * change; only the GEOMETRY of that image is taken over, turning it
+     * into a strip along the bottom edge so the label reads against
+     * solid base-100.
+     *
+     * The inline value is the `background` SHORTHAND, which re-resets
+     * color/size/repeat/position to their initial values on every write
+     * - hence four !important longhands, not just the colour. */
+    .er-control__input--colormap,
+    .er-control__display--colormap,
+    .er-control__display--custom-colormap {
+        background-color: oklch(var(--b1)) !important;
+        background-repeat: no-repeat !important;
+        background-position: left bottom !important;
+        background-size: 100% 0.375rem !important;
+    }
+
+    /* DaisyUI paints the .select caret with background-image, which the
+     * inline palette gradient replaces. Put a caret back on the wrapper.
+     * `er-control__body--colormap` is built from a template literal
+     * (renderControl ~:6175), so it is invisible to the content scan and
+     * survives only via the safelist. */
+    .er-control__body--colormap {
+        position: relative;
+    }
+
+    .er-control__body--colormap::after {
+        content: "";
+        position: absolute;
+        right: 0.55rem;
+        /* Centred in what is left ABOVE the palette strip, not in the box. */
+        top: calc(50% - 0.39rem);
+        width: 0;
+        height: 0;
+        border-left: 0.28rem solid transparent;
+        border-right: 0.28rem solid transparent;
+        border-top: 0.32rem solid currentColor;
+        opacity: 0.55;
+        pointer-events: none;
+    }
+
+    /* Non-interactive colormap is a <span> (ColorMap.toHtml ~:7640)
+     * carrying the same inline gradient - same strip, as a chip. */
+    .er-control__display--colormap,
+    .er-control__display--custom-colormap {
+        @apply inline-block w-full rounded-btn border border-base-300 text-xs;
+        padding: 0.125rem 0.375rem 0.6rem;
+    }
+
+    /* ---- checkbox ---------------------------------------------------
+     * `@apply checkbox` carries DaisyUI's `:checked` / `:indeterminate` /
+     * `:disabled` rules with it, so the checkmark survives. The primary
+     * tint is applied through DaisyUI's own custom properties rather than
+     * `@apply checkbox-primary`, which would drag in that modifier's
+     * whole rule set for no benefit.
+     *
+     * `checkbox-sm` is defined as `[type="checkbox"].checkbox-sm`, so the
+     * size is hand-written. The three-class second selector beats
+     * style.css:667's `width: 100%`, which would otherwise stretch the box
+     * across the whole column. */
+    .er-control__input--bool {
+        @apply checkbox;
+        /* `--p` / `--pc` are raw oklch COMPONENTS ("48.6% 0.286 281"), not
+         * colours. Assigned bare, both `background-color: var(--chkbg)` and the
+         * five-stop checkmark `background-image` inherited from `.checkbox:checked`
+         * become invalid at computed-value time and are dropped - so a checked box
+         * rendered pixel-identical to an unchecked one. Wrap them exactly as
+         * DaisyUI's own `.checkbox-primary` does. */
+        --chkbg: var(--fallback-p, oklch(var(--p)/1));
+        --chkfg: var(--fallback-pc, oklch(var(--pc)/1));
+    }
+
+    .er-control__input--bool,
+    .er-control__body > .er-control__input.er-control__input--bool {
+        width: 1rem;
+        height: 1rem;
+        min-width: 1rem;
+        margin: 0;
+        flex-shrink: 0;
+    }
+
+    /* renderControl (~:6173) emits bool rows as data-columns="2", so a 1rem
+     * checkbox is the only thing in a column every neighbour fills edge to
+     * edge. Left-aligned at the start of that column it reads as a value
+     * sitting where values start; right-aligning it to share the selects'
+     * trailing edge was tried and looked worse.
+     *
+     * This targets the BODY, not the input, so it does not collide with
+     * style.css:667's `width: 100%` (trap 1 above); the three-class rule
+     * directly above keeps the box itself at 1rem. The flex is what vertically
+     * centres the box against a title that may wrap to two lines. */
+    .er-control--bool > .er-control__body {
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
+    }
+
+    /* ---- number / textarea ------------------------------------------
+     * `.input` is what carries border-width, radius and background;
+     * `input-bordered` alone only sets border-COLOUR. */
+    .er-control__input--number,
+    .er-control__input--image-number {
+        @apply input input-bordered input-xs;
+        width: 100%;
+        text-align: left;
+    }
+
+    .er-control__input--textarea {
+        @apply textarea textarea-bordered textarea-xs w-full;
+        min-height: 3rem;
+    }
+
+    /* ---- color ------------------------------------------------------
+     * The @layer base `input[type="color"]:not(.color-input)` rule above
+     * already supplies the swatch look; only the width needs rescuing
+     * from style.css:667 (three classes, see trap 1). */
+    .er-control__body > .er-control__input.er-control__input--color {
+        width: 2.25rem;
+        height: 1.5rem;
+    }
+
+    /* ---- file input (Image control) --------------------------------- */
+    .er-control__input--image-file {
+        @apply file-input file-input-bordered w-full text-xs;
+        height: 1.75rem;
+        min-height: 1.75rem;
+        padding-inline-end: 0.5rem;
+        line-height: 1.75rem;
+    }
+
+    /* The `::file-selector-button` is the tall part of a file-input; DaisyUI
+     * sizes it from the base `.file-input` (no size modifier applied here). */
+    .er-control__input--image-file::file-selector-button {
+        height: 1.75rem;
+        min-height: 1.75rem;
+        padding-inline: 0.625rem;
+        font-size: 0.75rem;
+        line-height: 1.75rem;
+    }
+
+    /* ---- buttons -----------------------------------------------------
+     * Hand-written rather than `@apply btn btn-sm btn-outline`. @apply
+     * copies EVERY rule whose selector contains the applied class, and
+     * DaisyUI's `.btn` ships a combinatorial hover matrix
+     * (`.btn-primary:hover`, `.btn-secondary:hover`, `.glass:hover`, ...)
+     * - measured at 20.8 KB of dead CSS for two selectors that will never
+     * carry a `btn-*` modifier. This reproduces the btn-outline look with
+     * DaisyUI tokens for ~1 KB.
+     *
+     * `float: right` is hard-coded inline by Button.toHtml (~:8567) and is
+     * meaningless in the grid cell renderControl puts the button in;
+     * !important is the only way to undo an inline declaration. */
+    .er-control__button--action,
+    .er-control__button--image-upload {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.375rem;
+        width: 100%;
+        height: 1.5rem;
+        min-height: 1.5rem;
+        padding: 0 0.5rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        line-height: 1;
+        text-align: center;
+        border-radius: var(--rounded-btn, 0.375rem);
+        border: 1px solid oklch(var(--bc) / 0.35);
+        background-color: transparent;
+        color: oklch(var(--bc));
+        cursor: pointer;
+        transition: background-color 0.15s ease, border-color 0.15s ease;
+        float: none !important;
+    }
+
+    .er-control__button--action:hover,
+    .er-control__button--image-upload:hover {
+        background-color: oklch(var(--bc) / 0.12);
+        border-color: oklch(var(--bc) / 0.5);
+    }
+
+    .er-control__button--action:active,
+    .er-control__button--image-upload:active {
+        background-color: oklch(var(--bc) / 0.18);
+    }
+
+    .er-control__button--action:focus-visible,
+    .er-control__button--image-upload:focus-visible {
+        outline: 2px solid oklch(var(--p) / 0.45);
+        outline-offset: 2px;
+    }
+
+    .er-control__button--action:disabled,
+    .er-control__button--image-upload:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+
+    /* ---- Image control chrome ---------------------------------------
+     * The hint text is hardcoded English in the library (~:8788); filed
+     * upstream. Style it as a hint at least. */
+    .er-control__hint--image {
+        @apply text-xs opacity-60;
+        line-height: 1.2;
+        margin-bottom: 0.125rem;
+    }
+
+    .er-control__row--image-number {
+        @apply flex items-center gap-1.5 text-xs;
+        margin-bottom: 0.125rem;
+    }
+
+    .er-control__widget--image {
+        @apply flex flex-col gap-0.5;
     }
 }

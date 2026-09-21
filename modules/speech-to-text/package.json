@@ -1,0 +1,21 @@
+{
+  "name": "speech-to-text-module",
+  "version": "1.0.0",
+  "description": "Microphone capture and speech transcription for xOpat",
+  "keywords": [],
+  "buildEntry": "speech-to-text.ts",
+  "author": "Aiosa",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@ricky0123/vad-web": "0.0.30",
+    "onnxruntime-web": "^1.17.0"
+  },
+  "copy": {
+    "../../node_modules/@ricky0123/vad-web/dist/vad.worklet.bundle.min.js": "dist/silero/",
+    "../../node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx": "dist/silero/",
+    "../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs": "dist/silero/",
+    "../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm": "dist/silero/"
+  }
+}

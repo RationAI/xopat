@@ -1,0 +1,47 @@
+{
+  "params": {
+    "sessionName": "Nothing in this session resolves",
+    "customBlending": true
+  },
+  "data": ["slides/absent-background.tif", "slides/absent-overlay.tif"],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 1,
+      "name": "Missing background A"
+    },
+    {
+      "dataReference": 1,
+      "visualizationIndex": 0,
+      "name": "Missing background B"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Heatmap goal",
+      "shaders": {
+        "broken": {
+          "name": "Missing overlay",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    },
+    {
+      "name": "Sobel goal",
+      "shaders": {
+        "broken": {
+          "name": "Missing overlay",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

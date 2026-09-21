@@ -1,4 +1,5 @@
 const BuildLogic = require("./server/utils/mixins/build-logic");
+const { classifyIncludeFoldable, classifyIncludeKind } = require("./server/templates/javascript/utils");
 
 module.exports = function(grunt) {
     // import utils first to initialize them
@@ -26,6 +27,14 @@ module.exports = function(grunt) {
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
         require('./server/utils/grunt/tasks/realtime-compile')(grunt)
+    );
+    grunt.registerTask("i18n-audit",
+        'Audit core i18n: verify $.t() keys resolve in src/locales/en.json and flag hardcoded UI strings.',
+        require('./server/utils/grunt/tasks/i18n-audit')(grunt)
+    );
+    grunt.registerTask("storage-audit",
+        'Audit direct browser storage: localStorage/sessionStorage/document.cookie/indexedDB must route through the IO pipeline.',
+        require('./server/utils/grunt/tasks/storage-audit')(grunt)
     );
 
     // library tasks
@@ -103,29 +112,79 @@ module.exports = function(grunt) {
     });
 
     // DYNAMIC MINIFICATION CONFIG
+    // Build the uglify file-map: one `index.min.js` per NON-workspace item,
+    // concatenating only the *foldable* includes (plain local classic .js).
+    // Workspace items already ship a minified bundle (index.workspace.min.js,
+    // copied during workspaceBuild) so they are skipped here — re-uglifying an
+    // already-minified bundle is wasteful and would double-wrap it. `.mjs`,
+    // remote, already-`.min.js` and object-form (SRI / `bundle:false` worker)
+    // includes are excluded by the shared classifyIncludeFoldable predicate and
+    // keep loading as their own files. See server/templates/javascript/utils.js.
     grunt.registerTask('prepMinify', function() {
+        const collect = (target, prefix) => (acc, item, folder) => {
+            const isWorkspace = item["__workspace_item_entry__"]
+                || (Array.isArray(item.includes) && item.includes[0] === "index.workspace.js");
+            if (isWorkspace) return;
+            const foldable = (item.includes || [])
+                .filter(classifyIncludeFoldable)
+                .map(i => `${item.directory}/${i}`);
+            if (foldable.length) {
+                target[`${prefix}/${folder}/index.min.js`] = foldable;
+            }
+        };
+
         const moduleFiles = {};
         const pluginFiles = {};
-
-        grunt.util.reduceModules((acc, mod, folder) => {
-            moduleFiles[`modules/${folder}/index.min.js`] = mod.includes
-                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
-                .map(i => `${mod.directory}/${i}`);
-        }, {});
-
-        grunt.util.reducePlugins((acc, plug, folder) => {
-            pluginFiles[`plugins/${folder}/index.min.js`] = plug.includes
-                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
-                .map(i => `${plug.directory}/${i}`);
-        }, {});
+        grunt.util.reduceModules(collect(moduleFiles, "modules"), {});
+        grunt.util.reducePlugins(collect(pluginFiles, "plugins"), {});
 
         grunt.config.set('uglify.modules.files', moduleFiles);
         grunt.config.set('uglify.plugins.files', pluginFiles);
     });
 
-    grunt.registerTask('minify', ['workspaceBuild', 'buildUI', 'prepMinify', 'uglify']);
-    grunt.registerTask('default', ['minify']);
+    // Bundle each NON-workspace item's `.mjs` includes into one minified ESM
+    // file (index.min.mjs). Classic `.js` includes are handled by prepMinify +
+    // uglify (index.min.js); this covers the module half so `.mjs`-only plugins
+    // are minified in production too. Workspace items are skipped (they build
+    // their own index.workspace.min.js).
+    grunt.registerTask('bundleModules', 'Bundle .mjs includes into minified ESM per item', async function() {
+        const done = this.async();
+        const logger = {
+            log: (m) => grunt.log.writeln(m),
+            warn: (m) => grunt.log.warn(m),
+            error: (m) => grunt.log.error(m),
+        };
+        const run = async (item) => {
+            const isWorkspace = item["__workspace_item_entry__"]
+                || (Array.isArray(item.includes) && item.includes[0] === "index.workspace.js");
+            if (isWorkspace) return;
+            const mjs = (item.includes || []).filter(e => classifyIncludeKind(e) === "module");
+            if (!mjs.length) return;
+            try {
+                await BuildLogic.buildItemModuleBundle(item.directory, mjs, logger);
+            } catch (e) {
+                grunt.log.warn(`bundleModules ${item.directory}: ${e && e.message || e}`);
+            }
+        };
+        // reduceFolder invokes its accumulator synchronously and does NOT await,
+        // so collect items first, then await every esbuild build together.
+        // Awaiting the reduce result only awaits the LAST item's promise and lets
+        // grunt call done() while the rest are still building — those get killed
+        // on process exit, leaving no index.min.mjs (race).
+        const items = [];
+        const collect = (acc, item) => { acc.push(item); return acc; };
+        grunt.util.reduceModules(collect, items);
+        grunt.util.reducePlugins(collect, items);
+        await Promise.all(items.map(run));
+        done();
+    });
 
+    // Production build: also compiles the core (per-file dist AND the single
+    // minified src/dist/xopat-core.min.js bundle) so `client.production` has a
+    // complete set of min artifacts to serve. `buildCore` was previously absent
+    // here, so `minify` never produced the core dist at all. `bundleModules`
+    // produces the per-item ESM bundles (index.min.mjs) for `.mjs` includes.
+    grunt.registerTask('minify', ['workspaceBuild', 'buildUI', 'buildCore', 'prepMinify', 'uglify', 'bundleModules']);
     grunt.registerTask('default', ['minify']);
     grunt.registerTask('all', ['minify']);
 
@@ -148,9 +207,20 @@ module.exports = function(grunt) {
         });done();
         } catch (e) {grunt.fail.warn(e.message);}
     });
+    // The clean full build, and what a release should be cut from. The `twinc`
+    // watcher now produces an equivalent cascade (it splices per-file chunks
+    // onto the baseline layer by layer, and rebaselines when `tailwind-spec.css`
+    // or `tailwind.config.js` change), but it is still a merge of a superset:
+    // classes that fell out of use survive until the next baseline.
+    // `--minify` is not cosmetic — the shipped artifact is minified, and without
+    // it the source comments in the spec end up served to every client.
     grunt.registerTask('css', async function() {
         const done = this.async();
-        await BuildLogic.spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
+        await BuildLogic.spawnAsync("npx", ["tailwindcss",
+            "-c", "./tailwind.config.js",
+            "-i", "./src/assets/tailwind-spec.css",
+            "-o", "./src/libs/tailwind.min.css",
+            "--minify"]);
         done();
     });
     grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {

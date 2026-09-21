@@ -1,0 +1,9 @@
+{
+  "name": "io-mlflow-sink",
+  "version": "0.1.0",
+  "description": "MLflow-backed bundle + CRUD sink for the xOpat IO pipeline.",
+  "keywords": ["xopat", "io-pipeline", "mlflow", "sink"],
+  "buildEntry": "index.ts",
+  "author": "xOpat",
+  "license": "ISC"
+}

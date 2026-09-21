@@ -1,0 +1,34 @@
+{
+  "$meta": {
+    "description": "Anthropic chat with an operator-held key (server-side; never reaches the browser)",
+    "dimension": "chat",
+    "requires": ["ANTHROPIC_API_KEY"]
+  },
+  /**
+   * Unlike the OpenAI fragment, an unset key here is listed in `requires`: the
+   * Anthropic provider has no keyless mode worth booting into, so a missing
+   * variable is worth reporting before the server starts rather than after the
+   * first turn fails.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-anthropic": {
+            "providerDefaults": {
+              "apiKey": "<% ANTHROPIC_API_KEY %>"
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-anthropic": { "enabled": true, "permaLoad": true },
+    "chat-openai": { "enabled": false },
+    "chat-openai-compatible": { "enabled": false }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": true }
+  }
+}

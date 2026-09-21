@@ -5,6 +5,8 @@ import { ViewerVisualizationRuntime } from "./viewer-visualization-runtime";
 import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-shader-source-controller";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
 import { buildShaderIdNamespace, renameShaderIds } from "../visualization/shader-id-namespace";
+import { readPixelScale, computeOverlayWidth } from "./overlay-pixel-scale";
+import { canCompositeRegions } from "../virtual-region-protocol";
 
 export interface OpenViewerWithOptions {
     dataMode?: "replace" | "merge" | "merge-exact";
@@ -17,6 +19,13 @@ export interface OpenViewerWithOptions {
     strictVisualization?: boolean;
     skipVisualizationCapabilityCheck?: boolean;
     suppressDialogsOnVisualizationFailure?: boolean;
+    /**
+     * Force a full content reopen of every viewer even when the selection /
+     * render fingerprint is unchanged. Needed when the RENDER changes without the
+     * `activeBackgroundIndex` changing — e.g. switching a parent's
+     * `virtualizationMode` (none ⇄ overlaid both select the parent index).
+     */
+    force?: boolean;
 }
 
 export interface ViewerOpenPipelineDependencies {
@@ -142,6 +151,145 @@ export class ViewerOpenPipeline {
             activeBackground,
             vizSpec as any,
             opts
+        );
+    }
+
+    /**
+     * Switch the render mode of a virtualized parent background between
+     * `none` / `sidebyside` / `overlaid`. Runtime-switchable: the decomposition
+     * is stored once on the parent; this only recomputes the selection and
+     * reopens — it never re-detects regions.
+     *
+     *  - `none`       → one viewer shows the parent (uncropped).
+     *  - `sidebyside` → each region's child background fills its own viewer slot.
+     *                   Children are SEPARATE backgrounds with their own ids, so
+     *                   IO/annotations key per-region (not by the parent) — see the
+     *                   warning + docs (VIRTUAL_VIEWPORTS_SPLIT.md).
+     *  - `overlaid`   → all region chunks co-resident in ONE viewer that keeps the
+     *                   PARENT's identity (IO/annotations behave like the un-split
+     *                   slide). Alignment (placement via each region's `transform`)
+     *                   is a later phase; for now the chunks overlay at origin.
+     */
+    async setVirtualizationMode(
+        parentBgId: string,
+        mode: VirtualizationMode,
+        opts: OpenViewerWithOptions = {}
+    ) {
+        const config = this.deps.getConfig();
+        // Make sure the children exist before we map regions → indices.
+        BackgroundConfig.expandVirtualBackgrounds(config);
+        const backgrounds: any[] = Array.isArray(config.background) ? config.background : [];
+
+        const parentIndex = backgrounds.findIndex((b) => b && b.id === parentBgId);
+        if (parentIndex < 0) {
+            console.warn(`[virtualization] setVirtualizationMode: no background with id "${parentBgId}".`);
+            return false;
+        }
+        const parent = backgrounds[parentIndex];
+        const decomp: VirtualDecomposition | undefined = parent.virtualization;
+        if (!decomp || !Array.isArray(decomp.regions) || decomp.regions.length < 1) {
+            console.warn(`[virtualization] background "${parentBgId}" has no stored decomposition to switch.`);
+            return false;
+        }
+
+        // A split recomposites the tiles on each region BORDER as plain images
+        // (see `canCompositeRegions`), and it does so for EVERY data layer of the
+        // stack, not just the background. Refuse here, while the un-split parent
+        // is still on screen, rather than reopening into a viewer ringed with
+        // failed tiles. Only reachable when the parent is already open; a session
+        // authored straight into a split is caught by the source-level gate.
+        if (mode !== "none") {
+            const world: any = this.deps.viewerManager.getViewer?.(parentBgId)?.world;
+            if (world?.getItemCount) {
+                for (let i = 0; i < world.getItemCount(); i++) {
+                    const source = world.getItemAt(i)?.source;
+                    if (source && !canCompositeRegions(source)) {
+                        console.warn(`[virtualization] background "${parentBgId}" cannot be split: a data layer's tiles are not plain images.`);
+                        try {
+                            Dialogs.show($.t("virtualization.sourceNotCompositable"), 12000, Dialogs.MSG_WARN);
+                        } catch (_) { /* Dialogs not ready */ }
+                        return false;
+                    }
+                }
+            }
+        }
+
+        const childIndices: number[] = [];
+        for (const region of decomp.regions) {
+            const childId = UTILITIES.sanitizeID(`${parentBgId}::${region.id}`);
+            const idx = backgrounds.findIndex((b) => b && b.id === childId);
+            if (idx >= 0) childIndices.push(idx);
+        }
+
+        let activeBg: number[];
+        if (mode === "sidebyside") {
+            if (childIndices.length < 1) {
+                console.warn(`[virtualization] no expanded children for "${parentBgId}".`);
+                return false;
+            }
+            parent.virtualizationMode = "sidebyside";
+            activeBg = childIndices;
+            // Side-by-side opens each region as a SEPARATE background/viewer with
+            // its own id, so annotations/IO key per-region (not by the parent) and
+            // would need coordinate offsets to share state. Warn the user; the
+            // clean alternative is "overlaid" (single viewer, parent identity).
+            try {
+                Dialogs.show($.t("virtualization.sidebysideWarning"), 12000, Dialogs.MSG_WARN);
+            } catch (_) { /* Dialogs not ready */ }
+        } else if (mode === "overlaid") {
+            // Overlaid keeps the PARENT selected (identity = parent → IO/annotations
+            // behave like the un-split slide); the open pipeline detects the parent's
+            // overlaid mode and renders all children's cropped stacks into this one
+            // viewer's world.
+            parent.virtualizationMode = "overlaid";
+            activeBg = [parentIndex];
+        } else {
+            parent.virtualizationMode = "none";
+            activeBg = [parentIndex];
+        }
+
+        // Seed the cropped-source geometry cache from the parent slide that is
+        // currently open (under the previous mode), so the initial cropped open
+        // is synchronously-ready and avoids the async render race that otherwise
+        // produces transient square / blank / WebGL-framebuffer states.
+        if (mode !== "none") {
+            try {
+                const OSDref: any = (window as any).OpenSeadragon;
+                const seed = OSDref?.CroppedTileSource?.seedParentGeometry;
+                const pViewer: any = this.deps.viewerManager.getViewer?.(parentBgId);
+                const world: any = pViewer?.world;
+                if (seed && world?.getItemCount) {
+                    // Seed every loaded data source by its DataID (the cropped
+                    // sources key on the same id). The pipeline stamps each item
+                    // with `__xopatLoadKey = "data:<dataId>"`. Also PERSIST the
+                    // geometry into params so a later direct reload into the split
+                    // is synchronously-ready (no async first-pass square race).
+                    const cfg = this.deps.appContext._dangerouslyAccessConfig();
+                    cfg.params = cfg.params || {};
+                    const dimsMap = cfg.params.virtualSourceDims = cfg.params.virtualSourceDims || {};
+                    for (let i = 0; i < world.getItemCount(); i++) {
+                        const item = world.getItemAt(i);
+                        const key = item?.__xopatLoadKey;
+                        if (item?.source && typeof key === "string" && key.startsWith("data:")) {
+                            const dataId = key.slice(5);
+                            const geom = seed(dataId, item.source);
+                            if (geom) dimsMap[dataId] = geom;
+                        }
+                    }
+                }
+            } catch (_) { /* best-effort seeding */ }
+        }
+
+        return this.openViewerWith(
+            undefined,
+            undefined,
+            undefined,
+            activeBg,
+            undefined,
+            // Force a reopen: switching mode can change the RENDER without changing
+            // `activeBackgroundIndex` (none ⇄ overlaid both select the parent), so
+            // the pipeline's diff would otherwise treat it as a no-op.
+            { historyMode: "content-switch", force: true, ...opts }
         );
     }
 
@@ -628,6 +776,27 @@ export class ViewerOpenPipeline {
                 USER_INTERFACE.Loading.show(false);
                 throw new Error("Visualization validation failed: " + visualizationValidation.issues.join(" | "));
             }
+            // Non-strict: the offending layers have already been dropped from the
+            // sanitized collection, and until now that happened in silence — the
+            // viewer opened with fewer overlays than the session asked for and
+            // nothing said so. One aggregated message; the individual issue
+            // strings stay in the console above, since they name internal shader
+            // ids and are not translatable.
+            visualizationRuntime.warnVisualization($.t("error.visualizationValidationIssues"));
+        }
+        // Renderer-side verdict on the layers that survived. Report-only: these layers
+        // still render (the renderer substitutes or ignores what it cannot use), but
+        // until now a config whose control types or params were wrong reached the
+        // renderer in silence and the user only found out when the result looked odd —
+        // or, in the worst case, when the resulting program failed to compile. The
+        // individual lines name shader ids and JSON Pointer paths, so they go to the
+        // log, not the toast.
+        if (visualizationValidation.advisories.length > 0) {
+            APPLICATION_CONTEXT.log("app.visualization").warn(
+                `Visualization config rejected by the renderer's own validation (${visualizationValidation.advisories.length} finding(s)):\n`
+                + visualizationValidation.advisories.join("\n")
+            );
+            visualizationRuntime.warnVisualization($.t("error.visualizationParamsIgnored"));
         }
         config.visualizations = visualizationValidation.visualizations as any;
 
@@ -638,6 +807,12 @@ export class ViewerOpenPipeline {
             USER_INTERFACE.Loading.show(false);
             throw new Error(renderingCapability.error || "Visualization rendering is unavailable on this device.");
         }
+
+        // Expand any virtualized parent background (carrying a stored
+        // `virtualization` decomposition) into first-class child backgrounds —
+        // one per region — BEFORE wrapping, so children are wrapped uniformly.
+        // Idempotent: reloaded sessions whose children already exist are skipped.
+        BackgroundConfig.expandVirtualBackgrounds(appContext._dangerouslyAccessConfig());
 
         if (Array.isArray(config.background)) {
             config.background = config.background.map((bg: BackgroundItem | BackgroundConfig) => BackgroundConfig.from(bg, true, false));
@@ -653,21 +828,23 @@ export class ViewerOpenPipeline {
         const cfg = appContext.config;
         const bgs: BackgroundConfig[] = Array.isArray(cfg.background) ? cfg.background : [];
         const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
-        const isSecureMode = !!appContext.secure;
+        const isSecureMode = !!appContext.secureMode;
 
         const selectionStateChanged = !!UTILITIES.parseBackgroundSelection(effectiveBgSpec);
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
 
-        // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
-        // a prior `setOption(..., undefined)` deleted the cache+params entry.
-        // When the background array is genuinely empty we must NOT let that
-        // default resurrect an index — the selection was just cleared on purpose.
+        // The canonical stored shape is an array; [] means "explicitly nothing
+        // open" (parseBackgroundSelection maintains it). A scalar/undefined
+        // here is a boot default or a legacy session import. With an empty
+        // catalog the default 0 must not survive as an index.
         if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
             activeBg = undefined;
         }
 
         if (activeBg === undefined && bgs.length > 0) {
+            // First boot / legacy import without a stored selection: default to
+            // the first background.
             activeBg = 0;
         }
 
@@ -687,7 +864,10 @@ export class ViewerOpenPipeline {
             while (clamped.length > 1 && clamped[clamped.length - 1] === undefined) {
                 clamped.pop();
             }
-            if (bgs.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
+            // Only a stale NON-empty selection whose entries are all invalid
+            // resets to [0]; an explicitly-empty selection ([]) is deliberate
+            // ("nothing open") and must never resurrect background 0.
+            if (bgs.length > 0 && activeBg.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
                 clamped.length = 0;
                 clamped.push(0);
             }
@@ -721,6 +901,11 @@ export class ViewerOpenPipeline {
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
+        // Override with the locally-normalized selection so change detection
+        // and undo/redo see the same shape the pipeline works with (handles
+        // scalar/absent legacy forms; canonical stored shape is an array,
+        // [] = explicitly nothing open).
+        (nextSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
         const backgroundChanged = hadOpenViewerState && JSON.stringify(selectedBackgroundsBefore) !== JSON.stringify(selectedBackgroundsAfter);
@@ -767,7 +952,11 @@ export class ViewerOpenPipeline {
             }, 1000);
         }
 
-        await Dialogs.awaitHidden();
+        // NOTE: do NOT gate the load on Dialogs.awaitHidden() here. Dialogs is
+        // the (non-blocking) toast scheduler; awaiting it froze the whole load
+        // behind a transient toast's full timeout while the opaque loading veil
+        // covered that toast — undismissable. Error/warn toasts now render above
+        // the loader (see toast.mjs z-index), so no serialization is needed.
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
         const closingToEmpty = selectedBackgroundsAfter.length === 0;
@@ -797,7 +986,10 @@ export class ViewerOpenPipeline {
         }
 
         const bgPlan = (() => {
-            if (Array.isArray(activeBg)) {
+            // Explicitly-empty selection ([]) still needs ONE empty plan: the
+            // single kept viewer must be walked so its content is cleared and
+            // the "no data" placeholder page shows.
+            if (Array.isArray(activeBg) && activeBg.length > 0) {
                 return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
             if (Number.isInteger(activeBg)) {
@@ -839,6 +1031,21 @@ export class ViewerOpenPipeline {
             viewerManager.delete(i);
         }
 
+        /**
+         * The HttpClient that protocol resolution built for a source we are about
+         * to open, keyed by the source value it produced.
+         *
+         * The auth context belongs to the *protocol entry*, and a rendered URL
+         * cannot carry that binding back: two entries on one upstream with
+         * different `auth.contextId` render indistinguishable URLs, so recovering
+         * the client by baseURL prefix would pick one at random (see
+         * `SLIDE_PROTOCOLS.getActiveClientForUrl`, which now refuses that case).
+         * Remembering it at resolve time is what keeps each slide on its own
+         * credential.
+         */
+        const clientsBySource = new Map<any, any>();
+        const clientForSource = (source: any) => clientsBySource.get(source);
+
         const bgUrlFromEntry = (bgEntry: BackgroundConfig, dataSpec: DataSpecification | undefined = undefined) => {
             const spec: DataSpecification | undefined = dataSpec === undefined ? BackgroundConfig.dataSpecification(bgEntry) : dataSpec;
             const resolved = (window as any).SLIDE_PROTOCOLS.resolveBackground({
@@ -846,7 +1053,9 @@ export class ViewerOpenPipeline {
                 bgEntry,
                 isSecureMode,
             });
-            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+            if (resolved.client) clientsBySource.set(source, resolved.client);
+            return source;
         };
 
         // Renderer-side shader-config normalization wrappers were inlined here
@@ -855,7 +1064,25 @@ export class ViewerOpenPipeline {
         // FlexRenderer.normalizeShaderConfig / normalizeShaderMap, so the
         // wrappers are no longer needed in this file.
 
-        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void) => {
+        // A failed-open slot keeps a transparent placeholder whose `getConfig`
+        // stays `undefined` (inert slot: no IO restore / annotation attach). But
+        // consumers that enumerate open viewports — e.g. the slide switcher's
+        // OPEN VIEWERS list — need to know *which* background this dead slot was
+        // meant to hold, so it can be listed, flagged faulty, and closed. Stamp
+        // the intended background config on a dedicated field, separate from
+        // `getConfig`, so faulty detection (registry-driven) is untouched.
+        const stampFaultyBackground = (item: any, kind: string | undefined, index: number, ctx: any) => {
+            if (!item || kind !== "background") return;
+            try {
+                const bgIdx = typeof ctx?.bgIndexForItem === "function" ? ctx.bgIndexForItem(index) : undefined;
+                const bgCfg = Number.isInteger(bgIdx) ? cfg.background[bgIdx as number] : undefined;
+                if (bgCfg) item.__xopatFaultyBackground = bgCfg;
+            } catch (e) {
+                console.warn("[openPlaceholder] failed to stamp faulty background marker", e);
+            }
+        };
+
+        const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void, loadKey?: string, ctx?: any, kind?: string) => {
             // A real EmptyTileSource (rather than `{ type: "_blank" }`) so downstream
             // code that reads `item.source.dimensions` — annotations wrapper,
             // scalebar, navigator, etc. — sees a valid TiledImage instead of
@@ -877,6 +1104,33 @@ export class ViewerOpenPipeline {
                 success: (e: any) => {
                     e.item.__targetIndex = index;
                     e.item.getConfig = (_type: string | undefined) => undefined;
+                    // Stamp the pipeline load key so the placeholder is a
+                    // first-class surgical-reuse candidate (getExistingItemLoadKey
+                    // reads __xopatLoadKey first). Without this an EmptyTileSource
+                    // has no url/tileSourceId, its key degrades to `index:N`, and
+                    // the next visualization switch fails to reuse it — re-opening
+                    // (and silently un-marking) the faulty source. The key also
+                    // lets the faulty-source registry resolve this item's verdict.
+                    if (loadKey) e.item.__xopatLoadKey = loadKey;
+                    stampFaultyBackground(e.item, kind, index, ctx);
+                    // Give the placeholder a valid inert identity shader config
+                    // (mirrors flex-renderer's own default). The flex drawer's
+                    // rebuild maps `world._items -> item.__shaderConfig.id`; a
+                    // configless world item makes it dereference `undefined.id`
+                    // and cascades into renderer/WebGL crashes. An identity layer
+                    // over an opacity-0 source renders nothing but keeps the
+                    // renderer's "every item has a shader config" invariant.
+                    if (!e.item.__shaderConfig) {
+                        e.item.__shaderConfig = {
+                            id: `__xopat_faulty_${index}`,
+                            name: "Identity shader",
+                            type: "identity",
+                            visible: 1,
+                            fixed: false,
+                            params: {},
+                            cache: {},
+                        };
+                    }
                     console.info(`[openPlaceholder] EmptyTileSource registered at index=${index}, worldCount=${viewer.world.getItemCount()}`);
                     onOpen(false);
                 },
@@ -931,12 +1185,12 @@ export class ViewerOpenPipeline {
                 ? ctx.dataForItem(index)
                 : undefined;
 
-            const cfgForItem = item.getConfig();
-            let sourceOptions = cfgForItem && cfgForItem.options;
-
-            if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
-                sourceOptions = { ...(dataSpec.options || {}), ...(sourceOptions || {}) };
-            }
+            // Same merge the protocol registry used pre-metadata, from the same
+            // helper — a source that was constructed directly by SLIDE_PROTOCOLS
+            // therefore sees an identical object twice (before its info request,
+            // and here once the metadata is known so e.g. `channels: "all"` can
+            // expand). See SlideProtocolRegistry.optionsFor.
+            const sourceOptions = (window as any).SLIDE_PROTOCOLS.optionsFor(dataSpec, item.getConfig());
 
             if (sourceOptions !== undefined && item?.source?.setSourceOptions) {
                 item.source.setSourceOptions(sourceOptions);
@@ -948,6 +1202,57 @@ export class ViewerOpenPipeline {
                 if (drawer && typeof drawer.setTiledImageSmoothingEnabled === "function") {
                     drawer.setTiledImageSmoothingEnabled(item, (dataSpec as any).imageSmoothingEnabled);
                 }
+            }
+
+            applyPixelScale(item, index, ctx);
+        };
+
+        /**
+         * Size an overlay by the pixel scale its data spec declares.
+         *
+         * OSD normalizes every world item to viewport width 1, so an overlay
+         * lands on its background only when their aspect ratios match. An
+         * overlay covering a whole number of blocks of a slide whose width is
+         * NOT a whole number of blocks never matches: its edge block hangs past
+         * the slide, OSD squeezes it back to fit, and every cell ends up
+         * slightly small with the error accumulating across the image.
+         *
+         * `pixelScale` says how many reference pixels one of this image's
+         * pixels covers, which is all that is needed to place it:
+         *
+         *     width = ownPixelWidth * pixelScale / referencePixelWidth
+         *
+         * Only the width is set — OSD derives height from the image's own
+         * aspect ratio, which is already correct when both axes share a scale.
+         *
+         * Runs here rather than at `addTiledImage` time because neither pixel
+         * width is known until the sources are ready. Tiles open sequentially
+         * (see the `await openTile` loop), so a stack's reference is always in
+         * the world before anything that scales against it.
+         */
+        const applyPixelScale = (item: any, index: number, ctx: any) => {
+            const descriptor = ctx && typeof ctx.pixelScaleForItem === "function"
+                ? ctx.pixelScaleForItem(index)
+                : undefined;
+            if (!descriptor) return;
+
+            const reference = item?.viewer?.world?.getItemAt?.(descriptor.referenceIndex);
+            // Scaling the reference against itself is meaningless, and a missing
+            // one means there is nothing to be relative TO.
+            if (!reference || reference === item) return;
+
+            const width = computeOverlayWidth({
+                ownWidth: item?.source?.dimensions?.x || item?.source?.width,
+                referenceWidth: reference?.source?.dimensions?.x || reference?.source?.width,
+                scaleX: descriptor.scaleX,
+                placementWidth: descriptor.placementWidth,
+            });
+            if (width === undefined) return;
+
+            try {
+                item.setWidth(width, true);
+            } catch (e) {
+                console.warn("Failed to apply pixelScale to an opened item:", e);
             }
         };
 
@@ -1030,6 +1335,11 @@ export class ViewerOpenPipeline {
 
                 if (Number.isInteger(event.visualizationIndex)) {
                     visualizationIndex = event.visualizationIndex as number;
+                } else if (event.visualizationIndex === null) {
+                    // Explicit null from a handler means "no visualization for
+                    // this slide" — without it a stale seeded index could not
+                    // be cleared, only overridden.
+                    visualizationIndex = undefined;
                 }
                 // Per-viewer viz state lives on the bg entry — write back any
                 // override produced by the `before-open` handler chain.
@@ -1060,34 +1370,56 @@ export class ViewerOpenPipeline {
             appContext.setOption("activeBackgroundIndex", activeBg);
         };
 
-        const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
+        const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any, placement?: any) => {
             const originalSource = source.source || source;
-            // Determine the per-protocol HttpClient (if any). For a URL the
-            // registry matches by baseURL prefix; for a pre-built TileSource
-            // the registry already stamped `__xopatHttpClient` at resolve
-            // time. The active client is set during instantiation so OSD's
-            // metadata fetch (via the patched makeAjaxRequest) routes
-            // through it; afterwards we stamp the resulting source so the
-            // patched downloadTileStart picks it up for every tile.
+            const loadKey: string | undefined = typeof ctx?.loadKeyForItem === "function" ? ctx.loadKeyForItem(index) : undefined;
+            const faultyRegistry: any = (viewer as any).__faultySources;
+            // Determine the per-protocol HttpClient (if any). Preferred source of
+            // truth is the client protocol resolution already built for THIS item
+            // (`ctx.clientForItem`) — a URL cannot identify its own auth context, so
+            // two protocol entries on one upstream with different credentials are
+            // indistinguishable by baseURL prefix. A pre-built TileSource carries
+            // `__xopatHttpClient` from resolve time; the prefix lookup is the last
+            // resort for sources that never went through the registry. The active
+            // client is set during instantiation so OSD's metadata fetch (via the
+            // patched makeAjaxRequest) routes through it; afterwards we stamp the
+            // resulting source so the patched downloadTileStart picks it up for
+            // every tile.
             const SP = (window as any).SLIDE_PROTOCOLS;
-            const client = typeof originalSource === "string"
-                ? SP?.getActiveClientForUrl?.(originalSource)
-                : originalSource?.__xopatHttpClient;
-            const tileSource = await SP.withActiveClient(client, () =>
-                viewer.instantiateTileSourceClass({ tileSource: originalSource })
-                    .then((ev: any) => ev.source)
-                    .catch((ev: any) => ev.message || String(ev))
-            );
+            const client = (typeof ctx?.clientForItem === "function" ? ctx.clientForItem(index) : undefined)
+                ?? (typeof originalSource === "string"
+                    ? SP?.getActiveClientForUrl?.(originalSource)
+                    : originalSource?.__xopatHttpClient);
+            // A source the registry already constructed (explicit `tileSourceClass`
+            // or a factory protocol) started fetching its metadata at construction
+            // time. Route it through `awaitSourceReady` instead of OSD's
+            // `instantiateTileSourceClass`: the latter's already-a-TileSource branch
+            // does nothing but wait, and it cannot see an `open-failed` that fired
+            // before it subscribed — which would hang the open forever.
+            const isPrebuilt = !!originalSource && typeof originalSource === "object"
+                && originalSource instanceof (window as any).OpenSeadragon.TileSource;
+            const tileSource = isPrebuilt
+                ? await SP.awaitSourceReady(originalSource).catch((e: any) => e?.message || String(e))
+                : await SP.withActiveClient(client, () =>
+                    viewer.instantiateTileSourceClass({ tileSource: originalSource })
+                        .then((ev: any) => ev.source)
+                        .catch((ev: any) => ev.message || String(ev))
+                );
             if (client && tileSource && typeof tileSource === "object" && !tileSource.error && !(tileSource as any).__xopatHttpClient) {
                 (tileSource as any).__xopatHttpClient = client;
             }
 
             if (typeof tileSource === "string" || (typeof tileSource === "object" && tileSource.error) || tileSource instanceof Error) {
                 console.error(`Failed to instantiate tile source for ${kind} ${index}: ${tileSource}`);
+                const errorText = typeof tileSource === "object" && tileSource.error
+                    ? String(tileSource.error)
+                    : String(tileSource);
+                // Persist the verdict so it survives rebuilds / viz switches.
+                faultyRegistry?.markFaulty?.(loadKey, errorText, "instantiation");
                 await viewer.raiseEventAwaiting(
                     "tile-source-failed", { viewer, originalSource, kind, index, tileSource: null, error: tileSource }
                 ).catch((e: any) => console.warn("Exception in 'tile-source-failed' event handler: ", e));
-                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve));
+                return new Promise<boolean>(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve, loadKey, ctx, kind));
             }
 
             await viewer.raiseEventAwaiting(
@@ -1096,20 +1428,111 @@ export class ViewerOpenPipeline {
             ).catch((e: any) => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
+            // Eligibility is the SOURCE's call, not the layer's role: a data
+            // overlay is a tiled image like any other and pays the same
+            // first-paint cost, so it benefits identically. A source for which
+            // a preview would be wrong refuses on its own — via
+            // `__noPreviewLevel`, via a non-8-bit `getTilePrecision()` (the
+            // synthetic tile is an 8-bit raster), or simply by not implementing
+            // `getThumbnail()`, which is why vector sources fall out for free.
+            try { (tileSource as any).tryInjectPreviewLevel?.(); } catch (e) {
+                console.warn("Preview-level injection failed:", e);
+            }
+
+            // Per-cut viewport placement (OVERLAID mode): position + SAME pixel
+            // scale (width = region fraction). OSD has no `flipped` ctor option, so
+            // it is applied post-add via setFlip. `undefined` placement → OSD default.
+            //
+            // A source may also ask for a placement of its own — geometry it read
+            // out of the file rather than anything the session chose. The canonical
+            // cases are DICOM `ImageOrientationSlide`, which says how the slide sits
+            // on the glass, and a derived object whose raster covers only part of
+            // the matrix it declares.
+            //
+            // The two COMPOSE rather than override: the session says which region of
+            // the viewport this image's frame occupies, the file says where the image
+            // sits inside that frame, and `degrees` add. A source must never ask for a
+            // flip — OSD honours a flip when drawing and not when converting
+            // coordinates, which would leave annotations unmirrored on mirrored pixels.
+            const intrinsic: any = (() => {
+                try { return (tileSource as any).getIntrinsicPlacement?.() || null; } catch (e) {
+                    console.warn("Intrinsic placement failed:", e);
+                    return null;
+                }
+            })();
+            const degrees = (Number(placement?.degrees) || 0) + (Number(intrinsic?.degrees) || 0);
+            const iX = Number(intrinsic?.x) || 0;
+            const iY = Number(intrinsic?.y) || 0;
+            const iWidth = Number.isFinite(Number(intrinsic?.width)) ? Number(intrinsic.width) : 1;
+            // `(0, 0, 1)` is "the whole frame" — the default, and what a source that
+            // reports only a rotation means. Anything else has to reach OSD even when
+            // the session chose no placement at all.
+            const hasIntrinsicRect = iX !== 0 || iY !== 0 || iWidth !== 1;
+            let placementOpts: any;
+            if (placement) {
+                const pWidth = Number(placement.width) || 1;
+                placementOpts = {
+                    x: (Number(placement.x) || 0) + pWidth * iX,
+                    y: (Number(placement.y) || 0) + pWidth * iY,
+                    width: pWidth * iWidth,
+                    degrees,
+                };
+            } else if (hasIntrinsicRect) {
+                placementOpts = { x: iX, y: iY, width: iWidth, degrees };
+            } else {
+                placementOpts = degrees ? { degrees } : {};
+            }
             return new Promise<boolean>((resolve) => {
                 viewer.addTiledImage({
                     tileSource,
                     index,
+                    ...placementOpts,
                     success: (event: any) => {
                         configureOpenedItem(event.item, kind, index, ctx);
+                        if (placement?.flipped) { try { event.item.setFlip?.(true); } catch (_) {} }
                         resolve(true);
                     },
                     error: (e: any) => {
                         console.warn(e);
-                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve);
+                        faultyRegistry?.markFaulty?.(loadKey, String(e?.message || e), "instantiation");
+                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve, loadKey, ctx, kind);
                     }
                 });
             });
+        };
+
+        /**
+         * Apply the viewer's canvas clear color: the opened background's `fill`
+         * override, else the session/deployment `setup.backgroundColor`
+         * (`BackgroundConfig.resolveFillColor`).
+         *
+         * Applied per VIEWER, not per opened tile: a surgical rebuild reuses world
+         * items without going through `openTile`, and the clear color is a property
+         * of the drawer, not of one tiled image. Always applied (never conditionally
+         * skipped) so switching from a `fill`-carrying slide back to a plain one
+         * restores the global default instead of keeping the previous slide's color.
+         *
+         * MUST run before the renderer rebuilds its programs: `setBackground` only
+         * takes effect on the next shader compile (flex-renderer `setBackground`),
+         * which `overrideConfigureAll` below performs.
+         *
+         * `drawerOptions` is restamped too — `OpenSeadragon.makeStandaloneFlexDrawer`
+         * clones them, so offscreen drawers (thumbnails, region exports, vision
+         * inference images) render on the same background as the screen. Existing
+         * offscreen drawers are updated in place for the same reason.
+         */
+        const applyViewerFillColor = (viewer: any, bg: any) => {
+            const color = BackgroundConfig.resolveFillColor(bg);
+            try {
+                viewer.drawer?.renderer?.setBackground?.(color);
+                viewer.navigator?.drawer?.renderer?.setBackground?.(color);
+                const drawerOptions = viewer.drawerOptions?.["flex-renderer"];
+                if (drawerOptions) drawerOptions.backgroundColor = color;
+                viewer.__ofscreenRender?.renderer?.setBackground?.(color);
+                viewer.__scriptVisualizationStandaloneDrawer?.renderer?.setBackground?.(color);
+            } catch (e) {
+                console.warn("Failed to apply background fill color.", e);
+            }
         };
 
         const beginViewerRenderTransaction = (viewer: OpenSeadragon.Viewer) => {
@@ -1146,13 +1569,10 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via
-        // getOption, which falls back to defaultParams (= 0) after a
-        // deliberate clear. Override with the locally-normalized selection so
-        // downstream consumers (per-viewer changeKind, state-binding
-        // controller, session sync) see the actual cleared state instead of a
-        // phantom [0] against an empty bg array. Viz selection lives on bg
-        // entries already cloned into the snapshot.
+        // Override with the locally-normalized selection so downstream
+        // consumers (per-viewer changeKind, state-binding controller, session
+        // sync) see the same normalized array shape the pipeline works with.
+        // Viz selection lives on bg entries already cloned into the snapshot.
         (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
@@ -1172,7 +1592,7 @@ export class ViewerOpenPipeline {
             const isNewViewer = !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1;
 
             let changeKind: "noop" | "content" | "visualization";
-            if (isNewViewer) {
+            if (isNewViewer || opts.force) {
                 changeKind = "content";
             } else if (selectionChangedForViewer) {
                 changeKind = previousBgSelection !== nextBgSelection || changesViewerCount
@@ -1257,21 +1677,59 @@ export class ViewerOpenPipeline {
             if (!renderingWithWebGL && Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis) && (!viewerSupportsFlexRendering || !renderingCapability.ok)) {
                 visualizationRuntime.warnRenderingCapability(renderingCapability.error || "Visualization rendering is unavailable; opening image data without visualization shaders.");
             }
+            // An index that points past the end of the collection. `activeV` is
+            // then `undefined`, `assembleVisualizationShaders` returns on the
+            // spot, and the viewer opens background-only — previously with no
+            // signal at all, which is indistinguishable from a session that
+            // deliberately asked for no overlays. That case is NOT this one:
+            // "no visualization" is `visualizationIndex` absent or explicitly
+            // `null`, and neither reaches here (`Number.isInteger` guards both).
+            if (renderingWithWebGL && !activeV) {
+                visualizationRuntime.warnVisualization($.t("error.visualizationIndexMissing", { index: visIndexForThis }));
+            }
 
             const toOpen: any[] = [];
-            const uniqueOsdWorldIndexes: Map<any, number> = new Map();
+            // Reset per stack (in assembleStack) so two regions referencing the
+            // SAME data index (e.g. a shared heatmap) each get their OWN cropped
+            // world item instead of colliding on the first region's crop.
+            // `worldIndexEntries` accumulates across stacks for the playground's
+            // data→world map. buildManagedShaderSourceEntry closes over the `let`
+            // and so sees the current stack's map.
+            let uniqueOsdWorldIndexes: Map<any, number> = new Map();
+            const worldIndexEntries: [any, number][] = [];
             const openedSpecOrder: any[] = [];
             const renderOutput: Record<string, any> = {};
+            // Per-tile kind ("background" | "visualization"), parallel to `toOpen`.
+            // Replaces a single `firstVizIndex` boundary so that OVERLAID mode can
+            // interleave N per-region stacks (each bg + viz) in one viewer.
+            const tileKinds: string[] = [];
+            // Per-tile viewport placement (`{x,y,width,degrees,flipped}` | undefined),
+            // parallel to `toOpen`. OVERLAID cuts are placed at width = region.w so
+            // every cut renders at the SAME pixel scale (not OSD's default fit-to-1).
+            // `undefined` = OSD default (non-overlaid viewers fit their own content).
+            // `stackPlacement` is the current stack's placement; the shared
+            // buildManagedShaderSourceEntry reads it for time-series tiles.
+            const tilePlacements: (any | undefined)[] = [];
+            // Per-tile HttpClient from protocol resolution (`clientForSource`),
+            // parallel to `toOpen`. `undefined` = this source did not come from the
+            // registry (or its protocol declares no transport) and `openTile` falls
+            // back to the baseURL-prefix lookup.
+            const tileClients: (any | undefined)[] = [];
+            // Per-tile `pixelScale` placement (`{scaleX, referenceIndex, placementWidth}`
+            // | undefined), parallel to `toOpen`. Unlike `tilePlacements` this is
+            // PER ENTRY, not per stack: it says how big one pixel of THIS image is
+            // relative to its stack's background, which is the whole point — a
+            // stack-wide value could not express "the overlay is coarser than the
+            // slide". Consumed by `applyPixelScale` once both sources are ready.
+            const tileScales: (any | undefined)[] = [];
+            let stackPlacement: any | undefined = undefined;
+            // World index of the current stack's background — the image every
+            // `pixelScale` in this stack is relative to.
+            let stackBaseWorldIndex: number | undefined = undefined;
 
-            const vizUrlFromEntries = (dataIndex: number) => {
-                const spec = cfg.data[dataIndex] as DataSpecification;
-                const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({
-                    spec,
-                    vizEntry: activeV,
-                    isSecureMode,
-                });
-                return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
-            };
+            // Per-region crop propagation + the bg/viz source factories live inside
+            // `assembleStack` below (parameterized by each stack's croppingContext),
+            // so one viewer can render N region stacks (overlaid) — not just one.
 
             const isSeriesLikeMeta = (meta: any = {}) =>
                 meta?.param === "series" || meta?.shaderType === "time-series";
@@ -1345,6 +1803,10 @@ export class ViewerOpenPipeline {
                             uniqueOsdWorldIndexes.set(dataIndex, worldIndex);
                             toOpen.push(tileSource);
                             openedSpecOrder.push(cfg.data[dataIndex as number]);
+                            tileKinds.push("visualization");
+                            tilePlacements.push(stackPlacement);
+                            tileClients.push(clientForSource(tileSource));
+                            worldIndexEntries.push([dataIndex, worldIndex]);
                         }
                         const shaderId = meta?.config?.id || "shader";
                         shaderSourceController.registerShaderBinding(worldIndex as number, shaderId, 0, loadKey);
@@ -1369,63 +1831,179 @@ export class ViewerOpenPipeline {
                 };
             };
 
-            openedBase.forEach((bg: BackgroundConfig) => {
-                const index = bg.dataReference;
-                if (!uniqueOsdWorldIndexes.has(index)) {
-                    uniqueOsdWorldIndexes.set(index, toOpen.length);
-                    toOpen.push(bgUrlFromEntry(bg));
-                    openedSpecOrder.push(BackgroundConfig.dataSpecification(bg));
-                }
-            });
+            // Visualization shaders dropped during assembly because their data
+            // could not be resolved (e.g. no "visualization" slide protocol in
+            // this deployment + a stale session's shaders). Collected across
+            // stacks; surfaced once per open below.
+            const skippedVizShaders: string[] = [];
 
-            const allocateWorldIndex = (
-                dataIndex: number,
-                kind: "background" | "visualization",
-                bgRef?: BackgroundConfig,
-            ): number => {
-                if (uniqueOsdWorldIndexes.has(dataIndex)) {
-                    return uniqueOsdWorldIndexes.get(dataIndex) as number;
+            // Assemble ONE region "stack" (a background + its visualization, cropped
+            // via `croppingContext`) into the shared `toOpen` / `renderOutput`.
+            // NONE/SIDEBYSIDE run this once (the selected bg). OVERLAID runs it once
+            // per child region — N full cropped stacks in THIS one viewer, each
+            // shader-id sub-namespaced by the child id so they don't collide.
+            const assembleStack = (
+                stackBg: BackgroundConfig,
+                croppingContext: VirtualCroppingContext | undefined,
+                stackVizIndex: number | undefined,
+                prefix: string | null,
+                placement?: any,
+            ): void => {
+                if (!stackBg) return;
+                // Fresh allocation map per stack (see declaration). The shared
+                // `toOpen` keeps growing; only the data→world dedup is per stack.
+                uniqueOsdWorldIndexes = new Map();
+                // Every tile this stack opens gets the stack's viewport placement
+                // (bg + viz are co-registered). Read by buildManagedShaderSourceEntry.
+                stackPlacement = placement;
+                stackBaseWorldIndex = undefined;
+                const stackActiveV = (renderingWithWebGL && Number.isInteger(stackVizIndex)
+                    && Array.isArray(vis) && vis[stackVizIndex as number])
+                    ? vis[stackVizIndex as number] : undefined;
+
+                // Crop a data spec to this stack's region. The background image AND
+                // every visualization data layer route through the `virtual-region`
+                // protocol with the child's crop, so the whole stack crops together.
+                const cropSpec = (spec: DataSpecification): DataSpecification => {
+                    if (!croppingContext) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-croppingContext-in-scope", { prefix, specProtocol: (spec as any)?.protocol, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
+                    if (spec && typeof spec === "object" && (spec as DataOverride).croppingContext) {
+                        // console.warn("[vr-trace] cropSpec PASSTHROUGH already-has-context", { prefix, specProtocol: (spec as any)?.protocol });
+                        return spec;
+                    }
+                    const baseId = BackgroundConfig.dataFromSpec(spec);
+                    if (baseId === undefined) {
+                        // console.warn("[vr-trace] cropSpec SKIP no-baseId", { prefix, specKeys: spec && typeof spec === "object" ? Object.keys(spec) : typeof spec });
+                        return spec;
+                    }
+                    const wrapped: DataOverride = { dataID: baseId, protocol: "virtual-region", croppingContext };
+                    if (spec && typeof spec === "object") {
+                        const o = spec as DataOverride;
+                        if (o.microns != null) wrapped.microns = o.microns;
+                        if (o.micronsX != null) wrapped.micronsX = o.micronsX;
+                        if (o.micronsY != null) wrapped.micronsY = o.micronsY;
+                        if (o.options) wrapped.options = o.options;
+                    }
+                    return wrapped;
+                };
+                const vizUrl = (dataIndex: number) => {
+                    const spec = cropSpec(cfg.data[dataIndex] as DataSpecification);
+                    const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({ spec, vizEntry: stackActiveV, isSecureMode });
+                    const source = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                    if (resolved.client) clientsBySource.set(source, resolved.client);
+                    return source;
+                };
+                const allocate = (dataIndex: number, kind: "background" | "visualization", ref?: BackgroundConfig): number => {
+                    if (uniqueOsdWorldIndexes.has(dataIndex)) return uniqueOsdWorldIndexes.get(dataIndex) as number;
+                    const allocated = toOpen.length;
+                    uniqueOsdWorldIndexes.set(dataIndex, allocated);
+                    const source = kind === "background" && ref
+                        ? bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification))
+                        : vizUrl(dataIndex);
+                    toOpen.push(source);
+                    openedSpecOrder.push(cfg.data[dataIndex]);
+                    tileKinds.push(kind);
+                    tilePlacements.push(placement);
+                    // Scale is relative to THIS stack's background, so it is only
+                    // meaningful once that background has a world slot — which it
+                    // always does here, allocated just below before any call.
+                    const scaleX = readPixelScale(cfg.data[dataIndex],
+                        (message, value) => console.warn(`[open-pipeline] data[${dataIndex}]: ${message}`, value));
+                    tileScales.push(scaleX !== undefined && stackBaseWorldIndex !== undefined
+                        ? { scaleX, referenceIndex: stackBaseWorldIndex, placementWidth: placement?.width }
+                        : undefined);
+                    tileClients.push(clientForSource(source));
+                    worldIndexEntries.push([dataIndex, allocated]);
+                    return allocated;
+                };
+
+                // The stack's primary background image. It IS the reference, so it
+                // never carries a scale of its own.
+                const baseIndex = stackBg.dataReference;
+                if (!uniqueOsdWorldIndexes.has(baseIndex)) {
+                    const allocated = toOpen.length;
+                    uniqueOsdWorldIndexes.set(baseIndex, allocated);
+                    stackBaseWorldIndex = allocated;
+                    const baseSource = bgUrlFromEntry(stackBg);
+                    toOpen.push(baseSource);
+                    openedSpecOrder.push(BackgroundConfig.dataSpecification(stackBg));
+                    tileKinds.push("background");
+                    tilePlacements.push(placement);
+                    tileScales.push(undefined);
+                    tileClients.push(clientForSource(baseSource));
+                    worldIndexEntries.push([baseIndex, allocated]);
                 }
-                const allocated = toOpen.length;
-                uniqueOsdWorldIndexes.set(dataIndex, allocated);
-                if (kind === "background" && bgRef) {
-                    toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification));
+
+                const env = {
+                    backgrounds: [stackBg],
+                    activeVisualization: renderingWithWebGL ? stackActiveV : undefined,
+                    data: cfg.data,
+                    cloneRuntimeState,
+                    resolveWorldIndex: allocate,
+                    expandDataSourceRef: (entry: any, kind: "background" | "visualization", ref: BackgroundConfig | undefined, meta: any) => buildManagedShaderSourceEntry(
+                        entry,
+                        kind === "background" && ref
+                            ? (dataIndex: number) => bgUrlFromEntry(ref, cropSpec(cfg.data[dataIndex] as DataSpecification))
+                            : vizUrl,
+                        meta,
+                    ),
+                    onShaderSkipped: (shaderId: string, _error: unknown) => skippedVizShaders.push(shaderId),
+                };
+
+                const stackRO: Record<string, any> = {};
+                assembleBackgroundShaders(env, stackRO);
+                assembleVisualizationShaders(env, stackRO);
+
+                if (prefix) {
+                    Object.assign(renderOutput, renameShaderIds(stackRO, buildShaderIdNamespace(prefix, "r")));
                 } else {
-                    toOpen.push(vizUrlFromEntries(dataIndex));
+                    Object.assign(renderOutput, stackRO);
                 }
-                openedSpecOrder.push(cfg.data[dataIndex]);
-                return allocated;
             };
-
-            const assembleEnv = {
-                backgrounds: openedBase,
-                activeVisualization: renderingWithWebGL ? activeV : undefined,
-                data: cfg.data,
-                cloneRuntimeState,
-                resolveWorldIndex: allocateWorldIndex,
-                expandDataSourceRef: (entry: any, kind: "background" | "visualization", bgRef: BackgroundConfig | undefined, meta: any) => buildManagedShaderSourceEntry(
-                    entry,
-                    kind === "background" && bgRef
-                        ? (dataIndex: number) => bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification)
-                        : vizUrlFromEntries,
-                    meta,
-                ),
-            };
-
-            assembleBackgroundShaders(assembleEnv, renderOutput);
-
-            // `firstVizIndex` separates background-derived tiles from
-            // visualization-derived ones in the open-tile loop's `kind`
-            // labelling below. Capture it AFTER bg-shader allocation (which
-            // may add extra tiles for shaders with explicit dataReferences)
-            // and BEFORE viz-shader allocation.
-            const firstVizIndex = toOpen.length;
 
             if (renderingWithWebGL && activeV) {
                 appContext.prepareRendering();
             }
 
-            assembleVisualizationShaders(assembleEnv, renderOutput);
+            // OVERLAID: the selected bg is a parent whose child regions render
+            // co-resident in this one viewer (identity stays the parent — see ctx).
+            // Otherwise: a single stack (the selected bg, with its own crop if it is
+            // itself a side-by-side child).
+            const overlaidChildren: BackgroundConfig[] =
+                (bgForViewer && (bgForViewer as any).virtualizationMode === "overlaid" && (bgForViewer as any).virtualization)
+                    ? (bgs as any[]).filter((b: any) => b && b.virtualOf === (bgForViewer as any).id) as BackgroundConfig[]
+                    : [];
+            if (overlaidChildren.length > 0) {
+                // Place each cut at width = region.w so every cut shares the parent's
+                // pixel scale (instead of OSD fitting each to width=1). Position from
+                // the region's transform (identity → stacked at the common origin);
+                // a future registration step just writes dx/dy/rotation/flip.
+                const placementFor = (cc: VirtualCroppingContext | undefined): any => {
+                    if (!cc || !cc.region) return undefined;
+                    const r = cc.region;
+                    const t: any = cc.transform || {};
+                    return {
+                        x: Number(t.dx) || 0,
+                        y: Number(t.dy) || 0,
+                        width: r.w,
+                        degrees: Number(t.rotation) || 0,
+                        flipped: !!t.flip,
+                    };
+                };
+                for (const child of overlaidChildren) {
+                    const cc = (child as any).croppingContext;
+                    assembleStack(child, cc, visIndexForThis, (child as any).id, placementFor(cc));
+                }
+            } else {
+                assembleStack(bgForViewer, (bgForViewer as any)?.croppingContext, visIndexForThis, null);
+            }
+
+            if (skippedVizShaders.length) {
+                console.warn(`[viewer-open] ${skippedVizShaders.length} visualization shader(s) skipped (unresolvable data):`, skippedVizShaders);
+                Dialogs.show($.t("error.visualizationShaderSkipped"), 8000, Dialogs.MSG_WARN);
+            }
 
             // Cross-shader binding refs: the resolver's "sole user vs shared"
             // decision relies on knowing every shader that references a world
@@ -1484,6 +2062,11 @@ export class ViewerOpenPipeline {
                     await (window as any).IO_PIPELINE?.flushBundleExport?.({
                         viewerId: viewerUniqueIdBeforeReset,
                         backgroundId: previousBackgroundId,
+                        // Same reasoning as the restore below: this snapshot of
+                        // the slide being left is the pipeline's own upkeep,
+                        // triggered by navigation rather than requested. A
+                        // refusal belongs in the log, not in the user's way.
+                        trigger: "system",
                     });
                 } catch (e) {
                     console.warn("IO flush for vacated slide failed:", e);
@@ -1501,6 +2084,12 @@ export class ViewerOpenPipeline {
             try {
                 if (!canSurgicallyDiff) {
                     viewerManager._resetViewer(viewerIndex);
+                    // A full reset is a genuine content change (new slide /
+                    // viewer nature). Drop persisted faulty verdicts so a
+                    // re-opened source is attempted afresh; a viz-only surgical
+                    // rebuild keeps them, which is what makes the warning
+                    // survive a visualization switch.
+                    (viewer as any).__faultySources?.clear?.();
                 }
 
                 const ctx = {
@@ -1508,19 +2097,50 @@ export class ViewerOpenPipeline {
                     vizIndexForItem: (i: number) => visIndexForThis,
                     dataForItem: (i: number) => openedSpecOrder[i],
                     loadKeyForItem: (i: number) => loadKeys[i],
+                    clientForItem: (i: number) => tileClients[i],
+                    pixelScaleForItem: (i: number) => tileScales[i],
                 };
 
                 plog(`openIntoViewer PLAN v=${viewerIndex}`, {
                     toOpen: toOpen.length,
-                    firstVizIndex,
+                    tileKinds,
                     renderOutputIds: Object.keys(renderOutput),
                     canSurgicallyDiff,
                     viewerSupportsFlexRendering,
                 });
 
                 plog(`openIntoViewer TILE LOOP START v=${viewerIndex}`);
+                const faultyRegistry: any = (viewer as any).__faultySources;
                 for (let i = 0; i < toOpen.length; i++) {
-                    const kind = i < firstVizIndex ? "background" : "visualization";
+                    const kind = tileKinds[i] || "background";
+
+                    // A source that failed to instantiate can never render.
+                    // Re-instantiating it on every rebuild hammers a dead
+                    // endpoint and momentarily un-marks it (the new item has a
+                    // defined getConfig and no error metadata), which is the
+                    // exact mechanism by which a faulty background lost its
+                    // warning on a visualization switch. Keep a transparent
+                    // placeholder at this slot instead; the registry retains
+                    // the verdict so the navigator + shader menu stay marked.
+                    if (faultyRegistry?.isInstantiationFaulty?.(loadKeys[i])) {
+                        let placeholder = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
+                        if (!(placeholder && getExistingItemLoadKey(placeholder, i) === loadKeys[i] && !retainedItems.has(placeholder))) {
+                            await new Promise<boolean>(resolve =>
+                                openPlaceholder(viewer, faultyRegistry.getError(loadKeys[i]), i, toOpen[i], resolve, loadKeys[i], ctx, kind));
+                            placeholder = viewer.world.getItemAt(i);
+                        }
+                        // Deliberately NOT configureOpenedItem'd: the placeholder
+                        // keeps getConfig === undefined, preserving the legacy
+                        // navigator faulty signal alongside the registry verdict.
+                        // Still (re-)stamp the intended background marker so a
+                        // reused placeholder from a pre-marker rebuild is listable.
+                        if (placeholder) {
+                            stampFaultyBackground(placeholder, kind, i, ctx);
+                            retainedItems.add(placeholder);
+                        }
+                        continue;
+                    }
+
                     let reusable = canSurgicallyDiff ? viewer.world.getItemAt(i) : null;
 
                     if (reusable && getExistingItemLoadKey(reusable, i) === loadKeys[i] && !retainedItems.has(reusable)) {
@@ -1550,7 +2170,7 @@ export class ViewerOpenPipeline {
                         continue;
                     }
 
-                    if (await openTile(viewer, toOpen[i], kind, i, ctx)) {
+                    if (await openTile(viewer, toOpen[i], kind, i, ctx, tilePlacements[i])) {
                         const openedItem = viewer.world.getItemAt(i);
                         if (openedItem) retainedItems.add(openedItem);
                         successOpened++;
@@ -1571,7 +2191,7 @@ export class ViewerOpenPipeline {
                 // their renderer config against the same world layout this
                 // pipeline just established. Plain object so it survives a
                 // structured clone path if anyone serialises it later.
-                (viewer as any).__dataToWorldIndex = Array.from(uniqueOsdWorldIndexes.entries());
+                (viewer as any).__dataToWorldIndex = worldIndexEntries;
 
                 plog(`openIntoViewer TILE LOOP DONE v=${viewerIndex}`, {
                     successOpened,
@@ -1637,7 +2257,17 @@ export class ViewerOpenPipeline {
                     }
                 };
 
-                if (viewerSupportsFlexRendering) {
+                // Clear color, before any (re)build below bakes it into the compile.
+                applyViewerFillColor(viewer, bgForViewer);
+
+                // A viewer whose every source failed to instantiate holds only
+                // an inert placeholder and shows the demo overlay below. Feeding
+                // its (faulty) render output into the shared flex renderer
+                // corrupts the shared program and races the grid-cell teardown,
+                // cascading into renderer/WebGL crashes that also break the
+                // sibling (valid) viewports. Skip configuration entirely for a
+                // fully-failed viewer.
+                if (viewerSupportsFlexRendering && successOpened > 0) {
                     try {
                         plog(`openIntoViewer waitForViewerRenderReady BEGIN v=${viewerIndex}`);
                         await this.waitForViewerRenderReady(viewer);
@@ -1670,6 +2300,21 @@ export class ViewerOpenPipeline {
                             Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
                         }
                     }
+                } else if (viewerSupportsFlexRendering) {
+                    // Fully-failed viewer (only an inert placeholder). Put the
+                    // drawer in a clean EMPTY external-config state rather than
+                    // feeding it the faulty background's render output or leaving
+                    // it in internal-config mode. External mode keeps
+                    // `_configuredExternally` true (so the crash-prone
+                    // `world._items.map(i => i.__shaderConfig.id)` rebuild branch
+                    // is skipped) and, with no shaders, emits no `htmlHandler`
+                    // layer card — so the faulty viewport shows only the demo
+                    // overlay, not a spurious "Identity shader" entry.
+                    try {
+                        await viewer.drawer.overrideConfigureAll({});
+                    } catch (e) {
+                        console.warn("Failed to clear renderer for fully-failed viewer.", e);
+                    }
                 }
 
                 if (!canSurgicallyDiff || viewer.world.getItemCount() < 1) {
@@ -1698,6 +2343,12 @@ export class ViewerOpenPipeline {
                             await (window as any).IO_PIPELINE?.tryRestoreImport?.({
                                 viewerId: nextViewerUniqueId,
                                 backgroundId: nextBackgroundId,
+                                // The user opened a slide, not a restore. What
+                                // hydrates behind that is the pipeline's
+                                // bookkeeping, so a refusal is logged rather
+                                // than turned into a dialog about an action
+                                // nobody performed.
+                                trigger: "system",
                             });
                         } catch (e) {
                             console.warn("IO restore for new slide failed:", e);
@@ -1716,6 +2367,49 @@ export class ViewerOpenPipeline {
                 plog(`openIntoViewer EXIT v=${viewerIndex}`);
             }
         };
+
+        // DEFINITIVE async-dims fix: eagerly load each virtual-region PARENT's
+        // geometry and seed the cropped-source cache BEFORE the open loop builds
+        // any cropped source. A cropped source that finds its parent geometry in
+        // the cache is tall from construction, so OSD never builds a TiledImage
+        // from the square placeholder (which permanently caches a square
+        // contentAspectX / first-pass texture). Only runs when virtual-region
+        // sources are present.
+        await (async () => {
+            const OSDref: any = (window as any).OpenSeadragon;
+            const seed = OSDref?.CroppedTileSource?.seedParentGeometry;
+            const SP: any = (window as any).SLIDE_PROTOCOLS;
+            const probeViewer: any = viewerManager?.viewers?.[0];
+            const dataArr: any[] = Array.isArray(config.data) ? config.data : [];
+            const hasVirtual = dataArr.some((s: any) => s && typeof s === "object" && s.protocol === "virtual-region");
+            if (!seed || !SP || !probeViewer || !hasVirtual) return;
+            const seen = new Set<string>();
+            const jobs: Promise<void>[] = [];
+            for (const spec of dataArr) {
+                if (!spec) continue;
+                if (typeof spec === "object" && spec.protocol === "virtual-region") continue; // skip overrides
+                const dataId = (typeof spec === "object" && (spec as any).dataID) ? (spec as any).dataID : spec;
+                const pid = typeof dataId === "string" ? dataId : JSON.stringify(dataId);
+                if (seen.has(pid)) continue;
+                seen.add(pid);
+                jobs.push((async () => {
+                    try {
+                        const resolved = SP.resolveBackground({ spec: dataId, isSecureMode });
+                        const srcInput = resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
+                        // Resolution knows which entry (and therefore which credential)
+                        // owns this source; a URL does not.
+                        const client = resolved.client
+                            ?? (resolved.kind === "tileSource" ? resolved.tileSource?.__xopatHttpClient : undefined);
+                        const ev = await SP.withActiveClient(client, () =>
+                            probeViewer.instantiateTileSourceClass({ tileSource: srcInput }));
+                        if (ev?.source) seed(pid, ev.source);
+                    } catch (e) {
+                        console.warn("[virtualization] parent geometry preload failed:", pid, e);
+                    }
+                })());
+            }
+            await Promise.all(jobs);
+        })();
 
         const loadTooLongTimeout = setTimeout(
             () => Dialogs.show($.t("error.slide.pending"), 15000, Dialogs.MSG_WARN),
@@ -1765,14 +2459,19 @@ export class ViewerOpenPipeline {
 
             if (!opts.fromHistory && history && history.isRecordingEnabled !== false && anythingChanged) {
                 if (historyMode === "reset-history") {
+                    const resetSnapshot = captureLoadSnapshotFromConfig(config);
+                    // Reflect the locally-normalized selection (see nextSnapshot
+                    // override above).
+                    (resetSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.clear?.({
                         kind: "load-history-reset",
                         reason: "background-changed",
                         previousSnapshot,
-                        nextSnapshot: captureLoadSnapshotFromConfig(config),
+                        nextSnapshot: resetSnapshot,
                     });
                 } else if (historyMode === "content-switch" || historyMode === "visualization-step") {
                     const appliedSnapshot = captureLoadSnapshotFromConfig(config);
+                    (appliedSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
                     history.pushExecuted?.(
                         () => restoreLoadSnapshot(appliedSnapshot),
                         () => restoreLoadSnapshot(previousSnapshot),

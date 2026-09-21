@@ -38,10 +38,14 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
-      - name: Build JSDoc API reference
-        run: |
-          npm ci --ignore-scripts
-          npx grunt jsdoc --force
+      # TEMPORARY: the JSDoc API reference is incomplete and not published.
+      # The /api/ route serves a "coming soon" placeholder written by
+      # docs/site/scripts/sync-docs.mjs. To restore: un-comment the build +
+      # copy steps below.
+      # - name: Build JSDoc API reference
+      #   run: |
+      #     npm ci --ignore-scripts
+      #     npx grunt jsdoc --force
 
       - name: Build documentation site
         env:
@@ -49,8 +53,10 @@ jobs:
           BASE_URL: ${{ vars.BASE_URL }}
           DEMO_URL: ${{ vars.DEMO_URL }}
         run: |
-          mkdir -p docs/site/static/api
-          cp -r docs/build/. docs/site/static/api/
+          # TEMPORARY: API reference hidden — sync-docs writes a "coming soon"
+          # placeholder at static/api/index.html. Re-enable with the JSDoc step:
+          # mkdir -p docs/site/static/api
+          # cp -r docs/build/. docs/site/static/api/
           cd docs/site
           npm ci
           npm run build

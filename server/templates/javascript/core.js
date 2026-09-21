@@ -1,4 +1,5 @@
 const {parse} = require("comment-json");
+const {isUiBundleFresh, isCoreBundleFresh} = require("./utils");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
 module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
@@ -37,7 +38,6 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         //Relative Paths For the Viewer
         PROJECT_ROOT: projectRoot,
         PROJECT_SOURCES: projectRoot + 'src/',
-        EXTERNAL_SOURCES: projectRoot + 'src/external/',
         UI_SOURCES: projectRoot + 'ui/',
         LIBS_ROOT: projectRoot + 'src/libs/',
         ASSETS_ROOT: projectRoot + 'src/assets/',
@@ -126,6 +126,33 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return `    <script src="${this.CORE["openSeadragonPrefix"]}${this.CORE["openSeadragon"]}?v=${version}"></script>\n`;
         },
 
+        // Render the <title> + favicon <link>s from ENV core.setup.branding
+        // (operator-controlled = trusted, per AGENTS.md §7). Values are still
+        // HTML-escaped so a stray quote/angle bracket in config can't break the
+        // head or inject markup. Anything unset falls back to the stock xOpat
+        // assets, so existing deployments render identically without config.
+        requireBrandingHead: function () {
+            const b = (this.CORE && this.CORE["setup"] && this.CORE["setup"]["branding"]) || {};
+            const escHtml = (s) => String(s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const escAttr = (s) => escHtml(s).replace(/"/g, "&quot;");
+            const val = (key, dflt) => (b[key] != null && b[key] !== "" ? b[key] : dflt);
+
+            const title = escHtml(val("title", "Visualization"));
+            const apple = escAttr(val("appleTouchIcon", "src/assets/apple-touch-icon.png"));
+            const icon32 = escAttr(val("icon32", "src/assets/favicon-32x32.png"));
+            const icon16 = escAttr(val("icon16", "src/assets/favicon-16x16.png"));
+            const mask = escAttr(val("maskIcon", "src/assets/safari-pinned-tab.svg"));
+            const maskColor = escAttr(val("maskIconColor", "#5bbad5"));
+
+            return `    <title>${title}</title>
+    <link rel="apple-touch-icon" sizes="180x180" href="${apple}">
+    <link rel="icon" type="image/png" sizes="32x32" href="${icon32}">
+    <link rel="icon" type="image/png" sizes="16x16" href="${icon16}">
+    <link rel="mask-icon" href="${mask}" color="${maskColor}">
+`;
+        },
+
         requireLib: function (name) {
             return this._requireNested("libs", name, this.LIBS_ROOT);
         },
@@ -134,15 +161,48 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return this._require("libs", this.LIBS_ROOT);
         },
 
-        requireExternal: function () {
-            return this._require("external", this.EXTERNAL_SOURCES);
-        },
-
         requireCore(type) {
+            // In production, serve the whole core JS (loader + deps + app groups)
+            // as one minified bundle (src/dist/xopat-core.min.js, produced by
+            // buildCore). Emitted once, on the first core JS group requested;
+            // per-group CSS is preserved. `env` (CSS) always goes per-file. Falls
+            // back to per-file dev serving when the bundle isn't built.
+            const production = parseBool(this.CORE?.client?.production) === true;
+            // The bundle must also be NEWER than the per-file dist outputs the
+            // watcher rebuilds: "it exists" served six-day-old core code with
+            // nothing anywhere saying so. See isCoreBundleFresh.
+            if (production && (type === "loader" || type === "deps" || type === "app")
+                && fileExists(this.VIEWER_SOURCES_ABS_ROOT + "dist/xopat-core.min.js")
+                && isCoreBundleFresh(this.VIEWER_SOURCES_ABS_ROOT)) {
+                let result = "";
+                if (this.CORE["css"] && this.CORE["css"]["src"] && this.CORE["css"]["src"][type] !== undefined) {
+                    result += this.printCss(this.CORE["css"]["src"][type], this.PROJECT_SOURCES);
+                }
+                if (!this._coreBundleEmitted) {
+                    this._coreBundleEmitted = true;
+                    result += `    <script src="${this.PROJECT_SOURCES}dist/xopat-core.min.js?v=${this.VERSION}"></script>\n`;
+                }
+                return result;
+            }
             return this._requireNested("src", type, this.PROJECT_SOURCES);
         },
 
         requireUI: function () {
+            // In production, serve the prebuilt single UI bundle (ui/index.min.js,
+            // produced by `grunt minify`), preserving any UI CSS. Falls back to
+            // the ESM index.js in dev / when the min bundle isn't built.
+            const production = parseBool(this.CORE?.client?.production) === true;
+            // …and newer than `ui/index.js`, the esbuild output the watcher
+            // maintains. See isUiBundleFresh.
+            if (production && fileExists(this.ABS_UI + "index.min.js")
+                && isUiBundleFresh(this.ABS_UI)) {
+                let result = "";
+                if (this.CORE["css"] && this.CORE["css"]["ui"] !== undefined) {
+                    result += this.printCss(this.CORE["css"]["ui"], this.UI_SOURCES);
+                }
+                result += `    <script src="${this.UI_SOURCES}index.min.js?v=${this.VERSION}"></script>\n`;
+                return result;
+            }
             return this._require("ui", this.UI_SOURCES);
         },
 
@@ -293,7 +353,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
             return parse(out);
         } catch (e) {
-            throw err;
+            throw `${err} [${e?.message || e}]`;
         }
     }
 
@@ -340,6 +400,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     }
     CORE["client"] = C;
 
+    // Coerce the production flag to a strict boolean at the client-flatten
+    // boundary, so every downstream check is correct even if it arrived as a
+    // string (e.g. "false" from an env var, which is truthy in JS).
+    if (C && typeof C === "object") {
+        CORE["client"]["production"] = parseBool(CORE["client"]["production"]) === true;
+    }
+
     /*
      * Auto detect path and domain if null
      */
@@ -347,9 +414,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     if (!isType(C["path"], "string")) {
         CORE["client"]["path"] = core.PROJECT_ROOT;
     }
-    if (!isType(C["domain"], "string")) {
+    // The domain is the root of every derived URL (APPLICATION_CONTEXT.url).
+    // A blank or scheme-less value does not fail here — it produces silently
+    // relative or protocol-relative URLs, and the deployment then presents as
+    // unexplained request failures. Reject it where the verdict is deterministic.
+    const domain = C["domain"];
+    if (!isType(domain, "string") || !domain.trim()) {
         //todo try deduction of the domain
-        core.exception = "JavaScript cannot deduce the domain: configuration must specify the viewer domain and protocol!";
+        core.exception = "JavaScript cannot deduce the domain: configuration must specify a non-empty "
+            + "viewer domain and protocol (or \"__ORIGIN__\" to resolve it at boot)!";
+    } else if (domain !== "__ORIGIN__" && !/^[a-z][a-z0-9.+-]*:\/\//i.test(domain)) {
+        core.exception = `Viewer domain "${domain}" has no protocol: use e.g. "https://host/", `
+            + `or "__ORIGIN__" to resolve it from the browser at boot.`;
     }
 
     if (secure) {
@@ -361,6 +437,18 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         // Security: strip server configuration secret from the CORE that
         // gets shipped to the client.
         delete CORE.server.secure;
+
+        // `server.auth` is ALSO a secret-read path, and stripping only
+        // `server.secure` left it shipping to the browser. `verifyJwtToken`
+        // falls back to `core.CORE.server.auth.jwt` (`server/node/auth.js`) and
+        // the bearer verifier to `server.auth.bearer`, both of which accept a
+        // literal `secret` — so an operator who configured it there, as the
+        // schema allows, was publishing an HMAC signing key in the page source.
+        // The server keeps its copy on the same server-only backup.
+        if (CORE.server.auth) {
+            core.CORE_AUTH = CORE.server.auth;
+            delete CORE.server.auth;
+        }
     }
 
     // Author-tier server-only config: per-plugin / per-module `server.json`
@@ -372,7 +460,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
 
     core.VERSION = CORE["version"] || defaults.version || "dev";
-    core["version"] = CORE.VERSION;
+    // The browser reads the version off the SERVED env (`APPLICATION_CONTEXT.env.version`,
+    // i.e. this `CORE` object): the deployment-key fingerprint, the `engines.xopat` gate
+    // and the settings header all do. `config.json` ships `version: null` as an "inherit
+    // from package.json" sentinel, so the resolved value has to be written back here or
+    // `env.version` is `undefined` client-side and every one of those degrades silently.
+    CORE["version"] = core.VERSION;
+    core["version"] = core.VERSION;
     core.GATEWAY = CORE["gateway"];
     core.CORE = CORE;
     core.ENV = ENV;

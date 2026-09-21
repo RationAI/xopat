@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "DICOM Browser",
+    "description": "Browse a DICOMweb store from the slide switcher — patients, studies and series — and open slides from it. Adds boot-time defaults and automatic discovery of derived Segmentation / Parametric Map overlays."
+  },
+  "browser": {
+    "patients": "Patients",
+    "studies": "Studies",
+    "images": "Images",
+    "noStudies": "No studies available for this patient.",
+    "noPatients": "No patients found (server may not support patient listing).",
+    "openMissingIds": "Could not open the image: missing study identification!",
+    "searchHint": "Name, study UID, acc:<number> or YYYYMMDD-YYYYMMDD",
+    "noMatches": "Nothing matched \"{{query}}\".",
+    "listingFailed": "Could not load the list: {{error}}",
+    "chipAccession": "Acc# {{value}}",
+    "chipStudyId": "ID {{value}}",
+    "chipCounts": "{{series}} S | {{instances}} I",
+    "tooltipReferring": "Referring: {{value}}",
+    "tooltipPerforming": "Performing: {{value}}",
+    "tooltipBodyPart": "Body Part: {{value}}",
+    "tooltipRequested": "Requested: {{value}}",
+    "tooltipReason": "Reason: {{value}}",
+    "tooltipComments": "Comments: {{value}}"
+  }
+}

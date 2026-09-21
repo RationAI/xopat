@@ -1,5 +1,13 @@
 /**
  * Extending upon OpenSeadragon.TileSource, these properties are usable for advanced integration.
+ *
+ * `TileSource.prototype.tryInjectPreviewLevel` — the generic synthetic
+ * preview-level extension — is registered by `src/classes/preview-level.ts`,
+ * loaded as its own core script right after this one (config.json `js.src`).
+ *
+ * Focal-plane (z-stack) navigation is a duck-typed opt-in contract declared
+ * below (`zStack` / `setZDepth`); the runtime driver is
+ * `src/classes/app/viewer-depth-controller.ts`. See `src/ZSTACK.md`.
  */
 
 declare const APPLICATION_CONTEXT: {
@@ -15,14 +23,220 @@ type TileSourceDisplayField = { label: string; value: string | number | boolean 
 type TileSourceDisplaySection = { title?: string; description?: string; fields?: TileSourceDisplayField[] };
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 
+/**
+ * Where the original slide file can be fetched from. Returned by
+ * {@link getSlideFileDownload}; consumed by `UTILITIES.downloadSlideFile`
+ * (`src/classes/app/slide-file-download.ts`). Runtime source of truth for the
+ * shape: the exported `SlideFileDownload` there (this file is a plain core
+ * script and cannot import it — keep the two in sync).
+ */
+type SlideFileDownload = {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when the source knows it without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * Per-source HttpClient the fetch MUST be routed through when the endpoint
+     * needs auth headers. Normally just `this.__xopatHttpClient`. Leave unset
+     * for endpoints authenticated by cookie alone — the driver then hands the
+     * URL to the browser's own download manager instead of buffering the file.
+     */
+    client?: any /* HttpClient */;
+};
+
+/**
+ * Focal-plane (z-stack) descriptor a tile source exposes to opt into depth
+ * navigation. Runtime source of truth: the exported `ZStackDescriptor` in
+ * `src/classes/app/viewer-depth-controller.ts` (this file is a plain core
+ * script and cannot import it — keep the shapes in sync).
+ *
+ * - `count`      total number of focal planes; `count > 1` is the opt-in signal
+ * - `index`      currently active plane (0-based)
+ * - `spacingUm`  optional physical spacing between planes in micrometers
+ * - `labels`     optional per-plane display labels
+ */
+type ZStackDescriptor = {
+    count: number;
+    index: number;
+    spacingUm?: number;
+    labels?: string[];
+};
+
+
+/**
+ * Coarse transfer class of a pyramid's tile samples — see
+ * `OpenSeadragonTileSourceWithExtensions.getTilePrecision`.
+ */
+type TileSamplePrecision = "unorm8" | "float16";
+
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getMetadata(): TileSourceMetadata | undefined;
+    getSensitiveMetadata(): TileSourceMetadata | undefined;
     getDisplayMetadata(): TileSourceDisplayMetadata;
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
     getLabel(): Promise<ImageLike | undefined>;
+    canDownloadSlideFile(): boolean;
+    getSlideFileDownload(): Promise<SlideFileDownload | undefined>;
     getConfig(type?: string): any;
+    /**
+     * Optionally report that this source decomposes into multiple aligned
+     * sub-regions (a slide-wide spatial partition). Returns a
+     * `VirtualDecomposition` (see app.d.ts) or `null` when the source does not
+     * virtualize. The default delegates to `window.VIRTUALIZATION_DETECTORS`;
+     * subclasses with native knowledge (e.g. a multi-region DICOM source) may
+     * override to return their decomposition directly. See the virtual-viewports plan.
+     */
+    probeVirtualization(): Promise<any /* VirtualDecomposition | null */>;
+    /**
+     * Inject a synthetic single-tile coarsest pyramid level backed by
+     * `getThumbnail()`, so slides whose real coarsest level is large (>2k px,
+     * several tiles) paint on first open from at most one (cached) preview
+     * request. Implemented in `src/classes/preview-level.ts`; any source
+     * implementing `getThumbnail()` is eligible automatically — the layer's
+     * ROLE is irrelevant, a data overlay benefits exactly as a background does.
+     * Idempotent; returns true when the level is (already) injected. Opt out
+     * with `__noPreviewLevel = true` (e.g. thumbnails not depicting the full
+     * extent, or sources that change their level *count* in place), or by
+     * declaring a non-8-bit {@link getTilePrecision}.
+     */
+    tryInjectPreviewLevel(): boolean;
+    __noPreviewLevel?: boolean;
+    /**
+     * Sample encoding this pyramid's tiles carry, as a coarse *transfer class* —
+     * what a generic consumer must match to hand OSD a substitute tile for this
+     * source. Distinct from {@link _dataFormat} (the OSD data type a raw
+     * response is finished as) and from the renderer's colour-target precision.
+     *
+     * The one consumer today is the synthetic preview level, whose tile is an
+     * 8-bit `rasterBlob` (`preview-level.ts` `_servePreviewTile`) and therefore
+     * cannot be grafted onto a pyramid that delivers half-float packs.
+     *
+     * `undefined` means "not declared" and is treated as 8-bit-compatible:
+     * every source that works with the preview level today emits 8-bit rasters,
+     * and defaulting the other way would silently disable the feature for
+     * DICOMweb. A float source that forgets to declare gets a wrong preview —
+     * declare it.
+     */
+    getTilePrecision(): TileSamplePrecision | undefined;
+    /**
+     * Placement this image asks for because of what its FILE says, independent of
+     * anything the session chose — geometry, not preference. The canonical case is
+     * DICOM `ImageOrientationSlide` (0048,0102), which states how the slide sits on
+     * the glass; a viewer that ignores it draws the raster in whatever order the
+     * scanner happened to write it.
+     *
+     * `x`/`y`/`width` describe where this image sits in the frame it belongs to —
+     * the same normalized frame a session placement uses, where `width: 1` is the
+     * whole frame and `y` is scaled by the frame's WIDTH (OSD's convention). The
+     * case for it is an image that covers only part of what it is registered
+     * against: a DICOM Parametric Map declares the slide's total pixel matrix but
+     * may ship a raster covering, say, 92.7% of its width, and stretching that
+     * across the whole matrix misplaces every pixel but the ones at the origin.
+     *
+     * Composes with the session's virtual-viewport placement rather than replacing
+     * it (see `src/VIRTUAL_VIEWPORTS_SPLIT.md`) — the session says which region of
+     * the viewport this image's frame occupies, the file says where the image sits
+     * inside that frame:
+     *
+     * ```
+     * x       = placement.x + placement.width * intrinsic.x
+     * y       = placement.y + placement.width * intrinsic.y
+     * width   = placement.width * intrinsic.width
+     * degrees = placement.degrees + intrinsic.degrees
+     * ```
+     *
+     * Omitted fields default to `(0, 0, 1, 0)`, i.e. the whole frame unrotated, so
+     * a source that returns only `degrees` behaves exactly as before.
+     *
+     * **A sub-region must account for the rotation pivot.** OSD rotates each tiled
+     * image about *its own* bounds centre, so two images sharing an angle but not a
+     * bounding rect drift apart by `(R - I)·dc`. A source returning both a rotation
+     * and a sub-region rect is responsible for rotating that rect's centre about the
+     * frame's centre itself — see `DICOMDerivedTileSource#_placementFor`.
+     *
+     * **Never return a flip.** OpenSeadragon honours `setFlip` when drawing but not
+     * in `imageToViewportCoordinates` / `_pixelFromPoint`, so a flipped image
+     * carries its annotations unmirrored on top of mirrored pixels. A source whose
+     * file asks for a reflection must decompose it into a transpose it applies to
+     * its own raster plus the rotation it returns here.
+     */
+    getIntrinsicPlacement?(): { x?: number, y?: number, width?: number, degrees?: number } | undefined;
+    /**
+     * Focal-plane (z-stack) opt-in — see `src/ZSTACK.md` for the full design.
+     *
+     * A z-stack is ONE logical slide parameterized by a focal-plane index (NOT
+     * a time-series shader, which swaps distinct data entries at the
+     * shader-slot level). A source opts in by exposing this descriptor with
+     * `count > 1`; absence (or `count: 1`) keeps the slide single-plane. The
+     * per-viewer `ViewerDepthController` (`viewer.__depthController`,
+     * `src/classes/app/viewer-depth-controller.ts`) discovers it, drives plane
+     * switches via an in-place tile swap (no reload, no white flash), and
+     * feeds the navigator slider / Alt+wheel / `[` `]` shortcuts.
+     *
+     * There are no z-only members beyond this descriptor and `setZDepth`: the
+     * core derives everything else from the tile-source API a source already
+     * implements. Contract invariants for implementers:
+     * - `setZDepth(i)` mutates identity state ONLY, SYNCHRONOUSLY (so
+     *   `getTileUrl` starts returning plane-i URLs); the controller performs the
+     *   repaint, and also flips the plane briefly around a `getTileUrl` call to
+     *   learn the URL of a plane you are not currently showing.
+     * - `getTileUrl` must bake the active plane into the URL (e.g. append
+     *   `&z=<n>`, or address a different DICOM instance; emit nothing when
+     *   `count <= 1` so plain-slide URLs stay stable). Distinct planes must
+     *   produce distinct URLs — that is how the core recognizes which plane the
+     *   tile's original cache record already holds (`url === tile.getUrl()`).
+     * - `getTileHashKey` must stay z-INDEPENDENT — one tile identity across
+     *   planes — and must contain the source identity (`fileId` /
+     *   `tileSourceId`), which the plane-change zombie purge matches on. The OSD
+     *   default returns the URL and is therefore plane-DEPENDENT: overriding it
+     *   is mandatory. The controller layers plane pixels on top as extra
+     *   `z://<plane>/<key>` cache records, in the source's own data type.
+     * - `downloadTileStart` doubles as the plane loader: the core fetches other
+     *   planes by running it through a stock `OpenSeadragon.ImageJob` with `src`
+     *   set to the plane URL, so honour `context.src` (OSD requires this anyway)
+     *   and any data type works — `gpuTextureSet` included.
+     * - Descriptor-building helpers used from `configure()` must be `static`:
+     *   OSD invokes `configure()` with `this` bound to a generic autodetect
+     *   `TileSource`, not your subclass (see
+     *   `RationaiStandaloneV3TileSource._buildZStack`,
+     *   `modules/rationai-wsi-tile-source/tile-source.js` — the reference
+     *   implementation).
+     */
+    zStack?: ZStackDescriptor;
+    /**
+     * Switch the active focal plane (identity state only — no fetching, no
+     * cache work). Clamp `index` to `[0, zStack.count - 1]`, update
+     * `zStack.index` and whatever internal field `getTileUrl` reads. Called
+     * exclusively by `ViewerDepthController.setDepth(...)`, which then swaps
+     * loaded tiles in place through OSD's invalidation pipeline.
+     */
+    setZDepth?(index: number): void;
+    tileSourceId?: string;
+    /**
+     * OSD data type the raw tile response should be finished as. Sources that
+     * negotiate a non-raster transfer encoding with their server (e.g. a
+     * WSI-Service asked for `image_format=tiff`) set this so the default
+     * `downloadTileStart` hands the blob to the converter graph as that type
+     * instead of `"rasterBlob"`. Unset means `"rasterBlob"`.
+     */
+    _dataFormat?: string;
+    /**
+     * Whether this source can back a VIRTUAL REGION split (`virtual-region`
+     * protocol, `src/classes/virtual-region-protocol.ts`). Tiles on a region
+     * border are recomposited by re-fetching `getTileUrl(...)` and decoding it
+     * in the BROWSER, so the split needs plainly-fetchable, browser-decodable
+     * image tiles. Leave unset: `canCompositeRegions` then derives the answer
+     * from whether the source still uses the base `downloadTileStart` (it does
+     * ⇒ it is on that exact path). Set `true` to opt a source that overrides
+     * the download path but serves plain image URLs anyway; `false` to opt out.
+     * TODO: remove once Flex Render virtual region support lands
+     */
+    supportsRegionCompositing?: boolean;
     /**
      * Per-source HttpClient, stamped by `SLIDE_PROTOCOLS.resolve(...)` when the
      * resolved protocol declares `httpClient` options (proxy alias, auth ctx, …).
@@ -32,7 +246,40 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * routing uniformly.
      */
     __xopatHttpClient?: any /* HttpClient */;
+    /**
+     * Set by `SLIDE_PROTOCOLS` on a source it constructed itself, when that
+     * source raised `open-failed` before the open pipeline could subscribe.
+     * Read by `SLIDE_PROTOCOLS.awaitSourceReady`; without it a failure racing
+     * construction would leave the open hanging forever.
+     */
+    __xopatOpenFailure?: string;
 };
+
+/**
+ * Opt-in marker for direct construction by the slide-protocol registry
+ * (`ENV.client.slide_protocols.<id>.tileSourceClass`, see
+ * `src/types/slide-protocols.d.ts`).
+ *
+ * The default OSD flow fetches the slide metadata with a *generic*
+ * `OpenSeadragon.TileSource`, picks a class from the response via
+ * `TileSource.determineType`, and then builds a **second** instance from
+ * `configure()`. A class that declares this marker instead promises to be
+ * constructible straight from `{url}` — which is what lets xOpat apply
+ * `setSourceOptions` before the metadata request is issued.
+ *
+ * A class declaring `static xopatSelfConfiguring = true` MUST:
+ * - override `getImageInfo(url)` and configure **`this`** in place (never
+ *   delegate to a second instance);
+ * - set `this.ready = true` *before* raising the `ready` event, and raise it as
+ *   `raiseEvent('ready', { tileSource: this })`;
+ * - never raise `ready` / `open-failed` synchronously from the constructor;
+ * - route its fetches through `this.__xopatHttpClient` when present;
+ * - honour the {@link setSourceOptions} double-call contract above.
+ *
+ * Reference implementations: `OpenSeadragon.RationaiStandaloneV3TileSource`
+ * (`modules/rationai-wsi-tile-source/tile-source.js`).
+ */
+type SelfConfiguringTileSourceClass = { xopatSelfConfiguring: true };
 
 const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSeadragonTileSourceWithExtensions;
 
@@ -40,10 +287,41 @@ const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSea
 /**
  * Extension of OpenSeadragon: Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meaning. These are documented in the return function.
+ *
+ * This method must return ONLY non-identifying, technical metadata (dimensions, tile size, pyramid
+ * depth, pixel size via `micronsX/Y`/`microns`, channels, `error`, protocol-technical ids). Any
+ * patient-identifying / PHI information belongs in {@link getSensitiveMetadata} instead — it must
+ * never appear here, in `getDisplayMetadata()`, or in the general scripting namespaces.
  * @memberOf OpenSeadragon.TileSource
  * @function getMetadata
  */
 tileSourcePrototype.getMetadata = function (): TileSourceMetadata { return {}; };
+
+/**
+ * Extension of OpenSeadragon: Retrieve identifying / patient-sensitive slide metadata.
+ *
+ * Sensitivity is a generic TileSource concern (not DICOM-only): any source that carries identifying
+ * information must expose it here, kept strictly separate from {@link getMetadata}. This is the single
+ * integration point for **all** patient / clinical records — anything that identifies a person or
+ * discloses their clinical picture belongs here, e.g.:
+ *   - patient identity: name, id, sex / gender, birth-date, age
+ *   - clinical record: biopsy history, diagnosis, clinical history, and any other clinical notes
+ *   - study / acquisition: accession number, institution, referring / performing physician,
+ *     study & series descriptions, protocol UIDs
+ *   - provenance: raw source paths / filenames (which routinely embed the above)
+ *
+ * The value is an arbitrary (possibly nested) key-value object; the default returns `undefined` (no
+ * sensitive data). It is reachable only through:
+ *   - the isolated `patient` scripting namespace (`patient.getPatientMetadata()`), never the general
+ *     `viewer` / `application` namespaces or the default assistant context, and
+ *   - human-facing UI that explicitly opts in — the Slide Information panel (`slide-info`) reads this
+ *     getter to render a dedicated "Clinical information" card for the clinician.
+ * It is never merged into {@link getMetadata} or `getDisplayMetadata()`.
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSensitiveMetadata
+ * @return {TileSourceMetadata|undefined}
+ */
+tileSourcePrototype.getSensitiveMetadata = function (): TileSourceMetadata | undefined { return undefined; };
 
 /**
  * Extension of OpenSeadragon: User-facing display metadata for the Slide Information panel.
@@ -96,7 +374,27 @@ tileSourcePrototype.getDisplayMetadata = function (this: OpenSeadragonTileSource
 };
 
 /**
- * Set source options.
+ * Set source options — the per-slide `options` bag from the session config
+ * (`DataOverride.options` merged under the background/visualization entry
+ * `options`; see `SLIDE_PROTOCOLS.optionsFor`).
+ *
+ * **xOpat calls this up to twice, with the same object:**
+ * 1. synchronously at protocol-resolve time, *before* the source issues its
+ *    metadata request — but only for sources the broker constructed itself
+ *    (a protocol entry naming a `tileSourceClass`, or a factory protocol);
+ * 2. from `configureOpenedItem` after `addTiledImage` succeeds, when the
+ *    metadata is known.
+ *
+ * Implementations must therefore:
+ * - be **idempotent** and treat the argument as the *complete* desired option
+ *   set (reset derived state rather than accumulating — e.g. `delete` a query
+ *   parameter before conditionally re-setting it, so dropping an option
+ *   actually drops it);
+ * - tolerate being called before any metadata exists (`this.data` may be
+ *   undefined). Options that can only be expanded from the info response (e.g.
+ *   `channels: "all"` → concrete channel ids) are expected to no-op on the
+ *   first call and materialize on the second.
+ *
  * @memberOf OpenSeadragon.TileSource
  * @function setSourceOptions
  * @param {SlideSourceOptions} options
@@ -114,12 +412,82 @@ tileSourcePrototype.setSourceOptions = function (options: SlideSourceOptions): S
 tileSourcePrototype.getThumbnail = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
 
 /**
+ * Extension of OpenSeadragon: declare the sample encoding this source's tiles
+ * carry. Undeclared (the default) means 8-bit-compatible — see the interface
+ * doc above for why that is the safe direction.
+ * @memberOf OpenSeadragon.TileSource
+ * @function getTilePrecision
+ * @return {"unorm8"|"float16"|undefined}
+ */
+tileSourcePrototype.getTilePrecision = function (): TileSamplePrecision | undefined { return undefined; };
+
+/**
  * Extension of OpenSeadragon: Retrieve slide label.
  * @memberOf OpenSeadragon.TileSource
  * @function getLabel
  * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
  */
 tileSourcePrototype.getLabel = function (): Promise<ImageLike | undefined> { return Promise.resolve(undefined); };
+
+/**
+ * Extension of OpenSeadragon: can the *original* slide file (the scanner output
+ * this pyramid was derived from) be handed back to the user?
+ *
+ * Optional capability, duck-typed like {@link getLabel} — the default answers
+ * "no" and every UI surface hides its entry. Implement it together with
+ * {@link getSlideFileDownload}.
+ *
+ * **Must be synchronous and free of I/O.** Menus consult it while they are
+ * being built: `CanvasContextProvider` is synchronous by contract
+ * (`src/classes/app/canvas-context-menu.ts`), so there is nowhere to await.
+ * Answer from metadata already in hand (e.g. a `raw_download` flag on the
+ * slide-info response, or a URL pushed in through `setSourceOptions`), and
+ * return `false` while the metadata is still missing.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function canDownloadSlideFile
+ * @return {boolean}
+ */
+tileSourcePrototype.canDownloadSlideFile = function (): boolean { return false; };
+
+/**
+ * Extension of OpenSeadragon: describe where the original slide file lives.
+ * Called only after {@link canDownloadSlideFile} returned `true`; returning
+ * `undefined` anyway is allowed and simply cancels the download.
+ *
+ * This resolves a *location*, it does not transfer anything — the core driver
+ * (`UTILITIES.downloadSlideFile`) decides between handing the URL to the
+ * browser's download manager and streaming it through the source's HttpClient
+ * with a progress dialog. Whole-slide images are routinely tens of gigabytes,
+ * so never read the file into memory here.
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function getSlideFileDownload
+ * @return {Promise<SlideFileDownload|undefined>}
+ */
+tileSourcePrototype.getSlideFileDownload = function (): Promise<SlideFileDownload | undefined> {
+    return Promise.resolve(undefined);
+};
+
+/**
+ * Extension of OpenSeadragon: probe whether this source splits into multiple
+ * aligned virtual sub-sources. Default delegates to the optional
+ * `window.VIRTUALIZATION_DETECTORS` registry (supplied by a detector module);
+ * absent that module, sources never virtualize and this returns `null`.
+ * @memberOf OpenSeadragon.TileSource
+ * @function probeVirtualization
+ * @return {Promise<VirtualDecomposition|null>}
+ */
+tileSourcePrototype.probeVirtualization = async function (this: OpenSeadragonTileSourceWithExtensions): Promise<any> {
+    const registry = (window as any).VIRTUALIZATION_DETECTORS;
+    if (!registry || typeof registry.detect !== "function") return null;
+    try {
+        return await registry.detect(this);
+    } catch (e) {
+        console.warn("[probeVirtualization] detector failed:", e);
+        return null;
+    }
+};
 
 // Override tile fetching to route through xOpat's HttpClient when the
 // TileSource was resolved from a slide protocol that declares one — gaining
@@ -174,7 +542,11 @@ tileSourcePrototype.downloadTileStart = function (this: OpenSeadragonTileSourceW
             if (blob.size === 0) {
                 context.fail("[downloadTileStart] Empty image response.", null);
             } else {
-                context.finish(blob, null, "rasterBlob");
+                // A source that negotiates a non-raster transfer encoding (e.g. a
+                // WSI-Service asked for `image_format=tiff`) declares it via
+                // `_dataFormat`; the blob is then handed to OSD as that data type so
+                // the converter graph decodes it instead of treating it as an image.
+                context.finish(blob, null, this._dataFormat || "rasterBlob");
             }
         } catch (err: any) {
             if (controller.signal.aborted) return;

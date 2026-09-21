@@ -4,13 +4,27 @@ See the API of ``menu-pages`` module, this plugin only forwards its configuratio
 Supports ``data`` property - the configuration sent to the module. It can be either an array of
 configurations or a single configuration (also an array).
 
-Sanitization is enabled via ``sanitizeConfig`` param (either in configuration or in `include.json`).
-This param accepts ``true`` , `false`, `{....}` or object configuration (see the menu-pages module docs).
+## Trust boundary
+
+`data` can arrive from two places, and they are not equally trusted:
+
+| provenance | read from | policy applied |
+|---|---|---|
+| operator | `include.json` / `ENV.plugins["custom-pages"].data` | whatever `sanitizeConfig` says |
+| session | POST_DATA, URL params, an imported peer session | the menu-pages **default allowlist**, always |
+
+``sanitizeConfig`` and ``target`` are read via `getStaticMeta` **only** — deployment
+config, never the session (AGENTS.md §7). They used to be read via `getOption`, which let
+the same bundle that supplied the pages also decide how safely they were rendered.
+
+The param accepts ``true``, ``false`` or a sanitize-html config object; see the menu-pages
+module docs. Note ``false`` means "the module default allowlist", not "raw" — there is no
+raw mode, because a page config is not necessarily something the operator wrote.
 
 ## Placement target
 
 Pages can be mounted in two places. Set the plugin-level default via the ``target`` param
-(in the session config or `include.json`):
+(`include.json` or `ENV.plugins["custom-pages"].target`):
 
 | `target`   | Where the pages appear                                                        |
 |------------|-------------------------------------------------------------------------------|

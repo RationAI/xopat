@@ -1,6 +1,5 @@
 import { BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Dropdown } from "../../elements/dropdown.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
 import { PhIcon, iconComponentFor } from "../../elements/ph-icon.mjs";
 import { ToolbarItem } from "./toolbarItem.mjs";
 import van from "../../../vanjs.mjs";
@@ -44,9 +43,9 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
         const defaultItemKey = defaultItem.options.itemID ?? defaultItem.id;
         this._selectedId.val = defaultItemKey;
 
-        // icon name from child — works for both FAIcon and PhIcon since both
-        // expose the glyph name under options.name
-        const childIconName = (ci) => (ci.options.icon instanceof FAIcon || ci.options.icon instanceof PhIcon)
+        // icon name from child — an icon component exposes the glyph name
+        // under options.name, a plain string is already the name
+        const childIconName = (ci) => (ci.options.icon instanceof PhIcon)
             ? ci.options.icon.options.name
             : ci.options.icon;
 
@@ -65,7 +64,6 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
             };
         });
 
-        // Header icon — Phosphor names go through PhIcon, everything else FAIcon.
         const headerIcon = iconComponentFor(defaultIconName);
 
         // single dropdown; header icon will be driven by activeSelection
@@ -111,8 +109,11 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
 
         const headerId = this._dropdown.headerButton.id;
 
-        // adapt width to toolbar orientation:
-        // horizontal -> square; vertical -> full width
+        // adapt the header to toolbar orientation. Horizontal keeps the roomy
+        // icon + caret pair (58px, set by Dropdown.iconOnly). Vertical collapses
+        // it to a plain square icon button with the caret as a corner marker —
+        // otherwise this one control drags the whole column out to 58px, since
+        // every sibling item stretches to `w-full`.
         queueMicrotask(() => {
             const root = el.closest("[data-toolbar-root]");
             if (!root) return;
@@ -121,13 +122,13 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
                 const btnEl = document.getElementById(headerId);
                 if (!btnEl) return;
 
-                if (dir === "vertical") {
-                    btnEl.classList.add("w-full");
-                    btnEl.classList.remove("btn-square");
-                } else {
-                    btnEl.classList.remove("w-full");
-                    btnEl.classList.add("btn-square");
-                }
+                const vertical = dir === "vertical";
+                btnEl.classList.remove("w-full");
+                // vertical: one fixed column width shared with every other
+                // control; horizontal: the intrinsic square + the 58px header
+                btnEl.classList.toggle("toolbar-btn-vertical", vertical);
+                btnEl.classList.toggle("btn-square", !vertical);
+                this._dropdown.setCompactHeader(vertical);
             };
 
             const handler = (e) => apply(e.detail.dir);

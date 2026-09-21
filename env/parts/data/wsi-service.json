@@ -1,0 +1,44 @@
+{
+  "$meta": {
+    "description": "EMPAIA wsi-service on localhost:<% WSI_PORT %> — the shipped default",
+    "dimension": "data",
+    "clientKey": "localhost",
+    "defaults": { "WSI_PORT": "8080" }
+  },
+  /**
+   * The stock development data source: a wsi-service container serving slides
+   * over its `/v3/slides/info` endpoint, with `rationai-wsi-tile-source`
+   * reading tiles from it.
+   *
+   * `base/core` + this fragment is byte-equivalent to `env/env.default.json`
+   * — that equivalence is asserted in `test/suites/unit/env-compose.test.mjs`,
+   * so the split cannot silently drift from the file it replaced.
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          "wsi_service": {
+            "url": "`/v3/slides/info?slide_id=${data}`",
+            "baseURL": "http://localhost:<% WSI_PORT:-8080 %>"
+          }
+        },
+        "default_background_protocol": "wsi_service",
+        "default_visualization_protocol": "wsi_service"
+      }
+    }
+  },
+  "plugins": {
+    "rationai-wsi-file-browser": {
+      "enabled": true,
+      "permaLoad": true,
+      "wsiService": "http://localhost:<% WSI_PORT:-8080 %>"
+    }
+  },
+  "modules": {
+    "rationai-wsi-tile-source": {
+      "enabled": true,
+      "permaLoad": true
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "name": "Markdown",
+    "description": "Renders markdown text safely and turns #xopat-… links into actions any subsystem can register."
+  },
+  "links": {
+    "goToRegion": "Show this region in the slide viewer",
+    "regionUnavailable": "That slide region can no longer be shown — the viewer it refers to is not open.",
+    "unavailable": "This link can no longer be opened."
+  }
+}

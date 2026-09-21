@@ -3,8 +3,7 @@ import { PresetCard } from '../components/presetCard.mjs';
 const { div, span, input, select, option, button, i, b, a, br, h4 } = globalThis.van.tags;
 
 function iconNode(icon, extraClass = '', style = '') {
-    const isPh = String(icon ?? '').trim().startsWith('ph-');
-    const cls = isPh ? `ph-light ${icon} ${extraClass}` : `fa-auto ${icon} ${extraClass}`;
+    const cls = `ph-light ${icon ?? ''} ${extraClass}`;
     return i({ class: cls.trim(), style });
 }
 
@@ -23,6 +22,33 @@ export const presetMethods = {
         this.updatePresetsHTML();
     },
 
+    /**
+     * Is class creation constrained to a server-provided list right now?
+     * @return {object|undefined} the active vocabulary, or undefined when free
+     */
+    _lockedVocabulary() {
+        const vocabulary = this.context.presets.vocabulary;
+        return vocabulary && !vocabulary.allowFreeform ? vocabulary : undefined;
+    },
+
+    /**
+     * Which fields of a card the destination owns.
+     *
+     * Only presets that actually carry a vocabulary class are locked: an
+     * unclassified preset is the user's own scratch class and stays editable, and
+     * a preset predating the vocabulary must not become uneditable retroactively.
+     */
+    _presetCardLock(preset) {
+        const vocabulary = this._lockedVocabulary();
+        if (!vocabulary) return undefined;
+        if (!this.context.presets.classValueOf(preset)) return undefined;
+        return {
+            metaKeys: new Set([vocabulary.metaKey]),
+            title: true,
+            reason: this.t('annotations.presets.vocabularyLocked'),
+        };
+    },
+
     _setContainerContent(target, ...children) {
         if (!target) return;
         target.replaceChildren(...children.flat().filter(Boolean));
@@ -36,19 +62,12 @@ export const presetMethods = {
             try { return [item.create()]; } catch {}
         }
         if (typeof item === 'string') {
-            const parsed = UI?.BaseComponent?.parseDomLikeItem?.(item);
-            if (parsed instanceof Node) return [parsed];
-            if (Array.isArray(parsed)) return parsed.flatMap(x => this._normalizeDomLike(x));
-            if (typeof parsed === 'string') {
-                const s = parsed.trim();
-                if (s.startsWith('<')) {
-                    const wrap = div();
-                    wrap.innerHTML = s;
-                    return Array.from(wrap.childNodes);
-                }
-                return [span(parsed)];
-            }
-            return [];
+            // Route strings through the core builder: it sanitizes markup (when
+            // the sanitizer is loaded) and otherwise renders as plain text, so a
+            // string contributed by a `render-annotation-presets` listener can
+            // never inject raw HTML here.
+            const node = UI?.BaseComponent?.toNode?.(item);
+            return node ? [node] : [span(item)];
         }
         return [span(String(item))];
     },
@@ -80,6 +99,8 @@ export const presetMethods = {
         } else {
             this._setContainerContent(right, this.getMissingPresetHTML(false));
         }
+
+        this._refreshPresetSwatch?.();
     },
 
     updatePresetsHTML() {
@@ -165,6 +186,131 @@ export const presetMethods = {
         );
     },
 
+    /**
+     * Build the annotation toolbar's preset swatch: a single ToolbarPanelButton
+     * whose icon shows two mouse glyphs tinted by the active left/right presets.
+     * Clicking opens a compact picker where a left-click binds a class to the
+     * left mouse button and a right-click binds it to the right button. Colours
+     * and rows stay in sync via {@link _refreshPresetSwatch}.
+     * @return {ToolbarPanelButton}
+     */
+    buildPresetSwatchToolbarButton() {
+        const leftIconId = `${this.id}-swatch-l`;
+        const rightIconId = `${this.id}-swatch-r`;
+        this._presetSwatchIconIds = { left: leftIconId, right: rightIconId };
+
+        // Van nodes with stable ids; colours are applied later via
+        // element.style.color (DOM API) so a user-supplied preset colour is
+        // never interpolated into markup.
+        this._presetSwatchIcon = span({ class: "inline-flex items-center gap-0.5"},
+            i({id:`${leftIconId}`, class: "ph-light ph-mouse-left-click text-sm"}),
+            i({id: `${rightIconId}`, class: "ph-light ph-mouse-right-click text-sm"})
+        );
+
+        this._presetSwatchPanel = div({ class: 'flex flex-col w-56 bg-base-200' });
+
+        this._presetSwatchButton = new UI.ToolbarPanelButton({
+            id: `${this.id}-preset-swatch`,
+            itemID: 'preset-swatch',
+            icon: this._presetSwatchIcon,
+            label: this.t('annotations.toolbar.presetSwatch'),
+            onOpen: () => this._renderPresetSwatchPanel()
+        }, this._presetSwatchPanel);
+
+        // Initial paint once the icon/panel nodes exist in the DOM.
+        queueMicrotask(() => this._refreshPresetSwatch());
+        return this._presetSwatchButton;
+    },
+
+    /** Tint the two toolbar mouse glyphs from the active left/right presets. */
+    _renderPresetSwatchIcon() {
+        const ids = this._presetSwatchIconIds;
+        if (!ids) return;
+        const muted = 'var(--fallback-bc, #9ca3af)';
+        const paint = (elId, preset) => {
+            const el = document.getElementById(elId);
+            if (el) {
+                el.style.color = preset?.color || muted;
+                el.style.opacity = preset ? '1' : '0.5';
+            }
+        };
+        paint(ids.left, this.context.getPreset(true));
+        paint(ids.right, this.context.getPreset(false));
+    },
+
+    /** Rebuild the swatch picker rows (one per preset + an edit shortcut). */
+    _renderPresetSwatchPanel() {
+        const panel = this._presetSwatchPanel;
+        if (!panel) return;
+
+        const leftId = this.context.getPreset(true)?.presetID;
+        const rightId = this.context.getPreset(false)?.presetID;
+
+        const header = div({ class: 'flex items-center justify-between px-1 pb-1.5' },
+            span({ class: 'text-[11px] font-semibold uppercase tracking-wide opacity-50' },
+                this.t('annotations.toolbar.presetSwatchTitle')),
+            span({ class: 'flex items-center gap-1 text-[10px] opacity-50' },
+                span({ class: 'kbd kbd-xs' }, 'L'),
+                span({ class: 'kbd kbd-xs' }, 'R'))
+        );
+
+        const rows = [];
+        this.context.presets.foreach((preset) => {
+            const isLeft = preset.presetID === leftId;
+            const isRight = preset.presetID === rightId;
+
+            // Small tinted icon carries the preset colour. Set via DOM to keep a
+            // user-supplied colour out of an attribute string.
+            const icon = iconNode(preset.objectFactory.getIcon(), 'text-base shrink-0');
+            icon.style.color = preset.color || '';
+
+            const bindBtn = (bound, asLeft, tone) => button({
+                    class: `btn btn-xs btn-square font-bold ${bound ? tone : 'btn-ghost opacity-30 hover:opacity-100'}`.trim(),
+                    title: this.t(asLeft ? 'annotations.viewerMenu.leftClickPreset' : 'annotations.viewerMenu.rightClickPreset'),
+                    onclick: (e) => { e.stopPropagation(); this._clickPresetSelect(asLeft, preset.presetID); }
+                }, asLeft ? 'L' : 'R');
+
+            rows.push(div({
+                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim()
+                },
+                icon,
+                span({ class: 'truncate flex-1 text-xs font-medium' },
+                    preset.meta['category']?.value || this.t('annotations.toolbar.unnamedPreset')),
+                bindBtn(isLeft, true, 'btn-primary'),
+                bindBtn(isRight, false, 'btn-secondary')
+            ));
+        });
+
+        if (!rows.length) {
+            rows.push(div({ class: 'text-xs opacity-50 text-center py-3' },
+                this.t('annotations.toolbar.noPresets')));
+        }
+
+        const editLink = button({
+                class: 'btn btn-ghost btn-xs justify-center gap-1 normal-case font-normal opacity-70 hover:opacity-100 mt-1 pt-1 border-t border-base-300 rounded-none',
+                onclick: () => {
+                    this._presetSwatchButton?.close?.();
+                    this.showPresets(true);
+                }
+            },
+            iconNode('ph-pencil-simple', 'text-xs'),
+            this.t('annotations.toolbar.editPresets')
+        );
+
+        panel.replaceChildren(
+            header,
+            div({ class: 'flex flex-col gap-0.5 max-h-[240px] overflow-y-auto' }, ...rows.filter(Boolean)),
+            editLink
+        );
+    },
+
+    /** Keep the toolbar swatch (icon + open panel) in sync with preset state. */
+    _refreshPresetSwatch() {
+        if (!this._presetSwatchButton) return;
+        this._renderPresetSwatchIcon();
+        if (this._presetSwatchButton.isOpen?.()) this._renderPresetSwatchPanel();
+    },
+
     getPresetHTMLById(id, isLeftClick, index = undefined) {
         const preset = this.context.presets.get(id);
         if (!preset) return undefined;
@@ -221,6 +367,7 @@ export const presetMethods = {
             isSelected,
             enableModify: this.enablePresetModify,
             allowedFactories: this._allowedFactories,
+            lock: this._presetCardLock(preset),
             t: (key) => this.t(key),
             callbacks: {
                 getFactory: (id) => this.context.getAnnotationObjectFactory(id),
@@ -257,7 +404,7 @@ export const presetMethods = {
         }
         if (removed === false) {
             console.warn('Failed to remove preset', presetId);
-            Dialogs.show('Failed to remove preset.', 5000, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.presetRemoveFail'), 5000, Dialogs.MSG_ERR);
         }
     },
 
@@ -265,7 +412,7 @@ export const presetMethods = {
         if (!this.enablePresetModify) return null;
         const key = this.context.presets.addCustomMeta(presetId, name, '');
         if (!key) {
-            Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.metaCreateFail', { name }), 2500, Dialogs.MSG_ERR);
             return null;
         }
         return this._metaFieldHtml(presetId, key, { name, value: '' }, true, 'input-xs w-full');
@@ -277,7 +424,7 @@ export const presetMethods = {
             rowEl?.remove();
             return;
         }
-        Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaDeleteFail'), 2500, Dialogs.MSG_ERR);
     },
 
     _updatePresetEmptyState() {
@@ -316,7 +463,7 @@ export const presetMethods = {
         const inputNode = buttonNode.previousElementSibling;
         const name = inputNode?.value?.trim();
         if (!name) {
-            Dialogs.show('You must add a name of the new field.', 2500, Dialogs.MSG_ERR);
+            Dialogs.show(this.t('annotations.errors.metaNameRequired'), 2500, Dialogs.MSG_ERR);
             return;
         }
 
@@ -327,7 +474,7 @@ export const presetMethods = {
             inputNode.value = '';
             return;
         }
-        Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaCreateFail', { name }), 2500, Dialogs.MSG_ERR);
     },
 
     deletePresetMeta(inputNode, presetId, key) {
@@ -336,39 +483,97 @@ export const presetMethods = {
             inputNode.parentElement.remove();
             return;
         }
-        Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
+        Dialogs.show(this.t('annotations.errors.metaDeleteFail'), 2500, Dialogs.MSG_ERR);
     },
 
-    _createPresetDialogHeader() {
+    /**
+     * The "add a class" affordance.
+     *
+     * With a locked vocabulary this is a picker over the classes the destination
+     * declares, not a button that mints a blank one: a free-form class would be
+     * refused by the `crud:preset` guard, and before the guard existed it was
+     * silently dropped on the way upstream — the annotation stored, its
+     * classification lost. Drawing *without* a class stays possible (that is
+     * `allowUnclassified`); inventing one does not.
+     */
+    _createPresetAddControl(isLeftClick) {
+        if (!this.enablePresetModify) return null;
+        const vocabulary = this._lockedVocabulary();
+        if (!vocabulary) {
+            return button({
+                    class: 'btn btn-primary btn-sm gap-1 shrink-0',
+                    title: this.t('annotations.presets.addNew'),
+                    onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
+                },
+                iconNode('ph-plus', 'text-xs'),
+                span({ class: 'sm:inline' }, this.t('annotations.presets.addNew'))
+            );
+        }
+
+        const available = this.context.presets.unusedVocabularyEntries();
+        if (!available.length) {
+            return span({
+                class: 'text-xs opacity-60 shrink-0',
+                title: this.t('annotations.presets.vocabularyLocked'),
+            }, this.t('annotations.presets.vocabularyExhausted'));
+        }
+
+        const picker = new UI.Autocomplete({
+            size: 'sm',
+            allowClear: false,
+            placeholder: this.t('annotations.presets.vocabularyPick'),
+            options: available.map(entry => ({
+                value: entry.value,
+                label: entry.label,
+                description: entry.description,
+            })),
+            onChange: (value) => {
+                if (!value) return;
+                this.createNewPreset(undefined, isLeftClick, value);
+                // The chosen entry is no longer available; rebuilding the header
+                // is what removes it from the list.
+                this._refreshPresetAddControl(isLeftClick);
+            },
+        });
+        this._presetAddPicker = picker;
+        return div({ class: 'shrink-0 w-56' }, picker.create());
+    },
+
+    _refreshPresetAddControl(isLeftClick) {
+        const host = this._presetAddControlHost;
+        if (!host) return;
+        // Autocomplete portals its panel to document.body and tracks its anchor
+        // while open; `remove()` is what detaches both.
+        this._presetAddPicker?.remove?.();
+        this._presetAddPicker = undefined;
+        const next = this._createPresetAddControl(isLeftClick);
+        host.replaceChildren(...(next ? [next] : []));
+    },
+
+    _createPresetDialogHeader(isLeftClick) {
+        const addBtn = div({ class: 'flex items-center shrink-0' },
+            ...[this._createPresetAddControl(isLeftClick)].filter(Boolean));
+        this._presetAddControlHost = addBtn;
+
         return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 pb-2' },
             div({ class: 'flex items-center gap-2' },
                 iconNode('ph-tag', 'text-primary'),
                 h4({ class: 'text-lg font-bold' }, this.t('annotations.presets.dialogTitle'))
             ),
-            div({ class: 'relative w-full sm:w-64' },
-                span({ class: 'absolute inset-y-0 left-0 flex items-center pl-3 opacity-50' },
-                    iconNode('ph-magnifying-glass', 'text-xs')
+            div({ class: 'flex items-center gap-2 w-full sm:w-auto' },
+                div({ class: 'relative flex-1 sm:w-64' },
+                    span({ class: 'absolute inset-y-0 left-0 flex items-center pl-3 opacity-50' },
+                        iconNode('ph-magnifying-glass', 'text-xs')
+                    ),
+                    input({
+                        id: 'preset-filter-select',
+                        class: 'input input-bordered input-sm w-full pl-9 focus:input-primary',
+                        type: 'text',
+                        placeholder: this.t('annotations.presets.filterPlaceholder') || 'Filter classes...',
+                        oninput: (e) => this._applyPresetFilter(e.target.value)
+                    })
                 ),
-                input({
-                    id: 'preset-filter-select',
-                    class: 'input input-bordered input-sm w-full pl-9 focus:input-primary',
-                    type: 'text',
-                    placeholder: this.t('annotations.presets.filterPlaceholder') || 'Filter classes...',
-                    oninput: (e) => this._applyPresetFilter(e.target.value)
-                })
-            )
-        );
-    },
-
-    _createAddNewPresetButton(isLeftClick) {
-        return div({
-                id: 'preset-add-new',
-                class: 'flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-base-content/20 bg-base-100 hover:border-primary/60 hover:bg-base-200 transition-all cursor-pointer group min-h-[64px] py-3',
-                onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
-            },
-            iconNode('ph-plus-circle', 'text-base opacity-60 group-hover:opacity-100'),
-            span({ class: 'text-sm font-semibold uppercase tracking-wide opacity-60 group-hover:opacity-100' },
-                this.t('annotations.presets.addNew') || 'Add new class'
+                addBtn
             )
         );
     },
@@ -482,18 +687,13 @@ export const presetMethods = {
 
         if (this._presetCards.size === 0) emptyState.classList.remove('hidden');
 
-        const addNewWrapper = this.enablePresetModify
-            ? div({ class: 'mt-3' }, this._createAddNewPresetButton(isLeftClick))
-            : null;
-
         const body = div({ class: 'flex flex-col gap-2' },
             emptyState,
             cardsContainer,
-            noResults,
-            addNewWrapper
+            noResults
         );
 
-        const header = this._createPresetDialogHeader();
+        const header = this._createPresetDialogHeader(isLeftClick);
         const footer = this._createPresetDialogFooter(allowSelect);
 
         const modal = new UI.Modal({
@@ -616,13 +816,25 @@ export const presetMethods = {
         return { private: annotation.private };
     },
 
-    createNewPreset(buttonNode, isLeftClick) {
-        const id = this.context.presets.addPreset().presetID;
-        const newNode = this.getPresetHTMLById(id, isLeftClick);
+    /**
+     * @param {Node} [buttonNode] insertion anchor when there is no card container
+     * @param {boolean} isLeftClick which mouse button the dialog is editing
+     * @param {string} [classValue] vocabulary class to bind; creates the preset and
+     *   its class in one dispatch instead of a create followed by a meta update
+     */
+    createNewPreset(buttonNode, isLeftClick, classValue = undefined) {
+        const preset = classValue !== undefined
+            ? this.context.presets.addVocabularyPreset(classValue)
+            : this.context.presets.addPreset();
+        // A refused create (vocabulary guard, rights guard) already toasted; there
+        // is nothing to render and nothing more to say.
+        if (!preset) return;
+
+        const newNode = this.getPresetHTMLById(preset.presetID, isLeftClick);
         if (this._presetCardsContainer) {
             this._presetCardsContainer.appendChild(newNode);
         } else {
-            buttonNode.before(newNode);
+            buttonNode?.before(newNode);
         }
         this._updatePresetEmptyState();
         this._updateRightSideMenuPresetList();

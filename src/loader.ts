@@ -4,9 +4,28 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
+import { parseVersion, satisfies } from "./classes/app/semver";
+import { pluginsCookieKey } from "./classes/app/deployment-key";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
+import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
+import { ViewerDepthController } from "./classes/app/viewer-depth-controller";
+import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ViewerRotationController } from "./classes/app/viewer-rotation-controller";
+import { ViewerScrollZoomController } from "./classes/app/viewer-scroll-zoom-controller";
+import { ViewerKineticPanController } from "./classes/app/viewer-kinetic-pan-controller";
+import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-performance";
+import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
-import { serializeScene, mergeViewerLiveIntoConfig } from "./classes/app/canonical-scene";
+import { downloadSlideFile } from "./classes/app/slide-file-download";
+import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
+import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
+import {
+    registerCoreCapabilities, allowCoreAction,
+    CAP_EXPORT_FILE, CAP_EXPORT_URL,
+} from "./classes/app/core-capabilities";
+import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
+import { stripShaderIdNamespace } from "./classes/visualization/shader-id-namespace";
+import { serializeScene, mergeViewerLiveIntoConfig, snapshotViewport } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
 
@@ -31,10 +50,13 @@ const STORE_TOKEN = Symbol("XOpatViewerScratchStore");
  *
  * - `meta.capabilities[]` (top-level)  → explicit, declared verbatim.
  * - `meta.io.capabilities[]`           → auto-derived per the rules in
- *   `src/USER_ROLES.md` §2b. Guards are mounted on `IO_PIPELINE` for each
- *   `pre-create` / `pre-update` / `pre-delete` direction of every CRUD cap,
- *   and on bundle export/import via the same registerGuard façade
- *   (the pipeline forwards those through the same dispatch).
+ *   `src/USER_ROLES.md` §2b. Guards are mounted on `IO_PIPELINE` for every
+ *   pre-phase: `pre-create` / `pre-read` / `pre-update` / `pre-delete` per CRUD
+ *   capability, and `pre-export` / `pre-import` per bundle capability.
+ *
+ * Because the gate lives in the pipeline rather than in each owner, a sink
+ * never implements authorization: the veto has already run by the time any
+ * destination is contacted.
  *
  * Skips silently when:
  * - `meta` is missing (owner registered without include.json metadata),
@@ -48,8 +70,60 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
     const guards: Array<() => void> = [];
     const pipeline: any = (window as any).IO_PIPELINE;
 
-    const declare = (cap: { id: string; default: "allow" | "deny"; label?: string; description?: string }) => {
+    const declare = (cap: {
+        id: string; default: "allow" | "deny"; label?: string; description?: string;
+        direction?: "create" | "read" | "update" | "delete";
+    }) => {
         (window as any).XOpatUser.declareCapability({ ...cap, declaredBy: ownerId });
+    };
+
+    /**
+     * Mount the role check for one `(resource, pre-phase)` pair.
+     *
+     * Priority is intentionally high (10_000) so the role check short-circuits
+     * BEFORE domain validation runs — a denied user must not see a misleading
+     * "validation failed" when the real reason is permission.
+     *
+     * **The handler MUST filter by owner itself.** Guards are bucketed by
+     * `resource`, and a BUNDLE context carries no `resourceName` — so a bundle
+     * gate can only register under `"*"`, and `runGuards` then offers it EVERY
+     * owner's bundle dispatch. Without the check below, denying
+     * `annotations.bundle-export` refused the recorder's, the questionnaire's
+     * and every other owner's export too, each reporting the *annotations*
+     * capability id. CRUD gates bucket by resource name and are not exposed to
+     * that, but two owners declaring a resource of the same name would be —
+     * hence the same guard on both paths.
+     *
+     * @param capabilityId the IO capability being gated (`bundle-export`,
+     *   `crud:annotation`, …), matched against `ctx.capabilityId`
+     */
+    const mountGate = (rightsCapId: string, capabilityId: string, resource: string, direction: string) => {
+        if (!pipeline || typeof pipeline.registerGuard !== "function") return;
+        const dispose = pipeline.registerGuard({
+            ownerId: `rights:${ownerId}`,
+            resource,
+            direction,
+            priority: 10_000,
+            label: `rights-gate:${rightsCapId}`,
+            handler: (ctx: any) => {
+                // Not our owner's traffic — this guard has no opinion on it.
+                if (ctx?.ownerId !== ownerId) return { ok: true };
+                if (capabilityId && ctx?.capabilityId !== capabilityId) return { ok: true };
+                const user = (window as any).XOpatUser?.instance?.();
+                if (!user) return { ok: true };
+                if (user.can(rightsCapId)) return { ok: true };
+                return {
+                    ok: false,
+                    refused: true,
+                    reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
+                    userMessage: $.t("user.roles.refused", {
+                        capability: (window as any).XOpatUser.capabilityLabel(rightsCapId),
+                    }),
+                    code: "W_PERM_DENIED",
+                };
+            },
+        });
+        if (typeof dispose === "function") guards.push(dispose);
     };
 
     // 1. Explicit capabilities (top-level `capabilities` array)
@@ -82,7 +156,7 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
         if (!kind) {
             if (cap.id.startsWith("crud:")) kind = "crud";
             else if (cap.id.startsWith("kv:")) kind = "kv";
-            else if (cap.id === "bundle-export" || cap.id === "bundle-import") kind = "bundle";
+            else if (cap.id.startsWith("bundle-")) kind = "bundle";
             else continue; // unknown shape — skip silently
         }
 
@@ -91,12 +165,11 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
         if (kind === "bundle") {
             const rightsCapId = `${ownerId}.${cap.id}`; // e.g. annotations.bundle-export
             declare({ id: rightsCapId, default: dflt, label: baseLabel });
-            // Bundle guard: refuse pre-{export,import} via the same IO guard façade.
-            // The pipeline only models pre-* for CRUD currently; bundle gating uses
-            // the runtime check inside the dispatch path via XOpatUser.can — sinks
-            // can also consult it. For now the declared capability is sufficient
-            // surface for the owner's own exportBundle to query
-            // `XOpatUser.instance().can('<ownerId>.bundle-*')` if it wants.
+            // Bundle traffic is gated in the pipeline, not by the owner. The
+            // veto runs before `exportBundle`/`importBundle` is called, which is
+            // what lets an operator deny an export without every sink author
+            // having to implement their own permission check.
+            mountGate(rightsCapId, cap.id, "*", cap.id.includes("import") ? "pre-import" : "pre-export");
             continue;
         }
 
@@ -112,37 +185,13 @@ function registerOwnerRights(ownerId: string, meta: any): () => void {
 
         for (const dir of directions) {
             const rightsCapId = `${ownerId}.${cap.id}.${dir}`;
-            declare({ id: rightsCapId, default: dflt, label: baseLabel });
-
-            // Read has no pre-* phase in the pipeline today; just the declaration.
-            if (dir === "read") continue;
-
-            // Register a guard that refuses when the user lacks this capability.
-            // Priority intentionally high (10_000) so the role check short-circuits
-            // BEFORE domain validation runs — denied users don't see misleading
-            // "validation failed" messages when the real reason is permission.
-            if (pipeline && typeof pipeline.registerGuard === "function") {
-                const dispose = pipeline.registerGuard({
-                    ownerId: `rights:${ownerId}`,
-                    resource: resourceName,
-                    direction: `pre-${dir}`,
-                    priority: 10_000,
-                    label: `rights-gate:${rightsCapId}`,
-                    handler: (_ctx: any) => {
-                        const user = (window as any).XOpatUser?.instance?.();
-                        if (!user) return { ok: true };
-                        if (user.can(rightsCapId)) return { ok: true };
-                        return {
-                            ok: false,
-                            refused: true,
-                            reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
-                            userMessage: $.t?.("user.roles.refused", { capability: rightsCapId }) || "You do not have permission to perform this action.",
-                            code: "W_PERM_DENIED",
-                        };
-                    },
-                });
-                if (typeof dispose === "function") guards.push(dispose);
-            }
+            // `direction` alongside the label, not folded into it: all four
+            // siblings share the owner's single `label` ("Annotation"), so
+            // anything showing one to a human needs to say WHICH operation.
+            declare({ id: rightsCapId, default: dflt, label: baseLabel, direction: dir });
+            // `read` included: the pipeline gates it in `dispatch`/`queryStream`,
+            // so "may see" is expressible alongside "may change".
+            mountGate(rightsCapId, cap.id, resourceName, `pre-${dir}`);
         }
     }
 
@@ -182,13 +231,121 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
-    $.t = $.t || ((x: any) => String(x).split(".").findLast(Boolean));
+    ensureI18nNamespace();
 
 
     let REGISTERED_ELEMENTS: IXOpatElement[] = [];
     let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
-    let LOADING_PLUGIN = false;
     const REQUIRED_SINGLETONS = new Set<any>();
+    /**
+     * Singletons that declared themselves while a module's include chain was still being
+     * evaluated. Instantiating one at that moment builds it against a half-loaded namespace,
+     * so the sweep waits until the chain finishes. See `requireViewerSingletonPresence`.
+     */
+    const PENDING_SINGLETON_SWEEPS = new Set<any>();
+    /**
+     * Eagerly-registered modules waiting for their own include chain to finish. `addModule`
+     * runs from whichever file declares the class, which is rarely the last one, so building
+     * the singleton right there runs the constructor against a namespace the module's
+     * remaining files have not populated. Keyed by module id; see `flushPendingEagerInit`.
+     */
+    const PENDING_EAGER_INIT = new Map<string, any>();
+    /** Runtime plugin loads in flight, so a second request joins instead of re-injecting. */
+    const PENDING_PLUGIN_LOADS = new Map<string, { promise: Promise<void>, settle: () => void }>();
+
+    /**
+     * Who owns an injected script, for failure attribution.
+     *
+     * `"scripts"` is the conservative default used by external `attachScript` callers:
+     * on failure only the element's script section is dropped, nothing is torn down.
+     * The loader's own chains pass `"plugin"` / `"module"` so a failure routes to the
+     * matching quarantine (`cleanUpPlugin` / `cleanUpModule`). This replaces the old
+     * shared `LOADING_PLUGIN` boolean, which two overlapping runtime loads clobbered —
+     * a throw in one chain could tear down the other chain's plugin.
+     */
+    type ScriptOwner = { id: string, kind: "plugin" | "module" | "scripts" };
+
+    /**
+     * Identity of an injected script. Same-origin URLs drop the query so the `?v=`
+     * cache-buster does not make one file look like two — re-injecting an identical
+     * URL is served from HTTP cache but *re-evaluated*, which is how `fabric.min.js`
+     * ended up defining its classes twice.
+     */
+    function scriptKey(src: string): string {
+        try {
+            const url = new URL(src, document.baseURI);
+            return url.origin === window.location.origin ? url.origin + url.pathname : url.href;
+        } catch (_) {
+            return src;
+        }
+    }
+
+    /** Scripts this loader injected, keyed by `scriptKey`. Injection is idempotent against it. */
+    const SCRIPT_INJECTIONS = new Map<string, Promise<void>>();
+    /** Scripts currently evaluating, for attributing a top-level throw to its owner. */
+    const SCRIPT_EVALUATING = new Map<string, ScriptOwner>();
+
+    /**
+     * Has this file already been put on the page, by us or by the server-rendered
+     * `template-modules` / `template-plugins` sections?
+     *
+     * The document is probed lazily (on a registry miss) rather than seeded up front,
+     * because the loader runs from `template-app`, which the browser parses *before* the
+     * script tags those later templates emit. Without this a dependency whose
+     * `MODULES[id].loaded` flag did not survive the server-side snapshot gets injected a
+     * second time and re-evaluated — the source of the `fabric.Polyline is already
+     * defined` flood.
+     */
+    // The server-rendered script sections are all parsed AND executed by DOMContentLoaded,
+    // and everything injected afterwards goes through `attachScript` and registers itself.
+    // So the document is read exactly once, at that point. Indexing earlier would register a
+    // script that has been parsed but not yet run, and a dedup hit would then report
+    // "loaded" before the file's globals exist.
+    let documentScriptsIndexed = false;
+    function indexDocumentScripts() {
+        if (documentScriptsIndexed) return;
+        documentScriptsIndexed = true;
+        for (const node of Array.from(document.scripts)) {
+            const src = node.getAttribute("src");
+            if (src && !SCRIPT_INJECTIONS.has(scriptKey(src))) {
+                SCRIPT_INJECTIONS.set(scriptKey(src), Promise.resolve());
+            }
+        }
+    }
+    if (document.readyState === "loading") {
+        window.addEventListener("DOMContentLoaded", indexDocumentScripts, { once: true });
+    } else {
+        indexDocumentScripts();
+    }
+
+    function scriptAlreadyPresent(key: string): boolean {
+        return SCRIPT_INJECTIONS.has(key);
+    }
+
+    // One listener for the whole loader instead of clobbering `window.onerror` per script.
+    // `error` events for a top-level throw carry the script URL in `filename`, which is what
+    // lets a failure be attributed to the element that actually owns it.
+    window.addEventListener("error", (event: ErrorEvent) => {
+        if (!SCRIPT_EVALUATING.size) return;
+        let owner: ScriptOwner | undefined;
+        if (event.filename) {
+            // A named file that is not one of ours is not our failure — under the old
+            // `window.onerror` clobber any error during the load window tore an element down.
+            owner = SCRIPT_EVALUATING.get(scriptKey(event.filename));
+        } else if (SCRIPT_EVALUATING.size === 1) {
+            // Cross-origin scripts report an empty filename. Attribute only when there is a
+            // single candidate: guessing between two concurrent loads is how the old shared
+            // flag tore down the wrong plugin.
+            owner = SCRIPT_EVALUATING.values().next().value;
+        }
+        if (owner) failScriptOwner(owner, event.error || event.message);
+    });
+
+    function failScriptOwner(owner: ScriptOwner, e: any) {
+        if (owner.kind === "plugin") cleanUpPlugin(owner.id, e);
+        else if (owner.kind === "module") cleanUpModule(owner.id, e);
+        else cleanUpScripts(owner.id);
+    }
 
     // The IO pipeline is now bootstrapped earlier (in src/app.ts, via
     // bootstrapIOPipeline) so that AppCache/AppCookies are functional from the
@@ -207,64 +364,202 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     // `XOpatElement` constructors are resolved against this role catalog, and
     // the deployment default is applied to the user singleton at construction.
     // See src/USER_ROLES.md.
-    (window as any).XOpatUser?.configureRoles?.((ENV as any)?.core?.roles);
+    //
+    // `ENV.roles`, not `ENV.core.roles`: the server passes the CONTENTS of the
+    // env file's `core` block as ENV (see `initXOpat(... core.CORE ...)` in
+    // `server/node/index.js`, and `ENV.client` / `ENV.setup` everywhere else).
+    // Reading one level too deep resolved to `undefined` for every deployment,
+    // which is why a configured `core.roles` block had no effect whatsoever.
+    (window as any).XOpatUser?.configureRoles?.((ENV as any)?.roles);
+
+    // Core's own capabilities + the local-file route guard. Must follow
+    // `configureRoles` (so the role catalog is known) and precede any element
+    // mount (so the ids exist before the first IO dispatch).
+    registerCoreCapabilities(IO_PIPELINE);
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
     }
 
+    let _versionCheckWarned = false;
+
+    /**
+     * Verify an element's `engines.xopat` range against the running app version,
+     * and its `devOnly` marker against the server's dev mode.
+     * The version check is skipped - not failed - when the deployment does not report a
+     * usable version, since refusing on an unknowable version would break
+     * development builds that legitimately ship `version: null`.
+     * @return a human readable reason when the element must not load, else null
+     */
+    function incompatibilityReason(record: XOpatElementRecord | undefined): string | null {
+        // A development harness is not a feature a deployment may opt into: it exists to
+        // hand a machine unrestricted access to the running page. Declaring it here makes
+        // the gate one refusal the loader enforces for every such element, instead of a
+        // runtime check each harness has to remember to write.
+        if (record?.devOnly === true && APPLICATION_CONTEXT.env?.server?.devMode !== true) {
+            return $.t('messages.devOnlyElement');
+        }
+
+        const range = record?.engines?.xopat;
+        if (!range) return null;
+
+        const version = APPLICATION_CONTEXT.env?.version;
+        if (!parseVersion(version)) {
+            if (!_versionCheckWarned) {
+                _versionCheckWarned = true;
+                console.warn(`Deployment reports no usable version ('${version}'): 'engines' declarations are ignored.`);
+            }
+            return null;
+        }
+        // plain text: the reason is rendered both as a DOM text node (plugin list)
+        // and through an escaping HTML sink (showPluginError)
+        return satisfies(version!, range) ? null
+            : $.t('messages.incompatibleVersion', { range, version, interpolation: { escapeValue: false } });
+    }
+
+    /**
+     * Why a plugin or module cannot run in this deployment, if it cannot: for UI
+     * that lists elements it does not load itself.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @return human readable reason, or null when the element is compatible
+     */
+    (window as any).elementIncompatibility = function (kind: "plugins" | "modules", id: string) {
+        const record = kind === "plugins" ? PLUGINS[id] : MODULES[id];
+        return incompatibilityReason(record) || (kind === "plugins" ? moduleChainIncompatibility(record?.modules) : null);
+    };
+
+    /**
+     * Walk a module dependency closure and report the first module that cannot run
+     * against this app version, so a plugin refuses up front instead of dying later
+     * on a missing singleton.
+     */
+    function moduleChainIncompatibility(moduleList: string[] | undefined, seen = new Set<string>()): string | null {
+        for (const moduleId of moduleList || []) {
+            if (seen.has(moduleId)) continue;
+            seen.add(moduleId);
+
+            const record = MODULES[moduleId];
+            const reason = incompatibilityReason(record);
+            if (reason) return $.t('messages.moduleIncompatibleNamed', { module: elementName("modules", moduleId), reason });
+            const deep = moduleChainIncompatibility(record?.requires, seen);
+            if (deep) return deep;
+        }
+        return null;
+    }
+
     function setPluginLoadStatus(id: string, status: "idle" | "loading" | "loaded" | "failed") {
-        const buttonContainer = $(`#load-plugin-${id}`);
-        if (!buttonContainer.length) return;
+        // `querySelectorAll`, not `getElementById`: the plugins panel body is a getter that
+        // rebuilds a fresh tree on every render, so several nodes can carry this id and
+        // `getElementById` returns whichever comes first — often a stale one, leaving the
+        // visible button enabled while a load is already running.
+        const containers = document.querySelectorAll(`#load-plugin-${CSS.escape(id)}`);
+        if (!containers.length) return;
 
+        let markup: string;
         if (status === "idle") {
-            buttonContainer.html(`<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`);
-            return;
-        }
-
-        if (status === "loading") {
-            buttonContainer.html(
-                `<button disabled class="btn btn-sm">` +
+            markup = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
+        } else if (status === "loading") {
+            markup = `<button disabled class="btn btn-sm">` +
                 `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
-                `</button>`
-            );
-            return;
+                `</button>`;
+        } else if (status === "loaded") {
+            markup = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
+        } else {
+            markup = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
         }
+        containers.forEach(node => { node.innerHTML = markup; });
+    }
 
-        if (status === "loaded") {
-            buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`);
-            return;
-        }
+    /** Append a stylesheet <link> to <head>. Paths come from element metadata (deployment-controlled). */
+    function appendStyleSheet(href: string) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.type = "text/css";
+        link.href = href;
+        document.head.appendChild(link);
+    }
 
-        buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`);
+    /** Escape text destined for an HTML sink. Error texts come from plugin code and server records. */
+    function escapeHtml(value: unknown) {
+        return String(value).replace(/[&<>"']/g, char =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
     }
 
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
+        // All matches, not the first: the plugins panel can hold several renders of the row.
+        const errorContainers = document.querySelectorAll(`#error-plugin-${CSS.escape(id)}`);
         if (!e) {
-            $(`#error-plugin-${id}`).html("");
+            errorContainers.forEach(node => { node.innerHTML = ""; });
             setPluginLoadStatus(id, loaded ? "loaded" : "idle");
             return;
         }
-        $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
+        errorContainers.forEach(node => {
+            node.innerHTML = `<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${escapeHtml(e)}]</code></div>`;
+        });
         setPluginLoadStatus(id, "failed");
     }
 
     function cleanUpScripts(id: string) {
-        $(`#script-section-${id}`).remove();
-        LOADING_PLUGIN = false;
+        document.getElementById(`script-section-${id}`)?.remove();
     }
 
     function cleanUpPlugin(id: string, e: any = $.t('error.unknown')) {
+        // The load chain stops here (a failed script never fires `onload`), so release the
+        // in-flight guard explicitly — otherwise a retry would join a promise that never
+        // settles instead of starting over.
+        PENDING_PLUGIN_LOADS.get(id)?.settle();
+
         if (PLUGINS[id]) {
             delete PLUGINS[id].instance;
             PLUGINS[id].loaded = false;
             PLUGINS[id].error = e;
         }
 
+        // A dead plugin left wired keeps firing on events it can no longer service.
+        removeHandlersOwnedBy(id);
         showPluginError(id, e);
-        $(`.${id}-plugin-root`).remove();
+        document.querySelectorAll(`.${id}-plugin-root`).forEach(node => node.remove());
         cleanUpScripts(id);
+    }
+
+    /**
+     * Module counterpart of `cleanUpPlugin`: quarantine a module whose construction
+     * threw. Without this the singleton stays registered while half-built, its
+     * handlers keep running against missing state, and every later `instance()`
+     * silently hands out the broken object.
+     */
+    function cleanUpModule(id: string, e: any = $.t('error.unknown')) {
+        const modRef = MODULES[id];
+        if (modRef) {
+            delete modRef.instance;
+            // `loaded` stays as-is on purpose: it records "the files are on the page", and
+            // clearing it made the module eligible for a *second* full injection on the next
+            // dependency walk. `error` is the do-not-use signal — see `loadModuleOnce`.
+            modRef.error = e;
+        }
+
+        const ModuleClass = ((window as any).xmodules || {})[id];
+        if (ModuleClass) {
+            ModuleClass.__failed = e;
+            // The singleton constructor assigns `__self` before its body finishes, so a
+            // throw halfway leaves a half-built instance cached. Drop it.
+            ModuleClass.__self = undefined;
+        }
+
+        removeHandlersOwnedBy(id);
+
+        /**
+         * @property {string} id module id
+         * @property {string} message
+         * @memberof VIEWER_MANAGER
+         * @event module-failed
+         */
+        VIEWER_MANAGER.raiseEvent('module-failed', {
+            id: id,
+            message: $.t('error.moduleFailed', { module: elementName("modules", id) }),
+        } as ModuleFailedEvent);
     }
 
     function instantiatePlugin(id: string, PluginClass: XOpatPluginClass) {
@@ -277,12 +572,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             return;
         }
 
+        // Also guards plugins whose scripts the server already shipped (permaLoad):
+        // by refusing construction, incompatible code never wires itself in.
+        const incompatible = incompatibilityReason(PLUGINS[id]);
+        if (incompatible) {
+            console.warn(`Plugin ${id} refused:`, incompatible);
+            VIEWER_MANAGER.raiseEvent('plugin-failed', {
+                id: id,
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
+            } as PluginFailedEvent);
+            cleanUpPlugin(id, incompatible);
+            return;
+        }
+
         let plugin;
         try {
             if (!APPLICATION_CONTEXT.config.plugins[id]) {
                 APPLICATION_CONTEXT.config.plugins[id] = {};
             }
-            plugin = new PluginClass(id);
+            plugin = withHandlerOwner(id, () => new PluginClass(id));
         } catch (e) {
             console.warn(`Failed to instantiate plugin ${PluginClass}.`, e);
             /**
@@ -293,7 +601,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: id }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(id, e);
             return;
@@ -312,7 +620,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", id) }),
             } as PluginFailedEvent);
             cleanUpPlugin(plugin.id);
             return;
@@ -333,7 +641,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         try {
             if (typeof plugin.pluginReady === "function") {
-                await plugin.pluginReady();
+                // Note: only handlers registered synchronously by pluginReady are
+                // attributed — anything wired from an awaited continuation lands
+                // outside the owner scope and falls back to stack-based guessing.
+                await withHandlerOwner(plugin.id, () => plugin.pluginReady!());
             }
             PLUGINS[plugin.id]!.__ready = true;
 
@@ -360,11 +671,63 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[plugin.id]?.name }),
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: elementName("plugins", plugin.id) }),
             } as PluginFailedEvent);
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
             return false;
+        }
+    }
+
+    /**
+     * How long boot waits for one plugin's `pluginReady()`. Generous on purpose —
+     * a plugin legitimately fetches over the network there. This is a deadlock
+     * bound, not a performance budget.
+     */
+    const PLUGIN_READY_TIMEOUT_MS = 20000;
+
+    /**
+     * `initializePlugin` with a deadline, for the BOOT batch only.
+     *
+     * A rejecting plugin is already isolated (initializePlugin catches and cleans
+     * up). A *hanging* one was not: the batch `Promise.all` never settled, so the
+     * loading overlay was never hidden, `viewer-create` never fired, and the whole
+     * viewer sat behind an opaque spinner with nothing naming the culprit.
+     *
+     * On expiry we stop WAITING but deliberately do not tear the plugin down: it
+     * may simply be slow, and `cleanUpPlugin` would rip out handlers and DOM from
+     * under a plugin that is still mid-initialization. It is marked failed in the
+     * UI and left to finish (or not) on its own.
+     */
+    async function initializePluginBounded(plugin: IXOpatPlugin): Promise<boolean> {
+        if (!plugin) return false;
+        const debug = APPLICATION_CONTEXT.getOption("debugMode", undefined, false);
+        const startedAt = debug ? performance.now() : 0;
+
+        let timer: any = undefined;
+        const expired = new Promise<"timeout">((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), PLUGIN_READY_TIMEOUT_MS);
+        });
+        try {
+            const result = await Promise.race([initializePlugin(plugin, false), expired]);
+            if (result === "timeout") {
+                console.warn(`Plugin '${plugin.id}' did not finish pluginReady() within ` +
+                    `${PLUGIN_READY_TIMEOUT_MS / 1000}s; continuing boot without it. ` +
+                    `It is still running — check for an unresolved promise in pluginReady().`);
+                try {
+                    setPluginLoadStatus(plugin.id, "failed");
+                    USER_INTERFACE.Loading.text($.t("messages.pluginSlow",
+                        { plugin: elementName("plugins", plugin.id) }));
+                } catch (e) { /* UI is best-effort here */ }
+                return false;
+            }
+            if (debug) {
+                console.debug(`[loader] plugin '${plugin.id}' ready in ` +
+                    `${Math.round(performance.now() - startedAt)}ms`);
+            }
+            return result;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
@@ -386,21 +749,23 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const attachScript = (window as any).attachScript = function (
         pluginId: string,
         properties: ScriptProperties,
-        onload: () => void
+        onload: () => void,
+        owner: ScriptOwner = { id: pluginId, kind: "scripts" },
+        force: boolean = false
     ): boolean {
-        let errHandler = function (e: any) {
-            window.onerror = null;
-            // LOADING_PLUGIN is captured from the loader closure
-            if (LOADING_PLUGIN) {
-                cleanUpPlugin(pluginId, e);
-            } else {
-                cleanUpScripts(pluginId);
-            }
-        };
-
         if (!properties.hasOwnProperty('src')) {
-            errHandler($.t('messages.pluginScriptSrcMissing'));
+            failScriptOwner(owner, $.t('messages.pluginScriptSrcMissing'));
             return false; // Return false to match original logical flow on failure
+        }
+
+        const key = scriptKey(properties.src);
+
+        // Idempotent by file identity, not by element id: the same file is reachable
+        // through several dependency chains, and re-evaluating it is never what the
+        // caller meant. `force` is the deliberate re-run (plugin recovery, see loadPlugin).
+        if (!force && scriptAlreadyPresent(key)) {
+            SCRIPT_INJECTIONS.get(key)!.then(() => onload && onload(), () => { /* already reported */ });
+            return true;
         }
 
         let container = document.getElementById(`script-section-${pluginId}`);
@@ -416,14 +781,26 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             script[key] = properties[key];
         }
 
+        let settle: () => void, fail: (e: any) => void;
+        const injection = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+        injection.catch(() => { /* consumers opt in; keep the rejection from going unhandled */ });
+        SCRIPT_INJECTIONS.set(key, injection);
+        SCRIPT_EVALUATING.set(key, owner);
+
         script.async = false;
         script.onload = function () {
-            window.onerror = null;
+            SCRIPT_EVALUATING.delete(key);
+            settle();
             onload && onload();
         };
 
-        script.onerror = errHandler;
-        window.onerror = errHandler;
+        script.onerror = function (e: any) {
+            SCRIPT_EVALUATING.delete(key);
+            // A file that never arrived must not stay registered, or a retry silently no-ops.
+            SCRIPT_INJECTIONS.delete(key);
+            fail(e);
+            failScriptOwner(owner, e);
+        };
         script.src = properties.src;
 
         container.append(script);
@@ -439,10 +816,115 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
-     * Get one of allowed plugin meta keys
+     * Presentation metadata any code may read about a plugin. Everything else in
+     * the include.json record is either internal wiring or deployment config.
+     */
+    const PUBLIC_META_KEYS = ["name", "description", "longDescription", "author", "version", "icon",
+        "stability", "categories", "keywords", "homepage", "repository", "bugs", "docsUrl", "license", "engines"];
+
+    /** Meta values that may carry a `%key%` translation reference. */
+    const LOCALIZABLE_META_KEYS = ["name", "description", "longDescription"];
+
+    /**
+     * A `"%key%"` that survived resolution is metadata the user must not see:
+     * either the locale bundle is missing or the key does not exist.
+     * @global
+     */
+    const isUnresolvedMetaRef = (window as any).isUnresolvedMetaRef = function (value: any) {
+        return typeof value === "string" && value.length > 2 && value.startsWith("%") && value.endsWith("%");
+    }
+
+    /**
+     * Resolve a `"%key%"` meta value against the element's own i18next namespace
+     * (its id, see `_getLocale`). Plain strings pass through untouched.
+     *
+     * `$.t` never fails — a missing key comes back as the key's last segment —
+     * so `exists` decides, and an unresolved reference degrades to the raw
+     * include.json value rather than to a misleading word.
+     */
+    function resolveMetaText(id: string, value: any) {
+        const key = isUnresolvedMetaRef(value) ? value.slice(1, -1) : undefined;
+        if (!key) return value;
+        return $.i18n?.exists(key, {ns: id}) ? $.t(key, {ns: id}) : value;
+    }
+
+    /**
+     * Get one of allowed plugin meta keys. Localizable keys are resolved against
+     * the plugin's locale bundle - call `loadElementLocale` first if the plugin
+     * is not loaded yet, otherwise the raw `%key%` reference is returned.
      */
     const pluginMeta = (window as any).pluginMeta = function (id: string, metaKey: string) {
-        return ["name", "description", "author", "version", "icon"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+        if (!PUBLIC_META_KEYS.includes(metaKey)) return undefined;
+        const value = PLUGINS[id]?.[metaKey];
+        return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(id, value) : value;
+    }
+
+    /**
+     * Read a module's resolved static config (ENV `modules[<id>]` merged with its
+     * include.json) — the same source `XOpatModule.getStaticMeta` reads, but usable
+     * by plain module scripts that are not XOpatElement instances (e.g. the
+     * oidc-client-ts auth broker). Deployment-trusted config only; no secrets.
+     */
+    const moduleMeta = (window as any).moduleMeta = function (id: string, metaKey: string) {
+        const value = MODULES[id]?.[metaKey];
+        return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(id, value) : value;
+    }
+
+    /**
+     * Human readable element label for user-facing messages. Resolves a `%key%`
+     * name and degrades to the element id - a message must never leak a raw
+     * reference or `undefined`. Synchronous: pair with `ensureElementMeta` if the
+     * caller can afford to wait for the locale bundle.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @global
+     */
+    const elementName = (window as any).elementName = function (kind: "plugins" | "modules", id: string) {
+        const value = kind === "plugins" ? pluginMeta(id, "name") : moduleMeta(id, "name");
+        return !value || isUnresolvedMetaRef(value) ? id : value;
+    }
+
+    /**
+     * Load the locale bundle of a plugin or module that is not (yet) instantiated,
+     * so that its `%key%` metadata resolves - e.g. to list plugins the user has not
+     * loaded. Loaded elements get this via `XOpatElement.loadLocale`. Idempotent.
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @param locale defaults to the active language
+     */
+    const loadElementLocale = (window as any).loadElementLocale = async function (
+        kind: "plugins" | "modules", id: string, locale?: string) {
+        const isPlugin = kind === "plugins";
+        const record = isPlugin ? PLUGINS[id] : MODULES[id];
+        if (!record?.directory) return;
+        // Callers reach this from module scope (`modules/webtiff/index.mjs`), so the
+        // language is not knowable yet — the file name below is built from it.
+        if (!$.i18n) await whenI18nReady();
+        try {
+            await _getLocale(id, isPlugin ? PLUGINS_FOLDER : MODULES_FOLDER, record.directory,
+                `locales/${locale || $.i18n?.language}.json`, locale);
+        } catch (e) {
+            //an element without locales for the active language is legal: metadata stays raw
+            console.debug(`No '${locale || $.i18n?.language}' locale for ${kind} ${id}.`, e);
+        }
+    }
+
+    /**
+     * Locale bundle needed to render this element's metadata, or nothing to do.
+     * Returns `undefined` synchronously - no request, nothing to await - when the
+     * metadata is literal or the bundle is already registered, which is the case
+     * for every element in production (locales are baked into the page).
+     * @param kind "plugins" or "modules"
+     * @param id element id
+     * @return promise resolved once the metadata renders, or undefined
+     * @global
+     */
+    const ensureElementMeta = (window as any).ensureElementMeta = function (
+        kind: "plugins" | "modules", id: string): Promise<void> | undefined {
+        const record = kind === "plugins" ? PLUGINS[id] : MODULES[id];
+        if (!LOCALIZABLE_META_KEYS.some(key => isUnresolvedMetaRef(record?.[key]))) return undefined;
+        if (!$.i18n || $.i18n.hasResourceBundle($.i18n.language, id)) return undefined;
+        return loadElementLocale(kind, id);
     }
 
     /**
@@ -509,6 +991,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      */
     (window as any).addModule = function addModule(id: string, ModuleClass: any, eager: boolean = false) {
         if (!id || !ModuleClass) return;
+
+        // Refuse registration rather than let an incompatible module hand out
+        // singletons; dependents fail with a reported module-failed instead.
+        const incompatible = incompatibilityReason(MODULES[id]);
+        if (incompatible) {
+            console.warn(`Module ${id} refused:`, incompatible);
+            cleanUpModule(id, incompatible);
+            return;
+        }
+
         if (!MODULES[id]) {
             const known = Object.keys(MODULES);
             const guess = known.find(k => k.toLowerCase() === id.toLowerCase() || k.startsWith(id) || id.startsWith(k));
@@ -522,10 +1014,41 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
         if (eager && typeof ModuleClass.instance === "function") {
-            try { ModuleClass.instance(); }
-            catch (e) { console.error(`[loader] eager init of module "${id}" failed:`, e); }
+            // Called from inside the module's own chain — the normal case, since `addModule`
+            // lives in one of the module's files. Defer to the end of that chain so the
+            // constructor sees every file. `addModule` invoked outside a chain (a test, the
+            // console) still builds inline, exactly as before.
+            if (MODULE_LOAD_STACK.has(id)) {
+                PENDING_EAGER_INIT.set(id, ModuleClass);
+                return;
+            }
+            runEagerInit(id, ModuleClass);
         }
     };
+
+    /**
+     * Build an eagerly-registered module singleton. A throw here is a genuinely broken
+     * constructor, so it keeps the original quarantine: report it and disable the module.
+     */
+    function runEagerInit(id: string, ModuleClass: any) {
+        try { withHandlerOwner(id, () => ModuleClass.instance()); }
+        catch (e) {
+            console.error(`[loader] eager init of module "${id}" failed:`, e);
+            cleanUpModule(id, e);
+        }
+    }
+
+    /**
+     * Run the eager init deferred above, once this module's files are all on the page.
+     * Per module rather than "once nothing is loading": with `A requires B`, B's chain ends
+     * while A is still on the stack, and A's own files may resolve against B.
+     */
+    function flushPendingEagerInit(id: string) {
+        const ModuleClass = PENDING_EAGER_INIT.get(id);
+        if (!ModuleClass) return;
+        PENDING_EAGER_INIT.delete(id);
+        runEagerInit(id, ModuleClass);
+    }
 
     /**
      * Register viewer singleton globally.
@@ -543,7 +1066,51 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     };
 
     /**
+     * Instantiate a required viewer singleton for one viewer, if it is not there yet.
+     *
+     * Shared by the two places that need it — `requireViewerSingletonPresence` (a module
+     * declaring itself, possibly while viewers are already open) and the VIEWER_MANAGER
+     * `open` handler that drains REQUIRED_SINGLETONS. Keeping one body is deliberate: the
+     * second site used to be a copy of the first, and the copy carried `this._getSingleton`
+     * out of a VIEWER_MANAGER method into a free function, where `this` is `undefined`
+     * under ESM strict mode. That threw for every mid-session module load.
+     */
+    function ensureSingletonForViewer(SingletonClass: XOpatViewerSingletonClass, viewer: any) {
+        // A singleton whose constructor already threw is not retried: `open` fires on every
+        // slide load, so retrying would re-run a known-broken constructor (and re-register
+        // its handlers) each time.
+        if ((SingletonClass as any).__failed) return;
+        if (!viewer?.isOpen?.()) return;
+        if (window.VIEWER_MANAGER?._getSingleton(SingletonClass.IID, viewer)) return;
+        try {
+            withHandlerOwner((SingletonClass as any).$id || SingletonClass.IID,
+                () => SingletonClass.instance(viewer));
+        } catch (e) {
+            (SingletonClass as any).__failed = e;
+            console.error(`[loader] viewer singleton "${SingletonClass.IID}" failed to initialize; disabled.`, e);
+            removeHandlersOwnedBy((SingletonClass as any).$id || SingletonClass.IID);
+        }
+    }
+
+    /** Instantiate a required singleton for every viewer that is already open. */
+    function sweepSingletonOverViewers(SingletonClass: XOpatViewerSingletonClass) {
+        if (!window.VIEWER_MANAGER) return;
+        for (let v of VIEWER_MANAGER.viewers) {
+            ensureSingletonForViewer(SingletonClass, v);
+        }
+    }
+
+    /**
      * Force the SingletonClass class definition to be instantiated automatically per active viewer.
+     *
+     * The sweep is deferred while a module's include chain is in flight. Modules declare their
+     * singletons from a top-level statement in one of their files, and that file is rarely the
+     * last one: `annotations-canvas.js` is entry 10 of 23, and the FabricWrapper constructor
+     * reaches back into `OSDAnnotations`, whose own constructor needs `presets.js` (entry 19)
+     * and `freeFormTool.js` (entry 23). At boot this was invisible because no viewer is open
+     * yet, so the sweep found nothing and the REQUIRED_SINGLETONS drain on `open` did the work
+     * once everything was on the page; loading the same module mid-session, with a slide
+     * already open, built the singleton nine files too early and quarantined the module.
      */
     const requireViewerSingletonPresence = (window as any).requireViewerSingletonPresence = function (SingletonClass: XOpatViewerSingletonClass) {
         if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
@@ -554,13 +1121,22 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             registerViewerSingleton(SingletonClass);
         }
         REQUIRED_SINGLETONS.add(SingletonClass);
-        if (window.VIEWER_MANAGER) {
-            for (let v of VIEWER_MANAGER.viewers) {
-                if (v.isOpen() && !this._getSingleton(SingletonClass.IID, v)) {
-                    SingletonClass.instance(v);
-                }
-            }
+        if (MODULE_LOAD_STACK.size > 0) {
+            PENDING_SINGLETON_SWEEPS.add(SingletonClass);
+            return;
         }
+        sweepSingletonOverViewers(SingletonClass);
+    }
+
+    /**
+     * Run the sweeps deferred above, once no module chain is left in flight. Called from
+     * `loadModuleOnce`; a no-op when nothing deferred.
+     */
+    function flushPendingSingletonSweeps() {
+        if (MODULE_LOAD_STACK.size > 0 || PENDING_SINGLETON_SWEEPS.size === 0) return;
+        const pending = [...PENDING_SINGLETON_SWEEPS];
+        PENDING_SINGLETON_SWEEPS.clear();
+        for (const SingletonClass of pending) sweepSingletonOverViewers(SingletonClass);
     }
 
     function extendWith(target: Record<string, any>, source: Record<string, any>, ...properties: string[]) {
@@ -569,11 +1145,19 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
     }
 
-    function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void, folder: string = PLUGINS_FOLDER) {
-        if (index >= sources.includes.length) {
+    function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void,
+                       folder: string = PLUGINS_FOLDER,
+                       owner: ScriptOwner = { id, kind: "scripts" }, force: boolean = false) {
+        // In production the server may attach a `prodIncludes` overlay: foldable
+        // files collapsed into a single index.min.js, non-foldable entries kept
+        // in place. Fall back to the canonical `includes` in dev / when no min
+        // artifact exists. Same entry shapes, so the per-entry handling below is
+        // reused unchanged. See server/templates/javascript/utils.js.
+        const list = sources.prodIncludes ?? sources.includes;
+        if (index >= list.length) {
             onSuccess();
         } else {
-            let toLoad = sources.includes[index],
+            let toLoad = list[index],
                 properties: Partial<ScriptProperties> = {};
             if (typeof toLoad === "string") {
                 properties.src = `${folder}${sources.directory}/${toLoad}?v=${version}`;
@@ -588,52 +1172,138 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 throw "Invalid dependency: invalid type " + (typeof toLoad);
             }
 
-            attachScript(id, properties as ScriptProperties, () => chainLoad(id, sources, index + 1, onSuccess, folder));
+            attachScript(id, properties as ScriptProperties,
+                () => chainLoad(id, sources, index + 1, onSuccess, folder, owner, force), owner, force);
         }
+    }
+
+    /** Modules whose dependency walk is on the current stack, so a cycle terminates. */
+    const MODULE_LOAD_STACK = new Set<string>();
+
+    /**
+     * Load one module and its `requires`, at most once per page.
+     *
+     * The old chain guarded only on `MODULES[id].loaded`, a flag written *after* the whole
+     * async file chain finished. Two overlapping loads (two Plugins-menu clicks, a click
+     * racing the boot restore) therefore both saw `false` and both injected every file.
+     * The `__loading` promise is the missing in-flight marker; a second caller awaits it.
+     */
+    function loadModuleOnce(id: string): Promise<void> {
+        const module = MODULES[id];
+        if (!module) return Promise.resolve();
+
+        const pending = (module as any).__loading as Promise<void> | undefined;
+        if (pending) return pending;
+        // A quarantined module is not retried: `cleanUpModule` already removed its handlers
+        // and dropped its singleton, and re-running a known-broken file only repeats that.
+        if (module.loaded || module.error) return Promise.resolve();
+        if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
+
+        let settle: () => void, fail: (e: any) => void;
+        const loading = new Promise<void>((resolve, reject) => { settle = resolve; fail = reject; });
+        (module as any).__loading = loading;
+        MODULE_LOAD_STACK.add(id);
+
+        (async () => {
+            for (const dependency of module.requires || []) {
+                await loadModuleOnce(dependency);
+            }
+            await new Promise<void>(resolve => {
+                chainLoad(module.id + "-module", module, 0, () => {
+                    if (module.styleSheet) {  //load css if necessary
+                        appendStyleSheet(module.styleSheet);
+                    }
+                    module.loaded = true;
+                    resolve();
+                }, MODULES_FOLDER, { id: module.id, kind: "module" });
+            });
+        })().then(settle!, fail!).finally(() => {
+            MODULE_LOAD_STACK.delete(id);
+            delete (module as any).__loading;
+            // The module's own bootstrap first: a singleton sweep below may reach into it.
+            flushPendingEagerInit(id);
+            // Every file of this module is now on the page, so any singleton that declared
+            // itself mid-chain can safely be built. Also runs after a failed chain: a
+            // singleton from a module that only partly loaded still gets its one attempt,
+            // and `ensureSingletonForViewer` quarantines it if that attempt throws.
+            flushPendingSingletonSweeps();
+        });
+
+        return loading;
     }
 
     function chainLoadModules(moduleList: string[], index: number, onSuccess: () => void) {
-        if (index >= moduleList.length) {
+        (async () => {
+            for (let i = index; i < moduleList.length; i++) {
+                await loadModuleOnce(moduleList[i] ?? "");
+            }
+        })().then(onSuccess, (e) => {
+            console.error("[loader] module chain failed:", e);
+            // Keep the historical contract: the chain always continues to its callback,
+            // so a plugin whose optional dependency died still gets a decision made.
             onSuccess();
-            return;
-        }
-        let module = MODULES[moduleList[index] ?? ""];
-        if (!module || module.loaded) {
-            chainLoadModules(moduleList, index + 1, onSuccess);
-            return;
-        }
+        });
+    }
 
-        function loadSelf() {
-            //load self files and continue loading from modulelist
-            chainLoad(module!.id + "-module", module!, 0,
-                function () {
-                    if (module!.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${module!.styleSheet}' type='text/css'/>`);
-                    }
-                    module!.loaded = true;
-                    chainLoadModules(moduleList, index + 1, onSuccess);
-                }, MODULES_FOLDER);
-        }
+    /** Bundle fetches in flight or already registered, keyed by `<locale>::<id>::<file>`. */
+    const _localeBundles: Record<string, Promise<void>> = {};
 
-        //first dependencies, then self
-        chainLoadModules(module!.requires || [], 0, loadSelf);
+    /**
+     * Memo for `XOpatElement.t` calls that carry no interpolation.
+     *
+     * i18next resolves the namespace, splits the key and runs plural/context/
+     * interpolation handling on every single call. A profiled session spent
+     * 1.5s of a 22.6s trace inside it — all of it re-translating the same
+     * handful of static keys, once per row of a list, on every re-render.
+     *
+     * Only argument-free calls are memoized: anything carrying `count`,
+     * `context` or interpolation values must always go through. Keyed by
+     * language so switching cannot serve stale text, and cleared whenever a
+     * resource bundle arrives — a late-loading element locale turns a key that
+     * had been resolving to its fallback into a real translation.
+     */
+    const _staticTranslations = new Map<string, string>();
+
+    /** True for `undefined` and for an object with no own enumerable keys. */
+    function _hasNoTranslationArgs(options: Record<string, any> | undefined): boolean {
+        if (options === undefined || options === null) return true;
+        for (const _ in options) return false;
+        return true;
     }
 
     async function _getLocale(id: string, path: string, directory: string | undefined, data: any, locale: string | undefined) {
+        // Elements register their bundle from module scope, which routinely runs
+        // before i18next has initialised. Returning here — as this used to — drops
+        // the registration for the whole session with nothing to retry it, and the
+        // element's every string then renders as its raw `<id>.<key>` (that is what
+        // put `webtiff.dimensions` in the slide-info panel). Wait instead.
+        if (!$.i18n) await whenI18nReady();
         if (!$.i18n) return;
         if (!locale) locale = $.i18n.language;
 
         if (typeof data === "string" && directory) {
-            await fetch(`${path}${directory}/${data}`).then(response => {
+            const cacheKey = `${locale}::${id}::${data}`;
+            if (_localeBundles[cacheKey]) return _localeBundles[cacheKey];
+            if ($.i18n.hasResourceBundle(locale, id)) return;
+
+            // `?v=` lets the static server respond with immutable cache headers
+            // (versionless URLs are served `no-store`).
+            const versionSuffix = version ? `?v=${encodeURIComponent(version)}` : "";
+            return _localeBundles[cacheKey] = fetch(`${path}${directory}/${data}${versionSuffix}`).then(response => {
                 if (!response.ok) {
                     throw new HTTPError("HTTP error " + response.status, response, '');
                 }
                 return response.json();
             }).then(json => {
                 $.i18n.addResourceBundle(locale, id, json);
+                _staticTranslations.clear();
+            }).catch(e => {
+                delete _localeBundles[cacheKey];
+                throw e;
             });
         } else if (data) {
             $.i18n.addResourceBundle(locale, id, data);
+            _staticTranslations.clear();
         } else {
             throw "Invalid translation for item " + id;
         }
@@ -811,17 +1481,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
          * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
          * @param {string} optionKey
-         * @param {*} defaultValue
+         * @param {*} defaultValue returned when the key was never stored
          * @param {boolean} cache
          * @memberof XOpatModule
          * @return {*}
          */
-        getOption(optionKey: string, defaultValue: any, cache = true) {
+        getOption(optionKey: string, defaultValue: any = null, cache = true) {
             //options are stored only for plugins, so we store them at the lowest level
             let value = cache ? this.cache.get(optionKey, null) : null;
             if (value === "false") value = false;
             else if (value === "true") value = true;
-            return value;
+            // A miss yields the caller's default. `null` remains the fallback so
+            // callers that pass none keep the historical return value. Note this
+            // is the *module* option map, not APPLICATION_CONTEXT.getOption — the
+            // ENV-outranks-caller precedence of AGENTS.md §3 does not apply here.
+            return value ?? defaultValue;
         }
 
         /**
@@ -846,14 +1520,92 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * Translate the string in given element context
+         * Translate the string in given element context.
+         *
+         * Calls without `options` are memoized (see `_staticTranslations`);
+         * anything carrying interpolation values, `count` or `context` always
+         * goes through i18next.
          * @param key
          * @param options
          * @return {*}
          */
-        t(key: string, options: Record<string, any> = {}) {
+        t(key: string, options?: Record<string, any>) {
+            // Only memoize once i18next is really installed. Before that `$.t`
+            // is the placeholder returning the key's last dot-segment
+            // (AGENTS.md §3), and caching that would pin placeholder text in
+            // place for the rest of the session.
+            const i18n = $.i18n;
+            if (i18n && _hasNoTranslationArgs(options)) {
+                const memoKey = `${i18n.language} ${this.id} ${key}`;
+                const hit = _staticTranslations.get(memoKey);
+                if (hit !== undefined) return hit;
+                const value = $.t(key, {ns: this.id});
+                _staticTranslations.set(memoKey, value);
+                return value;
+            }
+            options = options || {};
             options.ns = this.id;
             return $.t(key, options);
+        }
+
+        /**
+         * The auth context this element authenticates against, from its own
+         * deployment-trusted static meta (never `getOption` — §7). `"core"` means
+         * the viewer's main identity.
+         */
+        get authContextId(): string {
+            return (this as any).getStaticMeta?.("authContext", null) || "core";
+        }
+
+        /**
+         * Whether this element requires a login at all. `authMode: "none"` (the
+         * default) means it works with no auth configured anywhere — auth is an
+         * opt-in addon, not a precondition.
+         */
+        get authRequiresLogin(): boolean {
+            return ((this as any).getStaticMeta?.("authMode", "none") || "none") !== "none";
+        }
+
+        /**
+         * Declare "I need a login for my auth context" WITHOUT naming a method.
+         * Whichever auth module owns that context (oidc-client-ts, saml-auth, …)
+         * supplies the mechanism, so the same element works unchanged across
+         * deployments — and works out of the box when `authMode` is "none".
+         *
+         * Back-compat: when no auth module claims the context, an inline
+         * `authBroker` + `authConfig` (legacy aliases: `oidc` + `oidcFlow`) on this
+         * element's static meta is applied instead. All read via `getStaticMeta`,
+         * i.e. deployment-trusted — a session bundle can never downgrade auth.
+         *
+         * @return {boolean} whether a login requirement was declared
+         */
+        requireAuthContext(): boolean {
+            if (!this.authRequiresLogin) return false;
+            const auth = (window as any).APPLICATION_CONTEXT?.auth;
+            if (!auth || typeof auth.requireContext !== "function") return false;
+
+            const meta = (key: string, fallback?: any) => (this as any).getStaticMeta?.(key, fallback);
+            const config = meta("authConfig", null) ?? meta("oidc", null);
+            const fallback = config ? {
+                method: meta("authBroker", null) || "oidc",
+                config,
+                authMethod: meta("authFlow", null) ?? meta("oidcFlow", "popup"),
+                tokenForServer: meta("tokenForServer", "access_token"),
+                secretTypes: meta("authSecretTypes", null) || undefined,
+            } : undefined;
+
+            try {
+                auth.requireContext({
+                    contextId: this.authContextId,
+                    serviceName: meta("name", undefined),
+                    requiresLogin: true,
+                    fallback,
+                });
+                return true;
+            } catch (e) {
+                console.error(`${this.uid}: failed to require auth context '${this.authContextId}'`, e);
+                return false;
+            }
         }
 
         /**
@@ -927,7 +1679,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @memberof XOpatElement
              */
             this.raiseEvent(notifyUser ? 'error-user' : 'error-system',
-                $.extend(e, { originType: this.xoContext, originId: this.id }));
+                Object.assign(e, { originType: this.xoContext, originId: this.id }));
         }
 
         /**
@@ -961,7 +1713,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
              * @memberof XOpatElement
              */
             this.raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
-                $.extend(e,
+                Object.assign(e,
                     { originType: this.xoContext, originId: this.id }));
         }
 
@@ -1017,7 +1769,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // interaction.
             if (options.importBundle) {
                 try {
-                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid });
+                    // `trigger: "system"` — this fires while the element is
+                    // still loading. A user who has not seen the UI yet cannot
+                    // have asked for it, so a refusal is logged, not shown.
+                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid, trigger: "system" });
                 } catch (e) {
                     console.error("IO Failure (initIO restore):", this.constructor.name, e);
                     this.error({
@@ -1075,7 +1830,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const uid = this.__uid;
             return {
                 flush: (scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }) =>
-                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId, backgroundId: scope?.backgroundId }),
+                    IO_PIPELINE.flushBundleExport({
+                        ownerUid: uid,
+                        // Was dropped here, silently: an owner asking to flush
+                        // ONE capability got every outbound bundle it declares.
+                        capabilityId: scope?.capabilityId,
+                        viewerId: scope?.viewerId,
+                        backgroundId: scope?.backgroundId,
+                    }),
                 capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
                 isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
             };
@@ -1309,7 +2071,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return await fn(payload, {
                     viewerId: options.viewerId,
                     contextId: options.contextId,
-                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient
+                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                    signal: options.signal,
+                    timeoutMs: options.timeoutMs,
+                    priority: options.priority
                 });
             } catch (error: any) {
                 this.raiseEvent?.("server-error", {
@@ -1324,6 +2089,45 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Invoke a streaming server method (one declared with
+         * `runtime.streaming: true` in its policy) for this element. Returns a
+         * live handle immediately; failures raise the same `server-error` event
+         * as {@link callServer} when the terminal result rejects.
+         */
+        callServerStream<TEvent = any, TResult = any>(
+            method: string,
+            payload?: any,
+            options: XOpatServerCallOptions = {}
+        ): XOpatServerStreamHandle<TEvent, TResult> {
+            const scope = this._serverScope();
+            const fn = scope?.$stream?.[method];
+
+            if (typeof fn !== "function") {
+                throw new Error(`Server streaming method '${this.xoContext}.${this.id}.${method}' is not available.`);
+            }
+
+            const handle = fn(payload, {
+                viewerId: options.viewerId,
+                contextId: options.contextId,
+                httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient,
+                signal: options.signal
+            }) as XOpatServerStreamHandle<TEvent, TResult>;
+
+            const result = handle.result.catch((error: any) => {
+                this.raiseEvent?.("server-error", {
+                    kind: this.xoContext,
+                    id: this.id,
+                    method,
+                    payload,
+                    error
+                });
+                throw error;
+            });
+            result.catch(() => { /* observed via the returned handle */ });
+            return { events: handle.events, result, abort: handle.abort };
+        }
+
+        /**
          * Ergonomic proxy so callers can do:
          *   await this.server().getChatMessages({...})
          * or
@@ -1334,6 +2138,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 get: (_, prop) => {
                     if (typeof prop !== "string") return undefined;
 
+                    // Streaming sub-scope mirror: this.server().$stream.method(payload)
+                    if (prop === "$stream") {
+                        return new Proxy({}, {
+                            get: (_s, streamProp) => {
+                                if (typeof streamProp !== "string") return undefined;
+                                return (payload?: any, callOptions: XOpatServerCallOptions = {}) =>
+                                    this.callServerStream(streamProp, payload, {
+                                        ...defaultOptions,
+                                        ...callOptions,
+                                        httpClient: callOptions.httpClient || defaultOptions.httpClient
+                                    });
+                            }
+                        });
+                    }
+
                     return async (payload?: any, callOptions: XOpatServerCallOptions = {}) => {
                         return await this.callServer(prop, payload, {
                             ...defaultOptions,
@@ -1342,7 +2161,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         });
                     };
                 }
-            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>>;
+            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>> & {
+                $stream: Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => XOpatServerStreamHandle>;
+            };
         }
     }
 
@@ -1367,8 +2188,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @return {Promise}
          */
         async loadLocale(locale = undefined, data = undefined) {
+            // `$.i18n.language` names the file: a module constructed before
+            // i18next init would throw here, and the bundle would never register.
+            if (!data && !locale && !$.i18n) await whenI18nReady();
             return await _getLocale(this.id, MODULES_FOLDER, MODULES[this.id]?.directory,
-                data || this.getLocaleFile(locale || $.i18n.language), locale);
+                data || this.getLocaleFile(locale || $.i18n?.language), locale);
         }
 
         /**
@@ -1381,7 +2205,25 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (metaKey === "instance") return undefined;
             const value = MODULES[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
-            return value;
+            //name/description/... may reference this module's locale bundle
+            return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(this.id, value) : value;
+        }
+
+        /**
+         * Read a runtime option (getOption) if set, otherwise the static
+         * include.json/ENV configuration value (getStaticMeta). Mirror of
+         * `XOpatPlugin.getOptionOrConfiguration` so modules can use the same
+         * pattern — previously this lived only on plugins, and calling it on a
+         * module threw "getOptionOrConfiguration is not a function".
+         * @param optKey runtime option key (getOption)
+         * @param staticKey static metadata key (getStaticMeta)
+         * @param defaultValue
+         * @param cache
+         * @return {undefined|*}
+         */
+        getOptionOrConfiguration(optKey: string, staticKey: string, defaultValue: any = undefined, cache = true) {
+            const value = this.getOption(optKey, undefined, cache);
+            return value === undefined || value === null ? this.getStaticMeta(staticKey, defaultValue) : value;
         }
 
         /**
@@ -1425,8 +2267,35 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         static instance() {
             //this calls sub-class constructor, no args required
             const Ctor = this as any;
-            Ctor.__self = Ctor.__self || new Ctor();
-            return Ctor.__self;
+            if (Ctor.__failed) {
+                throw `Module '${Ctor.$id}' failed to load and was disabled: ${Ctor.__failed}`;
+            }
+            if (Ctor.__self) return Ctor.__self;
+
+            // The module's own files are still being injected. `addModule` runs from whichever
+            // file declares the class — usually not the last one — so the constructor would be
+            // executing against a namespace its later files have not populated yet. That is a
+            // timing condition, not a broken module: refuse *without* quarantining, so the same
+            // call succeeds once the chain finishes. Quarantining here is what turned a
+            // mid-session load into a module disabled for the rest of the session.
+            if (MODULE_LOAD_STACK.has(Ctor.$id)) {
+                throw `Module '${Ctor.$id}' is still loading; instance() must wait for its files.`;
+            }
+
+            try {
+                return Ctor.__self = withHandlerOwner(Ctor.$id, () => new Ctor());
+            } catch (e) {
+                // The constructor assigns `__self` on entry (so nested instance() calls
+                // resolve), which means a throw halfway through leaves a half-built
+                // singleton cached — callers would then get an object missing whatever
+                // the constructor never got to set up, and blow up far from the cause.
+                // Quarantine instead: drop the instance, tear the module's handlers
+                // down, notify, and make every later instance() fail loudly.
+                Ctor.__failed = e;
+                Ctor.__self = undefined;
+                cleanUpModule(Ctor.$id, e);
+                throw e;
+            }
         }
 
         /**
@@ -1438,6 +2307,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         static __self = undefined;
+
+        /** Set to the construction error once the module is quarantined; blocks re-instantiation. */
+        static __failed = undefined;
 
 
         /**
@@ -1540,7 +2412,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (value) return value;
             const viewer = VIEWER_MANAGER.ensureViewer(viewerOrUniqueId);
             if (!viewer) return undefined;
-            return new this(viewer);
+            try {
+                return new this(viewer);
+            } catch (e) {
+                // Registration happens in the base constructor (via
+                // _attachSingleton) BEFORE the subclass body runs — a throwing
+                // subclass constructor would otherwise leave a half-built,
+                // poisoned instance registered that every later instance()
+                // call returns instead of retrying construction.
+                VIEWER_MANAGER._detachSingleton(this.IID, viewer);
+                throw e;
+            }
         }
 
         /**
@@ -1789,8 +2671,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param data possibly custom locale data if not fetched from a file
          */
         async loadLocale(locale = undefined, data = undefined) {
+            // See the module counterpart: the language names the file, so it must
+            // be known before the path is built.
+            if (!data && !locale && !$.i18n) await whenI18nReady();
             return await _getLocale(this.id, PLUGINS_FOLDER, PLUGINS[this.id]?.directory,
-                data || this.getLocaleFile(locale || $.i18n.language), locale)
+                data || this.getLocaleFile(locale || $.i18n?.language), locale)
         }
 
         /**
@@ -1803,7 +2688,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (metaKey === "instance") return undefined;
             const value = PLUGINS[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
-            return value;
+            //name/description/... may reference this plugin's locale bundle
+            return LOCALIZABLE_META_KEYS.includes(metaKey) ? resolveMetaText(this.id, value) : value;
         }
 
         /**
@@ -1956,6 +2842,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     const _alphabet = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
     const _alphaset = new Set(_alphabet.split(''));
 
+    /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
+    let _sessionUrlSyncable: boolean | null = null;
+
     /**
      * @namespace UTILITIES
      */
@@ -1987,9 +2876,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         nameFromBGOrIndex: function (indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix = true): string {
             // todo some error if not a string, that name must be provided etc...
             const isIndex = typeof indexOrItem === 'number';
+            // An explicit name is the author's answer and needs no data entry to
+            // resolve — checking it after the `!item` guard renamed every named
+            // background to "unknown" the moment its data reference stopped
+            // resolving (cleared `config.data`, faulty source).
+            if (!isIndex && indexOrItem.name) return indexOrItem.name;
             const item = BackgroundConfig.dataFromDataId(isIndex ? indexOrItem : indexOrItem.dataReference) as DataID;
             if (!item) return "unknown";
-            if (!isIndex && indexOrItem.name) return indexOrItem.name;
 
             if (typeof item === "string") {
                 return this.fileNameFromPath(item, stripSuffix);
@@ -2021,7 +2914,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (!viewer) return undefined;
             const item = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
             const bg = item?.getConfig?.("background");
-            return typeof bg?.id === "string" ? bg.id : undefined;
+            if (typeof bg?.id !== "string") return undefined;
+            // Virtual-region children key IO by the parent slide (see
+            // explicitSlotBackgroundId) so all modes share one bundle.
+            return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
         },
 
         /**
@@ -2042,7 +2938,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param ids all modules id to be loaded (rest parameter syntax)
          */
         loadModules: function (onload?: (() => void), ...ids: string[]) {
-            LOADING_PLUGIN = false;
             chainLoadModules(ids, 0, () => {
                 /**
                  * Module loaded event. Fired only with dynamic loading.
@@ -2058,16 +2953,43 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Load a plugin at runtime
          * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
+         * @param id plugin id
+         * @param onload called once the plugin finished loading (kept for back-compat; the
+         *   returned promise settles at the same point)
+         * @param force re-inject the plugin's **own** files even if they are already on the
+         *   page. Used to recover a plugin the server shipped but whose script never produced
+         *   an instance. Module dependencies are never forced — re-evaluating a shared module
+         *   is what duplicated fabric.js.
          */
-        loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean) {
+        loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean): Promise<void> {
             let meta = PLUGINS[id];
-            if (!meta || (meta.loaded && meta.instance)) return;
+            if (!meta || (meta.loaded && meta.instance && !force)) return Promise.resolve();
             if (meta && !Array.isArray(meta.includes)) {
                 meta.includes = [];
             }
 
+            // In-flight guard. `meta.loaded`/`meta.instance` are only written at the very end
+            // of the load, so without this two clicks (or a click racing the boot restore)
+            // both start a full chain and inject every file twice.
+            const inFlight = PENDING_PLUGIN_LOADS.get(id);
+            if (inFlight && !force) {
+                return onload ? inFlight.promise.then(() => { onload(); }) : inFlight.promise;
+            }
+
+            const incompatible = incompatibilityReason(meta) || moduleChainIncompatibility(meta.modules);
+            if (incompatible) {
+                showPluginError(id, incompatible);
+                return Promise.resolve();
+            }
+
             setPluginLoadStatus(id, "loading");
-            $(`#error-plugin-${id}`).html("");
+            document.querySelectorAll(`#error-plugin-${CSS.escape(id)}`).forEach(node => { node.innerHTML = ""; });
+
+            // Metadata of a plugin nobody loaded yet is still a raw `%key%`: kick the
+            // bundle fetch off here so it overlaps module + script loading, and await
+            // it only where a name is about to be shown. Costs nothing for literal
+            // metadata or in production, where bundles are baked into the page.
+            const localeReady = ensureElementMeta("plugins", id);
 
             if (pluginsWereInitialized()) {
                 /**
@@ -2079,12 +3001,18 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 VIEWER_MANAGER.raiseEvent('before-plugin-load', { id: id });
             }
 
-            let successLoaded = function () {
-                LOADING_PLUGIN = false;
+            let settleLoad!: () => void;
+            const loading = new Promise<void>(resolve => { settleLoad = resolve; });
+            const record = { promise: loading, settle: settleLoad };
+            PENDING_PLUGIN_LOADS.set(id, record);
+            loading.finally(() => {
+                if (PENDING_PLUGIN_LOADS.get(id) === record) PENDING_PLUGIN_LOADS.delete(id);
+            });
 
+            let successLoaded = async function () {
                 function finishPluginLoad() {
                     if (meta?.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
+                        appendStyleSheet(meta.styleSheet);
                     }
                     if (meta) meta.loaded = true;
                     showPluginError(id, null, true);
@@ -2093,24 +3021,32 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         for (let p in PLUGINS) {
                             if (PLUGINS[p]?.loaded) plugins.push(p);
                         }
-                        APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
+                        // Deployment-scoped name — see classes/app/deployment-key.ts.
+                        // The read side (ApplicationLifecycleController) must use the
+                        // same helper; a second literal here is how the two drift.
+                        APPLICATION_CONTEXT.AppCookies.set(pluginsCookieKey(), plugins.join(","));
                     }
                 }
 
                 if (pluginsWereInitialized()) {
-                    initializePlugin(PLUGINS[id]?.instance, true).then(success => {
-                        if (success) {
-                            finishPluginLoad();
-                        }
-                        onload && onload();
-                    });
+                    // `plugin-loaded` / `plugin-failed` name the plugin: let its
+                    // metadata resolve first (never rejects, see loadElementLocale).
+                    if (localeReady) await localeReady;
+                    const success = await initializePlugin(PLUGINS[id]?.instance, true);
+                    if (success) {
+                        finishPluginLoad();
+                    }
+                    settleLoad();
+                    onload && onload();
                     return;
                 }
                 finishPluginLoad();
+                settleLoad();
                 onload && onload();
             };
-            LOADING_PLUGIN = true;
-            chainLoadModules(meta!.modules || [], 0, () => chainLoad(id, meta!, 0, successLoaded));
+            chainLoadModules(meta!.modules || [], 0,
+                () => chainLoad(id, meta!, 0, successLoaded, PLUGINS_FOLDER, { id, kind: "plugin" }, !!force));
+            return loading;
         },
 
         /**
@@ -2123,7 +3059,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 let p = PLUGINS[id];
                 return p?.loaded && p?.instance;
             }
-            return MODULES[id]?.loaded;
+            const m = MODULES[id];
+            // `loaded` now means "files are on the page"; a quarantined module keeps it but
+            // carries an error, and is not usable. See cleanUpModule.
+            return !!m?.loaded && !m?.error;
         },
 
         /**
@@ -2131,9 +3070,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * @param includedPluginsList
          * @param withCookies
          * @param staticPreview Whether to mark the serialized app as static or not
-         * @return {Promise<{app: string, data: {}}>}
+         * @return {Promise<{app: string, data: {}, io: IOResult[]}>} `io` carries
+         *   the flush outcomes so the caller can tell the user what did NOT make
+         *   it into the export — a refused owner is silently absent otherwise.
          */
-        serializeApp: async function (includedPluginsList: string[] | undefined = undefined, withCookies = false, staticPreview = false): Promise<{ app: string, data: Record<string, any> }> {
+        serializeApp: async function (includedPluginsList: string[] | undefined = undefined, withCookies = false, staticPreview = false): Promise<{ app: string, data: Record<string, any>, io: IOResult[] }> {
             //reconstruct active plugins
             let pluginsData = APPLICATION_CONTEXT.config.plugins;
             let includeEvaluator = includedPluginsList ?
@@ -2154,8 +3095,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // capability bound to a sink contributes its payload. The
             // built-in `post-data` sink writes into POST_DATA, preserving
             // the legacy HTML-form session export shape. See src/IO_PIPELINE.md.
-            await IO_PIPELINE.flushBundleExport();
-            return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
+            const io = await IO_PIPELINE.flushBundleExport();
+            return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA, io };
         },
 
         generateID: function (input: any, size = 12) {
@@ -2213,15 +3154,32 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         },
 
         /**
+         * Recursively strip a per-viewer shader-id prefix from a renderer config
+         * map — the inverse of what the open pipeline applies before handing a
+         * configuration to `overrideConfigureAll`.
+         *
+         * Exposed on UTILITIES for plugins/modules, which are loaded dynamically
+         * and cannot import the TS module. Canonical implementation:
+         * `src/classes/visualization/shader-id-namespace.ts`.
+         *
+         * Returns a new map, but **mutates the config objects inside it**. Reading
+         * a config back out of a live renderer therefore requires cloning first —
+         * otherwise the renderer's own shader ids get un-namespaced in place,
+         * colliding control DOM ids across viewers.
+         */
+        stripShaderIdNamespace,
+
+        /**
          * Copy content to the user clipboard.
          */
         copyToClipboard: function (content: string, alert: boolean = true) {
             // todo try         navigator.clipboard?.writeText(content).catch(() => {}); on catch go this old way
-            let $temp = $("<input>");
-            $("body").append($temp);
-            $temp.val(content).select();
+            const temp = document.createElement("input");
+            document.body.appendChild(temp);
+            temp.value = content;
+            temp.select();
             document.execCommand("copy");
-            $temp.remove();
+            temp.remove();
             if (alert) Dialogs.show($.t('messages.valueCopied'), 3000, Dialogs.MSG_INFO);
         },
 
@@ -2229,48 +3187,157 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Export only the viewer direct link (without data) to the clipboard.
          */
         copyUrlToClipboard: function () {
+            if (!allowCoreAction(CAP_EXPORT_URL)) return;
             const data = UTILITIES.serializeAppConfig();
             UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
         },
 
         /**
+         * Whether the address bar can carry the session at all.
+         *
+         * `history.replaceState` refuses a URL whose origin differs from the
+         * document's, and an opaque origin (a sandboxed iframe without
+         * `allow-same-origin` — the EMPAIA Workbench embedding) can never match
+         * anything. Both are permanent properties of the deployment, so this is a
+         * deterministic check, memoized: without it every layer edit serialized
+         * the whole app config just to throw a `SecurityError`.
+         *
+         * @returns {boolean} true when {@link syncSessionToUrl} can do its job.
+         */
+        canSyncSessionToUrl: function canSyncSessionToUrl(): boolean {
+            if (_sessionUrlSyncable === null) {
+                let reason: string | null = null;
+                try {
+                    if (window.XOpatStorageAvailability?.opaqueOrigin) {
+                        reason = "opaque origin — sandboxed iframe without allow-same-origin";
+                    } else if (new URL(APPLICATION_CONTEXT.url, location.href).origin !== location.origin) {
+                        reason = `the app URL (${APPLICATION_CONTEXT.url}) is not on the document origin `
+                            + `(${location.origin}) — the viewer is served through a foreign path`;
+                    }
+                } catch (e) {
+                    reason = String((e as any)?.message || e);
+                }
+                _sessionUrlSyncable = reason === null;
+                if (reason) console.info("[session] URL sync disabled:", reason);
+            }
+            return _sessionUrlSyncable;
+        },
+
+        /**
          * Update the viewer URL with the current session data. Returns true if the URL was updated.
+         *
+         * A no-op (returning false) where the URL cannot carry a session — see
+         * {@link canSyncSessionToUrl}. The gate runs *before* serialization: this
+         * is a hot path (`scheduleSessionUrlSync` fires on every shader edit).
          */
         syncSessionToUrl: function syncSessionToUrl(withCookies: boolean = false) {
+            if (!UTILITIES.canSyncSessionToUrl()) return false;
+            // Silent: this fires on every shader edit, and a toast per edit
+            // would be the bug. The refusal the user acts on comes from the
+            // explicit share action. Checked here rather than folded into
+            // `canSyncSessionToUrl` because that answer is memoized for the
+            // session while roles change at login.
+            if (!allowCoreAction(CAP_EXPORT_URL, { silent: true })) return false;
             try {
-                const data = UTILITIES.serializeAppConfig();
+                const data = UTILITIES.serializeAppConfig(withCookies);
                 history.replaceState(history.state, "", APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
                 return true;
             } catch (e) {
-                console.warn("syncSessionToUrl failed:", e);
+                // Latch off: whatever makes the write illegal will not change
+                // mid-session, and repeating it means repeating the serialization.
+                _sessionUrlSyncable = false;
+                console.warn("syncSessionToUrl failed, disabling URL sync:", e);
                 return false;
             }
         },
 
         /**
-         * Create a screenshot of the current viewer viewport and open it in a new tab.
+         * Create a screenshot of a viewer viewport and show it in a preview modal.
+         *
+         * The result is shown via {@link UI.Modal} rather than `window.open`: a
+         * new tab opened from the async `toBlob` callback survives only when the
+         * browser still holds transient user activation, which a mouse click
+         * grants but a modifier keydown (e.g. the Alt+S shortcut) does not — so
+         * the popup was silently blocked for the keyboard path. The modal shows
+         * identically for every trigger; downloading / opening a tab then runs
+         * from a trusted in-modal click.
+         *
+         * @param {any} [viewer] the viewer to capture; defaults to the focused one
          * @returns {void}
          */
-        makeScreenshot: function () {
+        makeScreenshot: function (viewer?: any) {
+            viewer = viewer || VIEWER;
+            if (!viewer?.drawer?.canvas) {
+                Dialogs?.show($.t('main.screenshot.failed'), 4000, Dialogs?.MSG_WARN);
+                return;
+            }
             // todo OSD v5.0 ensure we can copy the canvas among drawers
             const canvas = document.createElement("canvas"),
-                viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+                viewportCanvas = viewer.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
             canvas.width = width;
             canvas.height = height;
             const context = canvas.getContext("2d") as CanvasRenderingContext2D;
             context.drawImage(viewportCanvas, 0, 0);
             //todo make this awaiting in OSD v5.0
-            VIEWER.raiseEvent('screenshot', {
+            viewer.raiseEvent('screenshot', {
                 context2D: context,
                 width: width,
                 height: height
             });
-            //show result in a new window
             canvas.toBlob((blob: Blob | null) => {
-                const url = blob && URL.createObjectURL(blob);
-                if (url === null) return;
-                window.open(url, '_blank');
-                URL.revokeObjectURL(url);
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const fileName = `xopat-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+
+                const img = document.createElement("img");
+                img.src = url;
+                img.alt = $.t('main.screenshot.title');
+                img.style.cssText = "max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:0.5rem;";
+
+                const download = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, type: UI.Button.TYPE.PRIMARY, onClick: () => {
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = fileName;
+                        a.click();
+                    } },
+                    $.t('main.screenshot.download')
+                );
+                const openTab = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: () => window.open(url, '_blank') },
+                    $.t('main.screenshot.openTab')
+                );
+                const copy = new UI.Button(
+                    { size: UI.Button.SIZE.SMALL, outline: UI.Button.OUTLINE.ENABLE, onClick: async () => {
+                        try {
+                            const clipboard = navigator.clipboard as any;
+                            if (!clipboard?.write || typeof ClipboardItem === "undefined") {
+                                throw new Error("Clipboard image write unsupported.");
+                            }
+                            await clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+                            Dialogs?.show($.t('main.screenshot.copied'), 2000, Dialogs?.MSG_INFO);
+                        } catch (e) {
+                            console.warn("Screenshot clipboard copy failed:", e);
+                            Dialogs?.show($.t('main.screenshot.copyFailed'), 4000, Dialogs?.MSG_WARN);
+                        }
+                    } },
+                    $.t('main.screenshot.copy')
+                );
+                const footer = document.createElement("div");
+                footer.className = "w-full flex items-center justify-end gap-2";
+                footer.append(openTab.create(), copy.create(), download.create());
+
+                const modal = new UI.Modal({
+                    header: $.t('main.screenshot.title'),
+                    body: img,
+                    footer,
+                    width: "min(80vw, 900px)",
+                    allowResize: true,
+                });
+                // Free the object URL once the preview goes away.
+                const origClose = modal.close.bind(modal);
+                modal.close = () => { URL.revokeObjectURL(url); modal.root?.remove(); return origClose(); };
+                modal.mount(document.body).open();
             });
         },
 
@@ -2300,6 +3367,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * see `UTILITIES.save()`.
          */
         export: async function () {
+            // One deny line closes the session document for every deployment,
+            // whatever plugins happen to be loaded — the per-owner capabilities
+            // can only speak about their own slice of it.
+            if (!allowCoreAction(CAP_EXPORT_FILE)) return;
             // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
             // round-trip to remote sinks (github, http-rest, …) for several
             // seconds. Show the global loading UI so the user knows we're
@@ -2307,19 +3378,56 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const showLoading = USER_INTERFACE?.Loading?.show;
             try { showLoading?.(true); } catch (_) { /* no-op */ }
             try {
+                const outcome: IOResult[] = [];
+                const form = await UTILITIES.getForm("", undefined, false, outcome);
                 const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
 <div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
-${await UTILITIES.getForm()}
+${form}
 </body></html>`;
 
                 UTILITIES.downloadAsFile("export.html", doc);
                 APPLICATION_CONTEXT.__cache.dirty = false;
+                // The file is written either way — the export is not "failed"
+                // because one owner was refused. But an export silently missing
+                // a feature's data is worse than a noisy one, so name what was
+                // left out, ONCE, rather than per owner per viewer.
+                UTILITIES.reportExportOmissions(outcome);
             } finally {
                 try { showLoading?.(false); } catch (_) { /* no-op */ }
             }
+        },
+
+        /**
+         * Tell the user which owners' data did not make it into an export.
+         *
+         * Rights denials are deterministic and identical on every dispatch, so
+         * the pipeline collects them instead of toasting per dispatch (a
+         * `bundleScope: "all"` owner dispatches 1 + N + N times). This turns the
+         * collected refusals into one sentence naming the affected features.
+         *
+         * @param results outcomes from `flushBundleExport`
+         */
+        reportExportOmissions: function (results: IOResult[] | undefined) {
+            if (!Array.isArray(results) || !results.length) return;
+            const names = new Set<string>();
+            for (const r of results) {
+                if (!r || r.ok) continue;
+                const ownerId = (r as any).ownerId;
+                if (!ownerId) continue;
+                // `elementName` resolves a `%key%` name and degrades to the id,
+                // so a message can never leak a raw reference or `undefined`.
+                const kind = (r as any).ownerUid?.startsWith?.("plugin.") ? "plugins" : "modules";
+                names.add(elementName(kind, ownerId));
+            }
+            if (!names.size) return;
+            Dialogs.show(
+                $.t("main.bar.exportPartialDenied", { elements: Array.from(names).join(", ") }),
+                8000,
+                Dialogs.MSG_WARN,
+            );
         },
 
         /**
@@ -2373,13 +3481,20 @@ ${await UTILITIES.getForm()}
                     // remind the user that Export is their escape hatch.
                     Dialogs.show($.t("main.bar.saveFailed"), 8000, Dialogs.MSG_ERR);
                 } else {
-                    // Case D — some destinations refused. The other ones got
-                    // through; mark the session clean BUT recommend Export so
-                    // the user has a complete local copy of whatever the
-                    // remote refused to take.
+                    // Case D — some destinations refused. The others got
+                    // through, but part of the user's work did NOT: the session
+                    // stays dirty so the unload warning still fires and a
+                    // retry/Export is still offered. Marking it clean here made
+                    // a partial save indistinguishable from a complete one,
+                    // which is the one state where losing the reminder costs
+                    // data.
                     Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
-                    APPLICATION_CONTEXT.__cache.dirty = false;
                 }
+                // Naming the refused owners is separate from the verdict above:
+                // "some destinations refused" does not tell the user WHICH of
+                // their work is unsaved. Only fires when the refusals carry an
+                // owner (rights denials do).
+                if (refused.length) UTILITIES.reportExportOmissions(refused);
             } finally {
                 try { showLoading?.(false); } catch (_) { /* no-op */ }
             }
@@ -2445,17 +3560,33 @@ ${await UTILITIES.getForm()}
         },
 
         /**
-         * Download a string as a file via a temporary link element.
+         * Download content as a file via a temporary link element. Strings are
+         * written as `text/plain`; binary payloads keep their own type (a Blob's
+         * own, `application/octet-stream` otherwise).
          */
-        downloadAsFile: function (filename: string, content: string) {
-            let data = new Blob([content], { type: 'text/plain' });
+        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
+            let data: Blob;
+            if (content instanceof Blob) data = content;
+            else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
+            else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
+
             let downloadURL = window.URL.createObjectURL(data);
             let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
             elem.href = downloadURL;
             elem.setAttribute('download', filename);
             elem.click();
-            URL.revokeObjectURL(downloadURL);
+            // Revoking synchronously races the browser's read of a large blob —
+            // Firefox in particular aborts the save. Let the click settle first.
+            setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
         },
+
+        /**
+         * Download the original slide file behind a tile source, when that source
+         * implements the optional download capability (`src/tile-source.ts`).
+         * Chooses between the browser's own download manager and a streamed,
+         * cancellable transfer — see `src/classes/app/slide-file-download.ts`.
+         */
+        downloadSlideFile: downloadSlideFile,
 
         /**
          * Open a file picker and read the selected file, then call the provided callback with the result.
@@ -2465,14 +3596,19 @@ ${await UTILITIES.getForm()}
          * @param mode - Read as text or as ArrayBuffer.
          */
         uploadFile: async function (onUploaded: (arg0: (string | ArrayBuffer)) => void, accept = ".json", mode = "text") {
-            const uploader = $("#file-upload-helper");
-            uploader.attr('accept', accept);
-            uploader.on('change', (e: JQuery.ChangeEvent) => {
+            const uploader = document.getElementById("file-upload-helper") as HTMLInputElement | null;
+            if (!uploader) {
+                console.error("Upload helper input is missing from the document.");
+                return;
+            }
+            uploader.accept = accept;
+            // `once` replaces the jQuery `.off('change')` teardown: a second
+            // uploadFile() call must not re-fire the previous callback.
+            uploader.addEventListener('change', (e: Event) => {
                 UTILITIES.readFileUploadEvent(e, mode).then(onUploaded as any).catch(onUploaded);
-                uploader.val('');
-                uploader.off('change');
-            });
-            uploader.trigger("click");
+                uploader.value = '';
+            }, { once: true });
+            uploader.click();
         },
 
         /**
@@ -2749,17 +3885,23 @@ ${await UTILITIES.getForm()}
             if (!withCookies) data.params.bypassCookies = true;
             data.params.bypassCacheLoadTime = true;
 
-            const snapshotViewport = (viewer: OpenSeadragon.Viewer) => ({
-                zoomLevel: viewer.viewport.getZoom(),
-                point: viewer.viewport.getCenter(),
-                rotation: viewer.viewport.getRotation(),
-            });
+            // Which deployment produced this session. This one serializer feeds the
+            // address-bar hash (`syncSessionToUrl`), the self-POST rewrite, `getForm`
+            // and the file export — the transports that outlive an ENV swap because
+            // they live in the history entry rather than in storage. Consumers warn
+            // on a mismatch and refuse to cache it (see src/parse-input.js).
+            //
+            // Top level, NOT in `params`: app.ts sanitizes params against the `setup`
+            // allowlist and would drop an unknown key with a warning.
+            data.__envKey = window.XOPAT_DEPLOYMENT_KEY || undefined;
+
+            // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
             if (viewers.length <= 1) {
                 const v = viewers[0] || VIEWER;
                 data.params.viewport = snapshotViewport(v);
             } else {
-                data.params.viewport = viewers.map(snapshotViewport);
+                data.params.viewport = viewers.map((v: OpenSeadragon.Viewer) => snapshotViewport(v));
             }
 
             for (const [k, v] of Object.entries(data.params)) {
@@ -2795,8 +3937,11 @@ ${await UTILITIES.getForm()}
          * @param customAttributes - Extra raw HTML attributes or inputs to include in the form.
          * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
          * @param withCookies - Include cookies in export payload.
+         * @param outcome - Optional sink; receives the IO flush results so the
+         *   caller can report what was refused. A refused owner is otherwise
+         *   just silently missing from the exported document.
          */
-        getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false) {
+        getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false, outcome?: IOResult[]) {
             const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
 
             if (!APPLICATION_CONTEXT.env.server.supportsPost) {
@@ -2809,7 +3954,8 @@ ${await UTILITIES.getForm()}
     <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
             }
 
-            const { app, data } = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            const { app, data, io } = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            if (outcome && Array.isArray(io)) outcome.push(...io);
             data.visualization = app;
 
             let form = `
@@ -2830,6 +3976,13 @@ form.appendChild(node);`;
             }
 
             for (let id in data) {
+                // Internal bookkeeping stamped onto POST_DATA — `__envKey`, the
+                // deployment stamp written by `parse-input.js`. Not user data,
+                // deliberately not exported, and NOT an error: the importing boot
+                // stamps its own. Skipping the whole `__` prefix rather than that
+                // one name, because the `post-data` sink also writes arbitrary
+                // top-level keys for `xoType: "core"` owners.
+                if (id.startsWith("__")) continue;
                 // dots seem to be reserved names therefore use IDs differently
                 const sets = id.split('.'), dataItem = data[id];
                 // namespaced export within "modules" and "plugins"
@@ -2885,6 +4038,15 @@ form.submit();
                     const cfg = viewer.world.getItemAt(i)?.getConfig?.("background");
                     if (cfg) return cfg;
                 }
+                // Failed-open slot: the placeholder carries no configured
+                // background but is stamped with the one it was meant to load.
+                // Count it as OPEN — dropping it here would write a selection
+                // without this slot, and a later close would diff [] → [] as a
+                // noop, leaving the faulty placeholder stuck on screen.
+                for (let i = 0; i < count; i++) {
+                    const faulty = (viewer.world.getItemAt(i) as any)?.__xopatFaultyBackground;
+                    if (faulty) return faulty;
+                }
                 return undefined;
             };
 
@@ -2938,10 +4100,10 @@ form.submit();
                 .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
                 .filter((value: number | undefined) => Number.isInteger(value));
 
-            APPLICATION_CONTEXT.setOption(
-                "activeBackgroundIndex",
-                activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
-            );
+            // Write [] explicitly when nothing is open — setOption(undefined)
+            // would delete the entry and getOption would resurrect the
+            // defaultParams fallback (background 0) on the next read.
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBackgroundIndex);
 
             // Per-viewer viz selection lives on each background entry as
             // `visualizationIndex`. Sync ONLY positive findings: the absence
@@ -3163,7 +4325,13 @@ form.submit();
             const idx = arr[slot];
             const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
             const bg = Number.isInteger(idx) ? backgrounds[idx as number] : undefined;
-            return bg && typeof bg.id === "string" ? bg.id : undefined;
+            if (!bg || typeof bg.id !== "string") return undefined;
+            // Virtual-region children resolve to their parent slide so identity
+            // (uniqueId / IO bundle key) is the un-split parent in EVERY mode —
+            // side-by-side selects child indices, but their data must still flow
+            // to the parent. `virtualOf` is the parent BACKGROUND id (the IO
+            // keying axis), not the parent data id.
+            return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
         } catch (_e) {
             return undefined;
         }
@@ -3196,10 +4364,12 @@ form.submit();
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
-            const config = item?.getConfig("background");
+            const config = item?.getConfig?.("background");
             if (config) {
-                viewer.__cachedUUID = config.id;
-                return config.id;
+                // Same parent redirect as explicitSlotBackgroundId (virtual children → parent).
+                const id = typeof config.virtualOf === "string" ? config.virtualOf : config.id;
+                viewer.__cachedUUID = id;
+                return id;
             }
             if (!firstItem) {
                 firstItem = item;
@@ -3228,6 +4398,34 @@ form.submit();
             return findViewerUniqueId(this);
         }
     });
+
+    /**
+     * Default `getConfig` so the documented TiledImage contract (`src/types/globals.d.ts`)
+     * is TOTAL — every world item answers it, whether or not anything configured it.
+     *
+     * The real implementation is stamped per item by `configureOpenedItem`, which runs in
+     * `addTiledImage`'s success callback. OSD puts the item in the world and calls
+     * `viewport.goHome(true)` BEFORE that (openseadragon.js `_loadQueuedTiledImage`), and
+     * `goHome` raises `zoom`/`pan` synchronously — so every consumer reading the reference
+     * item off a `zoom` handler saw a world item without the method and threw
+     * (`TypeError: …getConfig is not a function`, which silently killed the viewport cache
+     * for the rest of the session). Items added outside the pipeline
+     * (`ViewerShaderSourceController.addTile`, the renderer's managed shader sources) never
+     * get one at all.
+     *
+     * Returning `undefined` is the same answer `configureOpenedItem` gives for a kind it does
+     * not describe, so callers need no new branch — only the ones that were already prepared
+     * for "no config".
+     *
+     * @property {function} getConfig
+     * @method
+     * @memberof OpenSeadragon.TiledImage
+     */
+    if (!OpenSeadragon.TiledImage.prototype.getConfig) {
+        OpenSeadragon.TiledImage.prototype.getConfig = function () {
+            return undefined;
+        };
+    }
 
     /**
      * @property {function} getMenu
@@ -3330,6 +4528,37 @@ form.submit();
                 };
             }
 
+            // Program lifecycle, which is what a shared GL context makes fragile:
+            // CURRENT_PROGRAM is context-global, so one renderer's relink changes what
+            // every other renderer is drawing through. `registerProgram` now throws on a
+            // failed link (it builds into a scratch program and keeps the previously
+            // linked one), so the interesting event is the throw — log it with the key
+            // and let it propagate to whoever asked for the build.
+            //
+            // Bind mismatches are not tapped here: the library routes every bind through
+            // `_bindGLProgram`, which verifies CURRENT_PROGRAM itself when the drawer runs
+            // with `debug: true` — and this whole block only exists under webglDebugMode,
+            // which is exactly what sets that flag.
+            const renderer = drawer.renderer;
+            if (renderer && !renderer.__xopatProgramTap) {
+                renderer.__xopatProgramTap = true;
+
+                const origRegister = renderer.registerProgram;
+                if (typeof origRegister === "function") {
+                    renderer.registerProgram = function (program: any, key: any) {
+                        try {
+                            const result = origRegister.call(this, program, key);
+                            log(tag, "registerProgram OK", { key: result });
+                            return result;
+                        } catch (e) {
+                            console.error(`[flex:${tag}] registerProgram THREW — the program did not link; ` +
+                                `the previously linked one is kept`, { key, error: String(e) });
+                            throw e;
+                        }
+                    };
+                }
+            }
+
             const r = drawer.renderer;
             if (r) {
                 r.addHandler("program-used", (e: any) => {
@@ -3427,6 +4656,8 @@ form.submit();
         active: OpenSeadragon.Viewer | null;
         layout: any;
         _singletonsKey: symbol;
+        _cellSeq: number;
+        _dupWarnedUids: Set<string>;
 
         /**
          * Create a ViewerManager.
@@ -3434,9 +4665,17 @@ form.submit();
          */
         constructor(CONFIG: typeof APPLICATION_CONTEXT.config) {
             super();
+            // Before anything can subscribe: a throwing global-event handler must not
+            // abort the raiseEvent dispatch loop and take the rest of the app with it.
+            installEventIsolation(this, "VIEWER_MANAGER");
             this.CONFIG = CONFIG;
             this.menu = null;
             this.viewers = [];
+            // Monotonic, never-reused grid-cell id counter. Cell ids MUST NOT be
+            // derived from the (spliced, drifting) viewers array index — two live
+            // viewers would then collide on `osd-<index>` and leave an empty ghost
+            // grid cell (white area). See `add()`.
+            this._cellSeq = 0;
             this.viewerMenus = {};
             this.broadcastEvents = {} as typeof this.broadcastEvents;
             this.active = null;
@@ -3497,8 +4736,14 @@ form.submit();
         }
 
         _syncActiveViewState() {
+            // "Which viewport is active" is only information when there is more
+            // than one. With a single viewport the highlight marks the only
+            // thing on screen, and readers take it for a statement about the
+            // *slide* ("this one is open") and look for the list it refers to.
+            // Same for `aria-current`: current among one is not a distinction.
+            const distinguishable = this.viewers.length > 1;
             this.viewers.forEach((vw: OpenSeadragon.Viewer, index: number) => {
-                const isActive = vw === this.active;
+                const isActive = vw === this.active && distinguishable;
                 vw.container.classList.add("xo-viewer-host");
                 vw.container.classList.toggle("active", isActive);
                 vw.container.classList.toggle("xo-active-viewer", isActive);
@@ -3750,11 +4995,32 @@ form.submit();
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          */
+        /**
+         * Tear down a grid cell + its right-menu that `add()` created before the
+         * viewer failed to construct. Without this the cell is orphaned (present
+         * in the DOM / layout, absent from `this.viewers`), invisible to every
+         * slot-keyed lifecycle decision, and collides with the next `add`.
+         */
+        _discardOrphanCell(cellId: string) {
+            const menu = this.viewerMenus[cellId];
+            if (menu) {
+                try { menu.destroy?.(); } catch (e) { console.warn('Orphan viewer menu destroy failed', e); }
+                delete this.viewerMenus[cellId];
+            }
+            // A cell that never became a viewer must not keep its WebGL context
+            // slot, or repeated failed opens would exhaust the private budget and
+            // silently push every later viewer onto the shared (readback) path.
+            releaseFlexContextKey(cellId);
+            try { this.layout.removeById(cellId); } catch (e) { console.warn('Orphan cell removal failed', e); }
+        }
+
         add(index: number, setActive = true) {
             if (this.viewers[index]) this.delete(index);
 
-            // make a unique cell inside the grid
-            const cellId = `osd-${index}`;
+            // Cell id is a monotonic, never-reused token — NOT `osd-${index}`.
+            // The viewers array is spliced (indices shift), so an index-derived
+            // id collides after a delete+add and leaves a duplicate empty cell.
+            const cellId = `osd-${this._cellSeq++}`;
             const navigatorId = cellId + "-navigator";
             const cell = this.layout.attachCell(cellId, index);
             this.menu = new UI.RightSideViewerMenu(cellId, navigatorId);
@@ -3766,19 +5032,22 @@ form.submit();
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
                 webGlPreferredVersion: preferredWebGlVersion,
+                // "auto" lets a float slide upgrade the first-pass target; see config.json.
+                precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
-                // Share a single WebGL context across every FlexRenderer instance on the page
-                // (main viewer, navigator, standalone drawers, isolated playground viewers).
-                // Browsers cap concurrent WebGL contexts at ~16; on hosts like Jupyter that
-                // spawn several viewers per cell we'd otherwise crash with "out of contexts"
-                // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
-                // when key + webGLPreferredVersion + canvasOptions agree.
-                // TODO: temporarily disabled until fixed
-                // sharedContextKey: "xopat-flex-renderer",
+                // A private context when the budget allows, the shared one otherwise.
+                // Private means the presentation canvas IS the WebGL canvas, so the
+                // per-frame readPixels + putImageData transfer that shared contexts
+                // require does not happen at all. See flex-renderer-context.ts.
+                sharedContextKey: acquireFlexContextKey(cellId),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
-                    viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
+                    // Same teardown window as `htmlReset` below: a rebuild walking
+                    // a placeholder/faulty layer can fire after `VIEWER_MANAGER.delete`
+                    // cleared the menu slot, so `viewer.getMenu()` is undefined.
+                    // Optional-chain instead of throwing an uncaught error.
+                    viewer.getMenu()?.getShadersTab?.()?.createLayer?.(viewer, shaderLayer, shaderConfig, htmlContext);
                 },
                 // Invoked from inside `FlexRenderer.destroy()` during
                 // `viewer.destroy()` — by that point `VIEWER_MANAGER.delete`
@@ -3809,32 +5078,85 @@ form.submit();
                     navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
                         window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", undefined, false)
             };
 
-            if (renderingCapability.ok) {
-                viewerOptions.drawer = 'flex-renderer';
-                viewerOptions.drawerOptions = {
-                    'flex-renderer': flexDrawerOptions
-                };
-            } else {
-                // we would likely want to change the renderer for some alternative, right now no other renderer is capable anyway :/
-                viewerOptions.drawer = 'flex-renderer';
-                viewerOptions.drawerOptions = {
-                    'flex-renderer': flexDrawerOptions
-                };
-                console.warn('FlexRenderer runtime self-test failed. Falling back to the default drawer.', renderingCapability.error || renderingCapability);
-                // todo display screen-wide error (only once!)
-            }
+            // Device-aware, display-scaled OSD cache + draw-loop + render-order defaults.
+            // Merged as the LOWEST-precedence layer below, so ENV config still overrides it.
+            const perf = computeOsdPerformanceOptions({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                dpr: window.devicePixelRatio,
+                deviceClass: getDeviceClass(),
+                viewportCount: this.viewers.length || 1,
+            });
+            // An explicit numeric `maxImageCacheCount` pins a fixed per-viewer budget;
+            // `null` (the default) leaves the adaptive value computed above.
+            const explicitCache = APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false);
+            if (typeof explicitCache === "number") perf.maxImageCacheCount = explicitCache;
 
-            const viewer = window.OpenSeadragon($.extend(
-                true,
-                ENV.openSeadragonConfiguration,
-                ENV.client.osdOptions,
-                viewerOptions
-            ));
+            if (!renderingCapability.ok) {
+                // The FlexRenderer self-test failed (WebGL2 unavailable or a
+                // GPU/driver capability mismatch — seen on some mobile browsers).
+                // No alternative renderer can drive the visualization pipeline, so
+                // a viewer built here would fail to create any drawer, throw out of
+                // `new ViewerManager()`, and cascade into an opaque "Unknown error"
+                // with an endless spinner. Abort viewer creation instead and let
+                // `beginApplicationLifecycle` report the cause cleanly (it reads
+                // APPLICATION_CONTEXT.__renderingCapability, set just above).
+                console.error('FlexRenderer runtime self-test failed; cannot create a viewer.', renderingCapability.error || renderingCapability);
+                this._discardOrphanCell(cellId);
+                return;
+            }
+            viewerOptions.drawer = 'flex-renderer';
+            viewerOptions.drawerOptions = {
+                'flex-renderer': flexDrawerOptions
+            };
+
+            let viewer: OpenSeadragon.Viewer;
+            try {
+                viewer = window.OpenSeadragon(window.OpenSeadragon.extend(
+                    true,
+                    perf,
+                    ENV.openSeadragonConfiguration,
+                    ENV.client.osdOptions,
+                    viewerOptions
+                ));
+            } catch (e) {
+                // The predictive self-test above passed (WebGL2 is present), but the
+                // actual drawer/shader-program construction threw at runtime — most
+                // commonly because the GPU advertises WebGL2 yet its fragment-uniform
+                // budget (MAX_FRAGMENT_UNIFORM_VECTORS) is too small for the shader
+                // pipeline. This is observed on low-end / older mobile GPUs.
+                //
+                // ensureRuntimeSupport() only predicts failures; it does not probe the
+                // uniform budget, so it cannot catch this case. Left unguarded the throw
+                // escapes `new ViewerManager()` (this.add(0) in the constructor) and
+                // aborts initXOpat *before* `window.VIEWER_MANAGER` (app.ts) and
+                // `APPLICATION_CONTEXT.beginApplicationLifecycle` are assigned, which then
+                // cascades into opaque "Can't find variable: VIEWER_MANAGER" /
+                // "beginApplicationLifecycle is not a function" failures across every
+                // plugin and the DOMContentLoaded bootstrap.
+                //
+                // Degrade exactly like the self-test failure: record an `ok:false`
+                // verdict so beginApplicationLifecycle reports the cause cleanly and
+                // stops the loading spinner instead of leaving a broken half-booted app.
+                const error = (e as any)?.message || e;
+                (APPLICATION_CONTEXT as any).__renderingCapability = {
+                    ok: false,
+                    error: String(error || "WebGL renderer initialization failed."),
+                };
+                console.error('FlexRenderer viewer creation failed; cannot create a viewer.', e);
+                this._discardOrphanCell(cellId);
+                return;
+            }
             (viewer as any).__renderingCapability = renderingCapability;
+
+            // Install before the first `addHandler` below: everything registered
+            // afterwards — core wiring, `broadcastHandler`, viewer singletons, and
+            // plugins/modules calling `viewer.addHandler` directly — runs isolated,
+            // so a faulting handler cannot abort `updateOnce` and kill the render loop.
+            installEventIsolation(viewer, `viewer:${cellId}`);
 
             // Per-viewer broker for shader source (time-series) rebind requests.
             // The resolver must be installed on the drawer's options so the
@@ -3842,6 +5164,26 @@ form.submit();
             // blindly appending to viewer.world.
             const shaderSourceController = new ViewerShaderSourceController(viewer);
             (viewer as any).__shaderSourceController = shaderSourceController;
+            // Per-viewer persisted faulty-source verdicts (see registry doc).
+            (viewer as any).__faultySources = new ViewerFaultySourceRegistry(
+                APPLICATION_CONTEXT.getOption("faultyTileThreshold")
+            );
+            // Per-viewer focal-plane (z-stack) navigator. Swaps the active plane
+            // on the reference tiled image without re-entering the open pipeline.
+            (viewer as any).__depthController = new ViewerDepthController(viewer);
+            // Per-viewer joystick navigation (mode toggled via the
+            // core.viewport.toggleJoystick shortcut). No-op until the mode is on.
+            (viewer as any).__joystickController = new ViewerJoystickController(viewer);
+            // Per-viewer modifier-drag rotation (default Primary+drag). Only
+            // engages while OSD mouse-nav is on; the arming modifier is the
+            // remappable core.viewport.rotateDrag binding.
+            (viewer as any).__rotationController = new ViewerRotationController(viewer);
+            // Per-viewer wheel authority: delta normalization, scroll policy
+            // (ctrl gate / reverse / magnification snap) and Alt+wheel z-stack
+            // scrubbing. Replaces OSD's ±1 quantization + drop-gate throttling.
+            (viewer as any).__scrollZoomController = new ViewerScrollZoomController(viewer);
+            // Per-viewer momentum after a drag release. Drag itself stays 1:1.
+            (viewer as any).__kineticPanController = new ViewerKineticPanController(viewer);
             const attachResolver = (drawer: any) => {
                 if (!drawer || drawer.__xopatShaderResolverAttached) return;
                 drawer.options = drawer.options || {};
@@ -3903,8 +5245,8 @@ form.submit();
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);
             // when no provider returns items, no menu opens (parity with previous behavior).
-            $(viewer.element).on('contextmenu', function (event: any) {
-                const orig: MouseEvent = event.originalEvent || event;
+            viewer.element.addEventListener('contextmenu', function (event: MouseEvent) {
+                const orig: MouseEvent = event;
                 // Inner overlay (board panel, plugin HUD, …) already claimed this
                 // contextmenu by calling preventDefault — don't double-open.
                 if (orig.defaultPrevented) return;
@@ -3952,48 +5294,20 @@ form.submit();
                 }
             }
 
-            // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
-            // /**
-            //  * From https://github.com/openseadragon/openseadragon/issues/1690
-            //  * brings better zooming behaviour
-            //  */
-            // window.VIEWER.addHandler("canvas-scroll", function(e) {
-            //     if (Math.abs(e.originalEvent.deltaY) < 100) {
-            //         // touchpad has lesser values, do not change scroll behavior for touchpads
-            //         VIEWER.zoomPerScroll = 0.5;
-            //         _scrollCount = 0;
-            //         return;
-            //     }
-            //
-            //     _currentScroll = Date.now();
-            //     if (_currentScroll - _lastScroll < 400) {
-            //         _scrollCount++;
-            //     } else {
-            //         _scrollCount = 0;
-            //         VIEWER.zoomPerScroll = 1.2;
-            //     }
-            //
-            //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
-            //         VIEWER.zoomPerScroll += 0.2;
-            //     }
-            //     _lastScroll = _currentScroll;
-            // });
-
-            viewer.addHandler('navigator-scroll', function (e) {
-                viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+            // Accelerated zoom from the navigator thumbnail. Shares the wheel
+            // normalization of the canvas path, so a trackpad does not zoom in
+            // huge jumps here now that OSD's drop-gate is off.
+            viewer.addHandler('navigator-scroll', function (e: any) {
+                const notches = (viewer as any).__scrollZoomController?.wheelNotches(e) ?? e.scroll;
+                if (!notches) return;
+                viewer.viewport.zoomBy(Math.pow(1.5, notches));
                 viewer.viewport.applyConstraints();
             });
 
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', (e: any) => {
                 for (let SingletonClass of REQUIRED_SINGLETONS) {
-                    try {
-                        if (!this._getSingleton(SingletonClass.IID, viewer)) {
-                            SingletonClass.instance(viewer);
-                        }
-                    } catch (e) {
-                        console.error(e);
-                    }
+                    ensureSingletonForViewer(SingletonClass, viewer);
                 }
 
                 if (e.firstLoad) {
@@ -4020,6 +5334,10 @@ form.submit();
                     }
                     viewer[this._singletonsKey] = null;
                 }
+                (viewer as any).__joystickController?.destroy?.();
+                (viewer as any).__rotationController?.destroy?.();
+                (viewer as any).__scrollZoomController?.destroy?.();
+                (viewer as any).__kineticPanController?.destroy?.();
             })
 
             // todo: consider wiring these events later as we access viewerUniqueID too early
@@ -4036,25 +5354,10 @@ form.submit();
 
             viewer.gestureSettingsMouse.clickToZoom = false;
 
-            // Notebook / scrollable-host embeddings: gate scroll-to-zoom behind
-            // Ctrl/Cmd so plain wheel falls through to the host page. Uses OSD's
-            // canvas-scroll contract — preventDefaultAction skips the zoom,
-            // preventDefault=false lets the browser propagate the wheel.
-            if (APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')) {
-                let lastHintAt = 0;
-                viewer.addHandler('canvas-scroll', (e: any) => {
-                    const orig = e.originalEvent as WheelEvent | undefined;
-                    if (orig && !orig.ctrlKey && !orig.metaKey) {
-                        e.preventDefaultAction = true;
-                        e.preventDefault = false;
-                        const now = Date.now();
-                        if (now - lastHintAt > 8000) {
-                            lastHintAt = now;
-                            Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
-                        }
-                    }
-                });
-            }
+            // Scroll-to-zoom policy (ctrl gate, reverse, magnification snap) and
+            // Alt+wheel z-stack scrubbing live in ViewerScrollZoomController,
+            // installed above — it owns the whole wheel path so the raw delta
+            // magnitude survives OSD's ±1 quantization.
 
             new OpenSeadragon.Tools(viewer);
             this.menu.init(viewer);
@@ -4065,24 +5368,49 @@ form.submit();
              * @param enable
              * @param [explainErrorHtml=undefined]
              */
+            // NOT an OSD overlay. `addOverlay(el, new Rect(0, 0, 1, 1))` anchors
+            // the element in *viewport* coordinates, so an empty viewer — which
+            // has no world to fit and therefore an arbitrary viewport — rendered
+            // the "no slide" page off-centre and at a zoom-dependent scale, and
+            // put it under the annotation canvas where no click could reach it.
+            // The page is chrome, not content: it is mounted into the viewer
+            // container as a screen-fixed, always-centred layer instead. The
+            // layer itself is click-through (`pointer-events:none`) so the
+            // canvas keeps working; interactive children opt back in.
+            let demoHost: HTMLElement | null = null;
+
+            const unmountDemoPage = () => {
+                demoHost?.remove();
+                demoHost = null;
+            };
+
+            const mountDemoPage = (content: Element) => {
+                unmountDemoPage();
+                const host = document.createElement("div");
+                host.className = "xopat-demo-page";
+                host.style.cssText = "position:absolute;inset:0;display:flex;"
+                    + "align-items:center;justify-content:center;overflow:auto;"
+                    + "padding:1.5rem;pointer-events:none;z-index:30;";
+                host.appendChild(content);
+                (viewer.container || viewer.element).appendChild(host);
+                demoHost = host;
+            };
+
             viewer.toggleDemoPage = (enable: boolean, explainErrorHtml: string | undefined = undefined) => {
                 const id = "demo-ad-" + viewer.id;
 
                 if (enable) {
-                    const { h1, br, img, p, div } = van.tags;
-                    // todo ensure the outer div always has ID, even when someone added ID from outside
-                    let toSet = div({ id: id },
-                        h1("xOpat - The WSI Viewer"),
-                        p("The viewer is missing the target data to view; this might happen, if"),
-                        div({ innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml') }),
-                        br(), br(),
-                        p({ class: "text-small mx-6 text-center" },
-                            "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
-                        img({ src: "docs/assets/xopat-banner.png", style: "width:80%;display:block;margin:0 auto;" })
-                    );
+                    unmountDemoPage();
+                    // `explainErrorHtml` is the legacy signal for "this is a
+                    // failure, not an empty viewer". Its *content* is no longer
+                    // rendered — the overlay builds its own structured markup and
+                    // names the images that actually failed — but the parameter
+                    // and the event field stay, because consumers branch on it
+                    // (`plugins/slide-info` shows its own UI only when it is absent).
+                    let toSet: Element | null = buildDemoOverlay(viewer, id, Boolean(explainErrorHtml));
                     const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
-                        viewer.addOverlay(overlay || toSet, new OpenSeadragon.Rect(0, 0, 1, 1));
+                        mountDemoPage(overlay || toSet);
                         toSet = null;
                     };
 
@@ -4097,6 +5425,9 @@ form.submit();
 
                     doOverlay(undefined);
                 } else {
+                    unmountDemoPage();
+                    // Legacy path: an older build could leave the page mounted as
+                    // a real OSD overlay. Clean that up too, once.
                     const overlay = document.getElementById(id);
                     if (overlay) viewer.removeOverlay(overlay);
                 }
@@ -4177,7 +5508,10 @@ form.submit();
                     continue;
                 }
                 try {
-                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID });
+                    // `trigger: "system"` — the boot hydration pass. It runs
+                    // once per viewer before the user has done anything, so a
+                    // refusal here is logged rather than dialogged.
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, trigger: "system" });
                 } catch (e) {
                     console.error('IO Failure:', e);
                 }
@@ -4221,6 +5555,20 @@ form.submit();
         }
 
         /**
+         * Remove a registered viewer singleton. Used to roll back registration
+         * when a singleton subclass constructor throws after the base class
+         * already attached the instance (see XOpatViewerSingleton.instance()).
+         * @private
+         */
+        _detachSingleton(singletonId: string, viewerOrUniqueId: ViewerLikeItem) {
+            const viewer = this.ensureViewer(viewerOrUniqueId);
+            const singletons = viewer?.[this._singletonsKey];
+            if (singletons && singletonId in singletons) {
+                delete singletons[singletonId];
+            }
+        }
+
+        /**
          * @private
          */
         _getSingletons(singletonId: string): IXOpatViewerSingleton[] {
@@ -4249,7 +5597,15 @@ form.submit();
              * @event viewer-destroy
              * @memberof VIEWER_MANAGER
              */
-            this.raiseEvent('viewer-destroy', { viewer, uniqueId: viewer.uniqueId, index: removeIndex });
+            const destroyedUniqueId = viewer.uniqueId;
+            this.raiseEvent('viewer-destroy', { viewer, uniqueId: destroyedUniqueId, index: removeIndex });
+
+            // Re-arm bundle hydration for this viewer id: uniqueIds are
+            // data-derived, so a future viewer opening the same slide gets
+            // the SAME id and must restore from sinks again.
+            if (destroyedUniqueId) {
+                IO_PIPELINE.clearHydratedFor(destroyedUniqueId);
+            }
 
             const menu = this.viewerMenus[viewer.id];
             if (menu) {
@@ -4270,8 +5626,16 @@ form.submit();
                 console.warn('Viewer destroy failed', e);
             }
 
+            // Hand the WebGL context slot back only after destroy() has released
+            // the contexts, so a grid the user keeps rearranging does not drift
+            // onto the shared (readback) path one cell at a time.
+            releaseFlexContextKey(viewer.id);
+
             try {
-                this.layout.removeAt(removeIndex);
+                // Remove by the viewer's OWN cell id, not by array position:
+                // positions drift (splice) and a position-based removal can strip
+                // the wrong cell / leave a ghost when ids ever collide.
+                this.layout.removeById(viewer.id);
             } catch (e) {
                 console.warn('Viewer layout removal failed', e);
             }
@@ -4367,9 +5731,18 @@ form.submit();
     }
 
     return function () {
-        $("body")
-            .append("<a id='link-download-helper' class='hidden'></a>")
-            .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
+        const downloadHelper = document.createElement("a");
+        downloadHelper.id = "link-download-helper";
+        downloadHelper.className = "hidden";
+        document.body.appendChild(downloadHelper);
+
+        const uploadHelper = document.createElement("input");
+        uploadHelper.id = "file-upload-helper";
+        uploadHelper.type = "file";
+        uploadHelper.style.cssText = "visibility: hidden !important; width: 1px; height: 1px";
+        // Historically appended to <body>'s parent (<html>) by a jQuery
+        // `.parent().append(...)` chain; body is the correct, equivalent home.
+        document.body.appendChild(uploadHelper);
 
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             let plugin = PLUGINS[pid];
@@ -4378,7 +5751,12 @@ form.submit();
             }
         }
 
-        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin, false))).then(() => {
+        // allSettled, not all: a rejection is already contained inside
+        // initializePlugin, but this removes the last way one element could abort
+        // the batch — and matches the viewer-open call in viewer-open-pipeline.
+        return Promise.allSettled(
+            REGISTERED_PLUGINS!.map(plugin => initializePluginBounded(plugin))
+        ).then(() => {
             REGISTERED_PLUGINS = undefined;
         }).then(() => VIEWER_MANAGER.forceDataImportInitialization()).then(callDeployedViewerInitialized);
     };

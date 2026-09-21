@@ -39,14 +39,18 @@ class Toolbar extends BaseComponent {
             extraClasses: { tabs: "tabs", style: "tabs-boxed", events: "pointer-events-auto" }
         });
 
+        // Plain container, not a `.join`: it holds one content Div per tab, and
+        // as a join its first/last-child radius rules would reach through those
+        // wrappers and flatten every button group inside into a single pill.
+        // No `boxed2` either — that class carries its own padding + margin, which
+        // is the padding the toolbar was carrying around its groups for nothing.
         this.body = new ToolbarGroup(
             {
                 id: this.id + "-body",
+                join: false,
                 extraClasses: {
                     height: "h-full",
                     width: "w-full",
-                    style: "boxed2",
-                    margin: "m-0",
                     events: "pointer-events-auto"
                 }
             },
@@ -96,6 +100,19 @@ class Toolbar extends BaseComponent {
         this._managedVisible = true;
         this._embeddedTitle = options.embeddedTitle || null;
         this._embeddedIcon = options.embeddedIcon || null;
+        // Opt-in: on first run (no persisted `${id}-embed-pref`) this toolbar
+        // docks into the app bar. MainLayout reads this in `registerToolbar`.
+        this._defaultEmbedded = !!options.defaultEmbedded;
+
+        // Whether the toolbar *wants* to live in the app bar. This is the
+        // runtime source of truth (MainLayout routes on it); AppCache is only
+        // best-effort persistence, so embedding still works when the cache is
+        // bypassed (e.g. demo sessions with `bypassCache: true`). Seed from the
+        // persisted value if present, else from the `defaultEmbedded` opt-in.
+        const persistedPref = APPLICATION_CONTEXT.AppCache.get(`${this.id}-embed-pref`, null);
+        this._embedPreference = persistedPref === true || persistedPref === "true" ? true
+            : persistedPref === false || persistedPref === "false" ? false
+                : this._defaultEmbedded;
 
         this.visibility = new VisibilityManager(this);
         USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
@@ -157,8 +174,12 @@ class Toolbar extends BaseComponent {
         // Only wrap if there are multiple *components* (keep old HTML/string usage working)
         const allComponents = content.every(c => c instanceof BaseComponent);
         if (allComponents && content.length > 1) {
+            // `join: false`: this wrapper only holds the real groups and the
+            // separators between them. As a `.join` it would swallow them all
+            // into one pill (DaisyUI's first/last-child radius rules reach
+            // through wrappers), destroying the per-group grouping.
             const rootGroup = new ToolbarGroup(
-                { id: `${this.id}-rootgroup-${item.id}` },
+                { id: `${this.id}-rootgroup-${item.id}`, join: false },
                 ...content
             );
             content = [rootGroup];
@@ -201,31 +222,45 @@ class Toolbar extends BaseComponent {
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
                     onclick: () => this._toggle_body()
-                }, i({ class: "fa-auto fa-eye-slash" })),
+                }, i({ class: "ph-light ph-eye-slash" })),
                 */
 
                 // --- Handle (Simplified) ---
                 // Removed fixed width styles and large badge classes for a cleaner look
                 div({
                         // DaisyUI-themed drag handle (visible across themes)
-                        class: "handle pointer-events-auto self-center px-2 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
+                        class: "handle toolbar-handle-slim pointer-events-auto self-center rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
                         style: "touch-action: none;"
                     },
-                    i({ class: "fa-solid fa-grip-lines text-base-content" })
+                    i({ class: "ph-light ph-dots-six text-base-content" })
                 ),
 
-                // Small close button next to the handle. Guarded by a confirm
-                // dialog so a stray click can't dismiss a busy toolbar; the user
-                // can reopen it from the AppBar → View dropdown.
-                div({
-                        class: "toolbar-close pointer-events-auto self-center ml-1 px-1.5 py-0.5 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-pointer hover:bg-error/20 hover:text-error text-xs leading-none",
-                        title: $.t("toolbar.hide"),
-                        onclick: () => this._requestClose(),
-                    },
-                    i({ class: "fa-solid fa-xmark" })
+                // Dock + close stacked vertically next to the drag handle so the
+                // two small icons take one column's width instead of two. Dock
+                // embeds into the app bar (floating mode only — hidden when
+                // embedded; un-dock via the host-bar float button); close hides
+                // the toolbar (re-openable from the AppBar → View dropdown).
+                div({ class: "flex flex-col gap-0.5 self-center ml-1" },
+                    div({
+                            class: "toolbar-dock pointer-events-auto px-1.5 py-0.5 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-pointer hover:bg-primary/20 hover:text-primary text-xs leading-none",
+                            title: $.t("toolbar.dock"),
+                            onclick: () => this._requestEmbed(true),
+                        },
+                        i({ class: "ph-light ph-push-pin" })
+                    ),
+                    div({
+                            class: "toolbar-close pointer-events-auto px-1.5 py-0.5 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-pointer hover:bg-error/20 hover:text-error text-xs leading-none",
+                            title: $.t("toolbar.hide"),
+                            onclick: () => this._requestClose(),
+                        },
+                        i({ class: "ph-light ph-x" })
+                    )
                 )
             ),
-            div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-1 rounded-md" }, this.body.create())
+            // No padding: the frosted box hugs the button groups. Padding here
+            // only inflated the toolbar's footprint — the groups already carry
+            // their own rounding and the separators the spacing.
+            div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-0 rounded-md" }, this.body.create())
         );
 
         this._rootWrap = this._outerEl.querySelector("[data-toolbar-root]");
@@ -250,7 +285,21 @@ class Toolbar extends BaseComponent {
                 this._setOrientation("horizontal", true);
             } else {
                 this._applyFloatingStyles();
-                this._updateOrientationFromPosition(true);
+                // Restore the last resolved orientation rather than recomputing
+                // it from the freshly-created (unlaid-out) rect: the position →
+                // orientation calc depends on the toolbar's own width, which
+                // depends on the orientation, so an early recompute can flip a
+                // mid-screen toolbar to vertical until the first drag. A drag
+                // re-resolves and re-persists it (see checkRect).
+                const cachedDir = APPLICATION_CONTEXT.AppCache.get(`${this.id}-Orientation`, null);
+                const canUseCache = (cachedDir === "vertical" || cachedDir === "horizontal")
+                    && !this._horizontalOnly
+                    && !(this._mobileBreakpoint && window.innerWidth < this._mobileBreakpoint);
+                if (canUseCache) {
+                    this._setOrientation(cachedDir, true);
+                } else {
+                    this._updateOrientationFromPosition(true);
+                }
                 this._ensureFloatingRegistration();
             }
             this._ensureDragBinding();
@@ -323,6 +372,42 @@ class Toolbar extends BaseComponent {
         return this._outerEl || document.getElementById(this.id) || null;
     }
 
+    getDefaultEmbedded() {
+        return this._defaultEmbedded;
+    }
+
+    /** Runtime "wants to be embedded" state (source of truth for routing). */
+    getEmbedPreference() {
+        return this._embedPreference;
+    }
+
+    /** Set the embed preference; persists best-effort (no-op when cache bypassed). */
+    setEmbedPreference(value) {
+        this._embedPreference = !!value;
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-embed-pref`, value ? "true" : "false");
+    }
+
+    /** Ask the layout to dock this toolbar into the app bar (or pop it out). */
+    _requestEmbed(embedded) {
+        window.LAYOUT?.setToolbarEmbedded?.(this.id, !!embedded);
+    }
+
+    /**
+     * Drag-to-dock hit-test: when a floating toolbar is dropped overlapping the
+     * app-bar slot, request embedding. Returns true when it triggered embedding.
+     */
+    _maybeDockFromDrag() {
+        if (this._embeddedMode || !this._outerEl) return false;
+        const slotRect = USER_INTERFACE?.AppBar?.ToolbarSlot?.getRect?.();
+        if (!slotRect || slotRect.width <= 0) return false;
+        const r = this._outerEl.getBoundingClientRect();
+        const intersects = r.left < slotRect.right && r.right > slotRect.left
+            && r.top < slotRect.bottom && r.bottom > slotRect.top;
+        if (!intersects) return false;
+        this._requestEmbed(true);
+        return true;
+    }
+
     getEmbeddedMeta() {
         const firstTab = Object.keys(this.tabs)[0];
         const firstHeader = firstTab ? this.tabs[firstTab]?.headerButton : null;
@@ -364,6 +449,23 @@ class Toolbar extends BaseComponent {
         root.style.display = this._managedVisible ? "" : "none";
     }
 
+    /**
+     * Width of the toolbar's content box when laid out horizontally, in px —
+     * what it would occupy inside a host bar (the drag handle / dock / close
+     * chrome is hidden when embedded and is deliberately not counted).
+     *
+     * Returns 0 while the toolbar is laid out vertically: a column's width says
+     * nothing about its horizontal footprint, and guessing would be worse than
+     * letting the caller fall back to its own cached measurement.
+     *
+     * @return {number}
+     */
+    getHorizontalContentWidth() {
+        const wrap = this._rootWrap;
+        if (!wrap || wrap.classList.contains("flex-col")) return 0;
+        return Math.ceil(wrap.scrollWidth || wrap.getBoundingClientRect().width || 0);
+    }
+
     _applyEmbeddedStyles() {
         const root = this.getRootNode();
         const wrap = this._rootWrap;
@@ -384,9 +486,14 @@ class Toolbar extends BaseComponent {
         spacer?.classList.add("hidden");
         root.querySelector(".handle")?.classList.add("hidden");
         root.querySelector(".toolbar-close")?.classList.add("hidden");
+        root.querySelector(".toolbar-dock")?.classList.add("hidden");
 
         wrap.classList.remove("w-10", "h-10", "w-full", "h-full", "flex-col", "flex-col-reverse");
         wrap.classList.add("flex", "flex-row", "items-center", "max-w-full");
+        // Drop the toolbar's own frosted box when embedded — the host bar (and
+        // the app bar itself) already provides the chrome; doubling it makes the
+        // toolbar taller than the 35px bar and adds a nested border.
+        wrap.classList.remove("glass", "p-0", "rounded-md");
     }
 
     // Resolve where this toolbar should be placed when entering floating mode.
@@ -451,8 +558,11 @@ class Toolbar extends BaseComponent {
         spacer?.classList.remove("hidden");
         root.querySelector(".handle")?.classList.remove("hidden");
         root.querySelector(".toolbar-close")?.classList.remove("hidden");
+        root.querySelector(".toolbar-dock")?.classList.remove("hidden");
 
         wrap.classList.remove("max-w-full");
+        // Restore the floating toolbar's own frosted box.
+        wrap.classList.add("glass", "p-0", "rounded-md");
     }
 
     _ensureFloatingRegistration() {
@@ -563,6 +673,11 @@ class Toolbar extends BaseComponent {
             const key = `${Math.round(r.left)}:${Math.round(r.top)}`;
             if (this._lastBox !== key) {
                 this._lastBox = key;
+                // Drag-to-dock: if the user dropped the toolbar over the app-bar
+                // slot, embed it. The floating position has already been
+                // persisted during the drag, so it restores on un-dock. Bail
+                // before the floating-persist branch below.
+                if (this._maybeDockFromDrag()) return;
                 // Canonical end-of-interaction persist. The snap branch in
                 // _updateOrientationFromPosition only writes when the toolbar
                 // lands near an edge; mid-screen drops would otherwise depend
@@ -573,6 +688,9 @@ class Toolbar extends BaseComponent {
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, Math.round(r.left));
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  Math.round(r.top));
                 this._updateOrientationFromPosition(false, { persist: true });
+                // Persist the resolved orientation so the next startup restores
+                // it directly instead of recomputing from an unstable rect.
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-Orientation`, this._dir);
                 notifyMeasure();
             }
         };
@@ -734,12 +852,14 @@ class Toolbar extends BaseComponent {
             this.setClass("mobile", "mobile");
             root.querySelector(".handle")?.classList.add("hidden");
             root.querySelector(".toolbar-close")?.classList.add("hidden");
+            root.querySelector(".toolbar-dock")?.classList.add("hidden");
             this._applyEmbeddedStyles();
             this._setOrientation("horizontal", true);
         } else {
             this.setClass("mobile", "");
             root.querySelector(".handle")?.classList.remove("hidden");
             root.querySelector(".toolbar-close")?.classList.remove("hidden");
+            root.querySelector(".toolbar-dock")?.classList.remove("hidden");
             this._applyFloatingStyles();
             this._ensureFloatingRegistration();
             this._updateOrientationFromPosition(true);

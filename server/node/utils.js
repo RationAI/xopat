@@ -22,12 +22,57 @@ function mimeOf(p) {
     }[ext] || 'application/octet-stream';
 }
 
-async function rawReqToString (req) {
+/**
+ * Absolute ceiling on a body read through `rawReqToString`, mirroring the RPC
+ * path's `XOPAT_RPC_MAX_BODY_BYTES`.
+ *
+ * This function serves `/proxy/*` and the `responseViewer` POST, and it used to
+ * buffer whatever the peer sent — the RPC route was the only one with a cap, so
+ * these two were the cheapest way to make the server allocate without bound.
+ */
+const MAX_RAW_BODY_BYTES = Math.max(65536, Number(process.env.XOPAT_RPC_MAX_BODY_BYTES) || 16 * 1024 * 1024);
+
+class RawBodyTooLargeError extends Error {
+    constructor(limit) {
+        super(`Request body exceeds the ${limit} byte limit.`);
+        this.name = "RawBodyTooLargeError";
+        this.code = "RAW_BODY_TOO_LARGE";
+        this.statusCode = 413;
+    }
+}
+
+async function rawReqToBuffer (req, maxBytes = MAX_RAW_BODY_BYTES) {
     const buffers = [];
+    let size = 0;
     for await (const chunk of req) {
+        size += chunk.length;
+        if (size > maxBytes) {
+            // Stop reading rather than finish buffering and then complain — the
+            // point of the limit is the allocation, not the verdict.
+            //
+            // `pause()`, NOT `destroy()`: destroying the request tears down the
+            // socket, so the 413 the caller needs can never be written and they
+            // just see a connection reset. The handler answers first; the socket
+            // is closed by the `Connection: close` on that response.
+            req.pause();
+            throw new RawBodyTooLargeError(maxBytes);
+        }
         buffers.push(chunk);
     }
-    return Buffer.concat(buffers).toString();
+    return Buffer.concat(buffers);
+}
+
+/**
+ * UTF-8 text form of the body. Only for callers that genuinely want text (the
+ * viewer POST, which is form-urlencoded or JSON).
+ *
+ * `/proxy/*` must NOT use this: decoding arbitrary upload bytes as UTF-8 and
+ * letting `fetch` re-encode them corrupts every non-text payload (STOW-RS
+ * multipart, audio uploads) and silently disagrees with the forwarded
+ * `Content-Length`. Use `rawReqToBuffer` there.
+ */
+async function rawReqToString (req, maxBytes = MAX_RAW_BODY_BYTES) {
+    return (await rawReqToBuffer(req, maxBytes)).toString();
 }
 
 function base64UrlToBuffer(b64url) {
@@ -37,6 +82,27 @@ function base64UrlToBuffer(b64url) {
 }
 
 
+// `JSON.stringify` escapes quotes and backslashes but NOT `<`, so any value
+// containing `</script>` closes the tag and everything after it is parsed as
+// HTML — a reflected XSS on the viewer's own origin, next to the CSRF token.
+// EVERY interpolation into a <script> body must go through this, including
+// operator-controlled values: the invariant is "nothing reaches a script body
+// unescaped", because a per-value judgement call is what decays. See
+// AGENTS.md §7 and server/README.md.
+const LS = String.fromCharCode(0x2028), PS = String.fromCharCode(0x2029);
+const SCRIPT_UNSAFE_CHARS = new RegExp('[<' + LS + PS + ']', 'g');
+const BS = String.fromCharCode(92); // a literal backslash, kept out of source
+const SCRIPT_ESCAPES = Object.freeze({
+    "<": BS + "u003c",
+    [LS]: BS + "u2028",
+    [PS]: BS + "u2029",
+});
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(SCRIPT_UNSAFE_CHARS, (ch) => SCRIPT_ESCAPES[ch]);
+}
+
 module.exports = {
-    mimeOf, rawReqToString, base64UrlToBuffer
+    mimeOf, rawReqToString, rawReqToBuffer, base64UrlToBuffer, RawBodyTooLargeError, MAX_RAW_BODY_BYTES,
+    jsonForScript
 }

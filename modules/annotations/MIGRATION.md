@@ -23,14 +23,16 @@ Repository grep at migration time confirmed there were **zero** in-tree listener
 
 ### 2. Public method signatures are unchanged (still synchronous)
 
-The five user-facing mutation methods remain **synchronous**, despite routing through the IO pipeline. The pipeline's `IOResource.create / update / delete` are sync-core (see "sync core" in [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)): validate → sync guards → local apply → history push all happen in the caller's frame; the sink dispatch is queued and runs in the background. Returned objects carry a `.settled: Promise<IOResult>` for callers that want server confirmation.
+The five user-facing mutation methods remain **synchronous**, despite routing through the IO pipeline. The pipeline's `IOResource.create / update / delete` are sync-core (see "sync core" in [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)): validate → sync guards → local apply → history push all happen in the caller's frame; the sink dispatch is queued and runs in the background. (The history push is queued on the history's own promise chain, so the entry commits on the next tick.) Returned objects carry a `.settled: Promise<IOResult>` for callers that want server confirmation.
+
+Revert-on-refusal is the pipeline default, so a server reject undoes the local change unless the method opts out:
 
 | Method | Sync return | Notes |
 |---|---|---|
-| `OSDAnnotations.FabricWrapper#deleteAnnotation`        | `boolean` | Opts in to `rollbackOnAsyncRefuse: true` — server reject reverts the local removal. |
-| `OSDAnnotations.FabricWrapper#promoteHelperAnnotation` | `boolean` | Same — server reject reverts the local create. |
-| `OSDAnnotations.FabricWrapper#replaceAnnotation`       | `boolean` | Default-off rollback (a swap is easier to live with than flicker). |
-| `OSDAnnotations.FabricWrapper#changeAnnotationPreset`  | `boolean` | Default-off rollback. |
+| `OSDAnnotations.FabricWrapper#deleteAnnotation`        | `boolean` | Server reject restores the annotation from the snapshot it passes as `inversePayload`. |
+| `OSDAnnotations.FabricWrapper#promoteHelperAnnotation` | `boolean` | Server reject removes the local create. |
+| `OSDAnnotations.FabricWrapper#replaceAnnotation`       | `boolean` | **Opts out** (`rollbackOnAsyncRefuse: false`) — a shape snapping back mid-edit is worse than divergence. |
+| `OSDAnnotations.FabricWrapper#changeAnnotationPreset`  | `boolean` | Server reject restores the previous preset. |
 | `OSDAnnotations.FabricWrapper#beginSelectionEdit`      | `boolean` | Guard-only check (no dispatch). |
 
 So existing call sites continue to work without `await`. Mouse-move and edit hot paths stay native (no microtask yield from the pipeline). The private `_deleteAnnotation`, `_promoteHelperAnnotation`, `_replaceAnnotation`, `_addAnnotation` keep their synchronous shapes and bypass the resource pipeline by design (cleanup paths, undo replays, bulk operations).
@@ -45,9 +47,13 @@ await result.settled;               // optional: wait for server confirmation
 
 For 99% of UI code, the sync `result.ok` check is enough. The toast + `io:refused` event surface server outcomes asynchronously when no caller is watching.
 
-### 3. Preset silent-factory fallback removed
+### 3. Preset unknown-factory handling: stand-in, never dropped
 
-`OSDAnnotations.Preset.fromJSONFriendlyObject(parsedObject, context)` no longer falls back to polygon when `factoryID` is unknown. It now `throw`s an error and surfaces a toast (`Preset uses an unsupported shape "X" and was rejected.`). The bulk preset import path (`PresetManager.import`) catches per-item and continues; one bad preset does not abort the whole import.
+`OSDAnnotations.Preset.fromJSONFriendlyObject(parsedObject, context)` keeps a preset whose `factoryID` is unknown (after `resolveFactoryID` migration): it renders with the **polygon factory as a stand-in**, records the original id in `preset._factoryIDOverride`, and `toJSONFriendlyObject()` round-trips the original `factoryID` unchanged on re-export. A warning toast (`annotations.presets.unknownFactory`) surfaces the substitution. Annotations referencing the preset keep their class/color binding instead of dangling. (This replaces both the legacy *silent* polygon fallback and the interim strict-throw behavior.)
+
+### 3b. `PresetManager.import` merge mode
+
+`PresetManager.import(presets, options)` now takes `{ mode: 'merge' | 'replace' }` (boolean still accepted: `true` → replace, `false`/undefined → merge). **Merge** upserts by `presetID` and never deletes — it is the slide-hydration semantics (per-slide snapshots may only add to the session-global palette). **Replace** is the exact-restore semantics for user file imports and history undo. Note the old `clear=false` behavior additionally deleted *unused* presets — that deletion is gone; merge never removes anything.
 
 ### 4. Manual history pushes replaced by auto-history
 
@@ -192,7 +198,7 @@ These are preserved so existing listeners and integrations keep working:
 - The **Convertor** layer (`modules/annotations/convert/*`) — pure format encode/decode.
 - The **HistoryProvider** registered via `APPLICATION_CONTEXT.history.registerProvider` — its delegate-based `canUndo / canRedo` gating still works exactly as before.
 - The plugin's user-facing **export/import** buttons (`plugins/annotations/methods/io.mjs`) — they use `fabric.export()` / `fabric.import()`, both of which sit on top of the Convertor layer.
-- **Bulk-import path** (`addAnnotationsBulk`, `_loadObjects`, the `importBundle` IO hook) — bulk import does NOT fire per-item CRUD. The owner's `importBundle` hook applies the whole set in one call. This avoids "bulk-fetched data immediately syncs back to the server" loops.
+- **Bulk-import path** (`addAnnotationsBulk`, `_loadObjects`, the `importBundle` IO hook) — bulk import does NOT fire per-item CRUD, for annotations *or* presets. The owner's `importBundle` hook applies the whole set in one call, and `PresetManager.import` writes `_presets` directly rather than going through the CRUD-routed mutators. This avoids "bulk-fetched data immediately syncs back to the server" loops — which is exactly what the old event-mirror did, replaying every hydrated preset at the bound sink on each slide open.
 - The private `_deleteAnnotation`, `_promoteHelperAnnotation`, `_replaceAnnotation`, `_addAnnotation` — unchanged shape, used by undo callbacks, edit-cancel paths, and bulk delete (`deleteObject`). They bypass the resource pipeline by design.
 
 ---
@@ -201,7 +207,6 @@ These are preserved so existing listeners and integrations keep working:
 
 These would extend the migration further; nothing in this list blocks the existing functionality:
 
-- **Preset CRUD wrapping**: `presets.js` `addPreset / removePreset / updatePreset` are NOT yet routed through `presetResource.create / delete / update`. Today the `presetResource.validate` runs only on bulk *import* (via `Preset.fromJSONFriendlyObject`). Wrapping the three methods would activate per-item preset CRUD when admin binds `crud:preset`, plus auto-history if `inverseApply` is supplied. The wrapping is straightforward but changes their return types (sync → `Promise`); deferring until needed.
 - **freeFormTool external callers**: `freeFormTool.js` is now `async` end-to-end. Its callers from fabric mouse handlers fire-and-forget the resulting promises, which is fine for OSD event handlers (it doesn't await them).
 - **objectAdvancedFactories**: `recalculate` and `translate` use `void this._context.fabric.replaceAnnotation(…)` to discard the new async promise rather than propagating async into the factory API. The local canvas swap completes one microtask after the call returns; visible behavior is unchanged. If you want guards to be able to abort factory-driven transformations, await the call instead.
 

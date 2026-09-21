@@ -25,9 +25,9 @@ export class TagSelect extends BaseComponent {
         this.classMap.base = "relative";
         this._options = Array.isArray(options.options) ? options.options : [];
         this._selected = new Set(Array.isArray(options.selected) ? options.selected : []);
-        this._placeholder = options.placeholder || "Select values";
-        this._searchPlaceholder = options.searchPlaceholder || "Search...";
-        this._emptyText = options.emptyText || "No values";
+        this._placeholder = options.placeholder || $.t("common.selectValues");
+        this._searchPlaceholder = options.searchPlaceholder || $.t("common.search");
+        this._emptyText = options.emptyText || $.t("common.noValues");
         this._maxVisible = Number.isFinite(options.maxVisible) && options.maxVisible > 0
             ? Math.floor(options.maxVisible) : 100;
         this._onChange = typeof options.onChange === "function" ? options.onChange : (() => {});
@@ -67,7 +67,8 @@ export class TagSelect extends BaseComponent {
             }
         });
 
-        this.refs.list = div({ class: "menu menu-sm max-h-56 overflow-auto w-full" });
+        // max-height inline: `max-h-56` is not in the purged shipped Tailwind build.
+        this.refs.list = div({ class: "menu menu-sm overflow-auto w-full", style: "max-height: 14rem;" });
 
         this.refs.panel = div({
             class: "absolute z-20 mt-2 w-full rounded-box border border-base-300 bg-base-100 shadow-xl p-2 hidden"
@@ -226,7 +227,7 @@ export class TagSelect extends BaseComponent {
         if (overflowCount) {
             items.push(div(
                 { class: "px-2 py-2 text-xs opacity-60 italic" },
-                `+${overflowCount} more — refine your search`
+                $.t("common.moreRefineSearch", { count: overflowCount })
             ));
         }
 

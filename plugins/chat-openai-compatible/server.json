@@ -6,10 +6,18 @@
     "description": "OpenAI-compatible endpoint",
     "baseUrl": "https://api.openai.example/v1",
     "modelsPath": "/models",
-    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    // Three-state, see openai-compatible-host.server.ts: a string is the operator
+    // key, "" means "a key is required but none is configured" (model discovery
+    // stays off, the panel shows the BYOK hint), `false` declares the endpoint
+    // keyless. NEVER ship a placeholder string here — it is indistinguishable
+    // from a real key to `missingRequiredSecrets`, so discovery runs and 401s.
+    "apiKey": "",
     "defaultModelId": "",
-    "contextId": "jwt",
-    "authType": "jwt",
-    "requiresLogin": true
+    "defaultTranscriptionModelId": "",
+    // Biasing-prompt allowance for transcription, in characters (ceiling 1000). 0 =
+    // the prompt the client composes is dropped server-side. Measure before raising:
+    // on a self-hosted whisper-large-v3, 200 chars lost the first 30 s of a dictation
+    // (modules/speech-to-text/README.md). Deployer-only: not a configSchema field.
+    "transcriptionPromptMaxChars": 0
   }
 }

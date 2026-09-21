@@ -1,0 +1,12 @@
+{
+  "name": "empaia-workbench",
+  "version": "0.1.0",
+  "description": "EMPAIA Workbench v3 client plumbing for xOpat: VACI bridge, WBS3 API, tile sources, annotation convertor, IO sink and job runner.",
+  "keywords": ["xopat", "empaia", "workbench", "wbs3", "io-pipeline"],
+  "buildEntry": "index.ts",
+  "author": "xOpat",
+  "license": "ISC",
+  "dependencies": {
+    "@empaia/vendor-app-communication-interface": "^0.1.34"
+  }
+}

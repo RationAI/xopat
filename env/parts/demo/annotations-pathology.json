@@ -1,0 +1,163 @@
+{
+  "$meta": {
+    "description": "Annotations + measurements + pathology-foundation, with quick-draw keys actually bound — layer over any data/*",
+    "clientKey": "localhost"
+    /* Deliberately dimensionless (no `dimension` key), for the same reason as
+       `demo/visualization-flexibility`: it answers "which tools are on", not
+       "where slides come from", so it STACKS over whichever `data/*` fragment
+       is composed instead of competing with one. The `annotations-lab` preset
+       layers it over `data/tiff-webtiff` because the built-in tissue detector
+       and the measurement sampler both want real stained tissue, but nothing
+       here is webtiff-specific — `npm run up -- base/core data/wsi-service
+       demo/annotations-pathology auth/none chat/off` is equally valid.
+
+       No `requires`: every knob below is a plain value, there is no external
+       service and no credential. The three subsystems this fragment turns on
+       are all local — the tissue detector in `pathology-foundation` is
+       dependency-free and nothing leaves the viewer. */
+  },
+  /**
+   * The deployment for working on annotations, annotation-measurements and
+   * pathology-foundation together, because in practice they are one feature:
+   * you draw a region, the measurement engine samples what is under it, and
+   * the tissue mask that bounds the sample comes from the pathology module.
+   * Testing any one of them meant hand-editing an ENV to enable the other two
+   * and then remembering which keys were defaults and which were overrides.
+   *
+   *   npm run fixtures:fetch            # once — the H&E slide
+   *   npm run up:dev -- annotations-lab
+   *
+   * The startup banner prints the two sessions to open. `up:dev` (not `up`) is
+   * what reveals `debugMode` surfaces.
+   */
+  "plugins": {
+    "gui_annotations": {
+      "enabled": true,
+      "permaLoad": true,
+
+      /**
+       * Quick-draw: shape + preset + manual mode in one key press
+       * (`plugins/annotations/methods/quickDraw.mjs`).
+       *
+       * The auto per-shape family (one entry per allowed factory) ships
+       * UNBOUND by design — `defaultCombos: []`, so a deployment or the user
+       * assigns the stroke. That is correct for a product and useless for
+       * testing, which is the gap this fragment closes: the four composite
+       * entries below arrive with combos already on them, so quick-draw is
+       * exercisable the moment the viewer opens rather than after four trips
+       * through the Keymap panel.
+       *
+       * Presets are referenced by `index`, not `id`. Default preset ids are
+       * minted at creation time and are not stable across deployments, so an
+       * id ref would degrade closed (toast, no draw) on a fresh profile;
+       * `index` is the Nth preset in insertion order and always resolves as
+       * long as that many presets exist. A ref that resolves to nothing is a
+       * refusal, not a silent no-op — which is the behaviour to watch for when
+       * testing with a config that ships fewer presets.
+       *
+       * `Digit1`-`Digit4` are free: the annotation modes hold Q/E/R/W/Z/F/T/U,
+       * core navigation holds H/J/L and the Primary+ combos, and slide-info
+       * holds the brackets. The ShortcutManager enforces conflicts, so a
+       * collision here is a startup error rather than a shortcut that silently
+       * loses.
+       */
+      "quickDrawShapes": true,
+      "quickDraw": [
+        {
+          "id": "lab.polygon",
+          "factory": "polygon",
+          "preset": { "index": 0 },
+          "combo": "Digit1"
+        },
+        {
+          "id": "lab.rect",
+          "factory": "rect",
+          "preset": { "index": 0 },
+          "combo": "Digit2"
+        },
+        {
+          "id": "lab.ellipse",
+          "factory": "ellipse",
+          "preset": { "index": 1 },
+          "combo": "Digit3"
+        },
+        {
+          /* Preset-only: no `factory`, so the stroke swaps which preset the
+             LEFT button draws with and leaves the shape alone. The one shape
+             worth proving separately, because a composite entry that sets
+             neither a shape nor a preset is rejected at registration. */
+          "id": "lab.preset-swap",
+          "preset": { "index": 1 },
+          "combo": "Digit4"
+        }
+      ],
+
+      /* Comments are part of what a measured annotation carries, and the
+         global closed-method is the one that shows every comment at once —
+         which is what you want when checking that a measurement actually
+         landed on the object. */
+      "commentsEnabled": true,
+      "commentsClosedMethod": "global",
+      "commentsDefaultOpened": true
+    }
+  },
+  "modules": {
+    /**
+     * `annotation-measurements` already rides in on `gui_annotations`
+     * (`include.json` → `modules`), so `permaLoad` changes nothing under the
+     * default `pluginSelectionMode: "all"`. It is spelled out because
+     * `enabled` is the whitelist opt-in — compose this fragment with
+     * `flags/whitelist-plugins` and an unlisted module is dropped, dependency
+     * or not. Same reasoning as the `enabled` keys in `base/core`.
+     *
+     * Everything the module reads at runtime (`source`, `channel`,
+     * `threshold`, `targetMpp`, `tissueFactor`) goes through `getOption`, not
+     * `getStaticMeta` — they are user preferences persisted in `kv:cache`
+     * (AGENTS.md §7), so they are set from the workspace UI and deliberately
+     * NOT pinned here. Pinning them in ENV would be read once and then
+     * silently outranked by whatever the tester last clicked.
+     */
+    "annotation-measurements": { "enabled": true, "permaLoad": true },
+
+    /**
+     * `pathology-foundation` is NOT a dependency of the annotations plugin, so
+     * without this line the measurements workspace finds no pathology module
+     * (`index.js` → `pathology()` returns null) and the tissue-mask action is
+     * simply absent — which reads as a broken build rather than a deployment
+     * that did not ask for it.
+     *
+     * Nothing else is needed to use it: the built-in tissue detector is
+     * dependency-free, needs no key and no model, and nothing leaves the
+     * viewer. `drivers` stays empty — register a remote one only when testing
+     * the consent path; `chat/medgemma-vision` (the `annotations-lab-vision`
+     * preset) is what adds the `analyze` feature.
+     *
+     * The three timeouts are raised over their 6s/15s/20s defaults. Those
+     * defaults assume a tile server on the same network, and the webtiff path
+     * is a browser-side decode of a 683 MB pyramid read by byte range off the
+     * viewer's own media route — slower than a tile server on first touch. Too
+     * low and every field comes back `reason: "unread"`, which looks like an
+     * unreadable slide and is a latency problem. DEPLOYMENT knobs (static
+     * meta), which is why they belong here and not in a session.
+     */
+    "pathology-foundation": {
+      "enabled": true,
+      "permaLoad": true,
+      "fieldLoadTimeoutMs": 15000,
+      "surveyLoadTimeoutMs": 40000,
+      "renderQueueTimeoutMs": 40000
+    }
+  },
+  "core": {
+    "server": { "secure": { "examples": {
+      /* Published from the tracked session index rather than restated here —
+         see the note in `data/tiff-webtiff`. The filter is the index's own
+         `deployment` value. */
+      "annotations-lab-sessions": {
+        "sessionIndex": "test/fixtures/sessions/index.json",
+        "deployment": "annotations-lab",
+        "order": 5
+      }
+    }}}
+  }
+}

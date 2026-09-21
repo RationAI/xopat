@@ -57,15 +57,15 @@ from the **[Quick Start](quick_start.md)** brings up an image server and the
 viewer together in one command. Ideal for local evaluation, demos, and
 single-workstation use.
 
-### Jupyter & collaborative notebooks
-Drive xOpat from a notebook: an analysis cell constructs a session and opens the
-viewer on the relevant slides and results — the notebook plays the role of the
-"opener" third part described above.
+### Notebooks (Jupyter & Google Colab)
+Drive xOpat from a notebook: the `xopat` pip package downloads and starts the
+viewer plus an image server and embeds the viewer in a cell — the notebook plays
+the role of the "opener" third part described above.
 
-- **[Jupyter Integration](jupyter_deployment.md)** — embed or launch xOpat from a
-  local/JupyterHub environment.
-- **[Collaboratory Notebook Integration](collab_notebook_deployment.md)** — run
-  xOpat from a hosted collaborative notebook (e.g. Google Colaboratory).
+- **[Run from a Notebook (Jupyter)](jupyter_deployment.md)** — install the `xopat`
+  package and run `run_server` / `display`; covers local Jupyter and JupyterHub.
+- **[Google Colab](collab_notebook_deployment.md)** — the same package on Colab,
+  with its two caveats (no setup call; third-party cookies must be allowed).
 
 ### Custom Docker Compose
 When the Quick Start stack is close but not quite right, copy and adapt its

@@ -1,0 +1,36 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "viz-flex-mask-preview"
+  },
+  "data": [
+    "slides/slide.tif",
+    "generated/pyramid/mask-b.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "Preview-level injection on an overlay",
+      "shaders": {
+        "mask": {
+          "name": "Prediction (3889 px, 2 levels)",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "use_channel0": "r"
+          }
+        }
+      }
+    }
+  ]
+}

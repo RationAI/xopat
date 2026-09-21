@@ -1,0 +1,45 @@
+{
+  "keymap": {
+    "mode": {
+      "auto": "Navigate / select annotations",
+      "custom": "Create annotations manually",
+      "fft-add": "Brush to create / edit",
+      "fft-remove": "Brush to remove",
+      "fft-correct": "Correction tool",
+      "fixed-area": "Fixed-area annotations",
+      "magic-wand": "Automatic selection wand",
+      "viewport-segmentation": "Viewport segmentation"
+    },
+    "quickDraw": {
+      "preset": "Quick-draw with preset",
+      "shape": "Quick-draw: {{shape}}"
+    }
+  },
+  "autoSelect": {
+    "noData": "There is no data to annotate!",
+    "noPreset": "Select a preset to annotate!",
+    "noOverlays": "There are no overlays to segment!",
+    "noVisualizationLayer": "No visualization layer to segment from. Toggle one on, or load a visualization.",
+    "coversViewport": "The detected region fills the whole viewport, so it was not selected.",
+    "nothingHere": "Nothing to select here — no overlay was detected at this spot.",
+    "snapshotFailed": "Could not read the overlay to select from. Try moving the view slightly."
+  },
+  "modeOptions": {
+    "magicWand": {
+      "growth": "Growth",
+      "growthHint": "How far the selection spreads from the clicked point (scroll to change).",
+      "layer": "Detect from layer"
+    }
+  },
+  "presets": {
+    "unknownFactory": "Preset uses an unknown shape \"{{factory}}\" — shown as a polygon until the shape is available.",
+    "inUseCannotDelete": "This preset belongs to existing annotations: it cannot be removed.",
+    "classMetaName": "Class",
+    "vocabularyRequiresClass": "This session requires every class to come from the list provided by the server.",
+    "vocabularyUnknownClass": "\"{{value}}\" is not one of the classes this session accepts, so it could not be stored."
+  },
+  "readOnly": {
+    "refused": "This annotation is read-only and cannot be changed or removed.",
+    "badge": "Read-only"
+  }
+}

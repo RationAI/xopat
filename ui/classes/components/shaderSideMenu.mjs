@@ -6,7 +6,12 @@ import {draggable} from "../mixins/utils.mjs";
 
 const { div, span, select, option, br, ul, li, a } = van.tags;
 // Shaders to disable. These are either not configurable via UI or not meant to be used.
-const disabledShaders = ["group", "interaction-debug", "time-series", "texture"];
+// A type listed here is not merely un-offered: a layer already using it has no matching
+// option, so ShaderLayer suppresses its type selector entirely and shows a static label
+// instead (see _buildRenderTypeSelector), and UTILITIES.changeVisualizationLayer refuses
+// the switch outright. Source of truth is UTILITIES so both ends cannot drift apart.
+const fallbackDisabledShaders = ["group", "interaction-debug", "time-series", "texture"];
+const getDisabledShaders = () => window.UTILITIES?.NON_SWITCHABLE_SHADER_TYPES || fallbackDisabledShaders;
 /**
  * ShaderSideMenu (DaisyUI)
  * Props:
@@ -30,6 +35,9 @@ export class ShaderSideMenu extends BaseComponent {
         this.selectedVisualization = "";
         this.shaderNodeCells = {};
         this.shaderChildrenContainers = {};
+        // Shader keys that already carry a faulty-source alert in the current
+        // controls generation. Reset whenever the renderer rebuilds its HTML.
+        this._faultyAlertKeys = new Set();
         this.opacity = typeof opts.opacity === "number" ? opts.opacity : 1;
         this.classMap["base"] = "p-0 flex flex-col max-h-full"
 
@@ -57,37 +65,10 @@ export class ShaderSideMenu extends BaseComponent {
         viewer.drawer.renderer.addHandler('html-controls-created', e => {
             this._enableDragSort(viewer);
 
-            let layers = viewer.drawer.renderer.getAllShaders();
-            for (let key in layers) {
-                if (!layers.hasOwnProperty(key)) continue;
-
-                const shader = layers[key];
-
-                for (let source of shader.getConfig().tiledImages) {
-                    const tiledImage = viewer.world.getItemAt(source);
-
-                    if (typeof tiledImage?.source.getMetadata !== 'function') {
-                        console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
-                            'The visualization is unable to inspect problems with data sources.', tiledImage);
-                        continue;
-                    }
-
-                    const message = tiledImage.source.getMetadata();
-                    const node = this.shaderNodeCells[key];
-                    if (message !== undefined &&message.error && node) {
-                        const alert = new Alert({
-                            mode: "warning",
-                            title: $.t('main.shaders.faulty'),
-                            description: `<code>${message.error}</code>`,
-                            compact: true,
-                            extraClasses: { margin: "mb-2" }, //todo some horizontal margin
-                        });
-
-                        alert.prependedTo(node);
-                        break;
-                    }
-                }
-            }
+            // Fresh controls generation — DOM nodes (and thus their alerts) were
+            // rebuilt, so start the faulty-alert bookkeeping clean.
+            this._faultyAlertKeys = new Set();
+            this._scanFaultyShaders(viewer);
 
             /**
              * Fired when visualization goal is set up and run, but before first rendering occurs.
@@ -97,6 +78,11 @@ export class ShaderSideMenu extends BaseComponent {
              */
             viewer.raiseEvent('visualization-used', e);
         });
+
+        // A source can be marked faulty AFTER the controls were built (its tile
+        // requests start failing mid-session). Patch the alert in without
+        // waiting for a full renderer rebuild.
+        viewer.addHandler('source-marked-faulty', () => this._scanFaultyShaders(viewer));
 
         this._refreshOrder = (node) => {
             const listItems = Array.prototype.map.call(node.children, child => child.dataset.id);
@@ -117,10 +103,70 @@ export class ShaderSideMenu extends BaseComponent {
                 parentShader.shaderLayerOrder = [...listItems];
             } else {
                 // todo no change on the navigator...
+                // An EMPTY list means "no explicit order" and renders every
+                // registered layer — it used to mean the opposite, "render
+                // nothing", which was a bug: `[]` is truthy, so the order stayed
+                // pinned at nothing however many layers were registered later,
+                // and the viewer went blank. Sending `[]` to hide everything
+                // will not work; hide the layers instead.
                 viewer.drawer.renderer.setShaderLayerOrder(listItems);
             }
             viewer.drawer.rebuild();
         };
+    }
+
+    /**
+     * Resolve a faulty-source error message for a tiled image, preferring the
+     * persisted per-viewer registry (survives rebuilds / viz switches) and
+     * falling back to the live source's getMetadata().error. Returns undefined
+     * when the source is healthy.
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {OpenSeadragon.TiledImage} tiledImage
+     */
+    _resolveSourceError(viewer, tiledImage) {
+        if (!tiledImage) return undefined;
+        const src = tiledImage.source;
+        const srcKey = src?.tileSourceId || src?.url || tiledImage.__xopatLoadKey;
+        const registryError = viewer.__faultySources?.getError?.(srcKey);
+        if (registryError) return String(registryError);
+        // A missing getMetadata() no longer suppresses the warning — we simply
+        // have no secondary signal beyond the registry for such a source.
+        const meta = typeof src?.getMetadata === 'function' ? src.getMetadata() : undefined;
+        return meta && meta.error ? String(meta.error) : undefined;
+    }
+
+    /**
+     * Scan every shader layer and prepend a faulty-source alert to any layer
+     * whose backing tile source is faulty. Idempotent within a controls
+     * generation via {@link _faultyAlertKeys}.
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    _scanFaultyShaders(viewer) {
+        const layers = viewer.drawer.renderer.getAllShaders();
+        for (let key in layers) {
+            if (!layers.hasOwnProperty(key)) continue;
+            if (this._faultyAlertKeys.has(key)) continue;
+
+            const node = this.shaderNodeCells[key];
+            if (!node) continue;
+
+            const shader = layers[key];
+            for (let source of shader.getConfig().tiledImages) {
+                const error = this._resolveSourceError(viewer, viewer.world.getItemAt(source));
+                if (error) {
+                    const alert = new Alert({
+                        mode: "warning",
+                        title: $.t('main.shaders.faulty'),
+                        description: `<code>${error}</code>`,
+                        compact: true,
+                        extraClasses: { margin: "mb-2" },
+                    });
+                    alert.prependedTo(node);
+                    this._faultyAlertKeys.add(key);
+                    break;
+                }
+            }
+        }
     }
 
     _setCacheOpen(open) {
@@ -147,7 +193,7 @@ export class ShaderSideMenu extends BaseComponent {
             {
                 id: this.id + "-shaders",
                 name: "shaders",
-                class: "select select-md w-full bg-base-200/90 border border-base-300 text-base-content text-base font-semibold cursor-pointer",
+                class: "select select-sm w-full bg-base-200/90 border border-base-300 text-base-content text-sm font-semibold cursor-pointer",
                 "aria-label": "Visualization",
                 value: this.selectedVisualization,
                 onchange: e => {
@@ -176,7 +222,7 @@ export class ShaderSideMenu extends BaseComponent {
                     id: this.id + "-cache-snapshot",
                     tabindex: "0",
                     role: "button",
-                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-md align-middle ml-1 text-lg",
+                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 text-base",
                     title: $.t("main.shaders.saveCookies"),
                     onclick: (e) => {
                         e.stopPropagation();
@@ -186,11 +232,15 @@ export class ShaderSideMenu extends BaseComponent {
                 }
             ),
             // menu
+            // `menu-sm` + text-xs to match the canvas context menu
+            // (ui/classes/components/contextMenu.mjs) — two short entries do not
+            // need an 18rem panel of full-size rows. Padding is inline because
+            // the shipped tailwind.min.css is the purged build.
             ul(
                 {
                     tabindex: "0",
-                    class: "dropdown-content menu shadow bg-base-100 rounded-box z-[1]",
-                    style: "min-width: 18rem;"
+                    class: "dropdown-content menu menu-sm shadow bg-base-100 rounded-box z-[1] text-xs",
+                    style: "min-width: 12rem; padding: 0.25rem;"
                 },
                 li(
                     a(
@@ -202,7 +252,7 @@ export class ShaderSideMenu extends BaseComponent {
                             },
                         },
                         // icon: sort_by_alpha
-                        span({ class: "ph-light ph-sort-ascending mr-2" }),
+                        span({ class: "ph-light ph-sort-ascending mr-1" }),
                         $.t("main.shaders.cacheByName")
                     )
                 ),
@@ -216,7 +266,7 @@ export class ShaderSideMenu extends BaseComponent {
                             },
                         },
                         // icon: format_list_numbered
-                        span({ class: "ph-light ph-list-numbers mr-2" }),
+                        span({ class: "ph-light ph-list-numbers mr-1" }),
                         $.t("main.shaders.cacheByOrder")
                     )
                 )
@@ -227,21 +277,24 @@ export class ShaderSideMenu extends BaseComponent {
     }
 
     create() {
+        // Padding lives on the sections, not on the root: the side-menu tab
+        // wrapper contributes none, and every panel in the column shares the
+        // annotations rhythm (`px-2 mt-1`) so their insets line up.
         // Optional images panel placeholder (kept per legacy markup)
-        const panelImages = div({ id: this.id + "-panel-images", class: "mt-2" });
+        const panelImages = div({ id: this.id + "-panel-images", class: "px-2 mt-2" });
 
         const header = this._buildHeaderRow();
         this.layerContainer = div({ class: "clear-both mt-2", "data-reverse-order": "true" });
         const blendingEq = div({ id: this.id + "-blending-equation" });
         const content = div(
-            { class: "select-none" },
+            { class: "select-none px-2 mt-1" },
             header,
             this.layerContainer,
             blendingEq
         );
 
         return div(
-            { id: this.id + "-panel-shaders", class: "py-2 pl-2 pr-1" },
+            { id: this.id + "-panel-shaders", class: "w-full" },
             content,
             panelImages
         );
@@ -317,12 +370,14 @@ export class ShaderSideMenu extends BaseComponent {
                     selected: maskEnabled
                 }, {
                     title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                    icon: "payments",
+                    icon: "ph-scissors",
                     styles: "padding-right: 5px;",
                     action: (selected) => {
-                        const node = document.getElementById(`${id}-mode-toggle`);
+                        // The mode is owned by the layer config and re-read by
+                        // ShaderLayer; there is no `-mode-toggle` element to
+                        // stash it on (there has not been one for a while, and
+                        // dereferencing it threw right here).
                         const newMode = selected ? "blend" : "clip";
-                        node.dataset.mode = newMode;
                         if (!maskEnabled) {
                             UTILITIES.shaderPartSetBlendModeUIEnabled(id, true, viewer);
                         } else {
@@ -429,6 +484,7 @@ export class ShaderSideMenu extends BaseComponent {
     
     createLayer(viewer, shaderLayer, shaderConfig, htmlContext = {}) {
         // map the mediator list to [{type, name}]
+        const disabledShaders = getDisabledShaders();
         const availableShaders = OpenSeadragon
             .FlexRenderer
 
@@ -536,6 +592,17 @@ export class ShaderSideMenu extends BaseComponent {
         });
 
         const node = uiLayer.create();
+
+        // Idempotent by shader id: if this id already has a row (e.g. two
+        // renderer rebuild cycles both emit a build without an intervening
+        // clearLayers(), as the playground's open()+overrideConfigureAll race
+        // does), replace the stale row instead of prepending a duplicate.
+        const existing = this.shaderNodeCells[shaderLayer.id];
+        if (existing) {
+            existing.remove();
+            delete this.shaderChildrenContainers[shaderLayer.id];
+        }
+
         const parentContainer = htmlContext.parentShaderId
             ? this.shaderChildrenContainers[htmlContext.parentShaderId]
             : this.layerContainer;

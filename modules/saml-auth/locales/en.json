@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "name": "SAML Authentication",
+    "description": "SAML 2.0 Single Sign-On. Validates the IdP assertion on the server and provisions a short-lived token into the viewer session.",
+    "longDescription": "Server-side SAML 2.0 Service Provider. Runs the AuthnRequest / assertion-consumer / logout flow on the xOpat server, validates the signed assertion against the identity provider certificate, and mints a short-lived signed token that the viewer uses for authenticated requests. Supports SP-initiated and (opt-in) IdP-initiated sign-on, Single Logout, and a service-provider metadata endpoint for the IdP administrator."
+  },
+  "error": {
+    "loginFailed": "{{service}} sign-in did not complete. Please try again.",
+    "serverUnavailable": "SAML sign-in is unavailable: the xOpat server did not respond.",
+    "popupBlocked": "The sign-in window was blocked, continuing in this tab."
+  }
+}

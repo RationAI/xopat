@@ -1,8 +1,9 @@
 # Modules
 
 Are basically plugins for plugins - available feature extensions, libraries.
-Basically, there are two types of modules: 'extensions' and 'xOpat modules'.
-Modules are defined in ``include.json`` in this folder.
+Basically, there are two types of modules: general 'extensions' and true 'xOpat modules' (see below).
+Modules are declared by ``include.json``.
+
 #### `include.json`
 It's structure is similar to plugin's, but instead of `modules` key we 
 define a dependency on other modules with `requires` key - also accepts a list of modules. Circular
@@ -35,12 +36,16 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `name` is the module name
 - `description` is a text displayed to the user to let them know what the module does: it should be short and concise
 - `author` is the module author
-- `includes` is a list of JavaScript files relative to the module folder to include
+- `includes` is a list of JavaScript files relative to the module folder to include. In production (`client.production`, built with `npm run minify`) local `.js` includes are concatenated into `index.min.js` and local `.mjs` modules are bundled into `index.min.mjs`; remote, `.min.js` and object-form includes stay separate. Mark a local `.js` that must not be bundled (e.g. a Web Worker source) with `{ "src": "x.js", "bundle": false }`. See `plugins/README.md` → *Production minification* for the full rule.
 - `requires` array of id's of required modules (libraries)
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
+- `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. Presentation-only, never gates loading: the docs catalogue renders a badge on the module page. Overridable per deployment through `ENV.modules[<id>]`, readable with `getStaticMeta("stability")` or `moduleMeta(id, "stability")`.
+- `devOnly: true` **does** gate loading, and is the one marker that does: the loader refuses to register the module unless the server reports dev mode (`--dev` / `XOPAT_DEV_MODE`), and a plugin that requires it refuses up front with the same reason. Declare it on a development harness — anything that exists to give a developer, or a model driving one, access the application would not otherwise grant. Keep the element's own runtime check as well; this is the wall in front of it, not a replacement for it. `modules/chat-based-tester` is the reference case.
+- `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. A module out of range is **refused at registration**, and any plugin requiring it refuses to load with that reason. See `plugins/README.md` for the supported range syntax and the prerelease rule.
+- Presentation metadata shared with plugins — `longDescription`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, and `"%key%"` translation references for `name`/`description`/`longDescription` — behaves exactly as documented in `plugins/README.md`; for modules it surfaces in the docs catalogue (modules are not user-selectable). `moduleMeta(id, key)` resolves the `%key%` form.
 - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the module's `<id>` namespace that must be configured by the deployment for the module to be shipped under the server-side `"available"` selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty value:
-    1. `ENV.modules[<id>]` — env.json's top-level `modules` array.
+    1. `ENV.modules[<id>]` — env.json's top-level `modules` object, keyed by module id.
     2. `CORE.server.secure.modules[<id>]` — env.json's `core.server.secure.modules`. Never shipped to the browser.
   Same configured/missing semantics as the plugin field (booleans `false` and the number `0` count). **Include.json defaults are NOT consulted** — only what the deployment explicitly sets in either bucket satisfies the gate. The `"whitelist"` mode does NOT apply to modules (modules are infrastructure pulled in by plugins; dropping a required module surfaces as a plugin-level missing-dep error). See `plugins/README.md` and `server/README.md` for the full reference.
 
@@ -83,12 +88,22 @@ If your entity works with a viewer instance, the xOpat viewer can have multiple 
  position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
-> respect the ``APPLICATION_CONTEXT.secure`` flag parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` flag parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ## NPM Support and UI
 Please, [see development basics](../DEVELOPMENT.md) on how to develop with NPM and have live UI support.
 Also, [read ui specification](../ui/README.md) and get to know available UI elements.
+
+### Rendering markdown / rich text
+
+Never re-implement "parse markdown, sanitize, degrade closed". Depend on the
+[`markdown`](markdown/README.md) module and call
+`singletonModule("markdown").renderInto(host, text)`. It also owns the
+`#xopat-<kind>?…` link mechanism: register a kind there and a link written in one
+subsystem's text (an assistant message, a questionnaire description, a recorder
+overlay) becomes clickable in all of them. The built-in `region` kind navigates a
+viewer to a slide region.
     
 ## Modules: Extensions
 Extensions are unconstrained code libraries with no (or little) constrains; but without features. Only basic rules 
@@ -157,6 +172,8 @@ Returns stored value if available, supports cookie caching and the value gets ex
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
 for build-in defaults, defined in the viewer core.
 
+> **⚠️ Security / trust boundary.** `getOption` values are **per-session and third-party-controllable** (viewer URL, POST_DATA, imported peer sessions). Never gate an auth/security decision on them — read deployment settings (auth mode/context, `requiresLogin`, credentials, endpoints, scripting limits) from `getStaticMeta` (ENV/`include.json`) or server-secure config instead. See root `AGENTS.md` §3 / §7.
+
 #### `APPLICATION_CONTEXT::setOption(key, value, cache=true)`
 Stores value under arbitrary `key`, caches it if allowed. The value gets exported with the viewer. 
 The value itself is stored in the `params` object given to the constructor.
@@ -199,7 +216,7 @@ this.loadLocale('cs', {"x":"y"})
 Override ``getLocaleFile`` function to describe module-relative path to the locale file for given `locale` string.
 
 > Modules must not wait with initialization after locales had been loaded: modules define dependency trees that
->are not explicitly synchronized. For delayed translations, ``$.localize([selector])`` of `jqueryI18next` might be useful.
+>are not explicitly synchronized. For delayed translations, re-run the core `data-i18n` pass over your subtree (`localizeDom(node)`, `src/classes/app/i18n-dom.ts`).
 >However, most modules should act only when needed: instantiate your module after it had been used, then you are
 >guaranteed your locales had been loaded if you did so at the module inclusion time.
 
@@ -210,6 +227,23 @@ loading these scripts dynamically. You need to use **relative** file names and i
 your worker or import a module. Relative paths must begin in the repository root. With plugins and
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
+
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-module assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your module id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<module-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create
@@ -223,8 +257,9 @@ the functionality appropriately. This includes:
  - visualization swapping
  
 Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
-all measures should be done.
+Instead, use ``viewer.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
+all measures should be done — where `viewer` is the instance derived from the event
+(`e.eventSource`) or from `VIEWER_MANAGER`, never the global `window.VIEWER`.
 
 This is especially important now that viewer opening supports surgical world updates: a `TiledImage` that happened to represent some data earlier may be reused, replaced, or removed as the pipeline synchronizes one viewer independently from others.
 
@@ -388,3 +423,32 @@ The following global accessors are part of the supported ambient surface for mod
 - `viewerSingletonModule(className, viewerRef)`
 - `registerViewerSingleton(SingletonClass, className?)`
 - `requireViewerSingletonPresence(SingletonClass)`
+
+## Developing a Module in Its Own Repository
+
+Same mechanism as plugins — see
+[`plugins/README.md` § Developing a Plugin in Its Own Repository](../plugins/README.md#developing-a-plugin-in-its-own-repository).
+Symlink your module's repository into `modules/<id>/`.
+
+### Testing
+
+Ship tests under `modules/<id>/test/{unit,integration,e2e}/*.test.mjs`,
+importing `@xopat/test-harness`, and declare an optional `tests` block in
+`include.json`. The contract, the fixtures and the two caveats that apply to
+linked-in elements are documented once in
+[`plugins/README.md` § Testing](../plugins/README.md#testing) and in
+[`test/README.md`](../test/README.md); modules work identically.
+
+`modules/human-readable-ids/test/unit/encode.test.mjs` is a worked example of a
+pure-logic module suite, including how to load a browser-global script under
+Node with `installBrowserGlobals()` / `loadBrowserScript()`.
+
+#### Legacy: Cypress
+
+Cypress tests under `modules/<id>/test/e2e/*.cy.js` are picked up
+automatically — verified end-to-end against a genuine symlink (see
+`plugins/README.md` § Testing): both the global commands
+(`cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`) and the relative-import
+helpers (`waitForViewer`, `config`) work from outside this repository, as
+long as the relative import walks back through the symlink to this
+repo's real `test/support`/`test/fixtures` location.

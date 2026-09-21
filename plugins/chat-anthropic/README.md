@@ -17,7 +17,7 @@ For a server-managed default token, set secure plugin config in `server.json` or
 {
   "providerDefaults": {
     "baseUrl": "https://api.anthropic.com/v1",
-    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    "apiKey": "sk-ant-…",
     "defaultModelId": "",
     "modelsPath": "/models",
     "anthropicVersion": "2023-06-01"
@@ -25,4 +25,44 @@ For a server-managed default token, set secure plugin config in `server.json` or
 }
 ```
 
-If you want the viewer-side provider to require login, keep `authMode: "jwt"` and provide the corresponding auth context.
+> Substitute a **real** key or leave `apiKey` as `""`. A placeholder string is
+> indistinguishable from a real key to the "is a credential configured?" check,
+> so the provider registers as usable, model discovery runs, and the upstream
+> answers 401 instead of the panel showing the "key required" hint.
+
+`apiKey` has three states:
+
+| value | meaning |
+| --- | --- |
+| `"sk-ant-…"` | the operator's server-side key |
+| absent / `""` | a key is required — **model discovery does not call Anthropic** until the deployer or a BYOK user supplies one (no more 401 on every boot) |
+| `false` | the endpoint is declared keyless; discovery runs with no `x-api-key` header |
+
+See the chat SDK's [README](../../modules/vercel-ai-chat-sdk/README.md) →
+"No key, no discovery".
+
+## Requiring login
+
+Auth is **opt-in and method-agnostic**. `authMode: "none"` (the default) needs no
+auth configured anywhere. To require login:
+
+```json
+"chat-anthropic": {
+  "permaLoad": true,
+  "authMode": "jwt",
+  "authContext": "anthropic"     // null / "core" = the viewer's main identity
+}
+```
+
+The plugin names only the **context**, never the mechanism — whichever auth module
+the deployment loads (`oidc-client-ts`, `oidc-server-ts`, `saml-auth`, …) claims
+that context and drives the login. Load one with
+`modules.<id>.permaLoad: true`; the plugin no longer pulls one in through
+`modules`, so a SAML or auth-less deployment is not forced to ship OIDC.
+
+Enforce it server-side by pairing the context with a verifier under
+`core.server.secure.rpcVerifiers.<authContext>` (see `src/AUTH.md`).
+
+Back-compat: if the auth config lives on the plugin instead of on an auth module,
+set `authBroker` + `authConfig` (legacy: `oidc` + `oidcFlow`). It is applied only
+when no auth module claims the context.

@@ -3,7 +3,7 @@
 
 //todo use custom plugin to add meta to plugins/modules etc: https://jsdoc.app/about-plugins.html
 
-//requires taffydb
+//requires @jsdoc/salty (ships with jsdoc 4)
 const {files, destination, allowedExtensions, pattern} = require("./include");
 module.exports = {
     source: {
@@ -19,7 +19,12 @@ module.exports = {
     tags: {
         allowUnknownTags: true
     },
-    plugins: [ "./docs/plugins/include-as-comments-only.js"],
+    plugins: [
+        // must come first: it teaches the parser to read .ts before any file is parsed
+        "./docs/plugins/typescript-support.js",
+        "./docs/plugins/include-as-comments-only.js",
+        "./docs/plugins/hide-module-locals.js"
+    ],
     templates : {
         cleverLinks : true,
         monospaceLinks : false,

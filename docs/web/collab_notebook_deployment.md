@@ -1,51 +1,64 @@
-Run xOpat from a hosted, collaborative notebook (for example Google
-Collaboratory). As with [Jupyter](jupyter_deployment.md), the notebook is the
-**opener** (the optional third part from the
-[Deployment Overview](deployment.md)): a cell constructs a session and launches
-the viewer on the relevant slides and results, while collaborators share the same
-notebook.
+Run xOpat from [Google Colab](https://colab.research.google.com/). It works
+exactly like [local Jupyter](jupyter_deployment.md) — the same `xopat` pip
+package, the same `run_server` / `display` loop — with two Colab-specific
+differences.
 
-:::info
-This page documents the integration pattern. The notebook-side helper code and
-environment-specific wiring are maintained with the notebook tooling; this guide
-focuses on how the pieces fit together and what to watch out for in a hosted,
-shared environment.
+## Quick start
+
+```python
+!pip install xopat
+
+import xopat
+from xopat import run_server
+
+# No setup_* call needed — run_server detects Colab and configures itself.
+server = run_server(data_dir="/content")
+xopat.display(server, "slide.tiff")
+```
+
+The `slide` argument behaves the same as everywhere else: a string slide path
+relative to `data_dir`, or a full session config dict. See
+[Jupyter Integration](jupyter_deployment.md#the-ropes) for the full API.
+
+## What's different on Colab
+
+### 1. No `setup_*` call
+
+Unlike JupyterHub, you don't configure a host. Colab assigns each port its own
+proxy subdomain, which can't be set in advance but **can** be resolved at runtime,
+so `run_server` detects Colab and wires the proxy up automatically. Just call
+`run_server` and `display`.
+
+### 2. Third-party cookies must be allowed
+
+The embedded viewer is served through Colab's kernel-port proxy on
+`*.googleusercontent.com`, which is a **different domain** from
+`colab.research.google.com` where the notebook runs. The proxy's auth check rides
+on a cookie that is therefore **third-party**. If the browser blocks third-party
+cookies, the proxy rejects the request and the viewer iframe fails to load (blank
+frame / 404).
+
+This bites:
+
+- **Safari** — blocks third-party cookies by default (Intelligent Tracking
+  Prevention).
+- **Any browser with third-party cookies disabled**, and **incognito / private
+  windows**, which strip the storage the proxy relies on.
+
+:::tip Workarounds
+- Allow third-party cookies for `googleusercontent.com` (or disable the
+  cross-site tracking prevention) in the browser running the notebook.
+- Use a Chromium-based browser with default settings, in a normal (non-private)
+  window.
+- Or open the viewer in a real tab with `display_link(server, "")` — a top-level
+  tab on the proxy domain isn't a third-party context, so the auth cookie is
+  accepted.
 :::
-
-## How the pieces map
-
-| Part | Role |
-| --- | --- |
-| Image server | Serves WSI tiles — must be reachable from the *user's browser*, not just the notebook runtime. See [Image Server Deployment](image_server_deployment.md). |
-| xOpat viewer | Hosted somewhere publicly reachable (see [Ways to host the viewer](generic_deployment.md#ways-to-host-the-viewer)). |
-| Collaborative notebook | The **opener** — constructs a session and launches the viewer; shared between collaborators. |
-
-## What's different from a local Jupyter setup
-
-Hosted notebooks run in someone else's environment, which changes a few
-assumptions:
-
-- **Reachability.** The viewer and image server must be reachable from each
-  collaborator's browser over the public internet (or a shared network) — a
-  `localhost` service on the notebook runtime is not enough.
-- **Cross-origin.** Embedding the viewer in notebook output and talking to the
-  image server happens across origins; ensure CORS and any auth/proxy are
-  configured. See [Integration](../../INTEGRATION.md) and
-  [Viewer Configuration](xopat_configuration.md).
-- **Secrets.** Do not embed tokens or credentials in shared notebook cells; route
-  authenticated access through the viewer's auth/proxy layer instead.
-
-## Typical setup
-
-1. **Host the viewer and image server** at publicly reachable origins (the
-   [generic deployment](deployment.md#generic-deployment) path).
-2. **Construct a session in a cell** — slides, visualisation, plugins, data — the
-   same way as for [Viewer Configuration](xopat_configuration.md).
-3. **Open the viewer**, either embedded in the notebook output or via a link /
-   POST session to the viewer backend.
 
 ## See also
 
-- [Jupyter Integration](jupyter_deployment.md) — the same pattern for local /
-  JupyterHub environments.
+- [Jupyter Integration](jupyter_deployment.md) — the full package API and the
+  JupyterHub variant.
+- [Viewer Configuration](xopat_configuration.md) — how session dicts are
+  assembled.
 - [Integration](../../INTEGRATION.md) — embedding xOpat in a larger product.

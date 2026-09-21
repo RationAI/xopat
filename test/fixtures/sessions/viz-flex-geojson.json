@@ -1,0 +1,35 @@
+{
+  "params": {
+    "customBlending": true,
+    "sessionName": "viz-flex-geojson"
+  },
+  "data": [
+    "slides/slide.tif",
+    {
+      "dataID": "generated/vector/masks.geojson.json",
+      "protocol": "demo-static"
+    }
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "visualizationIndex": 0,
+      "name": "H&E slide"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "GeoJSON prediction masks",
+      "shaders": {
+        "masks": {
+          "name": "Prediction polygons",
+          "type": "identity",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": {}
+        }
+      }
+    }
+  ]
+}

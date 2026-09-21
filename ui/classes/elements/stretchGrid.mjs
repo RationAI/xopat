@@ -136,6 +136,17 @@ export class StretchGrid extends BaseComponent {
         return this.items.find(el => el.id === id);
     }
 
+    /**
+     * Remove a cell by its id, using the cell's true position in `items`
+     * (not `document.getElementById`, which returns the FIRST match and can
+     * strip a live duplicate). Safe no-op when the id is unknown.
+     */
+    removeById(id) {
+        if (!id) return;
+        const idx = this.items.findIndex(el => el.id === id);
+        if (idx >= 0) this.removeAt(idx);
+    }
+
     showOnly(id) {
         if (!id) return this.showAll();
 
@@ -178,8 +189,11 @@ export class StretchGrid extends BaseComponent {
         this._soloItemId = null;
         this._savedColsBeforeSolo = null;
         this._savedAutoBeforeSolo = null;
-        this._layout();
 
+        // Clear the inline styles applied by showOnly() first, then run
+        // _layout() last so the last-row stretch span it assigns to
+        // gridColumn survives (otherwise the reset loop wipes it and the
+        // stretched cell collapses back to a single column).
         for (const el of this.items) {
             el.style.display = "";
             el.style.visibility = "";
@@ -191,6 +205,8 @@ export class StretchGrid extends BaseComponent {
             el.style.flex = "";
             el.style.gridColumn = "";
         }
+
+        this._layout();
     }
 
     _recomputeAutoCols() {

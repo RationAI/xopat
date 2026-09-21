@@ -21,6 +21,11 @@ export class Modal extends BaseComponent {
         this.borderLess = options.borderLess ?? false;
         this.allowClose = options.allowClose !== undefined ? options.allowClose : true;
         this.closeButtonSide = options.closeButtonSide || Modal.CLOSE_BUTTON_SIDE.RIGHT;
+        // Optional stacking override. The DaisyUI `.modal` class ships z-index 999,
+        // which is BELOW app-level overlays such as #fullscreen-loader (999999) —
+        // a modal that must outrank one of those declares it here instead of the
+        // caller poking `root.style` after `create()`.
+        this.zIndex = options.zIndex;
 
         this._mouseMoving = this.__mouseMoving.bind(this);
         this._mouseUp = this.__mouseUp.bind(this);
@@ -71,12 +76,12 @@ export class Modal extends BaseComponent {
             this.options.footer ? div({ class: "modal-action" }, this.options.footer) : null,
         );
 
-        this.root = div(
-            {
-                class: `modal ${this.isOpen ? "modal-open" : ""}`,
-            },
-            box
-        );
+        // Carry the component id onto the node: BaseComponent's remount/lookup path
+        // falls back to `document.getElementById(this.id)`, which never matched
+        // because the root had no id at all.
+        const rootProps = { id: this.id, class: `modal ${this.isOpen ? "modal-open" : ""}` };
+        if (this.zIndex !== undefined) rootProps.style = `z-index: ${this.zIndex};`;
+        this.root = div(rootProps, box);
 
         if (this.isBlocking === false) {
             this.root.addEventListener("click", (e) => {
@@ -177,7 +182,6 @@ export class Modal extends BaseComponent {
      */
     static confirm(opts = {}) {
         return new Promise((resolve) => {
-            const t = (typeof $ !== "undefined" && typeof $.t === "function") ? $.t.bind($) : null;
             const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
             const bodyNode = typeof opts.body === "string"
                 ? div({ class: "text-sm" }, opts.body)
@@ -215,7 +219,7 @@ export class Modal extends BaseComponent {
                     outline: Button.OUTLINE.ENABLE,
                     onClick: () => finish(false),
                 },
-                opts.cancelLabel || (t ? t("common.cancel") : "Cancel")
+                opts.cancelLabel || $.t("common.cancel")
             );
             const confirmBtn = new Button(
                 {
@@ -223,7 +227,7 @@ export class Modal extends BaseComponent {
                     type: Button.TYPE.PRIMARY,
                     onClick: () => finish(true),
                 },
-                opts.confirmLabel || (t ? t("common.confirm") : "Confirm")
+                opts.confirmLabel || $.t("common.confirm")
             );
 
             footerRoot.append(cancelBtn.create(), confirmBtn.create());

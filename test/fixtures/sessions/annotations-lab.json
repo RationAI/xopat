@@ -1,0 +1,15 @@
+{
+  "params": {
+    "sessionName": "Annotations lab — bare H&E",
+    "customBlending": false
+  },
+  "data": ["slides/slide.tif"],
+  "background": [
+    {
+      "dataReference": 0,
+      "name": "H&E",
+      "microns": 0.6
+    }
+  ],
+  "visualizations": []
+}

@@ -9,6 +9,21 @@
 import { BackgroundConfig } from "../background-config";
 import { HttpClient } from "../http-client";
 import { ScriptingManager } from "../scripting-manager";
+import { NetworkStatus } from "../network-status";
+import { RequestScheduler } from "./request-scheduler";
+import { ClientLogging } from "./logging";
+import { CaptureIndicator } from "./capture-indicator";
+import { XOpatAuth } from "../auth/xopat-auth";
+import { ShortcutManager } from "./shortcut-manager";
+import { RenderDebugController } from "./render-debug-controller";
+import { TourEngine } from "./tutorial";
+import {
+    serializeScene,
+    serializeSceneFromViewer,
+    deserializeScene,
+    snapshotViewport,
+    applyViewport,
+} from "./canonical-scene";
 
 export type CreateApplicationContextOptions = {
     ENV: XOpatCoreConfig;
@@ -96,7 +111,11 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get sessionName() {
             // eslint-disable-next-line @typescript-eslint/no-this-alias
             const self = this as unknown as ApplicationContext;
-            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") || {};
+            // `getConfig?.` and not `getConfig(`: the method is stamped per world item after
+            // the item is already in the world (see the TiledImage.prototype default in
+            // loader.ts), and this getter is reached from `zoom`/`pan` handlers that OSD
+            // raises during that window.
+            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background") || {};
             if (config["sessionName"]) return config["sessionName"];
             if (sessionName) return sessionName;
             return self.referencedId();
@@ -105,7 +124,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
          * Check if viewer requires secure mode execution.
          * @type {boolean}
          */
-        get secure() {
+        get secureMode() {
             return viewerSecureMode;
         },
         /**
@@ -136,6 +155,17 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get pluginsMenuId() { return "app-plugins"; },
         /**
          * Get option, preferred way of accessing the viewer config values.
+         * Precedence:
+         *   1. `config.params[name]` — session / URL-hash payload,
+         *   2. `AppCache` — persisted user preference (skipped for `cache=false`
+         *      and for {@link SESSION_SCOPED_OPTIONS}),
+         *   3. `config.defaultParams[name]` — the deployment `ENV.setup` block
+         *      (`src/config.json` merged with `env.json` `core.setup`),
+         *   4. `defaultValue` — caller fallback, reached only for keys the setup
+         *      schema does not declare (those already warn below).
+         * Note the last two: a caller literal never shadows the deployment value,
+         * otherwise every `getOption("key", <same literal as config.json>)` call
+         * site would silently make the ENV key unreachable.
          * @param name
          * @param defaultValue
          * @param cache
@@ -188,7 +218,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     return cached;
                 }
             }
-            return normalize(defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
+            return normalize(builtin !== undefined ? builtin : defaultValue);
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
@@ -343,7 +373,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (!CONFIG.background || CONFIG.background.length < 0) {
                 return undefined;
             }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             if (bgConfig) {
                 return UTILITIES.nameFromBGOrIndex(bgConfig, stripSuffix);
             }
@@ -359,7 +389,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             }
             let config;
             if (VIEWER.scalebar) {
-                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
+                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig?.("background");
             } else {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
                     || CONFIG.background[0];
@@ -420,6 +450,24 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
     }) as unknown as ApplicationContext;
 
     /**
+     * Client-side logging broker — the counterpart of `XOPAT_SERVER.log`.
+     *
+     * Built FIRST, and before anything that might want to report a problem:
+     * channels, per-channel levels, a bounded ring (which replaces the unbounded
+     * `console.appTrace` array), and an operator-enabled forwarder that puts
+     * browser records into the server's sinks. Configured from
+     * `env.client.logging` — deployment-controlled, never `getOption` (§7).
+     * Reached as `APPLICATION_CONTEXT.log("channel").warn(...)`.
+     * See src/LOGGING.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    const logging = new ClientLogging(ac.env?.client?.logging);
+    ac.logging = logging;
+    ac.log = (channel: string) => logging.log(channel);
+    logging.adoptConsole(console);
+    logging.installLifecycleFlush();
+
+    /**
      * Core HTTP Client.
      * @memberof APPLICATION_CONTEXT
      */
@@ -433,8 +481,94 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      */
     ac.Scripting = ScriptingManager.instance();
 
+    /**
+     * Network connectivity source of truth. Consumers subscribe here instead
+     * of re-implementing `navigator.onLine` handling (see IOResource, and the
+     * offline pill/toasts wired in app.ts).
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.networkStatus = NetworkStatus.instance();
+
+    /**
+     * Interactive tutorial overlay — the step driver behind
+     * `USER_INTERFACE.Tutorials`. Replaces the vendored EnjoyHint; authoring
+     * is unchanged, see src/TUTORIALS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.tutorials = new TourEngine();
+
+    /**
+     * Per-origin admission gate for background HTTP (e.g. LLM vision-inference
+     * RPCs). Caps how many `priority: "background"` requests HttpClient runs
+     * concurrently per origin so slow POSTs can never saturate the browser's
+     * ~6-connection-per-host pool and starve interactive tile loading; the cap
+     * tightens further while tiles are actively loading. Reached as
+     * APPLICATION_CONTEXT.requestScheduler. See classes/app/request-scheduler.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.requestScheduler = RequestScheduler.instance();
+
+    /**
+     * Draws `region-capture` events (off-screen region renders, viewport grabs) as
+     * overlays on the viewer they read from, so analysis/LLM inspection is visible
+     * and auditable instead of silent. Reached as APPLICATION_CONTEXT.captureIndicator.
+     * See classes/app/capture-indicator.ts and src/EVENTS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.captureIndicator = CaptureIndicator.instance();
+
+    /**
+     * Core auth broker — registry + orchestration for "require login" contexts,
+     * sibling to XOpatUser. Method-agnostic: brokers (OIDC, SAML, …) register
+     * into it. Reached as APPLICATION_CONTEXT.auth. See src/AUTH.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.auth = new XOpatAuth();
+
+    /**
+     * Central keyboard-shortcut registry — core and modules/plugins register
+     * their key strokes here (defaults + conflict enforcement + user remaps
+     * persisted in AppCache). Dispatch is wired later via
+     * `attach(VIEWER_MANAGER)` from app.ts. See src/SHORTCUTS.md.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.shortcuts = new ShortcutManager({ cache: ac.AppCache });
+
+    /**
+     * Dev-only render capture — what the renderer was asked to draw (viewport
+     * and off-screen) and what each pass produced. Inert until the Render Debug
+     * window is opened, and gated on `debugMode`. Reached as
+     * APPLICATION_CONTEXT.renderDebug. See classes/app/render-debug-controller.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.renderDebug = new RenderDebugController();
+
+    /**
+     * Canonical scene snapshot/restore — THE stable interface for capturing
+     * and re-applying the full viewer session (open slides per slot, per-bg
+     * visualization + live shader state, optional per-viewer viewports).
+     * `openViewerWith` is its apply primitive; full-state snapshot/restore
+     * must go through this instead of hand-rolled config clones. Also exposed
+     * for devtools as `window.__SCENE`. See src/classes/app/canonical-scene.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.scene = {
+        serialize: serializeScene,
+        serializeFromViewer: serializeSceneFromViewer,
+        deserialize: deserializeScene,
+        snapshotViewport,
+        applyViewport,
+    };
+
     // todo maybe dont support this, just call directly the static method
-    (ac as any).registerConfig = function registerConfig(bg: BackgroundItem) {
+    (ac as any).registerConfig = function registerConfig(bg: BackgroundItem | BackgroundConfig) {
+        // Wrapping is for RAW entries (a custom slide browser's `{id, name,
+        // dataReference}`). An object that is already a BackgroundConfig is an
+        // entry of `config.background` — handing it to `from()` would resolve it
+        // through the id registry, and background ids are deliberately NOT unique
+        // (two entries may name the same slide on purpose), so that trades the
+        // caller's entry for whichever same-id entry was registered first.
+        if (bg instanceof BackgroundConfig) return bg;
         return BackgroundConfig.from(bg);
     };
 

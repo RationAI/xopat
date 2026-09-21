@@ -5,7 +5,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     static includeAllAnnotationProps = false;
 
     static lossy = true;
-    static lossyReason = "QuPath stores geometry only — text, custom factory metadata, and presets do not round-trip. Rulers and angles import back as plain polylines.";
+    static lossyReason = "QuPath stores geometry only — text, custom factory metadata, and presets do not round-trip. Lines and angles import back as plain polylines.";
 
     static getSuffix() {
         return 'qu.geo.json';
@@ -148,10 +148,11 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
+        "line": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
         // QuPath is geometry-only — on re-import this comes back as a
-        // polyline (no factoryID round-trip). Same lossy contract as Ruler.
+        // polyline (no factoryID round-trip). Same lossy contract as Line.
         "angle": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
+        "arrow": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
     _decodeMulti(object, featureParentDict, type) {

@@ -4,6 +4,50 @@ import { BaseComponent } from "../baseComponent.mjs";
 const { div, ul, li, a, span, i } = van.tags;
 
 /**
+ * Geometry shared by the root menu and every flyout. Kept as constants because
+ * the flyout's vertical offset must equal the list's own padding — a submenu
+ * whose first row does not sit on its parent row's baseline reads as broken,
+ * and the two used to be independent magic numbers that drifted apart.
+ *
+ * All of it is applied INLINE. `src/libs/tailwind.min.css` is the purged build
+ * (a new utility or a `@layer components` rule would need a Tailwind rebuild),
+ * and DaisyUI styles menu rows through `:where()` selectors that a class of
+ * ours would have to out-specify. Inline wins outright, with no rebuild.
+ */
+const MENU_PADDING = 4;
+const ROW_STYLE = "display:flex; align-items:center; gap:6px; padding:2px 8px; " +
+    "font-size:12px; line-height:1.3; min-height:0;";
+const ICON_BOX = 16;
+
+/** True for the `{title: ""}` entries providers push between groups. */
+function isSeparatorItem(item) {
+    return !item?.title && typeof item?.action !== "function"
+        && !(Array.isArray(item?.children) && item.children.length > 0);
+}
+
+/**
+ * Drop leading/trailing separators and collapse runs.
+ *
+ * The producers cannot do this themselves: `CanvasContextMenu.collect` pushes a
+ * separator before a provider's items without knowing whether any provider
+ * after it will contribute, and the same holds inside a submenu
+ * (`slideSwitcherMenu._buildOpenMenuItems`, the annotations Group submenu). So
+ * a trailing rule with nothing under it was the normal case, not an edge one.
+ * @param {Array} items
+ * @returns {Array}
+ */
+function normalizeSeparators(items) {
+    const out = [];
+    for (const item of items) {
+        if (!isSeparatorItem(item)) { out.push(item); continue; }
+        // Never open with a rule, never repeat one.
+        if (out.length && !isSeparatorItem(out[out.length - 1])) out.push(item);
+    }
+    while (out.length && isSeparatorItem(out[out.length - 1])) out.pop();
+    return out;
+}
+
+/**
  * @class ContextMenu
  * @extends BaseComponent
  * @description A floating context menu that opens at an arbitrary screen
@@ -123,29 +167,30 @@ export class ContextMenu extends BaseComponent {
 
     _iconNode(icon, iconCss) {
         // Use inline-flex with centered alignment so the glyph itself —
-        // which varies in natural width between fa-trash, fa-layer-group,
-        // fa-arrows-up-down, fa-shapes, etc. — is always centered inside
-        // a 20px box. Without this, taller / wider glyphs visibly shift the
+        // which varies in natural width between ph-trash, ph-stack,
+        // ph-arrows-vertical, ph-shapes, etc. — is always centered inside
+        // a fixed box. Without this, taller / wider glyphs visibly shift the
         // adjacent label, making the padding between icon and text appear
         // inconsistent across rows.
         const base = "inline-flex items-center justify-center shrink-0";
-        const style = "width: 20px; height: 20px; font-size: 16px; line-height: 1;";
+        const style = `width: ${ICON_BOX}px; height: ${ICON_BOX}px; font-size: 14px; line-height: 1;`;
         if (!icon) return span({ class: base, style });
-        const isPh = String(icon).trim().startsWith('ph-');
         return span({
-            class: `${base} ${isPh ? 'ph-light' : 'fa-auto'} ${icon}`,
+            class: `${base} ph-light ${icon}`,
             style: `${style} ${iconCss || ""}`,
         });
     }
 
     _renderMenuList(items, depth) {
-        // Match the legacy `window.DropDown` body styling exactly so cascading
-        // flyouts visually agree with the rest of the app's menus. The only
-        // difference is that a flyout doesn't carry the `oncontextmenu` guard.
+        // `menu menu-sm` is kept for what DaisyUI does well here — row hover,
+        // focus-visible and the button radius — while the geometry is overridden
+        // inline (see MENU_PADDING). DaisyUI's own `.menu { padding: .5rem }` is
+        // a sidebar measure and every cascade level would pay it again.
         const listEl = ul({
             class: "menu menu-sm bg-base-100 rounded-box shadow",
+            style: `padding: ${MENU_PADDING}px; min-width: 160px;`,
         });
-        for (const item of items) {
+        for (const item of normalizeSeparators(items)) {
             listEl.appendChild(this._renderItem(item, depth));
         }
         return listEl;
@@ -155,14 +200,31 @@ export class ContextMenu extends BaseComponent {
         const hasChildren = Array.isArray(item.children) && item.children.length > 0;
         const isAction = typeof item.action === "function";
 
-        // Header / separator
+        // Group boundary: a hairline rule, NOT a row. Rendering it as a text
+        // `li` gave it an empty line box (~12px of nothing) on top of its
+        // border, which is what made a three-provider menu look gapped.
+        // `currentColor` so it reads in both DaisyUI themes without a hex.
+        if (isSeparatorItem(item)) {
+            return li({
+                role: "separator",
+                class: "pointer-events-none",
+                style: "height: 1px; padding: 0; margin: 3px 6px; " +
+                    "background: currentColor; opacity: 0.15;",
+            });
+        }
+
+        // Titled section header (the legacy flat path in the annotations
+        // plugin). `menu-title` is DaisyUI's opt-out from both the row padding
+        // rules and the hover highlight — a header was never meant to look
+        // hoverable, and it did.
         if (!isAction && !hasChildren) {
             return li(
                 {
-                    class: "px-2",
-                    style: "font-size: 10px; border-bottom: 1px solid var(--color-border-primary, #d0d7de);",
+                    class: "menu-title",
+                    style: "padding: 2px 8px; font-size: 10px; line-height: 1.4; " +
+                        "text-transform: uppercase; letter-spacing: 0.02em; opacity: 0.6;",
                 },
-                item.title || ""
+                item.title
             );
         }
 
@@ -173,21 +235,25 @@ export class ContextMenu extends BaseComponent {
                 {
                     role: "menuitem",
                     tabindex: "0",
-                    class: `pl-1 dropdown-item pointer flex items-center justify-between gap-2 ${item.containerCss || ""}`.trim(),
+                    class: `${item.containerCss || ""}`.trim(),
+                    style: ROW_STYLE,
                     onclick: (e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         this._toggleFlyout(item, liEl, depth);
                     },
                 },
-                span({ class: "flex items-center gap-2 min-w-0" },
-                    this._iconNode(item.icon, item.iconCss),
-                    span({ class: "whitespace-nowrap" }, item.title || "")
-                ),
-                // Use a Font Awesome chevron rather than the U+25B6 triangle:
+                this._iconNode(item.icon, item.iconCss),
+                span({ class: "whitespace-nowrap" }, item.title || ""),
+                // Use an icon-font caret rather than the U+25B6 triangle:
                 // some systems render ▶ with emoji presentation (a coloured
                 // raster glyph), which clashes with the rest of the menu.
-                i({ class: "ph-light ph-caret-right opacity-60 ml-2 shrink-0", style: "font-size: 11px;" })
+                // `margin-left: auto` alone pushes it right — the old
+                // `justify-between` + `ml-2` pair spaced it twice.
+                i({
+                    class: "ph-light ph-caret-right opacity-60 shrink-0",
+                    style: "font-size: 10px; margin-left: auto;",
+                })
             );
             liEl.appendChild(anchor);
 
@@ -213,23 +279,22 @@ export class ContextMenu extends BaseComponent {
             return liEl;
         }
 
-        // Leaf clickable row — uses the same `flex items-center gap-2`
-        // layout as the parent rows so icon/text spacing is uniform between
-        // submenu entries and leaf entries. Without this, leaves render
-        // their icon+text inline (whatever the browser defaults are) while
-        // parents render them flex-aligned, producing the inconsistent
-        // "padding" the user reported.
+        // Leaf clickable row — shares ROW_STYLE with the parent rows so
+        // icon/text spacing is uniform between submenu entries and leaf
+        // entries. The selected background sits on the anchor rather than the
+        // `li`, so it picks up the row's own radius instead of painting
+        // full-bleed into the list padding.
         const selected = !!item.selected;
         const liEl = li(
-            {
-                role: "none",
-                style: selected ? "background: var(--color-state-focus-border);" : "",
-            },
+            { role: "none" },
             a(
                 {
                     role: "menuitem",
                     tabindex: "0",
-                    class: `pl-1 dropdown-item pointer flex items-center gap-2 ${item.containerCss || ""}`.trim(),
+                    class: `${item.containerCss || ""}`.trim(),
+                    style: selected
+                        ? `${ROW_STYLE} background: var(--color-state-focus-border);`
+                        : ROW_STYLE,
                     onclick: (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -268,7 +333,10 @@ export class ContextMenu extends BaseComponent {
         const anchorRect = anchorLi.getBoundingClientRect();
         const rect = flyoutEl.getBoundingClientRect();
         let left = anchorRect.right - 2;
-        let top = anchorRect.top - 4;
+        // The flyout's first row is inset by the list's own padding, so offset
+        // by exactly that to put it on the parent row's baseline. These were
+        // two independent constants and had drifted apart.
+        let top = anchorRect.top - MENU_PADDING;
 
         if (left + rect.width > window.innerWidth - margin) {
             left = Math.max(margin, anchorRect.left - rect.width + 2);

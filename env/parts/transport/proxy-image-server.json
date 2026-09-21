@@ -1,0 +1,59 @@
+{
+  "$meta": {
+    "description": "Route slide traffic through the server proxy alias `image-server` instead of straight to the tile server",
+    "dimension": "transport",
+    "clientKey": "localhost",
+    "defaults": { "WSI_PORT": "8080" }
+  },
+  /**
+   * Overlay for `data/wsi-service`: the same slides, reached through the
+   * server's proxy plumbing rather than directly. `/proxy/image-server/…` is
+   * forwarded to the upstream, which exercises the whole HttpClient path —
+   * CSRF injection, URL rewriting, and the patched
+   * `OpenSeadragon.makeAjaxRequest` / `downloadTileStart`.
+   *
+   * Worth running whenever a change touches tile fetching: a direct-URL
+   * deployment will not catch a proxy-path regression, and vice versa.
+   *
+   * NOT usable on its own over `data/wsi-service`: that fragment states the
+   * upstream origin as the client `baseURL`, and in proxy mode `baseURL` is the
+   * path AFTER `/proxy/<alias>/`. A layer cannot delete a key an earlier layer
+   * wrote, so the deployment must also clear it — the `image-proxy` preset does
+   * that in its `override` block. Leaving it set composes
+   * `/proxy/image-server/http://localhost:9002/v3/...`, which `up:check` now
+   * refuses (`proxy-absolute-base`).
+   */
+  "core": {
+    "client": {
+      "localhost": {
+        "slide_protocols": {
+          "wsi_service": {
+            "url": "`/v3/slides/info?slide_id=${data}`",
+            "proxy": "image-server"
+          }
+        }
+      }
+    },
+    "server": {
+      "secure": {
+        "proxies": {
+          /* No `auth.enabled` block = no JWT requirement. CSRF is still checked
+             on the viewer side. */
+          "image-server": {
+            "baseUrl": "http://localhost:<% WSI_PORT:-8080 %>"
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    /* The file browser talks to the same upstream, so it travels the same alias
+       — otherwise the case listing keeps going straight to the image server
+       while the tiles are proxied, and the deployment proves only half of what
+       it claims. A new key, so no layer disagreement: `proxy` wins over the
+       `wsiService` base `data/wsi-service` configured. */
+    "rationai-wsi-file-browser": {
+      "proxy": "image-server"
+    }
+  }
+}

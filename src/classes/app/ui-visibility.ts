@@ -7,15 +7,19 @@
 // to the scalebar block — it already runs on every `viewer.open`, so it
 // handles late-attached viewports too.
 //
-// `globalMenu`, `toolBar` and `statusBar` are *not* handled here — they
-// self-gate at the component level (MainLayout reads
-// `getInitialUiOption("globalMenu")` in its constructor; Toolbar reads
-// `getInitialUiOption("toolBar")` in `create()`; StatusBar reads
-// `getInitialUiOption("statusBar")` in its constructor and registers a
-// VisibilityManager with AppBar.View). Reading the flag at the component
-// covers plugin- and module-spawned components that are not yet constructed
-// when this boot helper runs, and the boot-phase variant ensures the flag
-// stops applying once the initial viewer has opened.
+// `globalMenu` and `toolBar` are *not* handled here — they self-gate at the
+// component level (MainLayout reads `getInitialUiOption("globalMenu")` in its
+// constructor; Toolbar reads `getInitialUiOption("toolBar")` in `create()`).
+// Reading the flag at the component covers plugin- and module-spawned
+// components that are not yet constructed when this boot helper runs, and the
+// boot-phase variant ensures the flag stops applying once the initial viewer
+// has opened.
+//
+// `statusBar` is handled NOWHERE, and that is not an omission here: core never
+// constructs a `UI.StatusBar`, so `#viewer-status-bar` does not exist and the
+// Settings checkbox for it toggles nothing. Wiring it up means mounting one and
+// registering its VisibilityManager with AppBar.View — until then the flag is
+// inert.
 
 export function applyInitialUiVisibility(): void {
     const ac = (window as any).APPLICATION_CONTEXT;

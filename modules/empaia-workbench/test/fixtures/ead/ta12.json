@@ -1,0 +1,54 @@
+{
+    "name": "Tutorial App 12 v3",
+    "name_short": "TA12v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_12.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangle": {
+            "type": "rectangle",
+            "reference": "io.my_wsi"
+        },
+        "my_cells": {
+            "type": "collection",
+            "items": {
+                "type": "polygon",
+                "reference": "io.my_wsi"
+            }
+        },
+        "my_cell_classes": {
+            "type": "collection",
+            "items": {
+                "type": "class",
+                "reference": "io.my_cells.items"
+            }
+        },
+        "tumor_ratio": {
+            "type": "float",
+            "reference": "io.my_rectangle"
+        }
+    },
+    "modes": {
+        "preprocessing": {
+            "inputs": [
+                "my_wsi"
+            ],
+            "outputs": [
+                "my_cells"
+            ]
+        },
+        "postprocessing": {
+            "containerized": true,
+            "inputs": [
+                "my_wsi",
+                "my_rectangle",
+                "my_cells"
+            ],
+            "outputs": [
+                "my_cell_classes",
+                "tumor_ratio"
+            ]
+        }
+    }
+}

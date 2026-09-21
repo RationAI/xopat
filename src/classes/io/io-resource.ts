@@ -23,7 +23,14 @@
 //   update + update → keep latest only
 //   update + delete → drop update, keep delete
 //   create + update → merge into create's payload (if def.merge given)
-// In-flight entries never coalesce.
+// In-flight entries never coalesce. A coalesced-out op always settles with
+// `{ coalesced: true }`, and a surviving op inherits its predecessor's slot,
+// so ops on other identities never get reordered.
+//
+// Auto-history replays dispatch the *inverse* op through this same queue. The
+// inverse op needs its own wire body — undoing a `delete` re-creates the full
+// item (`options.inversePayload`), undoing a `create` deletes by the id derived
+// from the payload. `inverseApply` only repairs local state.
 //
 // Reserved meta keys written by the pipeline (sinks / guards may read):
 //   `clientOpId` — stable per-call UUID for sink-side dedup on retry.
@@ -67,6 +74,30 @@ interface QueueEntry {
     replayPayload?: unknown;
     /** Phase 10: replay-mode flag — `apply` and `history` are skipped. */
     isReplay?: boolean;
+    /** Whether this entry's dispatch attempt has already been counted in IDB. */
+    attemptRecorded?: boolean;
+    /** Handle to the auto-pushed history entry, when one was pushed. Lets a
+     *  post-commit refusal revert exactly this mutation instead of whatever
+     *  happens to be on top of the undo stack. */
+    historyHandle?: Promise<HistoryEntryHandle | undefined>;
+}
+
+/** Outcome of the coalescing pass — see `IOResourceImpl._coalesce`. */
+type CoalesceVerdict =
+    | { action: "enqueue" }
+    | { action: "skip" }
+    | { action: "replace"; index: number };
+
+const VERDICT_ENQUEUE: CoalesceVerdict = { action: "enqueue" };
+const VERDICT_SKIP: CoalesceVerdict = { action: "skip" };
+
+/**
+ * Revert-on-refusal is the default: the destination is authoritative, so a
+ * change it refused must not stay on screen. Owners opt out explicitly where
+ * flicker is worse than divergence (e.g. a geometry swap mid-edit).
+ */
+function wantsRollback(options: IOResourceMutateOptions): boolean {
+    return options.rollbackOnAsyncRefuse !== false;
 }
 
 const COALESCED_RESULT: IOResult = { ok: true, payload: { coalesced: true } as any };
@@ -106,8 +137,14 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _storePromise: Promise<OutboxStore | null> | null = null;
     /** Approximate count of persisted entries for this resource (cap pre-flight). */
     private _persistedCount = 0;
-    /** Boot replay completed for this resource. */
-    private _replayDone = false;
+    /** `code|resource` pairs already reported — see {@link _warnOutboxFailureOnce}. */
+    private readonly _warnedOutboxFailures = new Set<string>();
+    /**
+     * Boot replay completed for this resource — the worker's start gate.
+     * Starts `true` for resources with no persistent outbox: there is nothing to
+     * replay, so there is nothing to wait behind.
+     */
+    private _replayDone = true;
     /** Set by the pipeline when offline; worker pauses dispatch. */
     private _offline = false;
 
@@ -120,18 +157,45 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         this.pipeline = opts.pipeline;
         this.def = opts.def as IOResourceDef<T>;
 
-        // Subscribe to online/offline so the worker can pause dispatch
-        // deterministically (instead of burning `withRetry` budget).
-        if (typeof window !== "undefined") {
-            this._offline = (window as any).navigator?.onLine === false;
-            window.addEventListener("online",  () => { this._offline = false; if (!this._running && this._outbox.length > 0) Promise.resolve().then(() => this._run()); });
-            window.addEventListener("offline", () => { this._offline = true; });
+        // Subscribe to the core connectivity source of truth so the worker can
+        // pause dispatch deterministically (instead of burning `withRetry`
+        // budget) and replay the outbox the moment we come back online. Falls
+        // back to a raw `navigator.onLine` read when the singleton is absent
+        // (SSR/headless), keeping the same pause semantics without listeners.
+        const net = (window as any).APPLICATION_CONTEXT?.networkStatus as NetworkStatusLike | undefined;
+        if (net?.addHandler) {
+            this._offline = net.isOffline;
+            net.addHandler("network-status-changed", ({ online }) => {
+                this._offline = !online;
+                if (online && !this._running && this._outbox.length > 0) {
+                    Promise.resolve().then(() => this._run());
+                }
+            });
+        } else if (typeof navigator !== "undefined") {
+            this._offline = navigator.onLine === false;
         }
 
+        // Same shape, different reason to wait: a sink this resource's binding
+        // names may register late (a module that must finish a handshake first).
+        // The worker holds meanwhile — see `_bindingsPending` — and this is what
+        // lets it go again.
+        (this.pipeline as any).addHandler?.("io:sink-registered", () => {
+            if (!this._running && this._outbox.length > 0) {
+                Promise.resolve().then(() => this._run());
+            }
+        });
+
         if (this.def.persistOutbox) {
-            // Kick off boot replay in the background. Does not block ctor;
-            // user-issued ops queue normally and tail any replayed ops.
-            void this._bootReplay();
+            // Kick off boot replay in the background. Does not block the ctor:
+            // user-issued ops queue normally and the worker holds until replay
+            // finishes, so they tail the previous session's ops instead of
+            // overtaking them.
+            this._replayDone = false;
+            // `finally` — a throw here must not leave the gate shut forever, which
+            // would freeze every write for this resource for the whole session.
+            void this._bootReplay()
+                .catch(e => console.warn(`[IO] resource "${this.name}" boot replay failed:`, e))
+                .finally(() => this._markReplayDone(0));
         }
     }
 
@@ -155,11 +219,21 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private async _whenStoreReady(): Promise<OutboxStore | null> {
         if (this._store !== undefined) return this._store;
         if (!this._storePromise) {
-            this._storePromise = OutboxStore.open().then(s => {
+            // `.catch` BEFORE `.then`: without it a rejected open() becomes an
+            // unhandled rejection and the `io:outbox-unavailable` event below
+            // never fires, so callers never learn the outbox is gone.
+            this._storePromise = OutboxStore.open().catch(e => {
+                console.warn("[IO] outbox store failed to open.", e);
+                return null;
+            }).then(s => {
                 this._store = s;
                 if (s === null) {
+                    // Named: one event per persisted resource fires, and a bare
+                    // `{reason}` left a listener unable to tell which — or how many
+                    // — resources had lost durability.
                     this.pipeline.emitQueueEvent_("io:outbox-unavailable", {
-                        reason: "IndexedDB unavailable (private mode or blocked)",
+                        ownerUid: this.ownerUid, resourceName: this.name,
+                        reason: "IndexedDB unavailable (private mode, blocked, or opaque origin)",
                     });
                 }
                 return s;
@@ -172,7 +246,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private async _bootReplay(): Promise<void> {
         const store = await this._whenStoreReady();
         if (!store) {
-            this._replayDone = true;
+            this._markReplayDone(0);
+            // Not a silent return: a consumer waiting on `io:outbox-replayed` to
+            // know boot sync finished would otherwise wait forever in exactly the
+            // deployments where IndexedDB is unavailable — a sandboxed iframe on an
+            // opaque origin, which is a supported shape, not an edge case.
             return;
         }
         const maxAge = this.def.persistMaxAgeMs ?? 7 * 24 * 3600 * 1000;
@@ -211,10 +289,25 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             });
         }
 
+        this._markReplayDone(entries.length);
+    }
+
+    /**
+     * Release anything that queued while boot replay was still reading IndexedDB.
+     *
+     * `_replayDone` used to be written and never read, so a user op issued during
+     * boot was dispatched immediately while persisted ops from the previous
+     * session were still being listed — the reverse of the order they happened in.
+     * The worker is only allowed to start once this has run, which is what makes
+     * the documented "strict causal order" true rather than aspirational.
+     */
+    private _markReplayDone(replayed: number): void {
+        if (this._replayDone) return;
         this._replayDone = true;
         this.pipeline.emitQueueEvent_("io:outbox-replayed", {
-            ownerUid: this.ownerUid, resourceName: this.name, count: entries.length,
+            ownerUid: this.ownerUid, resourceName: this.name, count: replayed,
         });
+        if (this._outbox.length > 0) void this._run();
     }
 
     private _enqueueReplay(persisted: PersistedOutboxEntry): void {
@@ -229,7 +322,11 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             resourceName: this.name,
             itemId: persisted.itemId,
             key: "",
-            meta: { ...meta, clientOpId: persisted.clientOpId, fromReplay: true },
+            // `identity` is persisted, so a replayed op keeps the same localId the
+            // sink correlated on before the reload even if `meta` did not survive.
+            meta: { ...meta, clientOpId: persisted.clientOpId, fromReplay: true,
+                    ...(persisted.identity && !persisted.identity.startsWith("__synth__::")
+                        ? { localId: persisted.identity } : {}) },
         };
         const entry: QueueEntry = {
             direction: persisted.direction,
@@ -239,7 +336,10 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             itemId: persisted.itemId,
             isReplay: true,
             options: {
-                rollbackOnAsyncRefuse: persisted.rollbackOnAsyncRefuse,
+                // Never roll back a replay: the local state was restored from
+                // the bundle/cache, not by this op, and the `inverseApply`
+                // closure that could revert it did not survive the reload.
+                rollbackOnAsyncRefuse: false,
                 skipGuards: true,
                 skipHistory: true,
                 meta: ctx.meta,
@@ -251,12 +351,20 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         // Replays don't re-coalesce against unstarted siblings normally —
         // but pairwise rule still applies (e.g. persisted create + delete
         // collapse on boot). _coalesce handles that uniformly.
-        if (this._coalesce(entry)) {
-            // Coalesced out — also drop the persisted entry.
+        const verdict = this._coalesce(entry);
+        if (verdict.action === "skip") {
+            // Coalesced out — settle it and drop the persisted entry.
+            entry.settle(COALESCED_RESULT);
             void this._unpersistById(persisted.clientOpId);
             return;
         }
-        this._outbox.push(entry);
+        if (verdict.action === "replace") {
+            // Supersedes an earlier persisted op; it is already in IDB under
+            // its own clientOpId, so only the slot changes.
+            this._outbox[verdict.index] = entry;
+        } else {
+            this._outbox.push(entry);
+        }
         if (!this._running) Promise.resolve().then(() => this._run());
     }
 
@@ -265,22 +373,27 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         return (async (): Promise<IOResult> => {
             const store = await this._whenStoreReady();
             if (!store) return { ok: true }; // unavailable → memory-only fallback
-            const persisted: PersistedOutboxEntry = {
-                clientOpId: String(entry.ctx.meta.clientOpId),
-                ownerUid: this.ownerUid,
-                resourceName: this.name,
-                direction: entry.direction,
-                identity: entry.identity,
-                itemId: entry.itemId,
-                serializedPayload: entry.direction === "delete"
-                    ? undefined
-                    : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, entry.ctx) : entry.rawPayload),
-                createdAt: Date.now(),
-                attemptCount: 0,
-                rollbackOnAsyncRefuse: !!entry.options.rollbackOnAsyncRefuse,
-                metaJson: this._safeStringify(entry.ctx.meta),
-            };
             try {
+                // Inside the try: `serialize` is owner code. A throw here used to
+                // reject `persistedPromise`, and the worker awaits it unguarded —
+                // so it escaped `_executeEntry` and wedged the queue permanently.
+                // Persistence is best-effort, so a throw becomes a refusal like
+                // any other IDB failure and dispatch still proceeds.
+                const persisted: PersistedOutboxEntry = {
+                    clientOpId: String(entry.ctx.meta.clientOpId),
+                    ownerUid: this.ownerUid,
+                    resourceName: this.name,
+                    direction: entry.direction,
+                    identity: entry.identity,
+                    itemId: entry.itemId,
+                    serializedPayload: entry.direction === "delete"
+                        ? undefined
+                        : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, entry.ctx) : entry.rawPayload),
+                    createdAt: Date.now(),
+                    attemptCount: 0,
+                    rollbackOnAsyncRefuse: !!entry.options.rollbackOnAsyncRefuse,
+                    metaJson: this._safeStringify(entry.ctx.meta),
+                };
                 await store.add(persisted);
                 this._persistedCount++;
                 return { ok: true };
@@ -292,6 +405,22 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                 };
             }
         })();
+    }
+
+    /**
+     * Count one dispatch attempt against the persisted entry.
+     *
+     * Best-effort and deliberately not awaited: the attempt counter is
+     * diagnostics, and delaying the dispatch for a bookkeeping write would be the
+     * wrong trade. Silent on failure for the same reason.
+     */
+    private async _bumpAttempt(entry: QueueEntry): Promise<void> {
+        const id = entry.ctx.meta?.clientOpId;
+        if (!id) return;
+        try {
+            const store = await this._whenStoreReady();
+            await store?.bumpAttempt(String(id));
+        } catch { /* diagnostics only */ }
     }
 
     private async _unpersist(entry: QueueEntry): Promise<void> {
@@ -325,15 +454,54 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         }
     }
 
-    private _scheduleRollback(): void {
-        Promise.resolve().then(async () => {
-            try {
-                const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-                if (history?.undo) await history.undo();
-            } catch (e) {
-                console.error(`[IO] resource "${this.name}" rollback failed:`, e);
+    /**
+     * Revert the local commit of ONE refused op.
+     *
+     * Deliberately not `history.undo()`: that pops whatever sits on top of the
+     * stack — which, because dispatch is queued, is rarely the refused op — and
+     * is offered to every `XOpatHistoryProvider` first, any of which may consume
+     * it instead. Running the entry's own `inverseApply` reverts exactly the
+     * right item, and invalidating its history entry keeps a later user undo
+     * from reverting it a second time.
+     *
+     * No inverse op is dispatched: the forward op never reached the sink, so
+     * the server has nothing to undo.
+     */
+    private async _revertEntry(entry: QueueEntry, result: IOResult): Promise<void> {
+        const inverseApply = entry.options.inverseApply;
+        if (!inverseApply) {
+            if (!this._warnedNoInverse.has(entry.direction)) {
+                this._warnedNoInverse.add(entry.direction);
+                console.warn(
+                    `[IO] resource "${this.name}": a "${entry.direction}" was refused but the `
+                    + `call supplied no \`inverseApply\`, so the local change cannot be reverted. `
+                    + `Pass one, or set \`rollbackOnAsyncRefuse: false\` to make that explicit.`,
+                );
             }
+            return;
+        }
+
+        const handle = entry.historyHandle ? await entry.historyHandle.catch(() => undefined) : undefined;
+        // Already reverted — by a user undo, or by an earlier refusal on the
+        // same entry. Reverting twice would apply the inverse to fresh state.
+        if (handle && !handle.isActive()) return;
+
+        try {
+            inverseApply();
+        } catch (e) {
+            console.error(`[IO] resource "${this.name}" rollback failed:`, e);
+            return;
+        }
+        handle?.invalidate();
+        this._emitQueueEvent("io:reverted", {
+            ownerUid: this.ownerUid, resourceName: this.name,
+            direction: entry.direction, itemId: entry.itemId,
+            ctx: entry.ctx, result,
         });
+    }
+
+    private _scheduleRollback(entry: QueueEntry, result: IOResult): void {
+        void Promise.resolve().then(() => this._revertEntry(entry, result));
     }
 
     /**
@@ -347,7 +515,15 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         options: IOResourceMutateOptions,
     ): IOResult {
         const v = this.def.validate?.(itemOrPatch as T, ctx);
-        if (v && !v.ok) return v;
+        if (v && !v.ok) {
+            // Surface it, exactly as a guard refusal is surfaced (IO_PIPELINE.md,
+            // "Refusal surfacing"). This used to return silently: the caller got
+            // `ok: false`, most callers ignore the sync result, and the user saw an
+            // annotation that simply never saved with nothing said about it. The
+            // `can*` probes call `def.validate` directly and are unaffected.
+            this.pipeline.surfaceRefusal_(ctx, v as any);
+            return v;
+        }
 
         if (!options.skipGuards) {
             const preDirection = (
@@ -374,6 +550,26 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         return { ok: true };
     }
 
+    /**
+     * Publish the owner's own identity for this item as `ctx.meta.localId`.
+     *
+     * A sink that stores remotely has to map "the record the server just created"
+     * back to "the object on screen", and on `create` there is nothing else to map
+     * with: `ctx.itemId` is absent by design (the id is the server's to assign, and
+     * a REST sink would otherwise POST to `/resource/<id>`), and the serialized
+     * payload need not carry the owner's local id either. `def.identityOf` already
+     * computes exactly that value for coalescing — this just makes it visible.
+     *
+     * The synthetic fallback is deliberately not published: it is a uniqueness
+     * device, not an identity, and a sink correlating on it would key state to a
+     * value the owner cannot look up again.
+     */
+    private _stampLocalId(ctx: IOContext, identity: string): void {
+        if (!identity || identity.startsWith("__synth__::")) return;
+        if (!ctx.meta) (ctx as any).meta = {};
+        (ctx.meta as Record<string, unknown>).localId = identity;
+    }
+
     /** Identity key used for coalescing. Falls back to a synthetic per-call
      *  id when `def.identityOf` is missing or returns nothing. */
     private _identityFor(direction: "create" | "update" | "delete", itemOrPatch: any, itemId: string | undefined): string {
@@ -382,6 +578,12 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             const id = this.def.identityOf?.(itemOrPatch as T);
             if (id !== undefined && id !== null && String(id).length > 0) return String(id);
         } catch { /* ignore */ }
+        // A `create` may still carry an explicit id — history replays of a
+        // `delete` resurrect the entity under the id it already had, and the
+        // caller may not have supplied a payload `identityOf` can read. Using
+        // it keeps the entity's identity stable across undo/redo so the pair
+        // still coalesces instead of leaking a synthetic key.
+        if (itemId !== undefined) return String(itemId);
         // Synthetic — guaranteed unique, so coalesce never triggers.
         return `__synth__::${++this._syntheticIdSeq}`;
     }
@@ -403,13 +605,18 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     /**
      * Apply coalescing rules between the new entry and the latest pending
-     * same-identity entry. Returns true if the new entry should be SKIPPED
-     * (coalesced out). May splice the partner from the outbox.
+     * same-identity entry.
+     *
+     *  - `enqueue` — no rule matched; push the new entry normally.
+     *  - `skip`    — the new entry is absorbed; the caller settles it.
+     *  - `replace` — the new entry supersedes the partner and takes over its
+     *                queue slot (never the tail), so ops on *other* identities
+     *                keep their relative order.
      */
-    private _coalesce(newEntry: QueueEntry): boolean {
-        if (!this.def.coalesce) return false;
+    private _coalesce(newEntry: QueueEntry): CoalesceVerdict {
+        if (!this.def.coalesce) return VERDICT_ENQUEUE;
         const idx = this._findCoalescePartner(newEntry.identity);
-        if (idx < 0) return false;
+        if (idx < 0) return VERDICT_ENQUEUE;
         const prev = this._outbox[idx]!;
 
         const dropPrev = () => {
@@ -418,26 +625,29 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             // Phase 10: also remove from IDB (best-effort).
             if (this.def.persistOutbox) void this._unpersist(prev);
         };
+        const supersedePrev = (): CoalesceVerdict => {
+            prev.settle(COALESCED_RESULT);
+            if (this.def.persistOutbox) void this._unpersist(prev);
+            return { action: "replace", index: idx };
+        };
 
         // Rule: create + delete → both removed
         if (prev.direction === "create" && newEntry.direction === "delete") {
             dropPrev();
-            return true; // also drop new (caller settles new with COALESCED_RESULT)
+            return VERDICT_SKIP;
         }
         // Rule: delete + create → both removed
         if (prev.direction === "delete" && newEntry.direction === "create") {
             dropPrev();
-            return true;
+            return VERDICT_SKIP;
         }
         // Rule: update + update → keep latest
         if (prev.direction === "update" && newEntry.direction === "update") {
-            dropPrev();
-            return false; // new will enqueue
+            return supersedePrev();
         }
         // Rule: update + delete → drop update
         if (prev.direction === "update" && newEntry.direction === "delete") {
-            dropPrev();
-            return false;
+            return supersedePrev();
         }
         // Rule: create + update → merge into create
         if (prev.direction === "create" && newEntry.direction === "update" && this.def.merge) {
@@ -454,27 +664,35 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                         return store.update(pid, { serializedPayload: newPayload });
                     }).catch(() => {});
                 }
-                newEntry.settle(COALESCED_RESULT);
-                return true; // new is folded into prev
+                return VERDICT_SKIP; // new is folded into prev
             } catch (e) {
                 console.warn(`[IO] resource "${this.name}" merge threw — keeping both ops:`, e);
-                return false;
+                return VERDICT_ENQUEUE;
             }
         }
-        return false;
+        return VERDICT_ENQUEUE;
     }
 
-    /** Build a queue entry with a settle Promise. */
+    /**
+     * Build a queue entry with a settle Promise.
+     *
+     * `reuseCtx` lets the caller hand in the very ctx the sync core (validate +
+     * guards) already ran against, so guards and the sink observe one identical
+     * context object instead of two that can drift apart.
+     */
     private _makeEntry(
         direction: "create" | "update" | "delete",
         itemOrPatch: any,
         itemId: string | undefined,
         options: IOResourceMutateOptions,
+        reuseCtx?: IOContext,
     ): QueueEntry {
-        const ctx = this.buildCtx(direction, itemId, options.meta);
+        const ctx = reuseCtx ?? this.buildCtx(direction, itemId, options.meta);
+        const identity = this._identityFor(direction, itemOrPatch, itemId);
+        this._stampLocalId(ctx, identity);
         const entry: any = {
             direction, itemId, options, ctx,
-            identity: this._identityFor(direction, itemOrPatch, itemId),
+            identity,
             rawPayload: itemOrPatch,
             started: false,
         };
@@ -484,8 +702,24 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     /** Enqueue a queue entry; apply coalescing first; start worker if idle. */
     private _enqueue(entry: QueueEntry): Promise<IOResult> {
-        if (this._coalesce(entry)) {
-            // Already settled inside _coalesce.
+        const verdict = this._coalesce(entry);
+        if (verdict.action === "skip") {
+            // Absorbed by a pending same-identity op. Settle centrally so
+            // `await result.settled` never hangs, whichever rule matched.
+            entry.settle(COALESCED_RESULT);
+            return entry.settled;
+        }
+        if (verdict.action === "replace") {
+            // Takes over the superseded entry's slot: the queue length is
+            // unchanged (no capacity pre-flight) and cross-identity ordering
+            // is preserved, unlike a splice + tail push.
+            this._outbox[verdict.index] = entry;
+            if (this.def.persistOutbox && !entry.isReplay) {
+                entry.persistedPromise = this._persistEntry(entry);
+            }
+            if (!this._running) {
+                Promise.resolve().then(() => this._run());
+            }
             return entry.settled;
         }
 
@@ -508,7 +742,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                 });
                 this.pipeline.surfaceRefusal_(entry.ctx, refusal as any);
                 entry.settle(refusal);
-                if (entry.options.rollbackOnAsyncRefuse) this._scheduleRollback();
+                if (wantsRollback(entry.options)) this._scheduleRollback(entry, refusal);
                 return entry.settled;
             }
         }
@@ -528,13 +762,34 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         return entry.settled;
     }
 
-    /** Worker: drain the outbox FIFO. Pauses when `_offline` is true. */
+    /**
+     * Is this resource's binding waiting for a sink that has not registered yet?
+     *
+     * Tolerant of a pipeline that predates the predicate — an older host simply
+     * never holds, which is the behaviour it had anyway.
+     */
+    private _bindingsPending(): boolean {
+        const p = (this.pipeline as any).bindingsPending;
+        return typeof p === "function" && p.call(this.pipeline, this.ownerUid, this.capabilityId) === true;
+    }
+
+    /** Worker: drain the outbox FIFO. Pauses when `_offline` is true or a bound sink is missing. */
     private async _run(): Promise<void> {
         if (this._running) return;
+        // Hold until the previous session's persisted ops have been re-enqueued,
+        // otherwise an op issued during boot is dispatched before ops that
+        // happened before it. `_markReplayDone` restarts us.
+        if (!this._replayDone) return;
         this._running = true;
         try {
             while (this._outbox.length > 0) {
-                if (this._offline) {
+                // Two reasons not to dispatch right now, one mechanism. Offline
+                // is transport; pending is destination — the operator bound a
+                // sink that has not registered yet (a module still completing a
+                // handshake). Dispatching anyway is worse than waiting: with no
+                // live sink the pipeline reports `{ok: true}` and the write is
+                // gone. Holding keeps the entry, the outbox, and the truth.
+                if (this._offline || this._bindingsPending()) {
                     // Don't burn `withRetry` budget while definitively offline.
                     if (!this._stalled) {
                         this._stalled = true;
@@ -548,6 +803,14 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
                 const entry = this._outbox[0]!;
                 entry.started = true;
+                // Record the attempt before making it: a crash mid-dispatch must
+                // leave evidence that this op was tried, otherwise `attemptCount`
+                // is 0 forever and a poison entry replayed on every boot is
+                // indistinguishable from a fresh one.
+                if (this.def.persistOutbox && !entry.attemptRecorded) {
+                    entry.attemptRecorded = true;
+                    void this._bumpAttempt(entry);
+                }
 
                 const result = await this._executeEntry(entry);
                 entry.settle(result);
@@ -580,14 +843,47 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     }
 
     /** Execute one queue entry: persist-await + dispatch + unpersist + rollback. */
+    /**
+     * Report a failed outbox write once per `(code, resource)`, with the fix.
+     *
+     * These failures are almost always *systematic* — a resource whose payload
+     * cannot be structured-cloned fails on every single operation, so recording
+     * a tour produced one identical warning per step and the actual advice
+     * ("declare a serialize()") appeared nowhere. Say it once, say what to do.
+     *
+     * The write is still ATTEMPTED every time: only the logging is deduped, so
+     * a resource that fails on one payload and succeeds on the next keeps its
+     * crash-recovery for the ones that work.
+     */
+    private _warnOutboxFailureOnce(code: string, reason: string): void {
+        const key = `${code}|${this.name}`;
+        if (this._warnedOutboxFailures.has(key)) return;
+        this._warnedOutboxFailures.add(key);
+        const hint = code === "W_IO_OUTBOX_WRITE" && /clone/i.test(String(reason ?? ""))
+            ? ` The payload is not structured-cloneable — declare a serialize() on this resource `
+              + `that returns JSON-safe data (see src/types/io.d.ts, "persistOutbox").`
+            : "";
+        console.warn(`[IO] resource "${this.name}": outbox persistence is failing (${code}).${hint} `
+            + `Dispatch is unaffected; crash-recovery is off for this resource. Reason:`, reason);
+    }
+
     private async _executeEntry(entry: QueueEntry): Promise<IOResult> {
         // Phase 10: wait for IDB persist before dispatching (crash-safe).
-        // If the persist failed (quota/IDB error), short-circuit with refusal.
+        // Outbox persistence is a best-effort crash-recovery optimization, NOT
+        // a gate on the real save. A write failure (quota / structured-clone /
+        // IDB error) must not drop the user's op — surface it loudly and fall
+        // through to dispatch so the sink still receives the mutation. Rollback
+        // stays tied to actual dispatch refusal below, never to a persist miss.
         if (entry.persistedPromise) {
             const pr = await entry.persistedPromise;
             if (!pr.ok) {
-                if (entry.options.rollbackOnAsyncRefuse) this._scheduleRollback();
-                return pr;
+                // The EVENT stays per-operation: a listener may legitimately
+                // count how many ops lost their crash-recovery record.
+                this.pipeline.emitQueueEvent_("io:outbox-write-failed", {
+                    ownerUid: this.ownerUid, resourceName: this.name,
+                    code: (pr as any).code, reason: (pr as any).reason,
+                });
+                this._warnOutboxFailureOnce((pr as any).code, (pr as any).reason);
             }
         }
 
@@ -599,20 +895,47 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                 ...entry.ctx,
                 meta: { ...entry.ctx.meta, phase: "post-commit" },
             };
-            const payload = entry.replayPayload !== undefined
-                ? entry.replayPayload
-                : (entry.direction === "delete"
-                    ? undefined
-                    : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, dispatchCtx) : entry.rawPayload));
+            // `serialize` is owner code and can throw (a live object with circular
+            // refs, a half-built patch). It used to sit OUTSIDE the try below, so
+            // a throw escaped `_executeEntry` entirely: the entry was never
+            // settled, never shifted off `_outbox`, and the worker left through
+            // its `finally` with `_running = false` — every later write for that
+            // resource then queued behind an op that could never complete. A
+            // silent, permanent stall. Its own code, not `W_IO_DISPATCH_THREW`:
+            // this is a local defect, and `isStallSignal` must not read it as the
+            // network being down.
+            let payload: unknown;
+            let serializeError: any;
             try {
-                result = await this.pipeline.dispatch(dispatchCtx, payload);
+                payload = entry.replayPayload !== undefined
+                    ? entry.replayPayload
+                    : (entry.direction === "delete"
+                        ? undefined
+                        : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, dispatchCtx) : entry.rawPayload));
             } catch (e: any) {
+                serializeError = e;
+            }
+
+            if (serializeError !== undefined) {
                 result = {
                     ok: false, refused: true,
-                    reason: e?.message ?? String(e),
-                    code: "W_IO_DISPATCH_THREW",
+                    reason: `serialize() threw for ${this.name}: ${serializeError?.message ?? serializeError}`,
+                    code: "W_IO_SERIALIZE_THREW",
                 };
+                console.error(`[IO] resource "${this.name}" serialize() threw; the ${entry.direction} `
+                    + "was rolled back and nothing was sent.", serializeError);
                 this.pipeline.surfaceRefusal_(dispatchCtx, result as any);
+            } else {
+                try {
+                    result = await this.pipeline.dispatch(dispatchCtx, payload);
+                } catch (e: any) {
+                    result = {
+                        ok: false, refused: true,
+                        reason: e?.message ?? String(e),
+                        code: "W_IO_DISPATCH_THREW",
+                    };
+                    this.pipeline.surfaceRefusal_(dispatchCtx, result as any);
+                }
             }
         }
 
@@ -622,13 +945,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             await this._unpersist(entry).catch(() => {});
         }
 
-        if (!result.ok && entry.options.rollbackOnAsyncRefuse) {
-            try {
-                const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-                if (history?.undo) await history.undo();
-            } catch (e) {
-                console.error(`[IO] resource "${this.name}" rollback failed:`, e);
-            }
+        if (!result.ok && wantsRollback(entry.options)) {
+            await this._revertEntry(entry, result);
         }
         return result;
     }
@@ -639,12 +957,49 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         } catch { /* pipeline may not be ready */ }
     }
 
+    /** One warning per resource+direction — a missing `inversePayload` is a
+     *  code-level omission, not a per-call condition. */
+    private _warnedInverse = new Set<string>();
+    /** Same, for a refusal that cannot be reverted for lack of `inverseApply`. */
+    private _warnedNoInverse = new Set<string>();
+
+    /**
+     * Payload the inverse op must put on the wire. `inverseApply` repairs
+     * local state; the sink needs its own body, and it is NOT the forward
+     * one — undoing a `delete` means re-creating the full item, undoing an
+     * `update` means sending the reverting patch. Only the inverse of a
+     * `create` is content-free (a `delete` addressed by id).
+     */
+    private _inversePayloadFor(
+        direction: "create" | "update" | "delete",
+        forwardPayload: any,
+        options: IOResourceMutateOptions,
+    ): any {
+        if (direction === "create") return undefined;
+        const supplied = options.inversePayload;
+        if (supplied !== undefined) {
+            return typeof supplied === "function" ? (supplied as () => unknown)() : supplied;
+        }
+        if (!this._warnedInverse.has(direction)) {
+            this._warnedInverse.add(direction);
+            console.warn(
+                `[IO] resource "${this.name}": undo of a "${direction}" has no `
+                + `\`inversePayload\`. The inverse op reaches the sink without a body `
+                + `(an undone delete resurrects an empty record; an undone update `
+                + `re-sends the forward patch). Local state is unaffected.`,
+            );
+        }
+        // Degrade, don't refuse: a sink that undeletes by id still works, and
+        // an update falls back to today's behaviour rather than dropping the op.
+        return direction === "update" ? forwardPayload : undefined;
+    }
+
     private _pushHistoryEntry(
         direction: "create" | "update" | "delete",
         itemOrPatch: any,
         itemId: string | undefined,
         options: IOResourceMutateOptions,
-    ): void {
+    ): Promise<HistoryEntryHandle | undefined> | undefined {
         const inverseDirection = (
             direction === "create" ? "delete"
             : direction === "delete" ? "create"
@@ -654,6 +1009,17 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const inverseApply = options.inverseApply!;
         const baseMeta = { ...(options.meta ?? {}) };
         const self = this;
+
+        // `create` is dispatched with no itemId (the id is the item's own), so
+        // the inverse `delete` would reach the sink unaddressable. Recover it
+        // from the payload the same way the coalescing pass does.
+        let inverseItemId = itemId;
+        if (direction === "create" && inverseItemId === undefined) {
+            try {
+                const id = this.def.identityOf?.(itemOrPatch as T);
+                if (id !== undefined && id !== null && String(id).length > 0) inverseItemId = String(id);
+            } catch { /* leave undefined — nothing better available */ }
+        }
 
         const redo = () => {
             self._dispatchInternal(direction, itemOrPatch, itemId, {
@@ -666,7 +1032,9 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             });
         };
         const undo = () => {
-            self._dispatchInternal(inverseDirection, itemOrPatch, itemId, {
+            // Resolved at undo time so a thunk can snapshot current state.
+            const inversePayload = self._inversePayloadFor(direction, itemOrPatch, options);
+            self._dispatchInternal(inverseDirection, inversePayload, inverseItemId, {
                 ...options,
                 meta: { ...baseMeta, fromUndo: true },
                 apply: inverseApply, inverseApply: apply,
@@ -677,7 +1045,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         };
 
         const history = (globalThis as any).APPLICATION_CONTEXT?.history;
-        history?.pushExecuted?.(redo, undo, {
+        return history?.pushExecuted?.(redo, undo, {
             name: `${this.name}:${direction}`,
             ownerId: this.ownerId,
         });
@@ -697,9 +1065,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const ctx = this.buildCtx(direction, itemId, options.meta);
         const r = this._runSyncCore(direction, itemOrPatch, ctx, options);
         if (!r.ok) return;
-        const entry = this._makeEntry(direction, itemOrPatch, itemId, options);
         // Replays inherit ctx from the freshly built one (with fromUndo/fromRedo).
-        entry.ctx = ctx;
+        const entry = this._makeEntry(direction, itemOrPatch, itemId, options, ctx);
         void this._enqueue(entry);
     }
 
@@ -710,11 +1077,10 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("create", item, ctx, options);
         if (!r.ok) return { ...(r as IOResult<{ id: string }>), settled: Promise.resolve(r as IOResult<{ id: string }>) };
 
+        const entry = this._makeEntry("create", item, undefined, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("create", item, undefined, options);
+            entry.historyHandle = this._pushHistoryEntry("create", item, undefined, options);
         }
-        const entry = this._makeEntry("create", item, undefined, options);
-        entry.ctx = ctx;
         const settled = this._enqueue(entry) as Promise<IOResult<{ id: string }>>;
         return { ok: true, settled };
     }
@@ -724,11 +1090,10 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("update", patch, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
+        const entry = this._makeEntry("update", patch, itemId, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("update", patch, itemId, options);
+            entry.historyHandle = this._pushHistoryEntry("update", patch, itemId, options);
         }
-        const entry = this._makeEntry("update", patch, itemId, options);
-        entry.ctx = ctx;
         const settled = this._enqueue(entry);
         return { ok: true, settled };
     }
@@ -738,18 +1103,39 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const r = this._runSyncCore("delete", undefined, ctx, options);
         if (!r.ok) return { ...r, settled: Promise.resolve(r) };
 
+        const entry = this._makeEntry("delete", undefined, itemId, options, ctx);
         if (options.apply && options.inverseApply && !options.skipHistory) {
-            this._pushHistoryEntry("delete", undefined, itemId, options);
+            entry.historyHandle = this._pushHistoryEntry("delete", undefined, itemId, options);
         }
-        const entry = this._makeEntry("delete", undefined, itemId, options);
-        entry.ctx = ctx;
         const settled = this._enqueue(entry);
         return { ok: true, settled };
     }
 
     // ── flush / drop ───────────────────────────────────────────────────
 
+    /**
+     * Await everything currently queued.
+     *
+     * A held queue must NOT be awaited: `flushAllResources` sits behind the user's
+     * Save button with a loading spinner, and an entry waiting for a sink that has
+     * not registered yet may never settle — the spinner would spin forever. Answer
+     * honestly instead, and leave the work queued rather than dropping it. Same
+     * reasoning for `_offline`: "we could not send this now" is a result, not a
+     * reason to block the UI indefinitely.
+     */
     flush(): Promise<IOResult[]> {
+        if (this._outbox.length && (this._offline || this._bindingsPending())) {
+            const pending = this._bindingsPending();
+            return Promise.resolve([{
+                ok: false, refused: true,
+                code: pending ? "W_IO_SINK_NOT_READY" : "W_IO_OFFLINE",
+                reason: pending
+                    ? `${this.name}: the configured destination has not registered yet`
+                    : `${this.name}: offline`,
+                userMessage: $.t(pending ? "error.ioSinkNotReady" : "error.ioOffline",
+                    { count: this._outbox.length }),
+            }]);
+        }
         return Promise.all(this._outbox.map(e => e.settled));
     }
 
@@ -779,26 +1165,33 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
     // ── Sync guard-only checks ─────────────────────────────────────────
 
-    canCreate(item: T, meta?: Record<string, unknown>): IOResult {
+    // These are questions, not operations: nothing has happened, and nothing
+    // will unless the caller goes on to `create/update/delete`. So by default
+    // they do NOT surface the refusal — a probe that drives UI enablement (is
+    // this row deletable?) would otherwise emit a user-facing error toast on
+    // every render. A caller that aborts a *user gesture* on the answer passes
+    // `{ surface: true }`, which is the one place the user should hear about it.
+    canCreate(item: T, meta?: Record<string, unknown>, options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("create", undefined, meta);
         const v = this.def.validate?.(item, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-create" as IODirection };
-        return this.pipeline.runGuards(ctxPre, item);
+        return this.pipeline.runGuards(ctxPre, item, { surface: options.surface === true });
     }
 
-    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>): IOResult {
+    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>,
+              options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("update", itemId, meta);
         const v = this.def.validate?.(patch as T, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-update" as IODirection };
-        return this.pipeline.runGuards(ctxPre, patch);
+        return this.pipeline.runGuards(ctxPre, patch, { surface: options.surface === true });
     }
 
-    canDelete(itemId: string, meta?: Record<string, unknown>): IOResult {
+    canDelete(itemId: string, meta?: Record<string, unknown>, options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("delete", itemId, meta);
         const ctxPre = { ...ctx, direction: "pre-delete" as IODirection };
-        return this.pipeline.runGuards(ctxPre);
+        return this.pipeline.runGuards(ctxPre, undefined, { surface: options.surface === true });
     }
 
     // ── streamed query (async by nature) ───────────────────────────────

@@ -49,9 +49,10 @@ export class ExperimentsAPI {
      * @param {"ACTIVE_ONLY"|"DELETED_ONLY"|"ALL"} [opts.view_type]
      * @param {number} [opts.max_results]
      * @param {string} [opts.page_token]
+     * @param {string} [opts.filter]
      */
-    list(opts = {}) {
-        return this.http.request("/experiments/list", { method: "GET", query: opts });
+    search(opts = {}) {
+        return this.http.request("/experiments/search", { method: "POST", body: opts });
     }
 
     delete(experiment_id) {

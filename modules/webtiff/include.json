@@ -1,0 +1,82 @@
+{
+  "id": "webtiff",
+  "name": "%meta.name%",
+  "author": "Aiosa",
+  "description": "%meta.description%",
+  "version": "1.0.0",
+  "categories": ["Data"],
+  "keywords": ["tiff", "ome-tiff", "qptiff", "svs", "ndpi", "bigtiff", "wsi", "multi-channel", "libtiff", "wasm"],
+  "stability": "experimental",
+  "includes": [
+    "index.mjs"
+  ],
+  "requires": [],
+
+  // Deployment knobs, read through `moduleMeta` (deployment-trusted config,
+  // never session data). Override per deployment under `ENV.modules.webtiff`.
+
+  // Derive a fitting shader for TIFF backgrounds instead of leaving them on the
+  // implicit `identity` layer, which is only correct for 8-bit RGBA data.
+  "autoConfigure": true,
+  // Register the `tiff` slide protocol so a `.tif`/`.tiff` data id opens without
+  // a deployment-specific protocol entry. Turn off when the deployment declares
+  // its own TIFF protocol. Note that the deprecated `geotiff` module registers
+  // the same id — enable one decoder, not both.
+  "registerSlideProtocol": true,
+  // The protocol whose slides this module owns — the only backgrounds it will
+  // ever auto-configure. Ownership is the protocol serving the slide, never what
+  // its data id looks like: a `.tif` served over DICOM or WSI-Service belongs to
+  // that protocol. Set this when the deployment turns `registerSlideProtocol` off
+  // and registers its own web-tiff-backed entry under a different id — that entry
+  // must exist before the first slide opens, and may name
+  // `tileSourceClass: "WebTiffTileSource"` with a `proxy`/`baseURL`/`auth` block to
+  // get a transport this module's own factory does not provide (README, "Where the
+  // slides live", route 3).
+  "protocolId": "tiff",
+  // Prefix for data ids handled by that protocol, so a session can reference
+  // "subdir/slide.tif" instead of a full URL. Absolute data ids are used as-is.
+  "protocolBaseUrl": "",
+  // How a measured channel range may seed the shader's input window. The decoder
+  // normalizes against the range a file DECLARES, so a file declaring 16 bits
+  // while using 12 — with no SMaxSampleValue to say so — decodes correctly and
+  // displays as a black frame. Nothing in the header separates that from a dim
+  // slide; only the samples do, which is why this is measured.
+  //   "rescue" — window only a channel that cannot reach half intensity (default)
+  //   "always" — window every scalar channel to its measured range (auto-contrast)
+  //   "off"    — never measure; leave every channel at its declared range
+  // The window is a live shader control either way, so any choice stays editable.
+  "autoWindow": "rescue",
+
+  // --- decode transport -----------------------------------------------------
+
+  // Decode workers. 0 = auto (half the cores, at most 4). Each worker holds its
+  // own decoder block cache, and a slide is opened on a worker only when a tile
+  // read finds the others busy.
+  "decodeWorkers": 0,
+  // Decoder block cache per worker per slide, bytes. 0 = the decoder's default
+  // (32 MB). Lower it on memory-constrained deployments that open many slides.
+  "workerCacheBytes": 0,
+  // Range-request granularity, bytes. 0 = the decoder's default (64 KB).
+  "blockSize": 0,
+  // How many recently fetched blocks the main thread keeps, so a second worker
+  // opening the same slide re-reads its header from memory rather than the
+  // network. Blocks are `blockSize` each — 96 blocks ≈ 6 MB at the default.
+  "byteCacheBlocks": 96,
+  // Slides whose decoder handles stay open. The least recently used slide that no
+  // viewer is showing is closed once this is exceeded.
+  "maxOpenSlides": 4,
+  // Pack tiles as 8-bit when the file needs no more than 8 bits (halves the
+  // upload for ordinary colour slides). Files that need more still get RGBA16F.
+  "preferRGBA8": true,
+  // Force RGBA16F packs even for 8-bit files. Diagnostic; costs upload bandwidth.
+  "forceRGBA16F": false,
+  // Decode tiles that arrive as TIFF bytes from a server (the `rawTiff` cache
+  // type, produced by WSI-Service sources negotiated to image_format=tiff).
+  // Converter edges only — those slides still belong to their own protocol.
+  // Turn off when another module provides the same edges.
+  "decodeRawTiffTiles": true,
+  // Use the pthreads wasm build. Only loadable on a cross-origin isolated page
+  // (COOP + COEP), and decoding inside it is serialized anyway — concurrency
+  // comes from the worker count above, so this is off by default.
+  "threads": false
+}

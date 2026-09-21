@@ -1,0 +1,190 @@
+/**
+ * `dicom-parametric` shader layer — renders a DICOM Parametric Map (or any
+ * single-channel quantitative derived object) as a colour-mapped overlay with
+ * live window/level.
+ *
+ * ## Where the DICOM display chain runs
+ *
+ * The Modality LUT (rescale / RealWorldValueMapping) is applied in the tile
+ * source, because it is a fixed property of the object. The **VOI LUT is applied
+ * here**, per fragment, so window centre and width are real sliders rather than
+ * a tile-cache invalidation.
+ *
+ * That requires the renderer's first-pass colour target to keep float precision.
+ * Without it the first pass quantizes samples to 8 bits and clamps them to [0,1]
+ * before this layer ever sees them, and windowing is meaningless.
+ *
+ * Precision is negotiated from the *data*, not requested by this class: the
+ * parametric tiles are half-float packs, which the drawer reports to the renderer,
+ * and the emitted shader config also carries `precision: "float16"`. Both are
+ * honoured only while the renderer option `precision` is `"auto"` — in xOpat the
+ * `webGlPrecision` application option, which is `"unorm8"` by default. The
+ * renderer warns loudly and falls back to RGBA8 when the WebGL context lacks
+ * `EXT_color_buffer_half_float`.
+ *
+ * ## Sample encoding
+ *
+ * Tiles carry the sample **normalized to the object's declared real-world
+ * range** (`params.valueRange`), not the raw value. Normalizing spends
+ * half-float's ~11 mantissa bits across the range that actually occurs, and
+ * keeps the fallback path sane: under RGBA8 the tile bands rather than clamping
+ * to white, which raw Hounsfield units would do. The range is emitted into the
+ * GLSL as literals and undone here, so every control below is in real-world
+ * units — the same units the DICOM object declares.
+ */
+
+import { controlRealGlsl, denormalizeGlsl, initialWindow, resolveValueRange, voiTransformGlsl, windowControlDefinitions, VOI_CUSTOM_PARAMS } from './voi-controls.mjs';
+
+/**
+ * @param {object} $ the OpenSeadragon namespace (NOT jQuery — the translator
+ *   therefore has to be passed in rather than reached through `$`).
+ * @param {(key: string, options?: object) => string} t namespace-aware
+ *   translator. Called per use, never cached: the loader installs a stub `$.t`
+ *   before i18next initializes, and control definitions are built later.
+ */
+export function defineDicomParametricShader($, t) {
+
+    return class DicomParametricShaderLayer extends $.FlexRenderer.ShaderLayer {
+
+        static type() { return "dicom-parametric"; }
+
+        static name() { return "DICOM Parametric Map"; }
+
+        static description() { return "colour-mapped quantitative overlay with live window/level"; }
+
+        static intent() {
+            return "Render a DICOM Parametric Map or other quantitative single-channel object " +
+                "with a colour map and interactive window centre/width in real-world units.";
+        }
+
+        /**
+         * Quantitative data: the samples must survive the first pass unquantized
+         * and unclamped for windowing to mean anything. Inherited `true` from
+         * `ShaderLayer` — stated here because it is load-bearing for this layer
+         * rather than incidental, and must not be flipped by a future edit.
+         *
+         * The upgrade itself is not requested here: precision is declared by the
+         * data (the half-float packs from `derived-tile-source.mjs`) and reinforced
+         * by `precision: "float16"` on the emitted shader config.
+         */
+        static supportsHighPrecision() { return true; }
+
+        static expects() {
+            return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+        }
+
+        static exampleParams() {
+            return {
+                valueRange: { min: 0, max: 1 },
+                voiPresets: [{ center: 0.5, width: 1 }],
+                units: "range: 0:1",
+                color: "Viridis",
+            };
+        }
+
+        static docs() {
+            return {
+                summary: "DICOM Parametric Map overlay with live window/level.",
+                description:
+                    "Samples one quantitative channel, denormalizes it into the object's declared " +
+                    "real-world range, applies the DICOM VOI transform with interactive centre and " +
+                    "width, and colours the result. Values at or below the cutoff render fully " +
+                    "transparent so the underlying slide stays visible.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Quantitative value, normalized to params.valueRange",
+                }],
+                controls: [
+                    { name: "color", ui: "colormap", valueType: "vec3", default: "Viridis" },
+                    { name: "windowCenter", ui: "range_input", valueType: "float" },
+                    { name: "windowWidth", ui: "range_input", valueType: "float" },
+                    { name: "cutoff", ui: "range", valueType: "float", default: 0.02, min: 0, max: 1, step: 0.01 },
+                ],
+            };
+        }
+
+        static sources() {
+            return [{
+                acceptsChannelCount: (x) => x >= 1,
+                description: "Quantitative value, normalized to the declared range",
+            }];
+        }
+
+        /** Read through `voi-controls.mjs`, so declared from there. */
+        static get customParams() {
+            return { ...VOI_CUSTOM_PARAMS };
+        }
+
+        static get defaultControls() {
+            return {
+                use_channel0: { default: "r" },   // eslint-disable-line camelcase
+                // DO NOT set `use_mode` here — see the note in dicom-seg.mjs.
+                // "blend" without an explicit `use_blend` selects the 'mask'
+                // blend function, which never reads the foreground's RGB and
+                // renders the overlay colourless.
+                color: {
+                    default: {
+                        type: "colormap",
+                        steps: 8,
+                        default: "Viridis",
+                        mode: "sequential",
+                        continuous: true,
+                        title: t('overlay.colormap'),
+                    },
+                    accepts: (type) => type === "vec3",
+                },
+                cutoff: {
+                    default: { type: "range", default: 0.02, min: 0, max: 1, step: 0.01, title: t('overlay.transparentBelow') },
+                    accepts: (type) => type === "float",
+                },
+            };
+        }
+
+        /**
+         * Real-world interval the tile samples were normalized against.
+         * Objects that declare no Real World Value range are already normalized
+         * by the tile source against the same `0..1` default.
+         */
+        _valueRange() { return resolveValueRange(this._params); }
+
+        /** The object's own window, which is the right thing to open with. */
+        _initialWindow() { return initialWindow(this._params); }
+
+        getControlDefinitions() {
+            const base = $.extend(true, {}, this.constructor.defaultControls);
+            // Slider bounds follow the data, so the control is usable whether the
+            // object measures probabilities in 0..1 or attenuation in Hounsfield
+            // units. A fixed 0..1 range would make the latter unusable. Shared
+            // with `dicom-window` so the two cannot drift.
+            Object.assign(base, windowControlDefinitions(t, this._params));
+            return base;
+        }
+
+        getFragmentShaderExecution() {
+            const range = this._valueRange();
+            const sample = this.sampleChannel('v_texture_coords', 0, { baseChannel: 0, raw: true });
+
+            return `
+// Tiles carry the sample normalized to [0,1] over the object's declared range;
+// undo that so the window controls below work in real-world units.
+float pmReal = ${denormalizeGlsl(sample, range)};
+
+// LINEAR_EXACT arithmetic (PS3.3 C.11.2.1.3). The plain LINEAR formula's
+// -0.5 / (w-1) terms count distinct integer stored values and are meaningless
+// for continuous samples — applied literally to a 0..1 map with width 1 they
+// collapse it to a binary mask.
+//
+// The window controls go through controlRealGlsl, not a bare sample: a float
+// control uploads a 0..1 ratio over its own bounds, so windowing pmReal — which
+// is in the object's real-world units — against the raw uniform clipped the
+// overlay to a mask.
+float pmT = ${voiTransformGlsl('pmReal', controlRealGlsl(this.windowCenter), controlRealGlsl(this.windowWidth))};
+
+if (pmT <= ${this.cutoff.sample()}) return vec4(.0);
+return vec4(${this.color.sample('pmT', 'float')}, 1.0);
+`;
+        }
+    };
+}

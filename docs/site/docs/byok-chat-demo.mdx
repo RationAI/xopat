@@ -1,0 +1,74 @@
+---
+title: BYOK AI Chat Demo
+sidebar_label: BYOK AI Chat
+---
+
+import DemoFrame from '@site/src/components/DemoFrame';
+import {byokChatConfig} from '@site/src/data/byokChatDemo';
+
+# Bring-Your-Own-Key AI Chat
+
+xOpat ships an AI assistant that can **see the current slide and drive the
+viewer** — describe tissue, jump to a region, list annotations — through the
+safe scripting API. It runs in one of two key modes:
+
+- **Managed** — the deployment holds the provider API key server-side; users
+  just chat.
+- **BYOK (bring your own key)** — the deployment registers the provider with
+  **no key**, and each user supplies their own from the settings panel. The key
+  is stored **locally in the browser** and sent only to the model provider
+  through the viewer's proxy — never baked into the session or seen by other
+  users.
+
+The demo below runs in **BYOK** mode: it opens a slide, enables the chat plugin,
+and launches a short guided tour showing where to paste your key.
+
+:::info Requires a BYOK provider on the demo server
+The session enables the chat plugin, but the provider list comes from the
+server. This demo assumes the deployment registers a chat provider with an empty
+`apiKey` (and `requiresLogin: false`). If the remote viewer has not been updated
+with such a provider yet, the chat tab still opens but shows no model to pick.
+:::
+
+<DemoFrame config={byokChatConfig} height="640px" scale={0.75} />
+
+## Add your key — step by step
+
+1. **Open the chat.** Click the **AI chat** tab in the right-side dock.
+2. **Pick a provider and model** at the top of the panel. A BYOK provider shows
+   a **“key required”** notice with an **Add key** link.
+3. **Paste your key.** Use that link, or open **Plugins ▸ Chat provider keys**
+   from the top app bar. Enter your key and save.
+4. **Chat.** The input unlocks once a key is stored. Ask *“Describe what you see
+   on this slide”*, or tell it to zoom to a region — it drives the viewer for
+   you.
+
+Your key never leaves the browser except as an upstream call to the model
+provider through the viewer proxy. Clearing it (same panel) removes it
+immediately.
+
+## Enabling it in your own session
+
+BYOK is a **server** decision — you register the provider with an empty key —
+plus a **session** that turns the plugin on. The session side is just:
+
+```json
+{
+  "data": ["path/to/your/slide.tiff"],
+  "background": [{ "dataReference": 0 }],
+  "plugins": {
+    "chat-openai-compatible": {}
+  }
+}
+```
+
+Expand **View session configuration** under the viewer above for the full demo
+JSON (it adds the guided tour via the `extra-tutorials` plugin). Swap
+`chat-openai-compatible` for `chat-openai` or `chat-anthropic` to match whichever
+provider your deployment registers. On the server, leave that provider's
+`apiKey` empty to make it BYOK — see the chat plugin READMEs for the
+`providerDefaults` block.
+
+For authoring sessions interactively, see the
+[Developer Setup Playground](./dev-setup-playground); for shader-focused
+examples, the [Summer School Demos](./summer-school-demo).

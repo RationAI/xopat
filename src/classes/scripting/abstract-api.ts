@@ -29,6 +29,23 @@ export type ScriptActionConsentOptions = {
      * Error message thrown by requireActionConsent when the user cancels.
      */
     rejectedMessage?: string;
+    /**
+     * When set, a granted consent is remembered on the scripting context under
+     * this key and equivalent actions (same key) skip the dialog for the rest of
+     * the session. Use one key per action CLASS the user reasoned about (e.g.
+     * `"tissue-mask:driver-id"`), never per call. Omit for actions that must
+     * always re-prompt. The per-context cache is runtime memory only — never
+     * persisted; the optional "Don't ask again" affordance (see `allowRemember`)
+     * additionally persists the grant user-locally with an expiry.
+     */
+    cacheKey?: string;
+    /**
+     * When a `cacheKey` is present, whether to offer the "Don't ask again"
+     * (persist for a time period) affordance in the dialog. Defaults to true;
+     * set false to force this action to always re-prompt on a fresh session
+     * even though it de-duplicates within one session via `cacheKey`.
+     */
+    allowRemember?: boolean;
 };
 
 export abstract class XOpatScriptingApi implements ScriptApiObject {
@@ -37,12 +54,33 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
     readonly namespace: string;
     readonly name: string;
     readonly description: string;
+    /**
+     * Marks the namespace as exposing identifying / patient-sensitive data. Consumers (e.g. the chat
+     * module) use this to withhold it from "grant everything" defaults; the patient namespace sets it.
+     * Informational only — it does not by itself change the core `__self__` grant.
+     */
+    readonly sensitive: boolean;
     protected _invocationContext?: ScriptApiInvocationContext;
 
-    protected constructor(namespace: string, name: string, description: string) {
+    protected constructor(namespace: string, name: string, description: string, sensitive = false) {
         this.namespace = namespace;
         this.name = name;
         this.description = description;
+        this.sensitive = sensitive;
+    }
+
+    /**
+     * Reports whether this namespace's backing feature is usable right now. The
+     * scripting manifest builder (`ScriptingManager.getAllowedApiManifest`)
+     * excludes namespaces that return `false`, so a capability whose owning
+     * module/plugin is not loaded is never advertised to scripts or the chat
+     * LLM — otherwise it would be described in full and only fail at call time.
+     * Default: always available. Override when the namespace resolves a module
+     * singleton (or other runtime dependency) lazily. Must be cheap and
+     * side-effect-free; it is polled on every manifest build.
+     */
+    isAvailable(): boolean {
+        return true;
     }
 
     bindInvocationContext(context: ScriptApiInvocationContext): this {
@@ -60,6 +98,107 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         return context;
     }
 
+    /**
+     * May identifying / patient-sensitive values leave this invocation's context?
+     *
+     * `sensitive` above gates a whole namespace by consent. This gates a single VALUE inside a
+     * namespace that is not itself sensitive but re-exports something one is — a raw slide
+     * path, a study UID, a fact derived from a filename. Mask such values when this is false;
+     * return them verbatim when true.
+     *
+     * Defaults to `true` when the context installs no policy, so local scripting and synthetic
+     * in-process contexts keep seeing the user's own data unchanged.
+     */
+    protected get mayExposeSensitive(): boolean {
+        return this._invocationContext?.scriptingContext?.mayExposeSensitiveData?.() ?? true;
+    }
+
+    /**
+     * The opaque stand-in for one masked value.
+     *
+     * Positional on purpose: `dataReference` is an index into `config.data`, so a handle that
+     * carries the index stays joinable with every other row the same payload hands out, and
+     * {@link unmaskDataEntries} can put the real value back if the caller returns it.
+     */
+    protected maskedHandle(kind: string, index: number): string {
+        return `xopat:masked-${kind}:${index}`;
+    }
+
+    /**
+     * `config.data` as the caller may see it: same length, no paths.
+     *
+     * Length is load-bearing — every shader layer, background and describeData row is keyed by
+     * the index — so entries are replaced, never dropped.
+     */
+    protected maskDataEntries(data: any[]): any[] {
+        if (this.mayExposeSensitive) return data;
+        return data.map((_entry, index) => this.maskedHandle("data", index));
+    }
+
+    /**
+     * The inverse, applied to anything coming back IN.
+     *
+     * A masked snapshot handed to a restore call would otherwise write the handles into
+     * `config.data` and open a slide that does not exist. Positional: handle `i` is whatever
+     * `config.data[i]` is right now.
+     */
+    protected unmaskDataEntries(data: any[]): any[] {
+        const live: any[] = Array.isArray(APPLICATION_CONTEXT?.config?.data)
+            ? APPLICATION_CONTEXT.config.data
+            : [];
+        return data.map((entry, index) => {
+            if (typeof entry !== "string" || !entry.startsWith("xopat:masked-data:")) return entry;
+            const from = Number(entry.slice("xopat:masked-data:".length));
+            // Fall back to the entry's own position: a reordered list is still a list of
+            // handles, and inventing a path here would be worse than restoring in place.
+            return live[Number.isInteger(from) ? from : index] ?? live[index] ?? entry;
+        });
+    }
+
+    /**
+     * Free-form tile-source metadata, reduced to what cannot identify a person.
+     *
+     * `getMetadata()` is contracted as non-identifying (`src/tile-source.ts`) and
+     * `getSensitiveMetadata()` is the channel for the rest — but DICOM puts study/series UIDs
+     * in the former for the SR pipeline, so the scripting boundary cannot trust the contract.
+     * It therefore degrades closed rather than enumerating known offenders: numbers and
+     * booleans (the calibration a caller actually needs — microns-per-pixel, tile size,
+     * magnification) survive, and strings survive only from a technical allowlist, because
+     * strings are what carry paths, names and UIDs. Identifier-shaped keys are dropped whatever
+     * their type, so a numeric record id does not slip through.
+     */
+    protected scrubSensitiveMetadata(metadata: any): any {
+        if (this.mayExposeSensitive) return metadata;
+        return XOpatScriptingApi.scrubMetadataValue(metadata);
+    }
+
+    /** Keys that name an identity rather than a measurement, at any depth. */
+    private static readonly IDENTIFYING_KEY = /(uid|^id$|identifier|name|path|url|uri|file|accession|patient|study|series|institution|physician|author|operator|comment|description|note|history|diagnosis|date|birth|sex|gender|age)/i;
+
+    /** String-valued keys whose content describes the FORMAT, never the subject. */
+    private static readonly TECHNICAL_STRING_KEY = new Set([
+        "format", "mimeType", "mime", "type", "unit", "units", "interpretation",
+        "colorSpace", "photometric", "sampleFormat", "compression", "encoding",
+    ]);
+
+    private static scrubMetadataValue(value: any): any {
+        if (Array.isArray(value)) return value.map((item) => XOpatScriptingApi.scrubMetadataValue(item));
+        if (!value || typeof value !== "object") return value;
+
+        const out: Record<string, any> = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (XOpatScriptingApi.IDENTIFYING_KEY.test(key)) continue;
+            if (typeof item === "number" || typeof item === "boolean" || item === null) {
+                out[key] = item;
+            } else if (typeof item === "string") {
+                if (XOpatScriptingApi.TECHNICAL_STRING_KEY.has(key)) out[key] = item;
+            } else if (typeof item === "object") {
+                out[key] = XOpatScriptingApi.scrubMetadataValue(item);
+            }
+        }
+        return out;
+    }
+
     protected get activeViewer(): OpenSeadragon.Viewer {
         const viewers = VIEWER_MANAGER?.viewers || [];
 
@@ -67,10 +206,10 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             throw new Error("No viewer is available. Open a slide first.");
         }
 
-        const selectedContextId =
-            this.scriptingContext.getActiveViewerContextId?.() ??
-            this.scriptingContext.activeViewerContextId ??
-            this.scriptingContext.id;
+        // Only an EXPLICIT binding may name a viewer. The context id is not a viewer id —
+        // falling back to it made an unbound context (e.g. the "default" one) claim to be
+        // bound to a viewer named 'default', which never exists.
+        const selectedContextId = this.scriptingContext.getActiveViewerContextId?.() ?? null;
 
         if (selectedContextId) {
             const boundViewer = viewers.find(
@@ -80,13 +219,23 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
                 return boundViewer;
             }
 
+            // Present the handle, not the real id: an error message reaches the model like any
+            // other value, and a raw id here would re-introduce identity the alias just removed.
+            const presented =
+                this.scriptingContext.toPresentedViewerId?.(selectedContextId) ?? selectedContextId;
             throw new Error(
-                `The current script context is bound to viewer '${selectedContextId}', but that viewer is not available.`
+                `The current script context is bound to viewer '${presented}', but that viewer is not available.`
             );
         }
 
+        // Unbound context: resolve live, the same way the in-process context does.
         if (viewers.length === 1) {
             return viewers[0];
+        }
+
+        const activeViewer = VIEWER_MANAGER?.active;
+        if (activeViewer && viewers.includes(activeViewer)) {
+            return activeViewer;
         }
 
         throw new Error(
@@ -132,26 +281,77 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             return true;
         }
 
+        // Already consented this session (per-context runtime cache), or the local user chose
+        // "don't ask again" for this action class (persistent, unexpired, non-secureMode).
+        if (options.cacheKey && (
+            this.scriptingContext.isActionConsented?.(options.cacheKey)
+            || this._isActionConsentRemembered(options.cacheKey)
+        )) {
+            return true;
+        }
+
+        const remember = (granted: boolean, rememberMs = 0): boolean => {
+            if (granted && options.cacheKey) {
+                this.scriptingContext.rememberActionConsent?.(options.cacheKey);
+                if (rememberMs > 0) this._rememberActionConsentPersistent(options.cacheKey, rememberMs);
+            }
+            return granted;
+        };
+
         const ui = (globalThis as any)?.UI;
         const win = globalThis as (typeof window & typeof globalThis) | undefined;
 
         if (typeof document === "undefined") {
             if (typeof win?.confirm === "function") {
-                return win.confirm(this.buildConsentFallbackMessage(options));
+                return remember(win.confirm(this.buildConsentFallbackMessage(options)));
             }
 
             throw new Error("Unable to render a consent dialog in the current environment.");
         }
 
         if (ui?.Modal && ui?.Button) {
-            return this.renderConsentDialogWithUi(ui, options);
+            const result = await this.renderConsentDialogWithUi(ui, options);
+            return remember(result.granted, result.rememberMs);
         }
 
         if (typeof win?.confirm === "function") {
-            return win.confirm(this.buildConsentFallbackMessage(options));
+            return remember(win.confirm(this.buildConsentFallbackMessage(options)));
         }
 
         throw new Error("Unable to render a consent dialog because no supported UI implementation is available.");
+    }
+
+    /** The core scripting manager (persistent remembered-consent store lives here). */
+    protected _manager(): any {
+        return (globalThis as any)?.APPLICATION_CONTEXT?.Scripting;
+    }
+
+    /** Whether the "Don't ask again" (persist) affordance may be offered for this action. */
+    protected _consentRememberOffered(options: ScriptActionConsentOptions): boolean {
+        return !!options.cacheKey
+            && options.allowRemember !== false
+            && !(globalThis as any)?.APPLICATION_CONTEXT?.secureMode
+            && typeof this._manager()?.rememberActionConsentPersistent === "function";
+    }
+
+    /** Persistent remembered-consent read — no-op under secureMode / when unavailable. */
+    protected _isActionConsentRemembered(cacheKey: string): boolean {
+        if ((globalThis as any)?.APPLICATION_CONTEXT?.secureMode) return false;
+        try {
+            return !!this._manager()?.isActionConsentRemembered?.(cacheKey);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /** Persistent remembered-consent write — no-op under secureMode / when unavailable. */
+    protected _rememberActionConsentPersistent(cacheKey: string, ttlMs: number): void {
+        if ((globalThis as any)?.APPLICATION_CONTEXT?.secureMode) return;
+        try {
+            this._manager()?.rememberActionConsentPersistent?.(cacheKey, ttlMs);
+        } catch (_) {
+            // best-effort
+        }
     }
 
     /**
@@ -194,9 +394,13 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
      * @param options dialog copy and button labels
      * @returns promise resolving to the user's decision
      */
-    protected renderConsentDialogWithUi(ui: any, options: ScriptActionConsentOptions): Promise<boolean> {
+    protected renderConsentDialogWithUi(
+        ui: any,
+        options: ScriptActionConsentOptions
+    ): Promise<{ granted: boolean; rememberMs?: number }> {
         const vanInstance = (globalThis as any)?.van;
         const tags = vanInstance?.tags || {};
+        const t = (key: string): string => (globalThis as any)?.$?.t?.(key) ?? key;
 
         const createTag = (tagName: string) =>
             (props: Record<string, unknown> = {}, ...children: any[]) => {
@@ -225,6 +429,12 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         const p = tags.p || createTag("p");
         const ul = tags.ul || createTag("ul");
         const li = tags.li || createTag("li");
+        // Always use the raw builders for form controls so we can hold references + wire events.
+        const inputTag = createTag("input");
+        const selectTag = createTag("select");
+        const optionTag = createTag("option");
+        const labelTag = createTag("label");
+        const spanTag = createTag("span");
 
         const detailsList = options.details?.length
             ? ul(
@@ -237,10 +447,40 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             ? new ui.Alert({
                 mode: options.mode || "warning",
                 soft: true,
-                title: "This script is asking for permission.",
+                title: t("scripting.consent.permissionTitle"),
                 description: options.description || ""
             }).create()
             : null;
+
+        // "Don't ask again" affordance — only when the action opts in and persistence is allowed.
+        const DAY = 24 * 60 * 60 * 1000;
+        let rememberCheckbox: HTMLInputElement | null = null;
+        let rememberSelect: HTMLSelectElement | null = null;
+        let rememberRow: HTMLElement | null = null;
+
+        if (this._consentRememberOffered(options)) {
+            rememberCheckbox = inputTag({ type: "checkbox", class: "checkbox checkbox-sm" }) as HTMLInputElement;
+            rememberSelect = selectTag(
+                { class: "select select-sm select-bordered", disabled: "disabled" },
+                optionTag({ value: String(1 * DAY) }, t("scripting.consent.remember1Day")),
+                optionTag({ value: String(7 * DAY) }, t("scripting.consent.remember7Days")),
+                optionTag({ value: String(30 * DAY) }, t("scripting.consent.remember30Days")),
+            ) as HTMLSelectElement;
+            rememberSelect.value = String(7 * DAY); // default 7 days
+            rememberCheckbox.addEventListener("change", () => {
+                if (rememberSelect) rememberSelect.disabled = !rememberCheckbox!.checked;
+            });
+            // The select is a sibling of the label (not nested) so clicking it does not toggle the box.
+            rememberRow = div(
+                { class: "flex items-center gap-2 text-sm mt-1" },
+                labelTag(
+                    { class: "flex items-center gap-2 cursor-pointer" },
+                    rememberCheckbox,
+                    spanTag({}, t("scripting.consent.dontAskAgain"))
+                ),
+                rememberSelect
+            );
+        }
 
         const body = div(
             { class: "flex flex-col gap-3" },
@@ -248,10 +488,11 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             options.description
                 ? p({ class: "text-sm leading-6 opacity-80" }, options.description)
                 : null,
-            detailsList
+            detailsList,
+            rememberRow
         );
 
-        return new Promise<boolean>((resolve) => {
+        return new Promise<{ granted: boolean; rememberMs?: number }>((resolve) => {
             let settled = false;
             const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
 
@@ -267,10 +508,13 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             const finish = (granted: boolean): void => {
                 if (settled) return;
                 settled = true;
+                const rememberMs = (granted && rememberCheckbox?.checked)
+                    ? Number(rememberSelect?.value) || 0
+                    : 0;
                 modal.close();
                 const root = (modal as any).root as HTMLElement | undefined;
                 root?.remove();
-                resolve(granted);
+                resolve({ granted, rememberMs });
             };
 
             const cancelButton = new ui.Button(
@@ -299,7 +543,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
                     settled = true;
                     const root = (modal as any).root as HTMLElement | undefined;
                     root?.remove();
-                    resolve(false);
+                    resolve({ granted: false });
                 }
                 return modal;
             };

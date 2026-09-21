@@ -1,9 +1,27 @@
 {
+  "meta": {
+    "name": "Annotations",
+    "description": "A plugin for annotations creation, management and sharing."
+  },
   "annotations": {
+    "quickDraw": {
+      "presetUnavailable": "Quick-draw preset is not available in the current configuration.",
+      "shapeUnavailable": "Quick-draw shape is not enabled for this viewer.",
+      "noPreset": "No annotation preset available to draw with."
+    },
+    "display": {
+      "title": "Display",
+      "outlineOnly": "Outline only",
+      "border": "Border",
+      "opacity": "Opacity",
+      "measurementLabels": "Show measurements on all annotations",
+      "measurementLabelsHint": "Floats each annotation's area or length above it. Automatically hidden while more than {{count}} annotations are visible."
+    },
     "viewerMenu": {
       "title": "Annotations",
       "toggleVisibility": "Show or hide annotations",
       "outlineOnly": "Outline only",
+      "measurementLabels": "Show measurements on all",
       "settings": "Display settings",
       "moreOptions": "More options",
       "border": "Border",
@@ -20,6 +38,20 @@
         "authors": "Authors"
       }
     },
+    "workspace": {
+      "label": "Workspace",
+      "outsideWarning": "Annotations can only be drawn inside the active workspace.",
+      "lockedHint": "Select a region workspace to annotate it."
+    },
+    "errors": {
+      "noPresetSelect": "No annotation class is selected. <a class='pointer' data-action='selectPreset'>Pick one here</a> to start annotating.",
+      "autoCreateFail": "Could not create the automatic annotation. Make sure you are <a class='pointer' data-action='highlightAutoOutline'>detecting in the correct layer</a> and selecting a coloured area. Adjusting the threshold can also help.",
+      "autoOutlineInvisibleLayer": "The <a class='pointer' data-action='highlightAutoOutline'>chosen layer</a> is not visible: the auto-outline method will not work.",
+      "metaCreateFail": "Failed to create the metadata field \"{{name}}\".",
+      "metaDeleteFail": "Failed to delete the metadata field.",
+      "presetRemoveFail": "Failed to remove the class.",
+      "metaNameRequired": "You must enter a name for the new field."
+    },
     "tutorial": {
       "title": "Annotations",
       "description": "Draw, save and share annotations on the slide.",
@@ -28,13 +60,21 @@
       "settings": "Open display settings to adjust outline-only mode and the border width and opacity of annotations.",
       "canvas": "Drawing happens directly on the slide: pick a class preset, then click-drag to outline a region. Right-click an annotation to copy / move / delete it. Hotkeys are listed under <i>More options</i> in the toolbar."
     },
+    "modeOptions": {
+      "brushRadius": "Brush radius",
+      "brushRadiusHint": "Size of a brush (scroll to change)."
+    },
     "toolbar": {
       "title": "Annotations",
       "undo": "Undo",
       "redo": "Redo",
       "history": "History",
-      "measurements": "Measurements",
-      "modeOptions": "Mode options"
+      "modeOptions": "Mode options",
+      "presetSwatch": "Drawing classes (left / right mouse button)",
+      "presetSwatchTitle": "Drawing classes",
+      "editPresets": "Edit classes…",
+      "noPresets": "No classes yet",
+      "unnamedPreset": "Unnamed class"
     },
     "export": {
       "menuTitle": "Annotations",
@@ -91,6 +131,10 @@
         "weeksAgo": "{{count}}w ago",
         "monthsAgo": "{{count}}mo ago",
         "yearsAgo": "{{count}}y ago"
+      },
+      "errors": {
+        "notLoggedIn": "Sign in to add comments.",
+        "noSelection": "Select an annotation first to comment on it."
       }
     },
     "authors": {
@@ -100,92 +144,6 @@
       "ignoreStyling": "Ignore styling",
       "color": "Color:",
       "dash": "Dash:"
-    },
-    "measurements": {
-      "title": "Metrics",
-      "presetLabel": "Preset",
-      "compute": "Compute",
-      "helperText": "Area in unit\u00b2, length in unit (aggregate per preset).",
-      "metrics": {
-        "area": "Area",
-        "length": "Length",
-        "mean": "Mean intensity",
-        "median": "Median intensity",
-        "percentPositive": "% positive",
-        "components": "Component count",
-        "componentSize": "Component size (mean)",
-        "circularity": "Circularity (mean)"
-      },
-      "tabs": {
-        "geometric": "Geometric",
-        "intensity": "Intensity",
-        "components": "Components"
-      },
-      "channelLabel": "Channel",
-      "channelSource": {
-        "raw": "Raw image"
-      },
-      "channels": {
-        "L": "Luminance",
-        "R": "Red",
-        "G": "Green",
-        "B": "Blue"
-      },
-      "thresholdLabel": "Threshold",
-      "thresholdUnits": "(0–255)",
-      "intensityHelper": "Pick a preset, then click Run. We sample what the standalone visualization renders inside each annotation and report mean / median / % above threshold.",
-      "componentsHelperShort": "Pick a preset and threshold, then click Run. We threshold the chosen channel and label connected regions inside each annotation.",
-      "reason": {
-        "noApi": "Visualization API isn't reachable from this module. Reload the page; if it keeps failing, the build is missing the visualization-api global bridge.",
-        "noActiveVisualization": "No visualization is active. Enable a visualization layer first, then re-run.",
-        "outOfViewport": "{{count}} annotation(s) are off-screen. Pan/zoom to bring them into view; partial overlaps are sampled automatically.",
-        "tooSmall": "{{count}} annotation(s) are below the 16-pixel minimum after downscaling.",
-        "renderFailed": "Standalone render failed for {{count}} annotation(s). Try toggling the active visualization off and on; check the browser console for details.",
-        "renderEmpty": "Standalone render produced no pixels for {{count}} annotation(s).",
-        "noSample": "Sampler returned no data for {{count}} annotation(s).",
-        "unsupportedShape": "{{count}} annotation(s) have a shape this tool can't rasterize (only polygons / rects / ellipses are supported).",
-        "unknown": "{{count}} annotation(s) failed with no specific reason.",
-        "generic": "{{count}} annotation(s) failed ({{- reason}})."
-      },
-      "scopeLabel": "Scope",
-      "scope": {
-        "preset": "Preset",
-        "selection": "Selection",
-        "visible": "Visible",
-        "all": "All"
-      },
-      "run": "Run",
-      "cancel": "Cancel",
-      "running": "Running\u2026",
-      "progress": "{{done}} / {{total}}",
-      "noPolygon": "No polygon-shaped annotations to measure for this scope.",
-      "noPixels": "No raster pixels could be sampled.",
-      "componentsTitle": "Connected components",
-      "componentsHelper": "Threshold the chosen channel inside each annotation, then label connected regions.",
-      "componentMinSize": "Min size (px)",
-      "componentMaxSize": "Max size (px, 0 = unlimited)",
-      "componentTotal": "Total components: {{count}}",
-      "componentPercentiles": "Size p10 / p50 / p90: {{p10}} / {{p50}} / {{p90}}",
-      "componentMeanCircularity": "Mean circularity: {{value}}",
-      "perAnnotationTitle": "Per annotation",
-      "perAnnotationEmpty": "Run a measurement to populate per-annotation values.",
-      "annotationLabel": "#{{id}} ({{type}})",
-      "channelHint": "{{source}} \u00b7 {{channel}}",
-      "viewMeasurements": "View measurements",
-      "computeMissing": "Compute missing",
-      "popoverTitle": "Annotation measurements",
-      "combineTitle": "Combine results",
-      "resultLabel": "Result",
-      "saveResult": "Save as result",
-      "copyCsv": "Copy CSV",
-      "clear": "Clear",
-      "empty": "No computed results yet.",
-      "objectShort": "obj",
-      "remove": "Remove",
-      "valueLabel": "Value",
-      "resultId": "Result id",
-      "pick": "(pick)",
-      "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
     },
     "presets": {
       "dialogTitle": "Annotation Class Presets",
@@ -200,8 +158,11 @@
       "typeLabel": "Type",
       "fieldsLabel": "Fields",
       "unnamed": "Unnamed Class",
-      "emptyState": "No classes yet. Use \"Add new class\" below to create one.",
+      "emptyState": "No classes yet. Use \"Add new class\" to create one.",
       "noFilterResults": "No classes match your filter.",
+      "vocabularyPick": "Add a class from the list...",
+      "vocabularyExhausted": "Every available class already has a preset.",
+      "vocabularyLocked": "This class comes from the connected service and cannot be renamed or changed here.",
       "useLeft": "Use for Left Click",
       "useRight": "Use for Right Click",
       "finishEditing": "Finish Editing"
