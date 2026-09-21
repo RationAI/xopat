@@ -36,25 +36,29 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 if (!api) throw new Error('EmpationAPI not available');
                 const examination = await api.examinations.create(entry.caseId, entry.appId);
                 const scope = await api.getScopeFrom(examination);
+                const onCapture = () => this._captureAnnotation({ _rootEl: null }, scope);
+
+                const inputsForm = await this._buildInputsForm(entry.appId, scope, onCapture, 'STANDALONE', entry.inputs);
+                const confirmed = await this._showRerunInputsModal(entry, inputsForm.container);
+                if (!confirmed) return;
 
                 let annotBounds = entry.bounds;
-                let inputs = { ...entry.inputs };
 
-                if (entry.hasRectInput) {
+                if (inputsForm.captureAnnotation) {
                     if (!this.getOption('skipDrawROIModal')) {
                         const shouldDraw = await this._showDrawROIModal();
-                        if (!shouldDraw) throw new Error('cancelled');
+                        if (!shouldDraw) return;
                     }
-                    const result = await this._captureAnnotation({ _rootEl: null }, scope);
-                    singletonModule('annotations')?.enableInteraction(false);
-                    const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(entry.appId);
-                    const rectKey = window.EmpaiaStandaloneJobs
-                        ?.getRequiredInputs?.(ead, 'STANDALONE')
-                        ?.find(i => i.type === 'rectangle')?.key;
-                    if (rectKey) inputs[rectKey] = result.id;
-                    annotBounds = result.bounds;
+                    try {
+                        const result = await inputsForm.captureAnnotation();
+                        annotBounds = result.bounds;
+                    } catch (e) {
+                        if (e?.message !== 'cancelled') console.error('[analyze] Annotation capture failed:', e);
+                        return;
+                    }
                 }
 
+                const inputs = inputsForm.getInputs();
                 const appLabel = entry.appName || entry.appId || 'Job';
                 const viewerId = String(VIEWER.uniqueId);
                 this._setJobBanner(`${appLabel}: Pending`, 'WARNING', null);
@@ -63,7 +67,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     caseId: entry.caseId,
                     mode: 'STANDALONE',
                     inputs,
-                    ead: await window.EmpaiaStandaloneJobs?.getEAD?.(entry.appId),
+                    ead: inputsForm.ead,
                 });
 
                 const status = res?.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
@@ -535,6 +539,26 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         fw.focus();
     }
 
+    async _openInputsForm(appId, fw) {
+        const api = singletonModule('empation-api')?.V3;
+        if (!api) throw new Error('EmpationAPI V3 is not available');
+        const caseId = await this._resolveCaseId();
+        if (!caseId) throw new Error('No active case found');
+        const examination = await api.examinations.create(caseId, appId);
+        const scope = await api.getScopeFrom(examination);
+        const onCapture = () => this._captureAnnotation(fw, scope);
+
+        let jobDefaults = {};
+        try {
+            const eadInfo = await api.rationai?.ead?.get?.(appId);
+            jobDefaults = eadInfo?.job_defaults || {};
+        } catch (e) {
+            console.warn('[analyze] Failed to fetch job defaults for', appId, e);
+        }
+
+        return this._buildInputsForm(appId, scope, onCapture, 'STANDALONE', jobDefaults);
+    }
+
     _createAppCard(app, idx, tOr, fw) {
         const appId = app?.id || app?.app_id;
         const wrap = document.createElement('div');
@@ -552,7 +576,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         const configBtn = document.createElement('button');
         configBtn.type = 'button';
         configBtn.className = 'btn btn-xs btn-ghost';
-        configBtn.textContent = 'Configure';
+        configBtn.textContent = tOr('analyze.advancedSettings', 'Advanced settings');
         header.appendChild(configBtn);
         wrap.appendChild(header);
 
@@ -584,14 +608,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             inputsSection.classList.toggle('hidden');
             if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
                 try {
-                    const api = singletonModule('empation-api')?.V3;
-                    if (!api) throw new Error('EmpationAPI V3 is not available');
-                    const caseId = await this._resolveCaseId();
-                    if (!caseId) throw new Error('No active case found');
-                    const examination = await api.examinations.create(caseId, appId);
-                    const scope = await api.getScopeFrom(examination);
-                    const onCapture = () => this._captureAnnotation(fw, scope);
-                    inputsForm = await this._buildInputsForm(appId, scope, onCapture);
+                    inputsForm = await this._openInputsForm(appId, fw);
                     inputsSection.innerHTML = '';
                     inputsSection.appendChild(inputsForm.container);
                     inputsLoaded = true;
@@ -626,14 +643,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
             if (!inputsLoaded) {
                 try {
-                    const api = singletonModule('empation-api')?.V3;
-                    if (!api) throw new Error('EmpationAPI V3 is not available');
-                    const caseId = await this._resolveCaseId();
-                    if (!caseId) throw new Error('No active case found');
-                    const examination = await api.examinations.create(caseId, appId);
-                    const scope = await api.getScopeFrom(examination);
-                    const onCapture = () => this._captureAnnotation(fw, scope);
-                    inputsForm = await this._buildInputsForm(appId, scope, onCapture);
+                    inputsForm = await this._openInputsForm(appId, fw);
                     inputsLoaded = true;
                 } catch (e) {
                     console.error('[analyze] Failed to load inputs for run:', e);
@@ -770,7 +780,64 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         });
     }
 
-    async _buildInputsForm(appId, scope, onCapture, mode = 'STANDALONE') {
+    _showRerunInputsModal(entry, container) {
+        const { FloatingWindow } = globalThis.UI;
+        return new Promise(resolve => {
+            let resolved = false;
+            const finish = (result) => {
+                if (resolved) return;
+                resolved = true;
+                resolve(result);
+            };
+
+            const width = 360, height = 420;
+            const modal = new FloatingWindow({
+                id: `${this.id}-rerun-inputs-modal`,
+                title: 'Edit inputs before rerun',
+                width,
+                height,
+                startLeft: Math.round((window.innerWidth - width) / 2),
+                startTop: Math.round((window.innerHeight - height) / 2),
+                onClose: () => finish(false),
+            });
+            modal.attachTo(document.body);
+
+            const body = document.createElement('div');
+            body.className = 'p-3 flex flex-col gap-3 overflow-auto';
+            body.style.height = '100%';
+            body.appendChild(container);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex gap-2';
+
+            const runBtn = document.createElement('button');
+            runBtn.type = 'button';
+            runBtn.className = 'btn btn-sm btn-primary flex-1';
+            runBtn.textContent = 'Rerun';
+            runBtn.addEventListener('click', () => {
+                finish(true);
+                modal.close();
+            });
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn btn-sm btn-ghost flex-1';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.addEventListener('click', () => {
+                finish(false);
+                modal.close();
+            });
+
+            actions.appendChild(runBtn);
+            actions.appendChild(cancelBtn);
+            body.appendChild(actions);
+
+            modal.setBody(body);
+            modal.focus();
+        });
+    }
+
+    async _buildInputsForm(appId, scope, onCapture, mode = 'STANDALONE', initialValues = {}) {
         const container = document.createElement('div');
         container.className = 'space-y-2 mt-2';
 
@@ -792,7 +859,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             const inputFields = {};
 
             for (const input of requiredInputs) {
-                const row = this._createInputRow(input, currentSlideId, inputFields, onCapture);
+                const row = this._createInputRow(input, currentSlideId, inputFields, onCapture, initialValues);
                 if (row) container.appendChild(row);
             }
 
@@ -831,7 +898,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         }
     }
 
-    _createInputRow(input, currentSlideId, inputFields, onCapture) {
+    _createInputRow(input, currentSlideId, inputFields, onCapture, initialValues = {}) {
         console.log("input.type:", input.type)
         if (input.type === 'wsi') {
             // Auto-fill with current slide — no UI row needed
@@ -858,27 +925,37 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             fieldEl = document.createElement('input');
             fieldEl.type = 'checkbox';
             fieldEl.className = 'checkbox checkbox-xs';
+            const def = initialValues[input.key];
+            if (def !== undefined) fieldEl.checked = def === true || def === 'true';
         } else if (input.type === 'integer' || input.type === 'float') {
             fieldEl = document.createElement('input');
             fieldEl.type = 'number';
             fieldEl.className = 'input input-xs input-bordered flex-1';
             if (input.type === 'float') fieldEl.step = 'any';
+            const def = initialValues[input.key];
+            if (def !== undefined) fieldEl.value = def;
         } else if (input.type === 'string') {
             const selectOpts = STRING_SELECT_OPTIONS[input.key];
+            const def = initialValues[input.key];
             if (selectOpts) {
                 fieldEl = document.createElement('select');
                 fieldEl.className = 'select select-xs select-bordered flex-1';
-                for (const opt of selectOpts) {
+                const opts = (def !== undefined && !selectOpts.includes(def))
+                    ? [...selectOpts, def]
+                    : selectOpts;
+                for (const opt of opts) {
                     const option = document.createElement('option');
                     option.value = opt;
                     option.textContent = opt;
                     fieldEl.appendChild(option);
                 }
+                if (def !== undefined) fieldEl.value = def;
             } else {
                 fieldEl = document.createElement('textarea');
                 fieldEl.className = 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs';
                 fieldEl.rows = 4;
                 fieldEl.placeholder = 'Enter text value\u2026';
+                if (def !== undefined) fieldEl.value = def;
             }
         } else {
             fieldEl = document.createElement('input');
