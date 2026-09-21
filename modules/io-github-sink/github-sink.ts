@@ -37,7 +37,7 @@ class IOGithubSink extends XOpatModuleSingleton {
         const sink = makeGithubSink({
             id: "github",
             label: "GitHub",
-            getOptions: () => this._composeOptions(pipeline),
+            getOptions: (ctx?: IOContext) => this._composeOptions(pipeline, ctx),
         });
         this._disposeSink = pipeline.registerSink(sink);
     }
@@ -49,16 +49,32 @@ class IOGithubSink extends XOpatModuleSingleton {
      *      defaults — branch, path template, proxy alias, …).
      *   3. Admin's `ENV.client.io.sinkOverrides.github` (per-deployment
      *      values: repo, optional committer/author/auth).
+     *   4. The per-binding `config` for THIS (owner, capability), from
+     *      `ENV.client.io.bindings`. This is what lets one github sink serve
+     *      differentiated outputs — annotations to one path (or repo),
+     *      recordings to another — without registering a second sink id,
+     *      which an admin editing only `ENV.client.io` cannot do.
+     *
+     * Layer 4 is skipped when no ctx is available (an older core, or a call
+     * outside a dispatch); the sink then behaves exactly as before.
      *
      * Underscore-prefixed keys (e.g. `_help`) are stripped so include.json
      * can carry inline documentation without leaking into runtime config.
      * `null` values are dropped so verbose include.json placeholders
      * don't shadow upstream layers.
      */
-    private _composeOptions(pipeline: any): GithubSinkConfig {
+    private _composeOptions(pipeline: any, ctx?: IOContext): GithubSinkConfig {
         const fromInclude = stripDocs((this.getStaticMeta("github") ?? {}) as Record<string, unknown>);
         const fromAdmin = stripDocs((pipeline.sinkOverrides?.("github") ?? {}) as Record<string, unknown>);
-        return { ...HARDCODED_DEFAULTS, ...fromInclude, ...fromAdmin } as GithubSinkConfig;
+        const fromBinding = ctx && typeof pipeline.bindingConfig === "function"
+            ? stripDocs(pipeline.bindingConfig(ctx.ownerUid, ctx.capabilityId, "github") ?? {})
+            : {};
+        return {
+            ...HARDCODED_DEFAULTS,
+            ...fromInclude,
+            ...fromAdmin,
+            ...fromBinding,
+        } as GithubSinkConfig;
     }
 }
 

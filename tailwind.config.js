@@ -3,17 +3,66 @@
 
 module.exports = {
     // WARNING: compiling styles for the entire app can take a few minutes
+    // `ts` is in here for the same reason the watcher watches it
+    // (Gruntfile twinc.watch): a class that exists only in a .ts source was
+    // invisible to the full build, so it reached the stylesheet only via that
+    // file's incremental delta - and vanished again on the next full build.
     content: [
         './.cache/tw-accumulated.html',
-        './ui/**/*.{html,js,mjs}',
-        './modules/**/*.{html,js,mjs}',
-        './plugins/**/*.{html,js,mjs}',
-        './src/**/*.{html,js}',
+        './ui/**/*.{html,js,mjs,ts}',
+        './modules/**/*.{html,js,mjs,ts}',
+        './plugins/**/*.{html,js,mjs,ts}',
+        './src/**/*.{html,js,mjs,ts}',
+        // Per-element packages vendor their own dependencies (today:
+        // modules/markdown/node_modules). Nothing in there carries a utility
+        // class, and scanning it is what trips Tailwind's
+        // `broad-content-glob-pattern` warn on every full build.
+        '!**/node_modules/**',
+        // Generated bundles: esbuild output of the very *.ts/*.mjs sources the
+        // globs above already scan, so they were a third of the scanned bytes
+        // for zero extra candidates. Kept in sync with `twinc.ignore` in
+        // Gruntfile.js, which has excluded them from the delta path all along.
+        '!**/*.workspace.{js,mjs}',
+        '!**/dist/**',
         '!**/*.min.js',
-        // TODO how to ignore
-        // '!./ui/index.js',
-        // '!./src/libs/**',
-        // '!(.dev-cache)/**'
+        '!./ui/index.js',
+        '!./src/libs/**',
+    ],
+    // The `.er-control*` skin at the end of src/assets/tailwind-spec.css targets
+    // markup emitted by src/libs/flex-renderer/flex-renderer.js, which puts no
+    // DaisyUI class on its own inputs (see UPSTREAM.md, "flex-renderer - basic
+    // UI controls carry no DaisyUI classes"). Tailwind tree-shakes custom
+    // `@layer components` CSS by class name, and today the only thing keeping
+    // that skin alive is the content scan finding these strings in the library
+    // source. Two ways that breaks silently: the '!./src/libs/**' TODO above
+    // gets uncommented, or the library switches a control to the generic
+    // renderInput() helper, whose class is a template literal. Pin them.
+    // `er-control__body--colormap` is ALREADY template-built (renderControl
+    // ~:6175) and exists nowhere the scanner can see it.
+    safelist: [
+        'er-control__title',
+        'er-control__body',
+        // `er-control--<type>` is template-built the same way (renderControl
+        // ~:6175), so the scanner never sees it either. Only the variants the
+        // skin actually targets need pinning.
+        'er-control--bool',
+        'er-control__body--colormap',
+        'er-control__input',
+        'er-control__input--select',
+        'er-control__input--colormap',
+        'er-control__input--bool',
+        'er-control__input--number',
+        'er-control__input--image-number',
+        'er-control__input--textarea',
+        'er-control__input--color',
+        'er-control__display--colormap',
+        'er-control__display--custom-colormap',
+        'er-control__button--action',
+        'er-control__button--image-upload',
+        'er-control__input--image-file',
+        'er-control__hint--image',
+        'er-control__row--image-number',
+        'er-control__widget--image',
     ],
     darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
     theme: {
@@ -27,7 +76,7 @@ module.exports = {
             2.5: '0.625rem',   // 10px
             3: '0.75rem',      // 12px
             3.5: '0.875rem',   // 14px
-            4: '1rem',         // 16px (keep if you need it)
+            4: '1rem',         // 16px
             // ...continue as you prefer
         },
     },
@@ -39,6 +88,8 @@ module.exports = {
                 '.btn-pointer': {
                 '--btn-color': 'var(--n)',     // same base color as neutral
                 '--btn-content': 'var(--nc)',  // same text color as neutral
+                '--bc': 'var(--nc)',
+                'cursor': 'pointer'
                 },
             });
         },

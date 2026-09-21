@@ -19,16 +19,23 @@ interface RecorderPlaybackSession {
     playback: RecorderPlaybackState;
 }
 
+/**
+ * Bundle format emitted by every export path and the highest version any
+ * import path understands. Older payloads (v2 objects, bare steps arrays)
+ * are migrated on read; anything newer is refused rather than coerced.
+ */
+const RECORDER_BUNDLE_VERSION = 3;
+
 function cloneRecord<T extends Record<string, unknown>>(value: T): T {
-    return $.extend(true, {}, value) as T;
+    return OpenSeadragon.extend(true, {}, value) as T;
 }
 
 function cloneValue<T>(value: T): T {
     if (Array.isArray(value)) {
-        return $.extend(true, [], value) as T;
+        return OpenSeadragon.extend(true, [], value) as T;
     }
     if (value && typeof value === "object") {
-        return $.extend(true, {}, value) as T;
+        return OpenSeadragon.extend(true, {}, value) as T;
     }
     return value;
 }
@@ -61,6 +68,17 @@ function makePlaybackState(): RecorderPlaybackState {
 }
 
 class Recorder extends XOpatModuleSingleton implements RecorderModule {
+    /**
+     * Default length of the eased move into a keyframe. Long enough to read as
+     * motion (the viewer keeps their bearings), short enough that the rest of
+     * the step is a still view to actually look at.
+     */
+    static readonly DEFAULT_MOVE_SECONDS = 1.8;
+    /** Below this much still time after the move, a stop is a flash, not a view. */
+    static readonly MIN_STILL_SECONDS = 1;
+    /** A tour shorter than this is over before a viewer has settled into it. */
+    static readonly MIN_TOUR_SECONDS = 5;
+
     private readonly _snapshotsState: RecorderState;
     /** CRUD façade for per-step sync; inert until an admin binds `crud:step`. */
     private stepResource?: any;
@@ -82,7 +100,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 // `downloadActiveRecording` (one recording).
                 const col = this._snapshotsState.viewers.get(viewerId);
                 const payload = {
-                    v: 3,
+                    v: RECORDER_BUNDLE_VERSION,
                     recordings: col ? col.recordings : [],
                     activeRecordingId: col?.activeRecordingId ?? null,
                     assets: col ? Array.from(col.assets.values()) : [],
@@ -98,7 +116,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewers: new Map<UniqueViewerId, RecorderViewerCollection>(),
             captureVisualization: false,
             captureViewport: true,
-            captureScreen: false,
         };
 
         this._initIOPipeline().catch(e => console.error("[recorder] IO pipeline init failed:", e));
@@ -130,10 +147,17 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!ctx?.viewerId) return undefined;
                 const col = this._snapshotsState.viewers.get(ctx.viewerId);
                 if (!col || !col.recordings.length) return undefined;
+                // Host-injected (transient) recordings never persist with the
+                // user's recorder state — their owner re-injects them on demand.
+                const recordings = col.recordings.filter(r => !r.transient);
+                if (!recordings.length) return undefined;
+                const activeRecordingId = recordings.some(r => r.id === col.activeRecordingId)
+                    ? col.activeRecordingId
+                    : recordings[0]?.id ?? null;
                 return JSON.stringify({
-                    v: 3,
-                    recordings: col.recordings,
-                    activeRecordingId: col.activeRecordingId,
+                    v: RECORDER_BUNDLE_VERSION,
+                    recordings,
+                    activeRecordingId,
                     assets: Array.from(col.assets.values()),
                 });
             },
@@ -180,6 +204,24 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!step.id) return { ok: false, refused: true, reason: "missing step id" };
                 return { ok: true };
             },
+            // `persistOutbox` requires a payload that round-trips through JSON:
+            // the entry is structured-cloned into IndexedDB, and the same
+            // projection is what reaches the sink. Without these two the RAW
+            // step went to both — a live step holds OpenSeadragon `Point` /
+            // `Rect` instances (and once held a live `<img>`, which made every
+            // write fail with a DataCloneError and silently disabled
+            // crash-recovery for the whole resource).
+            //
+            // Deliberately the SAME pair the export/import path uses, so a step
+            // has one on-the-wire shape rather than two that can drift.
+            serialize: (e: any) => ({
+                ...(e || {}),
+                step: cloneValue(e?.step),
+            }),
+            deserialize: (raw: any) => ({
+                ...(raw || {}),
+                step: this._hydrateStep(raw?.step, raw?.viewerId),
+            }),
         });
 
         // Binary overlay assets ride on their own CRUD channel — keeps step
@@ -198,6 +240,11 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (!asset.data || typeof asset.data !== "string") return { ok: false, refused: true, reason: "asset data (base64) required" };
                 return { ok: true };
             },
+            // Clone-safe only by accident today — `validate` happens to require
+            // `data` to be a string. Declaring the projection makes that a
+            // property of the resource rather than of its validator.
+            serialize: (e: any) => ({ ...(e || {}), asset: cloneValue(e?.asset) }),
+            deserialize: (raw: any) => ({ ...(raw || {}), asset: cloneValue(raw?.asset) }),
         });
     }
 
@@ -228,7 +275,15 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return col;
     }
 
-    /** Resolve a viewer's collection, guaranteeing at least one recording. */
+    /**
+     * Resolve a viewer's collection, guaranteeing at least one recording.
+     *
+     * Bootstrapping is a WRITE: it mints "Recording N" and makes it active. Only
+     * capture paths may call this — a caller that needs somewhere to put a step
+     * is entitled to create it. Reads must use `_rawCollection`/`_activeRecording`
+     * and treat "no recording" as the honest answer, or the mere act of
+     * rendering a timeline invents recordings the user never asked for.
+     */
     private _collection(viewerId?: UniqueViewerId): RecorderViewerCollection | undefined {
         const col = this._rawCollection(viewerId);
         if (col && !col.recordings.length) this._appendDefaultRecording(col);
@@ -257,8 +312,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return recording;
     }
 
+    /**
+     * The viewer's active recording, or undefined when it has none. Never
+     * bootstraps — capture paths call `_collection()` first, which does.
+     */
     private _activeRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         if (!col.activeRecordingId || !col.recordings.some(r => r.id === col.activeRecordingId)) {
             col.activeRecordingId = col.recordings[0]?.id ?? null;
@@ -409,8 +468,159 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return copy;
     }
 
+    upsertRecording(
+        viewerId: UniqueViewerId,
+        recording: Partial<RecorderRecording> & { id: string; steps: RecorderSnapshotStep[] },
+        opts?: { assets?: RecorderAsset[]; activate?: boolean; transient?: boolean },
+    ): RecorderRecording | undefined {
+        const col = this._rawCollection(viewerId);
+        if (!col || !recording?.id) return undefined;
+        this._suppressDispatch = true;
+        try {
+            let hydrated: RecorderRecording | undefined;
+            APPLICATION_CONTEXT.history.withoutRecording(() => {
+                this._stopCollection(col);
+                hydrated = this._hydrateRecording(recording);
+                if (!hydrated) return;
+                if (opts?.transient) hydrated.transient = true;
+                // Overwrite (not skip) existing asset ids so a refreshed
+                // recording carries its refreshed binaries.
+                for (const asset of opts?.assets ?? []) {
+                    if (asset?.id && typeof asset.data === "string") col.assets.set(asset.id, { ...asset });
+                }
+                const index = col.recordings.findIndex(r => r.id === hydrated!.id);
+                const replaced = index >= 0;
+                if (replaced) col.recordings.splice(index, 1, hydrated);
+                else col.recordings.push(hydrated);
+                this.raiseEvent(replaced ? "update" : "recording-create",
+                    { viewerId: col.viewerId, recordingId: hydrated.id, recording: hydrated });
+                if (opts?.activate !== false) {
+                    col.activeRecordingId = hydrated.id;
+                    col.playback.idx = 0;
+                    this.raiseEvent("recording-active", { viewerId: col.viewerId, recordingId: hydrated.id });
+                }
+            });
+            return hydrated;
+        } finally {
+            this._suppressDispatch = false;
+        }
+    }
+
+    /**
+     * User-facing import: merge recordings from a v3 bundle, a v2 payload or a
+     * bare steps array into `viewerId`'s collection.
+     *
+     * Deliberately NOT the `importBundle` IO hook: that one restores a session
+     * and therefore REPLACES the collection. This one is additive — existing
+     * recordings always survive, and a colliding id is minted fresh instead of
+     * overwriting its namesake. Imported recordings adopt the target viewer's
+     * identity (context key, title, background) so a file exported from another
+     * viewer or slide still plays back here.
+     *
+     * Throws with a `userMessage` on unusable input; the collection is left
+     * untouched in that case.
+     */
+    importRecordings(
+        viewerId: UniqueViewerId,
+        data: unknown,
+        opts?: { activate?: boolean },
+    ): RecorderRecording[] {
+        const col = this._rawCollection(viewerId);
+        if (!col) throw this._importError("There is no viewer to import the recordings into.");
+
+        const parsed = this._parseImportPayload(data);
+        let raws: any[];
+        let rawAssets: unknown;
+        if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).recordings)) {
+            raws = (parsed as any).recordings;
+            rawAssets = (parsed as any).assets;
+        } else {
+            // v2 / bare steps array → one recording. Unlike the restore path we
+            // do NOT filter steps by viewer: the user picked this file for this
+            // viewer, so foreign-viewer steps are the point, not noise.
+            let extracted: { steps: RecorderSnapshotStep[]; assets: RecorderAsset[] };
+            try {
+                extracted = this._extractV2(parsed);
+            } catch (e: any) {
+                throw this._importError("This is not a recorder file: expected a recording bundle or a list of steps.");
+            }
+            raws = extracted.steps.length
+                ? [{ name: this._defaultRecordingName(col), steps: extracted.steps }]
+                : [];
+            rawAssets = extracted.assets;
+        }
+
+        const hydrated = raws
+            .map(r => this._hydrateRecording(r, viewerId))
+            .filter((r): r is RecorderRecording => !!r && r.steps.length > 0);
+        if (!hydrated.length) throw this._importError("This file contains no recordings to import.");
+
+        const viewer = this._resolveViewer(viewerId);
+        const ctx = getViewerContextMeta(viewer);
+        const backgroundId = viewer ? (UTILITIES as any).currentBackgroundIdFor?.(viewer) : undefined;
+        const assets = Array.from(this._hydrateAssets(rawAssets).values());
+        const takenIds = new Set(col.recordings.map(r => r.id));
+        const takenNames = new Set(col.recordings.map(r => r.name));
+
+        const imported: RecorderRecording[] = [];
+        hydrated.forEach((rec, i) => {
+            if (takenIds.has(rec.id)) {
+                rec.id = this._newId("rec-");
+                rec.name = this._uniqueImportName(rec.name, takenNames);
+            }
+            takenIds.add(rec.id);
+            takenNames.add(rec.name);
+            rec.viewerContextKey = ctx.key;
+            rec.viewerTitle = ctx.title;
+            rec.backgroundId = backgroundId;
+            const stored = this.upsertRecording(viewerId, rec, {
+                // Assets are bundle-wide; one pass seeds them for every recording.
+                assets: i === 0 ? assets : undefined,
+                activate: opts?.activate !== false && i === hydrated.length - 1,
+            });
+            if (stored) imported.push(stored);
+        });
+        return imported;
+    }
+
+    /** Import failures are shown to the user verbatim — keep them readable. */
+    private _importError(message: string): Error {
+        const error = new Error(message);
+        (error as any).userMessage = message;
+        return error;
+    }
+
+    private _parseImportPayload(data: unknown): unknown {
+        let parsed: unknown = data;
+        if (typeof data === "string") {
+            try {
+                parsed = JSON.parse(data);
+            } catch (e: any) {
+                throw this._importError("This is not a recorder file: the content is not valid JSON.");
+            }
+        }
+        const version = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as any).v : undefined;
+        if (version !== undefined && (!Number.isFinite(version) || version > RECORDER_BUNDLE_VERSION)) {
+            throw this._importError(
+                `This recording was made by a newer version of the viewer (file format v${version}, supported up to v${RECORDER_BUNDLE_VERSION}).`
+            );
+        }
+        return parsed;
+    }
+
+    private _uniqueImportName(name: string, taken: Set<string>): string {
+        const base = `${name} (imported)`;
+        if (!taken.has(base)) return base;
+        for (let i = 2; ; i++) {
+            const candidate = `${name} (imported ${i})`;
+            if (!taken.has(candidate)) return candidate;
+        }
+    }
+
+    /** A viewer's recordings. Never creates one: an empty array means it has none. */
     listRecordings(viewerId?: UniqueViewerId): RecorderRecording[] {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         return col ? [...col.recordings] : [];
     }
 
@@ -431,11 +641,11 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     downloadActiveRecording(viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return void Dialogs.show("No recording is available to export.", 2500, Dialogs.MSG_WARN);
         const payload = {
-            v: 3,
+            v: RECORDER_BUNDLE_VERSION,
             recordings: [recording],
             activeRecordingId: recording.id,
             assets: Array.from(col.assets.values()),
@@ -483,7 +693,6 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerId: viewer.uniqueId || viewerId,
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
-            screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
         this._stampRecordingBackground(recording, viewer);
 
@@ -534,6 +743,40 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerContextKey: viewerContext.key,
             viewerTitle: viewerContext.title,
         };
+    }
+
+    /**
+     * Would capturing the viewer's CURRENT view right now collapse into a hold
+     * instead of adding a keyframe? I.e. "nothing has changed since the last
+     * keyframe".
+     *
+     * Exposed so callers that consider a no-op capture an error (a script that
+     * asked to capture a specific view) can say so up front, instead of
+     * duplicating the tolerances here — or worse, letting them drift. Uses the
+     * same viewer/recording resolution as `create()`, so the predicate cannot
+     * disagree with what `create()` would actually do. False when there is no
+     * recording: nothing to be redundant against.
+     */
+    isCurrentViewRedundant(viewerId?: UniqueViewerId): boolean {
+        const state = this._snapshotsState;
+        const viewer = this._resolveViewer(viewerId);
+        if (!viewer?.viewport) return false;
+        const recording = this._activeRecording(viewer.uniqueId || viewerId);
+        if (!recording) return false;
+
+        const candidate: RecorderSnapshotStep = {
+            id: "",
+            kind: "keyframe",
+            delay: 0,
+            duration: 0,
+            transition: 0,
+            rotation: state.captureViewport ? viewer.viewport.getRotation() : undefined,
+            zoomLevel: state.captureViewport ? viewer.viewport.getZoom() : undefined,
+            point: state.captureViewport ? viewer.viewport.getCenter() : undefined,
+            visualization: this._captureChangedVisualization(viewer, recording.steps),
+            annotationFilters: this._captureChangedAnnotationFilters(recording.steps),
+        };
+        return this._isRedundantKeyframe(candidate, recording.steps);
     }
 
     /**
@@ -649,7 +892,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     remove(index?: number, viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return;
         if (col.playback.playing) return;
@@ -729,14 +972,14 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     currentStep(viewerId?: UniqueViewerId): RecorderSnapshotStep | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         const recording = this._activeRecording(viewerId);
         if (!col || !recording) return undefined;
         return recording.steps[col.playback.idx];
     }
 
     currentStepIndex(viewerId?: UniqueViewerId): number {
-        return this._collection(viewerId)?.playback.idx ?? 0;
+        return this._rawCollection(viewerId)?.playback.idx ?? 0;
     }
 
     isPlaying(viewerId?: UniqueViewerId): boolean {
@@ -752,7 +995,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     // ---------------------------------------------------------------------
 
     private _buildSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         const viewer = this._resolveViewer(col.viewerId);
         if (!viewer?.viewport) return undefined;
@@ -763,7 +1006,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 
     /** Session referencing the recording currently playing (or the active one). */
     private _runningSession(viewerId?: UniqueViewerId): RecorderPlaybackSession | undefined {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (!col) return undefined;
         const viewer = this._resolveViewer(col.viewerId);
         if (!viewer?.viewport) return undefined;
@@ -882,7 +1125,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     playFromIndex(index: number, viewerId?: UniqueViewerId): void {
-        const col = this._collection(viewerId);
+        const col = this._rawCollection(viewerId);
         if (col) {
             if (col.playback.playing) return;
             col.playback.idx = index;
@@ -958,24 +1201,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return !!this._snapshotsState.captureViewport;
     }
 
-    set capturesScreen(value: boolean) {
-        this._snapshotsState.captureScreen = !!value;
-    }
-
-    get capturesScreen(): boolean {
-        return !!this._snapshotsState.captureScreen;
-    }
-
     setCapturesVisualization(value: boolean): void {
         this.capturesVisualization = value;
     }
 
     setCapturesViewport(value: boolean): void {
         this.capturesViewport = value;
-    }
-
-    setCapturesScreen(value: boolean): void {
-        this.capturesScreen = value;
     }
 
     // ---------------------------------------------------------------------
@@ -1024,8 +1255,9 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     putAsset(asset: RecorderAsset): RecorderAsset {
         if (!asset?.id) throw new Error("RecorderAsset.id required");
         // Update in place if it already lives somewhere; else attach to the
-        // active viewer's collection (the timeline being edited).
-        const col = this._findAssetCollection(asset.id) || this._collection();
+        // active viewer's collection (the timeline being edited). An asset needs
+        // a collection to live in, not a recording — no bootstrap.
+        const col = this._findAssetCollection(asset.id) || this._rawCollection();
         if (!col) throw new Error("RecorderAsset: no viewer collection available");
         col.assets.set(asset.id, asset);
         if (!this._suppressDispatch) this.assetResource?.create({ viewerId: col.viewerId, asset });
@@ -1073,6 +1305,80 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 
     stepCapturesNavigation(step: RecorderSnapshotStep): boolean {
         return !!step.navigation?.samples?.length;
+    }
+
+    /**
+     * Is this tour watchable — and if not, what is wrong with it?
+     *
+     * Authoring a recording programmatically has no feedback loop: a script writes the
+     * steps and never sees them play, so a tour of nine half-second uncaptioned stops
+     * looks like a success at every single call. This is the one place that can say
+     * otherwise, and it lives on the module rather than in a scripting namespace because
+     * both the recorder's own namespace (on play) and the questionnaire's (on bind) need
+     * the same verdict — two copies would be two definitions of a good tour.
+     *
+     * Never throws and never blocks: a half-finished draft is a legitimate thing to play.
+     * The warnings are phrased as the edit to make, because their reader is usually an
+     * LLM deciding what to do next.
+     */
+    summarizeTour(steps: RecorderSnapshotStep[] | undefined | null): RecorderTourSummary {
+        const all = Array.isArray(steps) ? steps.filter(Boolean) : [];
+        // A hold is a deliberate beat and a navigation step replays a captured path;
+        // neither is a "stop" a caption is missing from.
+        const stops = all.filter((step) => step.kind !== "empty" && !this.stepCapturesNavigation(step));
+        const hasCaption = (step: RecorderSnapshotStep): boolean =>
+            (step.overlays ?? []).some((o: any) => typeof o?.markdown === "string" && o.markdown.trim());
+
+        const uncaptioned: number[] = [];
+        const rushed: number[] = [];
+        let totalSeconds = 0;
+        let shortestSeconds = Number.POSITIVE_INFINITY;
+
+        all.forEach((step, index) => {
+            const duration = Number.isFinite(step.duration) ? Number(step.duration) : 0;
+            totalSeconds += duration + (Number.isFinite(step.delay) ? Number(step.delay) : 0);
+            if (duration < shortestSeconds) shortestSeconds = duration;
+            if (step.kind === "empty" || this.stepCapturesNavigation(step)) return;
+            if (!hasCaption(step)) uncaptioned.push(index + 1);
+            // What is left on screen once the eased move has finished — the only part a
+            // viewer can actually study.
+            const move = typeof step.moveDuration === "number"
+                ? step.moveDuration
+                : Math.min(duration, Recorder.DEFAULT_MOVE_SECONDS);
+            if (duration - move < Recorder.MIN_STILL_SECONDS) rushed.push(index + 1);
+        });
+
+        const round = (value: number) => Math.round(value * 10) / 10;
+        const warnings: string[] = [];
+        if (stops.length && uncaptioned.length === stops.length) {
+            warnings.push(
+                `None of the ${stops.length} stop(s) has a caption: a viewer gets a view and nothing telling `
+                + `them what to look at. Pass { narration } to captureFrame, or call setStepNarration(step, text).`
+            );
+        } else if (uncaptioned.length) {
+            warnings.push(
+                `${uncaptioned.length} of ${stops.length} stop(s) have no caption: step(s) ${uncaptioned.join(", ")}. `
+                + `Call setStepNarration(step, text) on each.`
+            );
+        }
+        if (rushed.length) {
+            warnings.push(
+                `Step(s) ${rushed.join(", ")} leave under ${Recorder.MIN_STILL_SECONDS}s on screen once the movement `
+                + `finishes. Raise their duration, or caption them (a caption stretches the hold to reading time).`
+            );
+        }
+        if (all.length && totalSeconds < Recorder.MIN_TOUR_SECONDS) {
+            warnings.push(`The whole tour runs ${round(totalSeconds)}s — too fast to follow.`);
+        }
+
+        return {
+            stepCount: all.length,
+            keyframeCount: stops.length,
+            narratedCount: stops.length - uncaptioned.length,
+            totalSeconds: round(totalSeconds),
+            shortestSeconds: Number.isFinite(shortestSeconds) ? round(shortestSeconds) : 0,
+            warnings,
+        };
     }
 
     sortWithIdList(ids: string[], removeMissing = false, viewerId?: UniqueViewerId): void {
@@ -1224,7 +1530,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return map;
     }
 
-    private _hydrateRecording(raw: any): RecorderRecording | undefined {
+    private _hydrateRecording(raw: any, stampViewerId?: UniqueViewerId): RecorderRecording | undefined {
         if (!raw || typeof raw !== "object") return undefined;
         return {
             id: typeof raw.id === "string" && raw.id ? raw.id : this._newId("rec-"),
@@ -1234,7 +1540,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerTitle: typeof raw.viewerTitle === "string" ? raw.viewerTitle : undefined,
             createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
             updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : undefined,
-            steps: this._hydrateSteps(Array.isArray(raw.steps) ? raw.steps : []),
+            steps: this._hydrateSteps(Array.isArray(raw.steps) ? raw.steps : [], stampViewerId),
         };
     }
 
@@ -1425,13 +1731,74 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             const v = Number.isInteger(bgIdx) ? bgArr[bgIdx as number]?.visualizationIndex : undefined;
             return Number.isInteger(v) ? v as number : undefined;
         });
+        // Canonical (namespace-stripped, world-index-free) param/state surface
+        // and the resolved per-layer data-source identities. Together these are
+        // the "did the visualization actually change" axes used by the no-op
+        // guard on replay — see _canonicalSurface / _sameVisualizationSnapshot.
+        const U = (window as any).UTILITIES;
+        const liveCanonical = typeof U?.exportLiveVisualization === "function"
+            ? U.exportLiveVisualization(viewer)
+            : undefined;
+
         return {
             backgrounds,
             activeBackgroundIndex,
             visualizations,
             activeVisualizationIndex,
             renderer: exported ? cloneRecord(exported) : undefined,
+            liveCanonical: liveCanonical ? cloneValue(liveCanonical) : undefined,
+            liveSources: this._resolveLayerSourceKeys(viewer),
         };
+    }
+
+    /**
+     * Strip the per-viewer shader-id namespace prefix from a (possibly nested,
+     * `/`-separated) shader path. Mirrors
+     * `src/classes/visualization/shader-id-namespace.ts:stripNamespaceFromPath`
+     * (re-implemented here because modules cannot import from `src/`).
+     */
+    private _stripShaderNamespace(path: string, namespace: string | undefined): string {
+        if (!namespace || typeof path !== "string" || !path) return path;
+        return path.split("/")
+            .map(seg => seg.startsWith(namespace) ? seg.slice(namespace.length) : seg)
+            .join("/");
+    }
+
+    /**
+     * Resolve a world index to a stable data-source identity. Mirrors
+     * `ViewerFaultySourceRegistry.keyForItem`: prefer `tileSourceId` (DICOMweb
+     * shares baseUrl, so url alone collides), then `url`, then the pipeline
+     * load key. Returns "" when the slot is empty.
+     */
+    private _sourceKeyForWorldIndex(viewer: RecorderManagedViewer, worldIndex: unknown): string {
+        if (!Number.isInteger(worldIndex) || (worldIndex as number) < 0) return "";
+        const item: any = (viewer as any)?.world?.getItemAt?.(worldIndex as number);
+        if (!item) return "";
+        const src = item.source;
+        return String(src?.tileSourceId || src?.url || item.__xopatLoadKey || `idx:${worldIndex}`);
+    }
+
+    /**
+     * Build `{ [strippedShaderPath]: sourceKey[] }` by following every shader's
+     * `tiledImages` world indices to their live source identity. This is the
+     * "same data source?" axis: a time-series active-frame swap rebinds an
+     * index to a different source (via the shader-source resolver) without
+     * changing the shader id/params, so only this map reveals it.
+     */
+    private _resolveLayerSourceKeys(viewer: RecorderManagedViewer): Record<string, string[]> {
+        const out: Record<string, string[]> = {};
+        const renderer = (viewer as any)?.drawer?.renderer;
+        const shaders = typeof renderer?.getAllShaders === "function" ? renderer.getAllShaders() : null;
+        if (!shaders) return out;
+        const namespace = (viewer as any)?.__shaderNamespace;
+        for (const key in shaders) {
+            if (!Object.prototype.hasOwnProperty.call(shaders, key)) continue;
+            const cfg = shaders[key]?.getConfig?.();
+            const tiledImages = Array.isArray(cfg?.tiledImages) ? cfg.tiledImages : [];
+            out[this._stripShaderNamespace(key, namespace)] =
+                tiledImages.map((idx: unknown) => this._sourceKeyForWorldIndex(viewer, idx));
+        }
+        return out;
     }
 
     private _captureChangedVisualization(
@@ -1660,10 +2027,18 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             const immediate = !pb.playing;
             pb.currentPlayback = this._playNavigation(viewer, step, immediate);
         } else if (capturesViewport) {
-            if (typeof step.rotation === "number" && !Number.isNaN(step.rotation)) {
-                viewer.viewport.setRotation(step.rotation, true);
+            if (pb.playing) {
+                // Eased move: a keyframe says "get me to this view", so the
+                // motion should settle instead of drifting at constant speed.
+                // (Navigation steps above stay linear on purpose — there the
+                // path between A and B is the content.)
+                pb.currentPlayback = this._playKeyframeTransition(viewer, step);
+            } else {
+                if (typeof step.rotation === "number" && !Number.isNaN(step.rotation)) {
+                    viewer.viewport.setRotation(step.rotation, true);
+                }
+                viewer.tools?.focus(step);
             }
-            viewer.tools?.focus(step);
         } else {
             viewer.forceRedraw?.();
         }
@@ -1745,24 +2120,37 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             }
         }
 
-        const targetState: RecorderVisualizationStateSnapshot = {
-            backgrounds: cloneValue(safeBackgrounds),
-            activeBackgroundIndex: cloneValue(activeBgSelection as number | number[] | undefined),
-            visualizations: cloneValue(visualizations),
-            activeVisualizationIndex: cloneValue(activeSelection as number | number[] | undefined),
-            renderer: target.renderer
-                ? {
-                    order: [...(target.renderer.order || [])],
-                    shaders: target.renderer.shaders ? cloneValue(target.renderer.shaders) : undefined,
-                }
-                : undefined,
-        };
-        const currentState = this._getVisualizationSnapshot(viewer, true);
-        if (this._sameVisualizationSnapshot(currentState, targetState)) {
+        // Decide how much work the apply actually needs by comparing canonical
+        // surfaces (selection + params/state/order + RESOLVED data sources).
+        // The `sources` axis follows each layer's tiledImages to the live source
+        // identity, so a time-series active-frame swap (same shader id/params,
+        // different underlying data) is correctly seen as a change.
+        const liveSurface = this._canonicalSurface(this._getVisualizationSnapshot(viewer, true), viewer);
+        const targetSurface = this._canonicalSurface(target);
+
+        // Tier 1 — nothing changed: no reopen, no rebuild.
+        if (this._sameCanonicalSurface(liveSurface, targetSurface)) {
             viewer.forceRedraw?.();
             return;
         }
 
+        // Tier 2 — only per-layer params/state/order changed (same layer set,
+        // same selection, same data sources): apply surgically via
+        // importLiveVisualization (a single drawer.rebuild — no world reset /
+        // tile reload). Needs the canonical payload (absent on old recordings).
+        if (target.liveCanonical && this._onlyLayerStateChanged(liveSurface, targetSurface)) {
+            const applied = (window as any).UTILITIES?.importLiveVisualization?.(viewer, target.liveCanonical);
+            if (applied) {
+                viewer.forceRedraw?.();
+                return;
+            }
+            // Could not apply (nothing mutated / missing local config / UTILITIES
+            // unavailable) — fall through to a full reopen below.
+        }
+
+        // Tier 3 — selection, layer set, or underlying data source changed
+        // (incl. a time-series frame swap): reopen through the pipeline +
+        // shader-source resolver so the correct data is (re)bound/loaded.
         // Serialize every recorder-driven reopen onto one queue. Concurrent
         // openViewerWith calls (e.g. multi-viewer stop restoring several viewers
         // at once) interleave the flex-drawer suspend/resume depth + shared
@@ -1770,7 +2158,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         void this._enqueueViewerOpen(() => {
             // Re-check at dequeue time — a prior queued reopen may have already
             // brought this viewer to the target state.
-            if (this._sameVisualizationSnapshot(this._getVisualizationSnapshot(viewer, true), targetState)) {
+            if (this._sameCanonicalSurface(this._canonicalSurface(this._getVisualizationSnapshot(viewer, true), viewer), targetSurface)) {
                 viewer.forceRedraw?.();
                 return Promise.resolve();
             }
@@ -1838,6 +2226,109 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         return JSON.stringify(value);
     }
 
+    // ── Canonical comparison surface (apply / no-op decision only) ────────────
+    // Distinct from `_sameVisualizationSnapshot` (capture-time): this surface is
+    // namespace-stripped, world-index-free, and source-aware so an unchanged
+    // baseline replays as a true no-op while real data-source changes (incl.
+    // time-series active-frame swaps) still reopen.
+
+    private _normalizeSelectionValue(v: unknown): unknown {
+        if (Array.isArray(v)) return v.map((x) => (Number.isInteger(x) ? x : null));
+        return Number.isInteger(v) ? v : null;
+    }
+
+    /** Reduce a layer to its comparable identity + semantic state, dropping defaults. */
+    private _normalizeCanonicalLayer(layer: any): { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> } {
+        const out: { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> } = {};
+        if (layer?.id != null) out.id = String(layer.id);
+        if (layer?.type != null) out.type = String(layer.type);
+        const cache = layer?.cache;
+        if (cache && typeof cache === "object" && Object.keys(cache).length) out.cache = cache as Record<string, unknown>;
+        const state = layer?.state;
+        if (state && typeof state === "object") {
+            const s: Record<string, unknown> = {};
+            if (state.visible === false || state.visible === 0) s.visible = false; // default visible:true dropped
+            if (state.use_mode !== undefined) s.use_mode = state.use_mode;
+            if (state.use_blend !== undefined) s.use_blend = state.use_blend;
+            if (Object.keys(s).length) out.state = s;
+        }
+        return out;
+    }
+
+    /**
+     * Build `{ selection, order, layers, sources }` from a snapshot. Prefers the
+     * canonical `liveCanonical` payload; falls back to deriving from the raw
+     * `renderer.shaders` for legacy recordings (which then lack `sources`, so
+     * they conservatively classify as a reopen). `viewer` strips any residual
+     * per-viewer namespace (stored fields are already stripped at capture).
+     */
+    private _canonicalSurface(
+        snapshot: RecorderVisualizationStateSnapshot | undefined,
+        viewer?: RecorderManagedViewer,
+    ): { selection: unknown; order?: string[]; layers: Record<string, any>; sources: Record<string, string[]> } {
+        const ns = (viewer as any)?.__shaderNamespace;
+        const selection = {
+            bg: this._normalizeSelectionValue(snapshot?.activeBackgroundIndex),
+            viz: this._normalizeSelectionValue(snapshot?.activeVisualizationIndex),
+        };
+
+        const layers: Record<string, any> = {};
+        const canonicalLayers = snapshot?.liveCanonical?.layers;
+        if (canonicalLayers && typeof canonicalLayers === "object") {
+            for (const [path, layer] of Object.entries(canonicalLayers)) {
+                layers[this._stripShaderNamespace(path, ns)] = this._normalizeCanonicalLayer(layer);
+            }
+        } else if (snapshot?.renderer?.shaders && typeof snapshot.renderer.shaders === "object") {
+            for (const [path, cfg] of Object.entries(snapshot.renderer.shaders)) {
+                const c: any = cfg || {};
+                const params = (c.params && typeof c.params === "object") ? c.params : {};
+                layers[this._stripShaderNamespace(path, ns)] = this._normalizeCanonicalLayer({
+                    id: this._stripShaderNamespace(String(c.id ?? path), ns),
+                    type: c.type,
+                    cache: c.cache,
+                    state: { visible: c.visible !== false && c.visible !== 0, use_mode: params.use_mode, use_blend: params.use_blend },
+                });
+            }
+        }
+
+        let order: string[] | undefined;
+        const rawOrder = snapshot?.liveCanonical?.layerOrder;
+        if (Array.isArray(rawOrder)) order = rawOrder.map((id) => this._stripShaderNamespace(String(id), ns));
+
+        const sources: Record<string, string[]> = {};
+        if (snapshot?.liveSources && typeof snapshot.liveSources === "object") {
+            for (const [path, keys] of Object.entries(snapshot.liveSources)) {
+                sources[this._stripShaderNamespace(path, ns)] = Array.isArray(keys) ? keys.map((k) => String(k)) : [];
+            }
+        }
+
+        return { selection, order, layers, sources };
+    }
+
+    private _sameCanonicalSurface(a: unknown, b: unknown): boolean {
+        return this._stableSerialize(a) === this._stableSerialize(b);
+    }
+
+    /**
+     * True when live → target differ ONLY in per-layer params/state/order — same
+     * selection, same resolved data sources, and same layer SET (paths + id +
+     * type). Such a change is surgically appliable via importLiveVisualization
+     * without a world reopen. A source or set difference returns false (reopen).
+     */
+    private _onlyLayerStateChanged(
+        live: { selection: unknown; layers: Record<string, any>; sources: Record<string, string[]> },
+        target: { selection: unknown; layers: Record<string, any>; sources: Record<string, string[]> },
+    ): boolean {
+        if (this._stableSerialize(live.selection) !== this._stableSerialize(target.selection)) return false;
+        if (this._stableSerialize(live.sources) !== this._stableSerialize(target.sources)) return false;
+        const setKey = (layers: Record<string, any>) => {
+            const m: Record<string, any> = {};
+            for (const [path, layer] of Object.entries(layers || {})) m[path] = { id: layer?.id, type: layer?.type };
+            return this._stableSerialize(m);
+        };
+        return setKey(live.layers) === setKey(target.layers);
+    }
+
     private _cloneVisualizationStateSnapshot(snapshot: RecorderVisualizationStateSnapshot): RecorderVisualizationStateSnapshot {
         return {
             backgrounds: cloneValue(snapshot.backgrounds || []),
@@ -1854,6 +2345,8 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                     shaders: snapshot.renderer.shaders ? cloneValue(snapshot.renderer.shaders) : undefined,
                 }
                 : undefined,
+            liveCanonical: snapshot.liveCanonical ? cloneValue(snapshot.liveCanonical) : undefined,
+            liveSources: snapshot.liveSources ? cloneValue(snapshot.liveSources) : undefined,
         };
     }
 
@@ -2080,6 +2573,79 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 if (frameId) window.cancelAnimationFrame(frameId);
             },
         };
+    }
+
+    /**
+     * Animate the viewer from wherever it is to a keyframe's view, easing in
+     * and out. Runs the same sample/apply machinery as recorded-path playback,
+     * but over a two-sample track whose time axis is warped by the easing curve
+     * — so the motion accelerates and settles rather than sliding at constant
+     * speed the way a recorded path (deliberately) does.
+     *
+     * The move takes `moveDuration`; the rest of the step's `duration` is a
+     * still hold (playStep already waits `duration` from the jump), which is
+     * what makes an overlay readable.
+     */
+    private _playKeyframeTransition(viewer: RecorderManagedViewer, step: RecorderSnapshotStep): RecorderDelayHandle {
+        const viewport = viewer.viewport;
+        // A keyframe carries both a point+zoom and the bounds it implies;
+        // mirror osd_tools.focus and prefer the point+zoom pair, since
+        // interpolating bounds re-derives (and drifts) the zoom.
+        const usePoint = !!step.point && typeof step.zoomLevel === "number" && (step.preferSameZoom || !step.bounds);
+        const moveSeconds = typeof step.moveDuration === "number"
+            ? step.moveDuration
+            : Math.min(step.duration, Recorder.DEFAULT_MOVE_SECONDS);
+        const durationMs = Math.max(0, moveSeconds * 1000);
+
+        const target: RecorderNavigationSample = usePoint
+            ? { at: durationMs, rotation: step.rotation, zoomLevel: step.zoomLevel, point: step.point }
+            : { at: durationMs, rotation: step.rotation, bounds: step.bounds };
+
+        if (durationMs <= 0) {
+            this._applyNavigationSample(viewer, target);
+            viewport.applyConstraints();
+            return { promise: Promise.resolve(-1), cancel() {} };
+        }
+
+        const from: RecorderNavigationSample = usePoint
+            ? { at: 0, rotation: viewport.getRotation(), zoomLevel: viewport.getZoom(), point: viewport.getCenter() }
+            : { at: 0, rotation: viewport.getRotation(), bounds: viewport.getBounds() };
+        const samples = [from, target];
+
+        const startedAt = performance.now();
+        let frameId = 0;
+        let cancelled = false;
+
+        const promise = new Promise<number>((resolve) => {
+            const tick = () => {
+                if (cancelled) return void resolve(-1);
+
+                const elapsedMs = performance.now() - startedAt;
+                if (elapsedMs >= durationMs) {
+                    this._applyNavigationSample(viewer, target);
+                    viewport.applyConstraints();
+                    return void resolve(-1);
+                }
+                const eased = this._easeInOut(elapsedMs / durationMs);
+                this._applyNavigationSample(viewer, this._interpolateNavigationSample(samples, eased * durationMs));
+                frameId = window.requestAnimationFrame(tick);
+            };
+            frameId = window.requestAnimationFrame(tick);
+        });
+
+        return {
+            promise,
+            cancel() {
+                cancelled = true;
+                if (frameId) window.cancelAnimationFrame(frameId);
+            },
+        };
+    }
+
+    /** Cubic ease-in-out: slow start, fast middle, gentle settle. */
+    private _easeInOut(progress: number): number {
+        const t = Math.min(1, Math.max(0, progress));
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
     private _interpolateNavigationSample(samples: RecorderNavigationSample[], playbackTimeMs: number): RecorderNavigationSample {

@@ -5,6 +5,29 @@ happening all over the place without tight dependencies. Note however,
 that using events without consideration might lead to unpredictable behaviour,
 like explosion of events or looped calling.
 
+## Handler fault isolation
+
+Handlers registered on a viewer or on `VIEWER_MANAGER` run isolated: an exception thrown by one of
+them is caught, logged, and reported as an `error-user` event with code `E_HANDLER_FAULT` instead of
+propagating. A handler that throws on three consecutive invocations is **unregistered** and reported
+once more with `E_HANDLER_REMOVED`.
+
+This exists because OpenSeadragon dispatches handlers without any try/catch, and re-arms its
+`requestAnimationFrame` loop only *after* the frame's handlers returned. Before isolation, one
+throwing handler on an event raised during the update cycle (`animation`, `animation-finish`,
+`update-viewport`, ...) permanently stopped canvas rendering — a broken plugin took down the core
+viewer. The isolation is installed per instance (`src/classes/app/event-isolation.ts`); the vendored
+library is not patched.
+
+Two consequences to keep in mind:
+- **Abort signals still work.** `async` handlers are untouched (their rejection still flows through
+  `raiseEventAwaiting`), and a *synchronous* throw on `before-app-init`, `before-refresh`, or
+  `before-open` is deliberately re-thrown, so the documented "throw to abort" contract holds.
+- **Isolation only covers handlers.** An exception thrown from OSD internals or a drawer outside a
+  handler can still abort the update cycle before the loop is rescheduled. The complete fix is
+  upstream (a `try/finally` around `updateOnce` in `updateMulti`, plus per-handler `try/catch` in
+  `EventSource.getHandler`) and cannot live in `src/libs/`.
+
 ## Core Events
 
 Events are of two basic types:
@@ -87,6 +110,28 @@ from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically 
 from the available data in the viewer.
 
+#### async `get-preview-shader` | e: `{background, dataId, spec, source, usesPreviewImage, viewer, shaders: null}`
+Fired while rendering a slide *preview* (the thumbnail in a slide list), for a background whose
+shader configuration is not otherwise known — nothing is authored on the entry and the slide is not
+open in any viewer, so the preview would fall back to the implicit `identity` layer and show a
+different picture from the one the viewport shows once the slide is opened.
+
+A handler answers by setting `shaders` to an array in the same authored form as
+`background.shaders`. The first non-null answer wins. `source` is the already-resolved, ready tile
+source, so a handler that only needs to inspect the slide can answer with no extra I/O; `spec` is
+the data spec, for `SLIDE_PROTOCOLS.protocolIdFor(...)`.
+
+Handler contract:
+- set `shaders` **only if it is still falsy**;
+- return immediately when `usesPreviewImage` is true — the rendered source is then a flat RGB
+  thumbnail image, and a channel-aware shader over it produces garbage;
+- answer only for backgrounds **you own** (see `protocolIdFor` in `src/README.md`);
+- **never mutate `background`** — a preview must not write session state.
+
+Awaited: an answer typically requires reading slide metadata, and a fire-and-forget raise would
+return before the handler wrote it. When nobody listens the raise short-circuits to a resolved
+promise, so the preview path pays nothing.
+
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
@@ -96,6 +141,11 @@ Fired when plugin is loaded within a system (at runtime). Carries a flag whether
 
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).
+
+#### `module-failed` | e: `{id: string, message:string}
+Fired when a module is quarantined because its construction threw. The module is disabled for the
+rest of the session: its instance is dropped, the handlers it registered are removed, and any later
+`instance()` call throws instead of returning a half-built object.
 
 #### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton, viewer: OpenSeadragon.Viewer|undefined}`
 Modules generally cannot be monitored as they might be any custom
@@ -117,8 +167,17 @@ and ignores OpenSeadragon key event.
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user releases a key. Similar as above.
 
+> **Prefer the shortcut registry.** Register key strokes with
+> `APPLICATION_CONTEXT.shortcuts` ([`SHORTCUTS.md`](SHORTCUTS.md)) — you get declared
+> defaults, conflict detection and user remapping via the Keymap panel. Raw
+> `key-down`/`key-up` handlers are the low-level fallback for cases the registry
+> cannot express (contextual Escape/Enter/Delete inside a widget stays widget-local
+> and is not registered).
+
 #### `io:refused` | e: `{ ctx: IOContext, result: IOResult }`
-Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a **guard** in a `pre-*` phase, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+
+> Guard refusals fire for **every** direction, not just CRUD writes: `ctx.direction` may be `pre-export`, `pre-import` or `pre-read` as well as `pre-create` / `pre-update` / `pre-delete`. A refusal with `code: "W_PERM_DENIED"` is the roles layer (`src/USER_ROLES.md`) — the user lacks the capability, and no sink was contacted.
 
 > `ctx.meta.fromUndo` / `ctx.meta.fromRedo` are reserved keys the auto-history layer sets when replaying a history entry. Subscribers that count refusals "per user action" should filter these out.
 
@@ -128,8 +187,8 @@ A bound sink's `accepts(ctx)` returned `false` — it opted out of handling this
 #### `io:fully-refused` | e: `{ ctx: IOContext, results: IOResult[] }`
 Every bound sink for one dispatch failed (refused, threw, or declined via `accepts`). The data was silently dropped. Almost always a misconfigured `ENV.client.io.bindings` — the admin bound the owner+capability to sinks that none accepted at runtime. The console warns automatically; subscribe to this event to surface a richer admin notification.
 
-#### `io:conflict` | e: `{ ctx: IOContext, sinkIds: string[] }`
-Reserved for the case when two or more registered sinks both `accepts(ctx)` for the same operation. Not yet emitted by the current implementation (mirror semantics make this expected and not a conflict).
+#### `io:reverted` | e: `{ ownerUid, resourceName, direction, itemId?, ctx: IOContext, result: IOResult }`
+A dispatch was refused *after* the local commit and the resource undid it: the call's `inverseApply` ran and the history entry it pushed was invalidated. This is the pipeline's default behaviour (`rollbackOnAsyncRefuse`, see [`src/IO_PIPELINE.md`](IO_PIPELINE.md)) — the destination is authoritative, so a change it refused does not stay on screen. Subscribe if the UI needs to explain *why* something the user just did disappeared; the refusal itself already toasts via `io:refused`.
 
 > Bundle export is driven by `IO_PIPELINE.flushBundleExport()` (called by `serializeApp` and the user-facing Export action). Plugins/modules declare bundle hooks via `this.initIO({ exportBundle, importBundle })`. See [`src/IO_PIPELINE.md`](IO_PIPELINE.md).
 
@@ -159,8 +218,18 @@ if the viewer is not reloaded.
 
 #### `show-demo-page` | e: `{id: string, show: function, htmlError: string|undefined}`
 When the viewer does not open any valid data, it shows a demo page. This event allows to use custom UI to show the demo page.
-If the viewer captures an error during loading, the error message is included.
 The first call wins - other show(...) calls are ignored.
+
+`htmlError` distinguishes the two situations the overlay covers, and consumers
+should branch on its **presence**, not its content: absent means nothing was
+requested (a landing page), present means images were requested and none opened
+(a failure report). The built-in overlay no longer renders that string — it
+builds its own markup and names the images that actually failed, read from
+`__xopatFaultyBackground` and the per-viewer faulty-source registry
+(`src/classes/app/viewer-demo-overlay.ts`). The field stays for back-compat.
+
+Note that an OSD overlay sits under the annotation canvas, so pointer events do
+not reach it: a demo page can inform, but cannot currently offer a button.
 
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
@@ -176,6 +245,31 @@ Same as above, an error event.
 #### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
 Fired when a viewport screenshot is requested.
 
+#### `region-capture` | e: `{captureId: string, phase: "queued"|"start"|"end", kind: "region"|"viewport", region?: {x, y, width, height}, refIndex?: number, label?: string, ok?: boolean, error?: string}`
+Fired whenever something reads pixels **out of this viewer** — an off-screen region render
+through the standalone drawer, a viewport/background extract, or an on-screen composite grab.
+It exists because those reads never move the user's viewport: without the event there is no
+way to tell that an analysis/LLM feature looked at the slide, or at which part of it.
+
+* `captureId` is stable across the three phases of one capture.
+* `queued` → the pass is waiting for its turn: off-screen passes are serialized per viewer,
+  and the admitted one still has to take a background scheduler slot, so this may last
+  seconds. `start` → it is actually rendering; `end` → finished, `ok`/`error` describe the
+  outcome. A capture that fails before admission emits `queued` and `end` with no `start`.
+  The interval between `queued` and `start` is the only way to tell a slow render from a
+  long wait for one — a caller that wants to *bound* that wait passes `queueTimeoutMs`.
+* `region` is in **full-resolution (level-0) image pixels of `refIndex`** — the same units
+  `visualization.renderRegionPixels` takes. Absent for `kind: "viewport"`, which covers
+  whatever is currently on screen.
+* `label` is a free-form diagnostic string supplied by the caller (e.g. "Examining region 2").
+  It may originate from a session-supplied script — **render it with `textContent`, never as HTML.**
+
+Raised by `src/classes/scripting/visualization-api.ts` for every API-mediated capture; features
+that read `viewer.drawer.canvas` directly (e.g. `pathology.captureViewportImage`) raise it
+themselves. `APPLICATION_CONTEXT.captureIndicator` consumes it to draw the capture markers
+(`classes/app/capture-indicator.ts`); `captureIndicator.getLog(viewer)` exposes the bounded
+history for auditing.
+
 ### User Input Events
 
 #### `canvas-press`
@@ -184,14 +278,41 @@ Fired when a viewport screenshot is requested.
 #### `canvas-nonprimary-press`
 #### `canvas-nonprimary-release`
 
+> **Right-click menus go through the registry.** Contribute canvas context-menu
+> items with `window.CanvasContextMenu.register(id, provider)`
+> (`src/classes/app/canvas-context-menu.ts`) — the core aggregates providers,
+> resolves the viewer and opens the drop-down. Never call `DropDown.open`
+> yourself from `nonprimary-release-not-handled`.
+>
+> Providers receive `ctx.selection` — every object the click pertains to. Core
+> owns no object model, so a subsystem that has one publishes it with
+> `registerSelectionResolver(id, viewer => objects[])` (and unregisters on
+> teardown); the registry unions the answers, dedups, and puts `ctx.active`
+> first, once per menu.
+
 
 ### Rendering-Related Events
 
+#### `source-marked-faulty` | e: `{ viewer, key, error }`
+Fired **once** when a tile source crosses from healthy to faulty — either it failed to instantiate
+(its `info.json` / DZI could not be loaded) or it accumulated too many *consecutive* failed tile
+requests during viewing (threshold: `faultyTileThreshold`, default 5; reset on any successful tile).
+The verdict is persisted per-viewer in a faulty-source registry keyed by source identity, so it
+survives renderer rebuilds and visualization switches. This is **warn-only**: the `TiledImage` is
+**not** removed — OpenSeadragon keeps requesting tiles so the source may recover. Consumers surface
+the warning (navigator tab title, shader-menu alert). `key` is the registry key; `error` is the
+human-readable reason.
+
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
-Fired when the corresponding `TiledImage` fails to load multiple tiles within a certain time
-so that the viewer believes the `TiledImage` instance is faulty and should be removed.
-The removal does not happen on the basic viewer layers but should you add your own `TiledImage`s to
-OpenSeadragon, this helps you to react on their misbehaviour.
+> **Deprecated.** No longer emitted by the core. Use `source-marked-faulty` instead, which carries a
+> persisted faulty verdict rather than a transient time-window heuristic.
+
+#### `z-depth-changed` | e: `{ index: number, count: number, viewer: OpenSeadragon.Viewer }`
+Fired on the viewer whenever the active focal plane of a z-stack slide changes
+(navigator slider, Alt+scroll, `[` / `]` shortcuts, or scripting `setZDepth`/`stepZDepth`).
+Raised by the per-viewer `ViewerDepthController` after the plane flip, before the in-place
+tile repaint completes. Only fires for sources exposing a `zStack` descriptor with
+`count > 1` — see [`ZSTACK.md`](ZSTACK.md).
 
 #### `visualization-used` | e: _visualization goal_
 The event occurs each time the viewer runs a visualization goal (switched between in the visualization setup title select if multiple available), 
@@ -279,6 +400,11 @@ Fired when a specific authentication secret is deleted from the user instance.
 
 #### `secret-needs-update`* | e: `{type: string, contextId: string}`
 Fired when a component (like HttpClient) encounters an authentication failure and requests the OIDCAuthClient to perform a background or interactive refresh.
+A broker must subscribe at construction, not at first login: `XOpatUser.requestSecretUpdate` rejects immediately when nothing listens, so an unsubscribed context can never be refreshed after a 401.
+
+#### `auth-settled`* | e: `{contextId: string, authenticated: boolean, reason: string}`
+Raised by `APPLICATION_CONTEXT.auth` when a context finished *trying* to authenticate — the broker claimed it, its boot login attempt completed, and any asynchronous secret write landed. `authenticated` says whether it succeeded; `reason` (`authenticated` | `unconfigured` | `no-broker` | `not-authenticated` | `timeout`) is diagnostics only — never branch a security decision on it.
+Prefer `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)` / `.onSettled(cb)` over subscribing directly. See `src/AUTH.md`.
 
 #### `user-select` | e: `{userId: string, userName: string}`
 Fired when the user interacts with the user panel/icon in the application interface.

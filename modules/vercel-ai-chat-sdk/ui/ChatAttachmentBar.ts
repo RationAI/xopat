@@ -1,4 +1,5 @@
-const { div, button, input } = (globalThis as any).van.tags;
+import {_t} from "../shared/i18n";
+const { div, span, button, input } = (globalThis as any).van.tags;
 
 export interface ChatAttachmentBarOptions {
     onFilesSelected?: (files: FileList | File[]) => void;
@@ -14,6 +15,7 @@ export class ChatAttachmentBar {
     _attachFileBtn: HTMLButtonElement | null;
     _screenshotBtn: HTMLButtonElement | null;
     _disabled: boolean;
+    _busy: boolean;
     _filesEnabled: boolean;
     _screenshotEnabled: boolean;
     _outsideClickHandler: ((e: MouseEvent) => void) | null;
@@ -27,6 +29,7 @@ export class ChatAttachmentBar {
         this._attachFileBtn = null;
         this._screenshotBtn = null;
         this._disabled = false;
+        this._busy = false;
         this._filesEnabled = true;
         this._screenshotEnabled = true;
         this._outsideClickHandler = null;
@@ -59,8 +62,8 @@ export class ChatAttachmentBar {
                 if (this._disabled || !this._filesEnabled) return;
                 this._fileInputEl?.click();
             },
-            title: "Attach files or images",
-        }, "Attach file") as HTMLButtonElement;
+            title: _t('attachFilesOrImages'),
+        }, _t('attachFile')) as HTMLButtonElement;
 
         this._screenshotBtn = button({
             type: "button",
@@ -72,8 +75,8 @@ export class ChatAttachmentBar {
                 this._closeMenu();
                 this.options.onScreenshot?.();
             },
-            title: "Attach a screenshot of the current viewer viewport",
-        }, "Take screenshot") as HTMLButtonElement;
+            title: _t('attachScreenshotViewport'),
+        }, _t('takeScreenshot')) as HTMLButtonElement;
 
         this._menuEl = div(
             {
@@ -93,7 +96,7 @@ export class ChatAttachmentBar {
                 if (this._disabled) return;
                 this._toggleMenu();
             },
-            title: "Add attachment or screenshot",
+            title: _t('addAttachmentOrScreenshot'),
         }, "+") as HTMLButtonElement;
 
         this._root = div(
@@ -131,6 +134,26 @@ export class ChatAttachmentBar {
         this._syncAvailabilityUi();
     }
 
+    /**
+     * An upload is running. The button swaps its "+" for a spinner: uploads encode the whole
+     * payload as base64 and can take seconds, during which the bar used to look idle.
+     */
+    setBusy(busy: boolean): void {
+        const next = !!busy;
+        if (next === this._busy) return;
+        this._busy = next;
+        if (!this._attachBtn) return;
+        this._attachBtn.replaceChildren();
+        if (this._busy) {
+            this._closeMenu();
+            this._attachBtn.appendChild(span({ class: "loading loading-spinner loading-xs" }) as HTMLElement);
+            this._attachBtn.title = _t('uploadingAttachment');
+        } else {
+            this._attachBtn.textContent = "+";
+            this._attachBtn.title = _t('addAttachmentOrScreenshot');
+        }
+    }
+
     setAvailability(options: { files?: boolean; screenshot?: boolean }): void {
         if (typeof options.files === "boolean") {
             this._filesEnabled = options.files;
@@ -152,8 +175,8 @@ export class ChatAttachmentBar {
             this._attachFileBtn.classList.toggle("opacity-50", this._disabled || !this._filesEnabled);
             this._attachFileBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._filesEnabled);
             this._attachFileBtn.title = this._filesEnabled
-                ? "Attach files or images"
-                : "File upload unavailable for this model";
+                ? _t('attachFilesOrImages')
+                : _t('fileUploadUnavailableForModel');
         }
 
         if (this._screenshotBtn) {
@@ -161,16 +184,16 @@ export class ChatAttachmentBar {
             this._screenshotBtn.classList.toggle("opacity-50", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.classList.toggle("cursor-not-allowed", this._disabled || !this._screenshotEnabled);
             this._screenshotBtn.title = this._screenshotEnabled
-                ? "Attach a screenshot of the current viewer viewport"
-                : "Screenshot unavailable for this model";
+                ? _t('attachScreenshotViewport')
+                : _t('screenshotUnavailableForModel');
         }
 
         const anyAvailable = this._filesEnabled || this._screenshotEnabled;
         if (this._attachBtn) {
             this._attachBtn.disabled = this._disabled || !anyAvailable;
             this._root!.title = !anyAvailable
-                ? "Attachments unavailable for this model"
-                : "Add attachment or screenshot";
+                ? _t('attachmentsUnavailableForModel')
+                : _t('addAttachmentOrScreenshot');
         }
 
         if ((!this._filesEnabled && !this._screenshotEnabled) || this._disabled) {

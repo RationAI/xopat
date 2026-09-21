@@ -164,6 +164,21 @@
         return r;
     };
 
+    // A pure reorder changes nothing the spatial index's cache key can see — not
+    // the member count, not the viewport, not the selection — but `visibleObjects`
+    // returns its result in canvas z-order, so a cached answer would keep the old
+    // stacking. Add/remove already invalidate through the hooks above; these are
+    // the paths that move an object without adding or removing one.
+    for (const method of ['bringToFront', 'sendToBack', 'bringForward', 'sendBackwards', 'moveTo']) {
+        const original = fabric.Canvas.prototype[method];
+        if (typeof original !== 'function') continue;
+        fabric.Canvas.prototype[method] = function (...args) {
+            const r = original.apply(this, args);
+            this.__spatialIndex?.invalidateVisibleCache();
+            return r;
+        };
+    }
+
     const _origSetCoords = fabric.Object.prototype.setCoords;
     fabric.Object.prototype.setCoords = function (skipCorners) {
         const r = _origSetCoords.call(this, skipCorners);
@@ -223,6 +238,25 @@
         _origRenderObjects.call(this, ctx, filtered);
 
         if (rects && rects.length) _drawClusters(ctx, this, rects);
+
+        // Always-on annotation labels: one pill centred on every
+        // individually-rendered annotation (clustered ones are already dropped
+        // from `filtered`). Two independent contents share the same pill —
+        // the area/length metric (opt-in via the annotations module) and a
+        // comment glyph shown whenever the annotation carries at least one
+        // live comment. The comment glyph is NOT tied to the metric toggle:
+        // an annotation with comments is always flagged.
+        // Both are skipped once the visible count exceeds the deployment
+        // threshold — that ceiling bounds the per-frame draw cost. Pure
+        // screen-space draw: no fabric object, no group, shapes untouched.
+        const mod = idx.wrapper && idx.wrapper.module;
+        if (mod && filtered.length <= (mod.measurementLabelMaxCount ?? 200)) {
+            const wantMetrics = !!mod._measurementLabelsEnabled;
+            const wantComments = !!mod.getCommentsEnabled?.();
+            if (wantMetrics || wantComments) {
+                _drawMeasurementLabels(ctx, this, filtered, mod, wantMetrics, wantComments);
+            }
+        }
     };
 
     // Cluster pill style (all values in CSS pixels — drawn in screen space).
@@ -395,6 +429,199 @@
         ctx.restore();
     }
 
+    // ── Always-on measurement labels ──────────────────────────────────────
+    // A read-only area/length pill centred on each visible annotation when
+    // the annotations module has the overlay enabled. Draws in screen space
+    // (retina-only transform) like the cluster pills, so the pill size stays
+    // constant across zoom and no fabric object is added to the canvas.
+    // The selected object is skipped: its metric floats ABOVE the shape via the
+    // toolbar pill, keeping the geometry being edited clear.
+    const ML_FONT = '600 11px Arial';
+    const ML_PAD_X = 6;
+    const ML_HEIGHT = 17;
+    const ML_RADIUS = ML_HEIGHT / 2;
+    const ML_BG = 'rgba(255,255,255,0.92)';
+    const ML_FG = '#333';
+    const ML_STROKE = 'rgba(0,0,0,0.55)';
+    const ML_OPACITY_FACTOR = 2;   // matches the toolbar pill's alpha boost
+
+    /**
+     * Label string for one object with a cheap per-object cache. Recomputed only
+     * when a lightweight token changes, so a static polygon does not re-run its
+     * area math every frame; an edited shape refreshes because its bbox changes.
+     * Always-fresh while an object is being actively transformed (its bbox moves
+     * each frame).
+     *
+     * The token carries `displayValue` and `presetID` as well as the geometry,
+     * because the label is a value slot rather than a measurement readout: an
+     * integration attaching a value to a *static* shape changes no geometry at
+     * all, and a geometry-only token would pin the stale string for the lifetime
+     * of the object. Both are scalars already on the object — the point of the
+     * cache is to skip the area math, and neither adds work to the render path.
+     */
+    function _measurementLabelFor(mod, obj) {
+        const token = obj.factoryID + '|'
+            + Math.round((obj.width || 0) * (obj.scaleX || 1)) + '|'
+            + Math.round((obj.height || 0) * (obj.scaleY || 1)) + '|'
+            + (obj.points ? obj.points.length : 0) + '|'
+            + (obj.path ? obj.path.length : 0) + '|'
+            + (obj.displayValue == null ? '' : obj.displayValue) + '|'
+            + (obj.presetID == null ? '' : obj.presetID);
+        const cached = obj.__mLabel;
+        if (cached && cached.token === token) return cached.text;
+        const text = mod.getMeasurementLabel(obj) || '';
+        obj.__mLabel = { token, text };
+        return text;
+    }
+
+    /**
+     * Tint for one object with a per-object cache keyed by its colour: the tint
+     * is a string parse + arithmetic, and this runs for every labelled object on
+     * every frame. Invalidates when the preset colour changes.
+     */
+    function _labelTintFor(mod, obj) {
+        if (!mod.getLabelTint) return null;
+        const cached = obj.__mTint;
+        if (cached && cached.color === obj.color) return cached.tint;
+        const tint = mod.getLabelTint(obj);
+        obj.__mTint = { color: obj.color, tint };
+        return tint;
+    }
+
+    // Comment glyph geometry (CSS pixels, screen space).
+    const ML_ICON_W = 11;
+    const ML_ICON_H = 11;
+    const ML_ICON_GAP = 4;
+
+    // The glyph is a constant-colour vector; rasterize it ONCE per retina
+    // scaling and blit it per pill. A path+fill per label per frame would put
+    // ~10 extra path ops on the hot render path for every commented annotation.
+    const _commentIconCache = new Map();   // retina -> canvas
+
+    function _getCommentIcon(retina) {
+        const s = Math.round(retina * 4) / 4 || 1;
+        const cached = _commentIconCache.get(s);
+        if (cached) return cached;
+
+        const bmp = document.createElement('canvas');
+        bmp.width = Math.ceil(ML_ICON_W * s);
+        bmp.height = Math.ceil(ML_ICON_H * s);
+        const g = bmp.getContext('2d');
+        g.scale(s, s);
+
+        // Speech bubble: rounded body + tail on the bottom-left.
+        const w = ML_ICON_W, bh = 8, r = 2.2;
+        g.beginPath();
+        g.moveTo(r, 0);
+        g.lineTo(w - r, 0);
+        g.arcTo(w, 0, w, r, r);
+        g.lineTo(w, bh - r);
+        g.arcTo(w, bh, w - r, bh, r);
+        g.lineTo(6, bh);
+        g.lineTo(2.5, ML_ICON_H);
+        g.lineTo(2.5, bh);
+        g.lineTo(r, bh);
+        g.arcTo(0, bh, 0, bh - r, r);
+        g.lineTo(0, r);
+        g.arcTo(0, 0, r, 0, r);
+        g.closePath();
+        g.fillStyle = ML_FG;
+        g.fill();
+
+        _commentIconCache.set(s, bmp);
+        return bmp;
+    }
+
+    /**
+     * Live comment count for one object. Deliberately an allocation-free loop
+     * rather than `comments.filter(...).length`: this runs for every visible
+     * annotation on every frame, and per-frame garbage is what makes a render
+     * loop stutter. Bails on the common no-comments case in one property read.
+     */
+    function _hasComments(obj) {
+        const list = obj.comments;
+        if (!list || !list.length) return false;
+        for (let i = 0; i < list.length; i++) if (!list[i].removed) return true;
+        return false;
+    }
+
+    function _drawMeasurementLabels(ctx, canvas, objects, mod, wantMetrics, wantComments) {
+        const idx = canvas.__spatialIndex;
+        const annOpacity = idx?.wrapper?.module?.presets?.commonAnnotationVisuals?.opacity ?? 1;
+        if (annOpacity <= 0) return;
+        const alpha = Math.min(1, annOpacity * ML_OPACITY_FACTOR);
+
+        const active = canvas.getActiveObject && canvas.getActiveObject();
+
+        const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
+        const commentIcon = wantComments ? _getCommentIcon(retina) : null;
+        ctx.save();
+        ctx.setTransform(retina, 0, 0, retina, 0, 0);
+        ctx.globalAlpha *= alpha;
+        ctx.font = ML_FONT;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+
+        for (let i = 0; i < objects.length; i++) {
+            const obj = objects[i];
+            // Selected object already shows its metric in the toolbar pill.
+            // Types that carry their own on-canvas text or whose extent is
+            // meaningless opt out via the factory's supportsMeasurements(),
+            // which getMeasurementLabel already honours (empty text below).
+            if (obj === active) continue;
+
+            const commented = wantComments && _hasComments(obj);
+            const text = wantMetrics ? _measurementLabelFor(mod, obj) : '';
+            if (!text && !commented) continue;
+
+            // Centred on the OBB: rotation-invariant, and unambiguous about
+            // which shape the metric belongs to.
+            const c = obj.calcLineCoords();
+            const cx = (c.tl.x + c.br.x) / 2;
+            const cy = (c.tl.y + c.br.y) / 2;
+
+            let contentW = text ? ctx.measureText(text).width : 0;
+            if (commented) contentW += ML_ICON_W + (text ? ML_ICON_GAP : 0);
+            const w = contentW + ML_PAD_X * 2;
+            const x = cx - w / 2;
+            const y = cy - ML_HEIGHT / 2;
+            const r = ML_RADIUS;
+
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.arcTo(x + w, y, x + w, y + r, r);
+            ctx.lineTo(x + w, y + ML_HEIGHT - r);
+            ctx.arcTo(x + w, y + ML_HEIGHT, x + w - r, y + ML_HEIGHT, r);
+            ctx.lineTo(x + r, y + ML_HEIGHT);
+            ctx.arcTo(x, y + ML_HEIGHT, x, y + ML_HEIGHT - r, r);
+            ctx.lineTo(x, y + r);
+            ctx.arcTo(x, y, x + r, y, r);
+            ctx.closePath();
+            // Same preset-colour wash the toolbar pill uses, so a label reads as
+            // belonging to its shape. Falls back to the neutral chrome when the
+            // object has no resolvable colour.
+            const tint = _labelTintFor(mod, obj);
+            ctx.fillStyle = tint ? tint.fill : ML_BG;
+            ctx.fill();
+            ctx.strokeStyle = tint ? tint.stroke : ML_STROKE;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            let cursor = x + ML_PAD_X;
+            if (commented) {
+                ctx.drawImage(commentIcon, cursor, Math.round(cy - ML_ICON_H / 2), ML_ICON_W, ML_ICON_H);
+                cursor += ML_ICON_W + (text ? ML_ICON_GAP : 0);
+            }
+            if (text) {
+                ctx.fillStyle = ML_FG;
+                ctx.fillText(text, cursor, cy);
+            }
+        }
+
+        ctx.restore();
+    }
+
     // ── Precise geometric hit-test (narrow phase) ─────────────────────────
     // The rbush spatial index gives us a viewport-pruned, bbox-passing
     // candidate set in O(log n). Fabric's stock _checkTarget then runs an
@@ -415,6 +642,39 @@
     // No offscreen render (fabric's `perPixelTargetFind` would do that);
     // typical cost at one click is a few µs across tens of candidates, well
     // under one frame even at 10k+ annotations on the canvas.
+    //
+    // Every test is widened by a tolerance derived from `obj.padding` — the
+    // same screen-px margin fabric already folded into `lineCoords` for the
+    // bbox phase — so the two phases never disagree about how close is close
+    // enough. Callers that want stricter geometry just set `padding: 0`.
+
+    function _distToSegmentSq(px, py, ax, ay, bx, by) {
+        const dx = bx - ax, dy = by - ay;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        const ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+        return ex * ex + ey * ey;
+    }
+
+    // Distance from a point to a poly-path. `closed` adds the wrap-around
+    // segment (polygon outline) — an open polyline must NOT get it, or its
+    // last vertex would appear connected to its first.
+    function _nearPath(px, py, points, tolSq, closed) {
+        const n = points.length;
+        if (n === 0) return false;
+        if (n === 1) {
+            const dx = px - points[0].x, dy = py - points[0].y;
+            return dx * dx + dy * dy <= tolSq;
+        }
+        for (let i = 1; i < n; i++) {
+            if (_distToSegmentSq(px, py, points[i - 1].x, points[i - 1].y,
+                points[i].x, points[i].y) <= tolSq) return true;
+        }
+        if (closed && n > 2 && _distToSegmentSq(px, py, points[n - 1].x, points[n - 1].y,
+            points[0].x, points[0].y) <= tolSq) return true;
+        return false;
+    }
 
     function _rayCastInPolygon(px, py, points) {
         // Odd-even rule. Points are in object-local coords; pre-adjusted by
@@ -453,32 +713,64 @@
         }
         const type = obj.type;
 
+        // Grab tolerance, expressed in the same local units as `local`.
+        // `obj.padding` is the caller's margin in SCREEN px (fabric applies it
+        // that way in calcLineCoords, which is what the bbox phase tested), so
+        // it has to come back through the same combined matrix _normalizePointer
+        // inverted: viewportTransform ∘ obj.calcTransformMatrix(). Half the
+        // stroke is added so a thick line is grabbable across its drawn width.
+        let tol = 0;
         try {
-            // Polygon / polyline — odd-even ray-cast on obj.points.
-            // Rendered points sit at (p.x - pathOffset.x, p.y - pathOffset.y)
-            // in the centered local space, so equivalently we test the local
-            // pointer plus pathOffset against the raw obj.points array.
+            const m = fabric.util.multiplyTransformMatrices(
+                this.viewportTransform, obj.calcTransformMatrix());
+            const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+            tol = (obj.padding || 0) / scale + (obj.strokeWidth || 0) / 2;
+        } catch (e) {
+            tol = (obj.strokeWidth || 0) / 2;
+        }
+        const tolSq = tol * tol;
+
+        try {
+            // Polygon / polyline — points live at (p.x - pathOffset.x,
+            // p.y - pathOffset.y) in the centered local space, so equivalently
+            // we test the local pointer plus pathOffset against raw obj.points.
             if ((type === 'polygon' || type === 'polyline') && Array.isArray(obj.points)) {
                 const offX = obj.pathOffset ? obj.pathOffset.x : 0;
                 const offY = obj.pathOffset ? obj.pathOffset.y : 0;
-                return _rayCastInPolygon(local.x + offX, local.y + offY, obj.points);
+                const px = local.x + offX, py = local.y + offY;
+                // A polyline is an OPEN path: it has no interior, so the
+                // odd-even rule is meaningless for it (and _rayCastInPolygon
+                // rejects < 3 points outright, which made every 2-point
+                // polyline permanently unselectable). Hit it on its stroke.
+                if (type === 'polyline') return _nearPath(px, py, obj.points, tolSq, false);
+                // Polygon: interior OR outline, so a click that lands just
+                // outside a thin/outline-only shape still selects it.
+                return _rayCastInPolygon(px, py, obj.points)
+                    || _nearPath(px, py, obj.points, tolSq, true);
             }
-            // Ellipse — closed-form, centered.
+            // Line — exact segment distance. Previously this fell through to
+            // the "unknown type" branch and accepted the whole AABB, so a long
+            // diagonal was selectable from far off the drawn line.
+            if (type === 'line' && typeof obj.calcLinePoints === 'function') {
+                const p = obj.calcLinePoints();
+                return _distToSegmentSq(local.x, local.y, p.x1, p.y1, p.x2, p.y2) <= tolSq;
+            }
+            // Ellipse — closed-form, centered, radii inflated by the tolerance.
             if (type === 'ellipse') {
-                const rx = obj.rx || 0, ry = obj.ry || 0;
+                const rx = (obj.rx || 0) + tol, ry = (obj.ry || 0) + tol;
                 if (rx <= 0 || ry <= 0) return true;
                 const dx = local.x / rx, dy = local.y / ry;
                 return dx * dx + dy * dy <= 1;
             }
             // Circle — closed-form, centered.
             if (type === 'circle') {
-                const r = obj.radius || 0;
+                const r = (obj.radius || 0) + tol;
                 if (r <= 0) return true;
                 return local.x * local.x + local.y * local.y <= r * r;
             }
             // Rect — AABB centered at local (0,0).
             if (type === 'rect') {
-                const w = (obj.width || 0) / 2, h = (obj.height || 0) / 2;
+                const w = (obj.width || 0) / 2 + tol, h = (obj.height || 0) / 2 + tol;
                 return Math.abs(local.x) <= w && Math.abs(local.y) <= h;
             }
             // Group / activeSelection — bbox already passed; keep current
@@ -614,23 +906,25 @@
     }
 
     /**
-     * @param {Object} options
-     *      Allows configurable properties to be entirely specified by passing
-     *      an options object to the constructor.
-     * @param {Number} options.scale
-     *      Fabric 'virtual' canvas size, for creating objects
+     * Attach the fabric overlay to a viewer.
+     *
+     * Takes no options: the overlay derives its transform live from the
+     * referenced tiled image on every frame (see _computeFabricViewportTransform),
+     * so it needs nothing at construction time and can be created before — or
+     * without — an open slide. It used to accept a `scale` (the level-0 image
+     * width), which forced every caller to have a tiled image on hand; that value
+     * was stored and never read.
      **/
-    OpenSeadragon.Viewer.prototype.fabricjsOverlay = function(options) {
-        this._fabricjsOverlayInfo = new FabricOverlay(this, options.scale);
+    OpenSeadragon.Viewer.prototype.fabricjsOverlay = function() {
+        this._fabricjsOverlayInfo = new FabricOverlay(this);
         return this._fabricjsOverlayInfo;
     };
 
     class FabricOverlay {
-        constructor(viewer, scale) {
+        constructor(viewer) {
             var self = this;
 
             this._viewer = viewer;
-            this._scale = scale;
             this._containerWidth = 0;
             this._containerHeight = 0;
             this._canvasdiv = document.createElement('div');
@@ -740,11 +1034,19 @@
         }
 
         resizecanvas(updateObjects = true) {
-            this._fabricCanvas.setDimensions({
-                width: this._containerWidth,
-                height: this._containerHeight
-            });
-            this._fabricCanvas.calcOffset();
+            // setDimensions reallocates the canvas backstore and calcOffset forces a
+            // layout reflow (getBoundingClientRect). Both are expensive and only need
+            // to run when the canvas SIZE actually changed — not on every rendered
+            // frame. Mirror the guard resize() already uses for the DOM attributes.
+            if (this._containerWidth !== this._appliedW || this._containerHeight !== this._appliedH) {
+                this._fabricCanvas.setDimensions({
+                    width: this._containerWidth,
+                    height: this._containerHeight
+                });
+                this._fabricCanvas.calcOffset();
+                this._appliedW = this._containerWidth;
+                this._appliedH = this._containerHeight;
+            }
 
             const transform = this._computeFabricViewportTransform();
             if (!transform) {
@@ -755,7 +1057,23 @@
             const zoom = transform.zoom;
             const canvas = this._fabricCanvas;
             canvas.__osdViewportScale = zoom;
-            canvas.setViewportTransform(transform.matrix);
+
+            // Only re-apply a transform that actually differs.
+            //
+            // OSD raises `update-viewport` once per rendered frame whether or not
+            // the viewport moved (tile arrivals and forceRedraw raise it too), and
+            // setViewportTransform recomputes vptCoords and bumps the spatial
+            // index's setCoords version. Applying an identical matrix therefore
+            // cost a full re-cluster of the viewport on frames where nothing had
+            // moved — and, because it ran before any consumer could compare the
+            // cache key, on the hit-tests between those frames as well.
+            const current = canvas.viewportTransform;
+            const m = transform.matrix;
+            if (!current
+                || current[0] !== m[0] || current[1] !== m[1] || current[2] !== m[2]
+                || current[3] !== m[3] || current[4] !== m[4] || current[5] !== m[5]) {
+                canvas.setViewportTransform(m);
+            }
 
             // square root will make closer zoom a bit larger -> nicer
             const smallZoom = Math.sqrt(zoom) / 2;

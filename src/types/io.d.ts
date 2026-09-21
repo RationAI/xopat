@@ -22,6 +22,13 @@
  *    veto the operation. Owners use `IOResource.create/update/delete` (which
  *    runs guards then dispatches) or call `IOResource.canCreate/…` for the
  *    guard-only check.
+ *  - `pre-export` / `pre-import` / `pre-read` — the same veto phase for the
+ *    directions that used to have none. `pre-export` runs before the owner's
+ *    `exportBundle` hook is even called, `pre-import` before `importBundle`,
+ *    `pre-read` before any sink read/query. This is what lets the rights layer
+ *    gate bundle and read traffic centrally: a refusal happens before a payload
+ *    is produced or a destination is contacted, so **sinks never implement
+ *    authorization themselves**.
  *  - `kv-get` / `kv-set` / `kv-delete` / `kv-clear` / `kv-keys` — key/value store
  */
 type IODirection =
@@ -35,6 +42,9 @@ type IODirection =
     | "pre-create"
     | "pre-update"
     | "pre-delete"
+    | "pre-export"
+    | "pre-import"
+    | "pre-read"
     | "kv-get"
     | "kv-set"
     | "kv-delete"
@@ -118,6 +128,41 @@ interface IOContext {
      * by `viewer-open-pipeline`).
      */
     backgroundId?: string;
+    /**
+     * Which *route* the data is travelling on. Guards use it to answer two
+     * independent questions rather than one conflated one — see
+     * src/USER_ROLES.md "Two routes".
+     *
+     *  - `"sink"` (default) — a bound destination from `ENV.client.io.bindings`
+     *    (`post-data`, `session-memory`, a remote store, …). Gated by the
+     *    owner's own capabilities (`<ownerId>.bundle-export`, …).
+     *  - `"local"` — the local-file escape hatch: the `file-download` last
+     *    resort, the `file-upload` sink, and `IO_PIPELINE.importBundle` with a
+     *    user-picked payload. Gated by the single core capability
+     *    `core.io.local-file`, NOT by the owner's capabilities.
+     *
+     * The split is what makes "do not upload, but let me keep a copy"
+     * expressible without inventing a per-owner destination axis. A guard that
+     * ignores `route` sees every dispatch, exactly as before this field existed.
+     */
+    route?: "sink" | "local";
+    /**
+     * Who asked for this dispatch. Decides whether a refusal is worth
+     * interrupting the user with.
+     *
+     *  - `"user"` (**default**) — the user did something: a gesture, a menu
+     *    action, a file they picked. A refusal is an answer to them, and is
+     *    surfaced through the notifier.
+     *  - `"system"` — the pipeline's own orchestration: boot hydration, the
+     *    restore after a slide opens, the flush of a slide being vacated. The
+     *    user asked for none of it, so a refusal here raises `io:refused` and
+     *    is logged, but never becomes a dialog.
+     *
+     * **Loud by default, on purpose.** A call site that forgets to declare
+     * itself over-warns, which someone notices and fixes; a default of silence
+     * would let a real refusal disappear, which nobody notices at all.
+     */
+    trigger?: "user" | "system";
     /** Free-form metadata, e.g. format hints. */
     meta: Record<string, unknown>;
 }
@@ -135,15 +180,129 @@ type IOResult<T = unknown> =
           reason: string;
           userMessage?: string;
           code?: string;
+          /**
+           * Who the refusal was about. Optional and best-effort, but the only
+           * way a caller can NAME what it could not persist: a flush pushes a
+           * variable number of results per owner (0 when the hook returned
+           * nothing, 1 on a veto, N across sinks, +1 on the local fallback),
+           * so correlating by index is not possible. `IOContext` carries this
+           * but stays local to the dispatch.
+           */
+          ownerId?: string;
+          ownerUid?: string;
+          capabilityId?: string;
       };
+
+/**
+ * Bundle payload envelope for owners whose state is BYTES, not JSON —
+ * recordings, exported region images, anything already in a binary
+ * container. An owner's `exportBundle` may return this instead of a string
+ * or a plain object, and `importBundle` receives it back on the way in.
+ *
+ * Sinks that can store bytes natively (mlflow artifacts, github blobs) do so
+ * without a JSON round-trip; sinks that cannot are free to refuse. Base64
+ * inside a JSON bundle inflates by a third and reads as opaque in every
+ * storage backend, which is why this exists as a first-class shape.
+ */
+interface IOBinaryPayload {
+    bytes: Uint8Array | ArrayBuffer;
+    /** MIME type recorded with the stored object. Default `application/octet-stream`. */
+    contentType?: string;
+    /** Extension a sink may append when it names the stored object. */
+    fileExt?: string;
+}
+
+/**
+ * Options for `IO_PIPELINE.formatPath`.
+ *
+ * The TEMPLATE is trusted (it comes from server-delivered config) and may
+ * contain `/` in every mode. Only the SUBSTITUTED VALUES are treated as
+ * untrusted.
+ */
+interface IOFormatOptions {
+    /**
+     * `"path"` (default) / `"name"` — each substituted value is reduced to
+     *   ONE safe segment: charset `[A-Za-z0-9._-]`, never `.` or `..`,
+     *   never empty, ≤128 chars. `"path"` is for storage paths, `"name"`
+     *   for identifiers (MLflow experiment/run names); they share the
+     *   charset rule and differ only in intent.
+     * `"raw"` — no charset restriction; control characters (incl. CR/LF)
+     *   are still stripped and the value is capped at 256 chars. For
+     *   NON-ADDRESSING text only, e.g. a commit message.
+     */
+    mode?: "path" | "name" | "raw";
+    /** Substitute for values that sanitize to empty. Default `"_"`. */
+    empty?: string;
+    /** Extra placeholders, merged over the ctx-derived set. */
+    extra?: Record<string, string | undefined>;
+}
+
+/**
+ * Declarative statement of what a sink can serve. The pipeline reads this
+ * at *binding-resolution* time — before any data is at risk — and reports
+ * `io:invalid-binding` for every admin binding the sink cannot honour.
+ *
+ * Prefer this over an imperative `accepts` for anything statically known.
+ * A sink that only stores annotations should say
+ * `{ kinds: ["bundle"], owners: ["annotations"] }` rather than
+ * `accepts: ctx => ctx.ownerId === "annotations"`: the declarative form is
+ * visible at boot, the imperative one only at dispatch, and a dispatch that
+ * every bound sink declines is a data-loss event.
+ *
+ * All pattern fields are anchored globs where `*` matches any run of
+ * characters (`IO_PIPELINE.matchesPattern`). An absent field means "any".
+ */
+interface IOSinkSupport {
+    /** Capability kinds this sink implements. */
+    kinds: IOCapabilityKind[];
+    /** Patterns matched against `ctx.ownerId` OR `ctx.ownerUid`. */
+    owners?: string[];
+    /** Patterns matched against `ctx.capabilityId`. */
+    capabilities?: string[];
+    /** Patterns matched against `ctx.resourceName` (crud capabilities only). */
+    resources?: string[];
+}
+
+/**
+ * A sink declining one dispatch, with a reason. Returned from `accepts`
+ * instead of a bare `false` when the sink can explain itself — the reason
+ * is collected into the `W_IO_NO_SINK_ACCEPTED` refusal raised when *no*
+ * bound sink took the call, so the user sees "DICOM sink only stores
+ * annotations" rather than "no sink accepted export".
+ */
+interface IOAcceptDecision {
+    accept: false;
+    reason: string;
+    userMessage?: string;
+    /**
+     * `true` when the sink declined on **policy** grounds ("this user//deployment
+     * may not write here") rather than shape grounds ("I do not handle this
+     * kind of payload").
+     *
+     * The distinction decides whether the local-file fallback may run. A shape
+     * decline means nobody suitable was bound, and handing the user a local
+     * copy is the right rescue. A policy decline means someone said *no* — and
+     * silently downloading the same bytes would make that "no" meaningless.
+     *
+     * Authorization does not belong in a sink (see src/IO_SINK_AUTHORING.md);
+     * this flag exists for sinks whose *upstream* refuses, so the refusal is
+     * not misread as "no sink was interested".
+     */
+    policy?: boolean;
+}
 
 /**
  * Sink contract. Each sink implements only the methods relevant
  * to the capability kinds it advertises in `supports`.
  *
- * `accepts` is an optional fine-grained gate: if defined, it must return
- * true for the sink to receive the call. Useful for per-context
- * filtering (e.g. "only handle items from viewer X").
+ * `accepts` is an optional fine-grained gate for genuinely *runtime*
+ * conditions (missing config, wrong viewer state). Statically-known limits
+ * belong in `supports` — see `IOSinkSupport`.
+ *
+ * Declining is quiet ONLY while another bound sink succeeds. If every sink
+ * bound to a (owner, capability) declines or refuses, the pipeline raises
+ * `io:fully-refused` and the dispatch resolves to a refusal — never to a
+ * silent `{ok:true}`.
  *
  * Modules/plugins register sinks at runtime via `IO_PIPELINE.registerSink(...)`.
  * Sink options (URLs, repo paths, tokens, …) are composed by the module
@@ -154,8 +313,23 @@ type IOResult<T = unknown> =
 interface IOSink {
     id: string;
     label?: string;
-    supports: IOCapabilityKind[];
-    accepts?(ctx: IOContext): boolean;
+    /**
+     * Either the legacy short form (kinds only) or the full descriptor.
+     * The pipeline normalizes to `IOSinkSupport` on registration.
+     */
+    supports: IOCapabilityKind[] | IOSinkSupport;
+    /**
+     * Which route this sink is (`IOContext.route`, default `"sink"`). Set
+     * `"local"` on a sink that moves data between the app and the user's own
+     * machine — the pipeline then stamps `route: "local"` on its dispatch
+     * context and checks it against the local-file policy rather than the
+     * owner's capability, even when an admin has bound it explicitly.
+     *
+     * This is a statement of *what the sink is*, not of who may use it: policy
+     * still lives in the guards (see src/IO_SINK_AUTHORING.md §0).
+     */
+    route?: "sink" | "local";
+    accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx: IOContext, payload: unknown): Promise<IOResult> | IOResult;
     readBundle?(ctx: IOContext): Promise<IOResult> | IOResult;
@@ -262,11 +436,17 @@ interface IOResourceDef<T = unknown> {
      *  - `create X` then `delete X` (same identity, both unstarted): both removed.
      *  - `delete X` then `create X`: both removed.
      *  - Multiple `update X`: keep only the latest.
+     *  - `update X` then `delete X`: drop the update, keep the delete.
      *  - `create X` then `update X`: merge `update`'s patch into the
      *    `create`'s payload via `merge` (only applied if `merge` is provided).
      * In-flight ops never coalesce — only entries with `started === false`
      * are candidates. Rollback ops (from `rollbackOnAsyncRefuse`) participate
      * in coalescing like any normal op.
+     *
+     * Guarantees: a coalesced-out op always settles with
+     * `{ ok: true, payload: { coalesced: true } }` (awaiting callers never
+     * hang), and a surviving op keeps its predecessor's queue slot, so the
+     * relative order of ops on *different* identities is never disturbed.
      */
     coalesce?: boolean;
     /**
@@ -281,6 +461,19 @@ interface IOResourceDef<T = unknown> {
      * and removed after settle. Pending ops survive page reloads and
      * replay automatically on next boot. Requires `serialize` /
      * `deserialize` that round-trip through JSON.
+     *
+     * **What "requires" costs if you skip it.** Without `serialize` the RAW
+     * item is what gets written — and what gets dispatched. Anything the
+     * structured-clone algorithm refuses (a DOM node, a canvas, a `File`, a
+     * function, a class instance you care about the prototype of) then fails
+     * the IndexedDB write on *every* operation, and this resource silently has
+     * no crash-recovery at all: the dispatch still succeeds, so nothing looks
+     * broken. The same raw payload also cannot cross a worker or `postMessage`
+     * boundary, so a sink that does will fail too.
+     *
+     * `modules/annotations` (raw fabric objects) and `modules/recorder` (a live
+     * `<img>` screenshot) both shipped this way. Neither had a symptom until
+     * someone read the console.
      */
     persistOutbox?: boolean;
     /**
@@ -326,19 +519,57 @@ interface IOResourceDef<T = unknown> {
  *                   when `rollbackOnAsyncRefuse: true` and the queued dispatch
  *                   resolves to refusal — the pipeline drives `history.undo()`
  *                   so the entry is popped and `inverseApply` runs once.
+ *  - `inversePayload`
+ *                   wire payload the *inverse* op carries when auto-history
+ *                   replays this mutation. `inverseApply` fixes local state;
+ *                   this fixes what the sink receives. Supply it whenever
+ *                   `apply` + `inverseApply` are given and the forward
+ *                   direction is:
+ *                   - `delete` — the inverse `create` needs the full item
+ *                     snapshot, otherwise the record is resurrected empty.
+ *                   - `update` — the inverse `update` needs the *reverting*
+ *                     patch, otherwise the forward patch is re-applied.
+ *                   Ignored for `create` (the inverse `delete` needs only the
+ *                   id, which the resource derives itself). A thunk defers the
+ *                   snapshot to undo time. Omitting it where required logs a
+ *                   warning and dispatches the inverse op without a body.
  *  - `skipGuards`   bypass the guard phase.
  *  - `skipHistory`  bypass the auto-history push for this single call.
  *  - `rollbackOnAsyncRefuse`
- *                   when `true` and the queued dispatch ultimately refuses,
- *                   the pipeline calls `history.undo()` to revert local state
- *                   and drop the entry. Default `false` — local input stays
- *                   visible; user is informed via `io:refused` toast and the
- *                   owner can react manually. See src/IO_PIPELINE.md.
+ *                   **Default `true`.** When the queued dispatch ultimately
+ *                   refuses, the resource runs *this call's* `inverseApply`
+ *                   and invalidates the history entry it pushed — the
+ *                   destination is authoritative, so a change it refused must
+ *                   not stay on screen. It reverts exactly this op: not
+ *                   `history.undo()`, which pops whatever is on top of the
+ *                   stack (rarely the refused op, since dispatch is queued) and
+ *                   can be intercepted by a `HistoryProvider`. Already-undone
+ *                   ops are skipped, so a revert never double-applies.
+ *                   Set `false` where flicker is worse than divergence (e.g. a
+ *                   geometry swap mid-edit); the user is then informed via the
+ *                   `io:refused` toast and the owner reacts manually. Reverting
+ *                   requires `inverseApply` — without it the resource warns
+ *                   once and leaves local state alone. See src/IO_PIPELINE.md.
+ *
+ * Which fields matter, by direction:
+ *
+ * | Forward op | `inverseApply` reverts | `inversePayload` carries |
+ * |---|---|---|
+ * | `create` | the local removal | — (inverse `delete` is addressed by id) |
+ * | `update` | the local patch      | the reverting patch |
+ * | `delete` | the local removal    | the full item snapshot |
+ *
+ * `apply` + `inverseApply` together (and no `skipHistory`) are what make the
+ * resource push a history entry. Pass `apply` alone when an outer
+ * `history.push` already owns undo for a group — but then also pass
+ * `inverseApply` + `skipHistory: true` if you want per-item revert-on-refusal
+ * without a second history entry.
  */
 interface IOResourceMutateOptions {
     meta?: Record<string, unknown>;
     apply?: () => void;
     inverseApply?: () => void;
+    inversePayload?: unknown | (() => unknown);
     skipGuards?: boolean;
     skipHistory?: boolean;
     rollbackOnAsyncRefuse?: boolean;
@@ -373,11 +604,12 @@ interface IOResource<T = unknown> {
     update(itemId: string, patch: Partial<T>, options?: IOResourceMutateOptions): IOSyncResult;
     delete(itemId: string, options?: IOResourceMutateOptions): IOSyncResult;
     /** Run validate + sync guards for `pre-create`. No sink calls. */
-    canCreate(item: T, meta?: Record<string, unknown>): IOResult;
+    canCreate(item: T, meta?: Record<string, unknown>, options?: IOGuardProbeOptions): IOResult;
     /** Run validate + sync guards for `pre-update`. No sink calls. */
-    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>): IOResult;
+    canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>,
+              options?: IOGuardProbeOptions): IOResult;
     /** Run sync guards for `pre-delete`. No sink calls. */
-    canDelete(itemId: string, meta?: Record<string, unknown>): IOResult;
+    canDelete(itemId: string, meta?: Record<string, unknown>, options?: IOGuardProbeOptions): IOResult;
     /**
      * Wait for the per-resource outbox queue to drain. Resolves with the
      * aggregate results of every queued op once all of them have settled
@@ -402,19 +634,33 @@ interface IOResource<T = unknown> {
     query(params: Record<string, unknown>, meta?: Record<string, unknown>): AsyncIterable<T>;
 }
 
-/** Direction(s) a guard listens to. `"*"` matches every CRUD direction. */
-type IOGuardDirection = "pre-create" | "pre-update" | "pre-delete" | "*";
+/**
+ * Direction(s) a guard listens to.
+ *
+ * `"*"` matches every **CRUD write** phase (`pre-create` / `pre-update` /
+ * `pre-delete`) and nothing else. It deliberately does NOT cover `pre-export`,
+ * `pre-import` or `pre-read`: those phases were added after `"*"` was already
+ * in use, and widening it would silently turn every existing write guard into a
+ * veto over exports and reads it was never written to judge. The new phases
+ * must be named explicitly.
+ */
+type IOGuardDirection =
+    | "pre-create" | "pre-update" | "pre-delete"
+    | "pre-export" | "pre-import" | "pre-read"
+    | "*";
 
 /**
  * A registered guard handler. Guards are not routed (they don't appear in
  * `ENV.client.io.bindings`); they're vetoes that run in the pre-action phase
- * of every matching CRUD call.
+ * of every matching call.
  *
  *  - `ownerId`   who registered. If listed in `ENV.client.io.disabled`, all
  *                guards from that owner are silenced (consistent with how
  *                sink/capability disable already works).
- *  - `resource`  matches `IOContext.resourceName`. `"*"` = any resource.
- *  - `direction` `"pre-create" | "pre-update" | "pre-delete" | "*"`.
+ *  - `resource`  matches `IOContext.resourceName`. `"*"` = any resource, and is
+ *                the only value that matches a BUNDLE context (bundle traffic
+ *                carries no `resourceName`).
+ *  - `direction` one `IOGuardDirection`; see the note on `"*"` above.
  *  - `priority`  higher first; default 0.
  *  - `handler`   returns `{ ok: true }` to allow or `{ ok: false, refused: true, … }`
  *                to abort. First refusal short-circuits the call. Per-viewer
@@ -429,9 +675,15 @@ interface IOGuardSpec {
     /**
      * Sync-only handler. Returns `{ ok: true }` to allow or
      * `{ ok: false, refused: true, … }` to abort. First refusal short-circuits.
-     * Use the (separate) async-guard registry for round-trip checks that
-     * cannot run synchronously — those run AFTER local commit and rely on
-     * `rollbackOnAsyncRefuse` for revert.
+     *
+     * There is no async guard registry — a guard runs *before* the local
+     * commit, and nothing can await there without letting the UI commit first.
+     * A check that needs a round trip belongs in one of two places:
+     *  - at the **call site**, resolved before `create/update/delete` is called
+     *    (e.g. `await Dialogs.confirm(...)`), or
+     *  - in the **sink**, refusing during dispatch — the resource then reverts
+     *    the local commit through `inverseApply` (`rollbackOnAsyncRefuse`,
+     *    on by default).
      */
     handler: (ctx: IOContext, payload?: unknown) => IOResult;
     label?: string;
@@ -459,6 +711,53 @@ interface IOOwnerBundleHooks {
  *      (preserves legacy HTML-form session export)
  *   5. capability kind === `"crud"` → `[]` (inert)
  */
+/**
+ * One entry in a binding list: either a bare sink id (the legacy form, still
+ * fully supported) or a sink id plus configuration for that sink *in this
+ * position*.
+ *
+ * This is the answer to "one sink, many different outputs". `sinkOverrides`
+ * is keyed by sink id alone, so a deployment binding both `annotations` and
+ * `recorder` to `github` had to share one `pathTemplate` — and could not
+ * register a second github instance, because sink ids are hardcoded by the
+ * module that registers them. Per-binding config gives each (owner,
+ * capability) its own slot, including the values no path placeholder can
+ * express: `repo`, `branch`, `proxy`, `auth`.
+ *
+ * Precedence in the sink's own option composition (highest first):
+ *   binding `config` → `sinkOverrides[sink]` → include.json block → module defaults.
+ *
+ * The pipeline never interprets `config`; it normalizes, freezes and hands it
+ * back through `IO_PIPELINE.bindingConfig(...)`.
+ *
+ * Trust: `ENV.client.io` is server-delivered and is NOT reachable from URL
+ * params or an imported session bundle, so `config` carries the SAME trust
+ * level as `sinkOverrides` — endpoint- and credential-selecting keys are
+ * legitimate here. If bindings ever become contributable by a less trusted
+ * source, that invariant has to be re-litigated before this stays true.
+ *
+ * For `kv:*` capabilities the entry names a KV DRIVER, and `config` is
+ * currently ignored (drivers have no option-composition hook).
+ */
+type IOBindingTarget =
+    | string
+    | {
+          /** Registered sink id (or KV driver id for `kv:*` capabilities). */
+          sink: string;
+          /** Per-(owner, capability) sink options. Frozen by the pipeline. */
+          config?: Record<string, unknown>;
+          /** Optional human label for admin/debug surfaces. */
+          label?: string;
+      };
+
+/** Normalized binding entry, as returned by `bindingTargetsFor`. */
+interface IOResolvedBinding {
+    sink: string;
+    /** Always an object (`{}` when the binding carried none). Frozen. */
+    config: Readonly<Record<string, unknown>>;
+    label?: string;
+}
+
 interface IOConfigBlock {
     /** Owner ids (or uids) for which IO is fully inert. Highest precedence. */
     disabled?: string[];
@@ -473,8 +772,12 @@ interface IOConfigBlock {
      * for the session-aware sync described in src/IO_PIPELINE.md.
      */
     disabledCapabilities?: Array<[string, string]>;
-    /** Routing decisions: `{ ownerId: { capabilityId: [sinkId, ...] } }`. */
-    bindings?: Record<string, Record<string, string[]>>;
+    /**
+     * Routing decisions: `{ ownerId: { capabilityId: IOBindingTarget[] } }`.
+     * Each entry is a sink id, or `{ sink, config }` to give that sink
+     * per-(owner, capability) options — see {@link IOBindingTarget}.
+     */
+    bindings?: Record<string, Record<string, IOBindingTarget[]>>;
     /**
      * Per-deployment overrides for a sink's options, keyed by sink id.
      * The module that registered the sink decides how to merge this slot
@@ -497,8 +800,21 @@ type IOIncludeBlock =
     | boolean
     | {
           capabilities?: Array<IOCapability | string>;
-          defaultBindings?: Record<string, string[]>;
+          defaultBindings?: Record<string, IOBindingTarget[]>;
       };
+
+/**
+ * Options for the guard-only probes (`canCreate` / `canUpdate` / `canDelete`).
+ *
+ * A probe is a question, so it stays silent by default — UI that greys out a
+ * control by asking "may I delete this?" must not toast on every render. Pass
+ * `surface: true` from the one place that aborts an actual user gesture on the
+ * answer; that is where the user should hear the reason.
+ */
+interface IOGuardProbeOptions {
+    /** @default false */
+    surface?: boolean;
+}
 
 type IODisposer = () => void;
 
@@ -516,6 +832,33 @@ interface IOPipelineLike {
     listSinks(): IOSink[];
     getSink(id: string): IOSink | undefined;
 
+    // ── runtime binding claims ──────────────────────────────────────────
+    /**
+     * A sink-providing module claims the right to serve `(owner, capability)`
+     * in this deployment, for cases where the module IS the backend and
+     * requiring an operator-written binding would leave the feature inert.
+     *
+     * Resolves as Rule 2.5: below `ENV.client.io.bindings` (an explicit
+     * operator binding always wins) and above the capability owner's own
+     * `include.json` `io.defaultBindings`. `disabled` / `disabledCapabilities`
+     * still silence it. Multiple claims for one pair are merged, de-duplicated
+     * and reported.
+     *
+     * @param owner ownerId or ownerUid of the CAPABILITY's owner, not the claimant
+     * @param capabilityId e.g. `"crud:annotation"`
+     * @param targets sink ids or `{sink, config}` entries, same shape as ENV bindings
+     * @param claimantUid uid of the claiming element, for diagnostics
+     */
+    claimBinding(
+        owner: string,
+        capabilityId: string,
+        targets: IOBindingTarget[],
+        claimantUid: string,
+    ): IODisposer;
+    listBindingClaims(): Array<{
+        owner: string; capabilityId: string; claimantUid: string; targets: IOBindingTarget[];
+    }>;
+
     // ── owner registry (for bundle hooks + ownerId↔uid mapping) ─────────
     registerOwner(
         ownerUid: string,
@@ -523,8 +866,38 @@ interface IOPipelineLike {
     ): IODisposer;
 
     // ── binding resolution ──────────────────────────────────────────────
+    /** Resolved sink ids, in binding order. */
     bindingsFor(ownerUid: string, capabilityId: string): string[];
+    /** The same list, with each entry's per-binding config attached. */
+    bindingTargetsFor(ownerUid: string, capabilityId: string): IOResolvedBinding[];
+    /**
+     * True when a **configured** binding names sinks that are not registered yet.
+     *
+     * Distinguishes the two situations an empty `bindingsFor` cannot: nothing is
+     * bound (inert by design, normal) versus the operator bound a destination
+     * whose module has not finished starting up. Writes are held while this is
+     * true rather than dispatched into nothing — see `IOResource.flush`, which
+     * answers `W_IO_SINK_NOT_READY` instead of blocking on entries that may never
+     * settle.
+     */
+    bindingsPending(ownerUid: string, capabilityId: string): boolean;
+    /**
+     * Per-binding config for one (owner, capability, sink) triple, or `{}`.
+     * Sinks call this from their own `getOptions(ctx)` — nothing is threaded
+     * through the dispatch sites, so runtime `.mjs` sinks work unchanged.
+     */
+    bindingConfig(
+        ownerUid: string,
+        capabilityId: string,
+        sinkId: string,
+    ): Readonly<Record<string, unknown>>;
     isEnabled(ownerUid: string, capabilityId?: string): boolean;
+    /**
+     * Re-check every resolved binding against its sink's declared
+     * `IOSinkSupport`, reporting `io:invalid-binding` for each mismatch.
+     * Runs automatically (debounced) on sink/driver/owner registration.
+     */
+    validateBindings(): void;
     /**
      * Returns the admin-supplied override slot for a sink, or `{}`. The
      * module that registered the sink is responsible for merging this with
@@ -552,12 +925,22 @@ interface IOPipelineLike {
      *    refusal surfaces as an error toast instead of producing an unwanted
      *    file. **Export** (the explicit "give me a file" action) leaves it
      *    `false`.
+     *  - `capabilityId`: restrict the flush to ONE outbound bundle capability.
+     *    Owners that declare several (session state vs. a submission, say) use
+     *    it to drive one from a button without pushing the others.
      */
     flushBundleExport(scope?: {
         ownerUid?: string;
+        capabilityId?: string;
         viewerId?: string;
         backgroundId?: string;
         skipFileFallback?: boolean;
+        /**
+         * `"system"` when the pipeline itself drove this (a slide-leave flush),
+         * so a refusal is logged rather than shown. Default `"user"` — see
+         * {@link IOContext.trigger}.
+         */
+        trigger?: "user" | "system";
     }): Promise<IOResult[]>;
     importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
@@ -572,12 +955,22 @@ interface IOPipelineLike {
     flushAllResources(): Promise<IOResult[]>;
 
     /**
-     * True if any owner has at least one **non-`file-download`** sink bound to
-     * a `bundle-export` capability (i.e. a real persistence destination, not
-     * just the local-file fallback). The Save UI calls this to decide between
-     * a remote flush and degrading to the legacy Export flow.
+     * True if a **user-recoverable** sink is bound for an outbound bundle
+     * capability — a real persistence destination, as opposed to the local-file
+     * fallback or the in-page / in-session dicts the resolver falls back to
+     * (see `NON_REMOTE_BUNDLE_SINKS`).
+     *
+     * This is the honest form of "is anything actually configured?". An empty
+     * flush result is NOT: every bundle capability resolves to `post-data` when
+     * nothing is bound, so a write always looks like it went somewhere.
+     *
+     * The Save UI calls it to decide between a remote flush and degrading to
+     * Export. Pass `capabilityId` when an owner has several outbound channels
+     * (session state vs. a submission) and you mean one of them — asking about
+     * the owner as a whole would answer "yes, somewhere" and let the unbound
+     * channel report success.
      */
-    hasRemoteBundleSinks(ownerUid?: string): boolean;
+    hasRemoteBundleSinks(ownerUid?: string, capabilityId?: string): boolean;
     /**
      * Stream raw items from the first bound sink whose `query` method
      * exists and `accepts(ctx)` (if defined) passes. `ctx.direction` is
@@ -591,9 +984,10 @@ interface IOPipelineLike {
     /** Register a sync guard handler. Returns a Disposer. */
     registerGuard(spec: IOGuardSpec): IODisposer;
     /** Run all matching guards in priority order, synchronously. First
-     *  refusal wins; emits `io:refused` on refusal. Returns `{ ok: true }`
-     *  if no guards or all passed. */
-    runGuards(ctx: IOContext, payload?: unknown): IOResult;
+     *  refusal wins; emits `io:refused` and toasts on refusal unless
+     *  `options.surface === false`. Returns `{ ok: true }` if no guards or
+     *  all passed. */
+    runGuards(ctx: IOContext, payload?: unknown, options?: { surface?: boolean }): IOResult;
     /** All currently registered guards (for admin/debug UIs). */
     listGuards(): IOGuardSpec[];
 
@@ -621,7 +1015,80 @@ interface IOPipelineLike {
      */
     sanitizeKey(s: string): string;
 
-    // ── events: 'io:refused', 'io:conflict' ─────────────────────────────
+    // ── templating ──────────────────────────────────────────────────────
+    /**
+     * Interpolate `{placeholder}` tokens from an `IOContext`, sanitizing
+     * every substituted value. This is THE sink-side templating helper —
+     * sinks must not hand-roll their own, both because the placeholder sets
+     * drift and because the values are attacker-influenceable (a session
+     * bundle chooses `viewerId` / `backgroundId`, a live-collab peer chooses
+     * `itemId`).
+     *
+     * Placeholders:
+     *   `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}`
+     *   `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
+     *   `{resourceName}` `{itemId}`
+     *
+     * `{capabilityId}` is direction-DEPENDENT (`bundle-export` on the way
+     * out, `bundle-import` on the way back) and is therefore NOT round-trip
+     * safe. Use `{capabilityGroup}` — both collapse to `bundle` — for
+     * anything that must address the same slot in both directions.
+     *
+     * Unknown tokens are replaced with `options.empty` and warned about once.
+     */
+    formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string;
+
+    /**
+     * Anchored glob match (`*` = any run of characters). Used for
+     * `IOSinkSupport` patterns; exposed so sinks can reuse one dialect for
+     * their own allowlists (mlflow's `experimentAllow`, …) instead of
+     * inventing a second one.
+     */
+    matchesPattern(value: string, patterns: string[] | null | undefined): boolean;
+
+    // ── events: 'io:refused', 'io:reverted', 'io:fully-refused', … ──────
     addHandler(eventName: string, handler: (e: any) => void): void;
     removeHandler(eventName: string, handler: (e: any) => void): void;
+
+    // ── host-only surface ───────────────────────────────────────────────
+    // Declared because core calls these and a typed reference should not have
+    // to cast, but they are NOT part of the plugin/module contract: they drive
+    // pipeline lifecycle rather than moving anyone's data.
+
+    /**
+     * @internal Read every readable bundle sink and feed the payloads to the
+     * owners' `importBundle`. Driven by boot and by `viewer-open-pipeline` on
+     * slide change; owners get their own catch-up from `initIO`.
+     */
+    tryRestoreImport(scope?: {
+        ownerUid?: string;
+        viewerId?: string;
+        backgroundId?: string;
+        /**
+         * `"system"` for boot hydration and the restore after a slide opens —
+         * every shipped caller. Default `"user"`, so a new caller has to decide
+         * rather than inherit silence. See {@link IOContext.trigger}.
+         */
+        trigger?: "user" | "system";
+    }): Promise<IOResult[]>;
+    /** @internal Apply an element's `include.json` `io` block at load time. */
+    applyIncludeBlock(ownerUid: string, block: IOIncludeBlock | undefined): void;
+    /** @internal Drop every memoized binding resolution. */
+    invalidateAll(): void;
+    /** @internal Boot restore finished; late owners may now catch up per-viewer. */
+    markBootRestoreComplete(): void;
+    /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
+    clearHydratedFor(viewerId: string): void;
+    /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
+    /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */
+    emitQueueEvent_(name: string, payload: Record<string, unknown>): void;
+    /** @internal The shared POST_DATA dictionary the `post-data` sink writes into. */
+    readonly POST_DATA: Record<string, any>;
+    /**
+     * Retry decorator for sinks, attached at bootstrap so runtime-loaded
+     * `.mjs` sinks can reach it without an import:
+     * `IO_PIPELINE.registerSink(IO_PIPELINE.withRetry(mySink, { attempts: 3 }))`.
+     */
+    withRetry?(inner: IOSink, options?: Record<string, unknown>): IOSink;
 }

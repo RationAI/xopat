@@ -1,0 +1,79 @@
+{
+  "$meta": {
+    "description": "Local Keycloak over SAML 2.0 (server-side SP, session token signed by the server)",
+    "dimension": "auth",
+    "requires": ["XOPAT_SAML_JWT_SECRET"],
+    "defaults": { "KEYCLOAK_URL": "http://localhost:8081", "KEYCLOAK_REALM": "xopat" }
+  },
+  /**
+   * The protocol twin of `auth/keycloak-oidc`: same IdP, same users, same
+   * groups, same roles — reached over SAML. Nothing outside this fragment has
+   * to change to swap between them, which is the whole claim of the auth
+   * broker (src/AUTH.md): a feature declares *that* it needs an identity, never
+   * *how* one is obtained.
+   *
+   * Bring the IdP up with `test/fixtures/keycloak/` first.
+   */
+  "core": {
+    "server": {
+      /* SERVER-ONLY. Only serviceName/autoLogin/flow/sloEnabled reach the browser. */
+      "secure": {
+        "modules": {
+          "saml-auth": {
+            "contexts": {
+              "core": {
+                "idpMetadataUrl": "<% KEYCLOAK_URL:-http://localhost:8081 %>/realms/<% KEYCLOAK_REALM:-xopat %>/protocol/saml/descriptor",
+                /* MUST equal the Keycloak clientId — it is the SP entityID. */
+                "issuer": "xopat-viewer",
+                "identifierFormat": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
+                "signatureAlgorithm": "sha256",
+                "digestAlgorithm": "sha256",
+                "wantAssertionsSigned": true,
+                "wantAuthnResponseSigned": true,
+                "allowIdpInitiated": false,
+                "clockSkewSec": 60,
+                "requestTtlSec": 600,
+                /* Right-hand sides are the Keycloak mappers' SAML attribute names. */
+                "attributeMap": {
+                  "sub": "uid",
+                  "name": "displayName",
+                  "email": "email",
+                  "groups": "groups"
+                },
+                "extraClaims": [],
+                "sessionTtlSec": 28800,
+                "token": {
+                  /* The variable NAME, never the value — the server reads it
+                     from its own environment. */
+                  "secretEnv": "XOPAT_SAML_JWT_SECRET",
+                  "issuer": "xopat-saml",
+                  "audience": "xopat",
+                  "ttlSec": 3600
+                },
+                "autoLogin": false,
+                "flow": "redirect",
+                "serviceName": "Keycloak SSO"
+              }
+            }
+          }
+        },
+        /**
+         * saml-auth registers its own verifier, reading secret/issuer/audience
+         * straight from `contexts.core.token` above — so `{}` is complete and
+         * the minting and verifying halves cannot drift apart.
+         */
+        "rpcVerifiers": {
+          "core": {
+            "verifiers": { "saml": {} },
+            "mode": "all"
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "saml-auth": { "enabled": true, "permaLoad": true },
+    "oidc-client-ts": { "enabled": false },
+    "oidc-server-ts": { "enabled": false }
+  }
+}

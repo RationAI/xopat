@@ -54,8 +54,8 @@ workflows, local desktop viewing, Kubernetes-scale deployments, and more.
 It is not an all-in-one product. xOpat does **not** read WSI formats itself and
 does **not** run your AI — but it **connects** to the servers and services that
 do. If an image server can read your slides, xOpat can show them; AI results
-arrive as raster images (like any slide) or as vector graphics through the
-annotations plugin. Add a plugin to wire up whatever else you need.
+arrive as raster images (like any slide) or as vector graphics. 
+Add a plugin to wire up whatever else you need.
 
 ## Get started
 
@@ -70,7 +70,9 @@ annotations plugin. Add a plugin to wire up whatever else you need.
 | **Understand the core** | [Core architecture](src/README.md) |
 
 📚 **Full documentation:** <https://xopat.org> &nbsp;·&nbsp;
-🔎 **API reference:** <https://xopat.org/api/>
+<!--🔎 **API reference:** <https://xopat.org/api/>-->
+
+<a href="https://rationai.fi.muni.cz"><img alt="RationAI Logo" src="https://raw.githubusercontent.com/RationAI/xopat/master/src/assets/logos/rationai-logo.png" height="70" /></a>
 
 ## Sponsors
 
@@ -78,3 +80,11 @@ We are grateful for the development and financial contributions supporting xOpat
 and the OpenSeadragon project.
 
 <a href="https://www.bbmri-eric.eu"><img alt="BBMRI ERIC Logo" src="https://raw.githubusercontent.com/RationAI/xopat/master/src/assets/logos/bbmri-logo.png" height="70" /></a>
+
+## License
+
+xOpat is released under the MIT License — see [`LICENSE`](LICENSE).
+
+xOpat bundles and redistributes third-party open-source software (OpenSeadragon,
+Phosphor Icons, Monaco, Little CMS, and others) under their own licenses. Those
+notices are collected in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

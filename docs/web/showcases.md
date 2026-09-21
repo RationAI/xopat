@@ -25,7 +25,7 @@ Examples we intend to document here include:
 - **Image server + viewer** — connecting xOpat to a WSI image server.
 - **AI chat assistant** — a deployment with a chat plugin and a secured proxy.
 - **Annotations with a persistence backend** — routing IO to a remote sink.
-- **Notebook-driven** — opening the viewer from Jupyter / collaborative notebooks.
+- **Notebook-driven** — opening the viewer from Jupyter or Google Colab.
 
 Have a setup worth showcasing? [Open an issue](https://github.com/RationAI/xopat/issues)
 or contribute one.

@@ -18,12 +18,14 @@ export const globalPluginWindowMethods = {
             'annotations-shared',
             this.t('annotations.export.menuTitle'),
             menuContainer,
-            'fa-fw',
+            '',
             { chrome: 'plain' }
         );
         van.add(menuContainer, createAnnotationSettingsMenu(this));
 
-        this.updateSelectedFormat(this.exportOptions.format);
+        // Not a user choice — do NOT persist, or the resolved default becomes a
+        // sticky cache entry that outranks deployment config on every reload.
+        this.setFormat(this.exportOptions.format, false);
         this.updatePresetsHTML();
 
         this.context.addHandler('author-annotation-styling-toggle', (e) => this._toggleStrokeStyling(e.enable));
@@ -183,12 +185,6 @@ export const globalPluginWindowMethods = {
                     icon: 'ph-arrow-clockwise',
                     label: this.t('annotations.toolbar.redo'),
                     onClick: () => APPLICATION_CONTEXT.history.redo()
-                }),
-                new ui.ToolbarItem({
-                    id: 'toolbar-history-metrics',
-                    icon: 'ph-chart-bar-horizontal',
-                    label: this.t('annotations.toolbar.measurements'),
-                    onClick: () => this.showMeasurementsWindow()
                 })
             );
 
@@ -199,8 +195,9 @@ export const globalPluginWindowMethods = {
             const gModes = new ui.ToolbarGroup({
                 itemID: 'g-modes',
                 selectable: true,
-                defaultSelected: modes.AUTO.getId(),
-                extraClasses: { padding: 'mx-2' }
+                defaultSelected: modes.AUTO.getId()
+                // no extra padding: the group renders as its own pill and the
+                // ToolbarSeparators already carry the spacing
             });
 
             new ui.ToolbarItem({
@@ -292,7 +289,10 @@ export const globalPluginWindowMethods = {
                 label: modes.FIXED_AREA.getDescription()
             })).attachTo(gModes);
 
-            new ui.ToolbarItem({
+            // Edit-selection is NOT a creation mode, so it lives with the
+            // mouse-preset swatch and mode settings in the g-tools group below,
+            // not among the drawing modes.
+            this._editItem = new ui.ToolbarItem({
                 itemID: modes.EDIT_SELECTION.getId(),
                 icon: modes.EDIT_SELECTION.getIcon(),
                 label: modes.EDIT_SELECTION.getDescription(),
@@ -303,7 +303,7 @@ export const globalPluginWindowMethods = {
                     }
                     this.switchModeActive(modes.EDIT_SELECTION.getId());
                 }
-            }).attachTo(gModes);
+            });
 
             this._gModes = gModes;
 
@@ -351,10 +351,22 @@ export const globalPluginWindowMethods = {
                 panelClass: 'w-80 max-h-[60vh] overflow-y-auto space-y-2',
             }, this._htmlWrap);
 
+            const presetSwatch = this.buildPresetSwatchToolbarButton();
+
+            // Edit (selection), mouse-preset swatch and mode settings share one
+            // group. Selectable so the edit item highlights when active; the two
+            // panel buttons aren't ToolbarItems, so they never claim the slot.
+            const gTools = new ui.ToolbarGroup({ id: 'g-tools', itemID: 'g-tools', selectable: true },
+                this._editItem, presetSwatch, this._modeOptionsPanel);
+            this._gTools = gTools;
+
             USER_INTERFACE.Tools.setMenu(this.id, 'annotations-tool-bar', this.t('annotations.toolbar.title'),
-                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), this._modeOptionsPanel],
+                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), gTools],
                 'draw'
             );
+            // The toolbar builds lazily (this runs in a setTimeout), after the
+            // initial updatePresetsHTML — so paint the swatch once its DOM exists.
+            this._refreshPresetSwatch();
 
             const modeChangeHandler = (e) => {
                 const mode = e.mode;
@@ -362,11 +374,10 @@ export const globalPluginWindowMethods = {
                 const modeId = mode.getId();
 
                 if (this._htmlWrap && this._modeOptionsPanel) {
-                    // Read from `e.mode`, not `this.context.mode`: the
-                    // _setModeToAuto path in annotations.js fires the event
-                    // BEFORE assigning `this.mode`, so the global would still
-                    // point at the previous (now-stale) mode and the panel
-                    // would never hide when switching to navigation.
+                    // Read from `e.mode`, not `this.context.mode`: the event
+                    // payload is the authoritative statement of what is now in
+                    // effect, including a REFUSED switch, which reports AUTO
+                    // without anything having changed.
                     const rawHtml = (mode.customHtml && mode.customHtml()) || '';
                     const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
 
@@ -385,7 +396,13 @@ export const globalPluginWindowMethods = {
                     }
                 }
 
-                if (modeId === modes.AUTO.getId()) {
+                // Edit-selection lives in g-tools; every other mode in g-modes.
+                // Keep the two groups mutually exclusive so only one shows active.
+                const isEdit = modeId === modes.EDIT_SELECTION.getId();
+                this._gTools?.setSelected(isEdit ? modes.EDIT_SELECTION.getId() : null);
+                if (isEdit) {
+                    this._gModes.setSelected(null);
+                } else if (modeId === modes.AUTO.getId()) {
                     this._gModes.setSelected(modes.AUTO.getId(), false);
                 } else if (
                     modeId === modes.MAGIC_WAND.getId() ||
@@ -413,12 +430,30 @@ export const globalPluginWindowMethods = {
             };
 
             this.context.addHandler('mode-changed', modeChangeHandler);
+            // Apply the current mode once at startup: no 'mode-changed' has
+            // fired yet, so without this the mode-options panel shows for the
+            // default (auto/navigate) mode, which has no options.
+            if (this.context.mode) modeChangeHandler({ mode: this.context.mode });
         }, 2000);
     },
 
-    updateSelectedFormat(format) {
+    /**
+     * Apply an export/import format.
+     * @param {string} format registered convertor id, or the 'auto' UI sentinel
+     * @param {boolean} persist store as this browser's preference. ONLY for an
+     *   explicit user pick — the cache outranks every configuration source
+     *   (see loader.ts getOption), so persisting a merely-derived default would
+     *   pin it forever and make deployment config unchangeable.
+     */
+    setFormat(format, persist = false) {
         this.exportOptions.format = format;
-        this.context.setIOOption('format', format);
-        this.cache.set('defaultIOFormat', format);
+        // 'auto' is an import-time UI sentinel, not something the module can export with.
+        if (format !== 'auto') this.context.setIOOption('format', format);
+        if (persist) this.cache.set('ioFormat', format);
+    },
+
+    /** User picked a format in the settings menu. */
+    updateSelectedFormat(format) {
+        this.setFormat(format, true);
     },
 };

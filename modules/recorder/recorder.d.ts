@@ -62,6 +62,27 @@ declare global {
          */
         activeVisualizationIndex?: number | Array<number | undefined>;
         renderer?: RecorderVisualizationSnapshot;
+        /**
+         * Canonical, namespace-stripped live visualization surface captured via
+         * `UTILITIES.exportLiveVisualization` (params/state/order, no world
+         * indices). Used to detect "did the visualization actually change" on
+         * replay so an unchanged baseline does NOT trigger a reopen. Additive;
+         * absent on recordings made before this field existed.
+         */
+        liveCanonical?: {
+            layerOrder?: string[];
+            layers?: Record<string, { id?: string; type?: string; cache?: Record<string, unknown>; state?: Record<string, unknown> }>;
+        };
+        /**
+         * Per-layer resolved data-source identities at capture time, keyed by
+         * namespace-stripped shader path. Each entry follows the shader's
+         * `tiledImages` world indices to the live source identity
+         * (`source.tileSourceId || source.url || item.__xopatLoadKey`). This is
+         * the "same data source?" axis — it catches a time-series active-frame
+         * swap, which changes the underlying data without changing shader
+         * id/params. Additive; absent on older recordings.
+         */
+        liveSources?: Record<string, string[]>;
     }
 
     /**
@@ -75,6 +96,22 @@ declare global {
         object: any;
         /** Optional viewer hint when the ref originated on a specific viewer. */
         viewerId?: UniqueViewerId;
+    }
+
+    /**
+     * The verdict of `RecorderModule.summarizeTour` — the counts a caller needs to judge
+     * a recording it cannot watch, plus `warnings` phrased as the edits to make.
+     * `warnings` is empty when the tour is fine.
+     */
+    interface RecorderTourSummary {
+        /** Every step, holds and recorded paths included. */
+        stepCount: number;
+        /** Steps that show a view of their own — the ones a caption belongs on. */
+        keyframeCount: number;
+        narratedCount: number;
+        totalSeconds: number;
+        shortestSeconds: number;
+        warnings: string[];
     }
 
     interface RecorderSnapshotStep {
@@ -91,7 +128,19 @@ declare global {
         kind?: RecorderStepKind;
         delay: number;
         duration: number;
+        /**
+         * Legacy spring stiffness, passed to `viewer.tools.focus` when a step is
+         * applied outside playback (timeline scrubbing). Playback no longer uses
+         * it: a keyframe is animated by the module's own eased tween, whose
+         * length is {@link RecorderSnapshotStep.moveDuration}.
+         */
         transition: number;
+        /**
+         * Seconds the eased move into this keyframe takes during playback. The
+         * rest of `duration` is a still hold — that is what makes an overlay
+         * readable. Defaults to min(`duration`, 1.8 s).
+         */
+        moveDuration?: number;
         preferSameZoom?: boolean;
         rotation?: number;
         zoomLevel?: number;
@@ -100,7 +149,6 @@ declare global {
         navigation?: RecorderNavigationTrack;
         visualization?: RecorderVisualizationStateSnapshot;
         annotationFilters?: RecorderAnnotationFilter[];
-        screenShot?: unknown;
         /**
          * Annotations associated with this step. Migrated from the recorder
          * plugin's side-channel `annotationRefs: Record<stepId, AnnObj[]>`
@@ -124,8 +172,30 @@ declare global {
         | "ml" | "mc" | "mr"
         | "bl" | "bc" | "br";
 
+    /**
+     * Layout intent, resolved by the renderer into a region of the viewer.
+     * Prefer this over a bare {@link RecorderOverlayAnchor}: the nine-cell grid
+     * says *where a box is pinned*, a region says *what the overlay is for*, so
+     * the renderer can size it accordingly.
+     *
+     * - `center` — covers the view; for overlays meant to be read instead of
+     *   the slide (chapter intros, conclusions).
+     * - `top` / `bottom` — a wide band across the viewer, leaving the opposite
+     *   side of the view clear; the default for informative narration.
+     * - `left` / `right` — a narrow side column. The viewer's left and right
+     *   edges usually hold application UI (toolbars, side menus), so use these
+     *   only when the narration would otherwise cover what it talks about.
+     */
+    type RecorderOverlayRegion = "center" | "top" | "bottom" | "left" | "right";
+
     interface RecorderOverlayPlacement {
         anchor: RecorderOverlayAnchor;
+        /**
+         * Layout intent. When set, the renderer sizes and pins the overlay for
+         * that region and `anchor` is only a fallback for renderers/editors
+         * that do not understand regions.
+         */
+        region?: RecorderOverlayRegion;
         /** CSS padding from the viewer edge in px. Defaults to 16. */
         padding?: number;
     }
@@ -151,7 +221,7 @@ declare global {
 
     interface RecorderTextOverlay extends RecorderOverlayBase {
         kind: "text";
-        /** Markdown source; renderer parses via window.xnpm.marked. */
+        /** Markdown source; rendered (and sanitized) by the `markdown` module. */
         markdown: string;
     }
 
@@ -222,6 +292,13 @@ declare global {
         createdAt: number;
         updatedAt?: number;
         steps: RecorderSnapshotStep[];
+        /**
+         * Injected at runtime by a host feature (e.g. a questionnaire page or
+         * guided tour) rather than authored by the user. Transient recordings
+         * are excluded from the per-viewer bundle persistence so they never
+         * leak into the user's saved recorder state.
+         */
+        transient?: boolean;
     }
 
     /** Live (non-serialized) playback state for one viewer's timeline. */
@@ -256,7 +333,6 @@ declare global {
         viewers: Map<UniqueViewerId, RecorderViewerCollection>;
         captureVisualization: boolean;
         captureViewport: boolean;
-        captureScreen: boolean;
     }
 
     interface RecorderModule extends IXOpatModuleSingleton {
@@ -309,23 +385,68 @@ declare global {
         deleteRecording(recordingId: string, viewerId?: UniqueViewerId): void;
         /** Deep-clone a recording (new ids) and make the copy active. */
         duplicateRecording(recordingId: string, viewerId?: UniqueViewerId): RecorderRecording | undefined;
+        /**
+         * A viewer's recordings; empty when it has none. Reads never create a
+         * default recording — only the capture calls (`create`, `createEmpty`,
+         * `createNavigation`) bootstrap one, since only they need somewhere to
+         * put a step. Callers may rely on this: an empty result is the honest
+         * answer, not a state to be avoided.
+         */
         listRecordings(viewerId?: UniqueViewerId): RecorderRecording[];
+        /**
+         * Insert or replace (matched by `recording.id`) a recording in a
+         * viewer's collection from plain JSON. Steps and assets are hydrated
+         * exactly like bundle import (OSD points/rects reconstructed). Not a
+         * recordable user action: no history entry, no CRUD echo. Use
+         * `opts.transient` for host-injected recordings that must not persist
+         * with the user's recorder bundles. Returns the hydrated recording, or
+         * undefined when the viewer cannot be resolved.
+         */
+        upsertRecording(
+            viewerId: UniqueViewerId,
+            recording: Partial<RecorderRecording> & { id: string; steps: RecorderSnapshotStep[] },
+            opts?: { assets?: RecorderAsset[]; activate?: boolean; transient?: boolean },
+        ): RecorderRecording | undefined;
+        /**
+         * Merge recordings from a v3 bundle / v2 payload / bare steps array into
+         * a viewer's collection. Additive by design — existing recordings are
+         * never dropped and colliding ids are minted fresh (unlike the
+         * `importBundle` IO hook, which replaces the collection on restore).
+         * Imported recordings adopt the target viewer's identity. Throws with a
+         * `userMessage` on unusable input, leaving the collection untouched.
+         */
+        importRecordings(
+            viewerId: UniqueViewerId,
+            data: unknown,
+            opts?: { activate?: boolean },
+        ): RecorderRecording[];
         setActiveRecording(recordingId: string, viewerId?: UniqueViewerId): void;
         getActiveRecording(viewerId?: UniqueViewerId): RecorderRecording | undefined;
         /** Serialize one recording (active by default) as a v3 download bundle. */
         downloadActiveRecording(viewerId?: UniqueViewerId): void;
         capturesVisualization: boolean;
         capturesViewport: boolean;
-        capturesScreen: boolean;
         setCapturesVisualization(value: boolean): void;
         setCapturesViewport(value: boolean): void;
-        setCapturesScreen(value: boolean): void;
         exportJSON(serialize?: true): string;
         exportJSON(serialize: false): RecorderSnapshotStep[];
         importJSON(json: string | RecorderSnapshotStep[]): RecorderSnapshotStep[];
+        /**
+         * True when capturing the viewer's current view would collapse into a
+         * hold (nothing changed since the last keyframe). For callers that treat
+         * a no-op capture as an error and want to say so before calling
+         * `create`.
+         */
+        isCurrentViewRedundant(viewerId?: UniqueViewerId): boolean;
         stepCapturesVisualization(step: RecorderSnapshotStep): boolean;
         stepCapturesViewport(step: RecorderSnapshotStep): boolean;
         stepCapturesNavigation(step: RecorderSnapshotStep): boolean;
+        /**
+         * Whether a recording is watchable, and what to fix when it is not. Shared by
+         * every surface that finishes a tour (recorder playback, questionnaire page
+         * binding) so "a good tour" has one definition. Never throws.
+         */
+        summarizeTour(steps: RecorderSnapshotStep[] | undefined | null): RecorderTourSummary;
         sortWithIdList(ids: string[], removeMissing?: boolean, viewerId?: UniqueViewerId): void;
 
         /**

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Measure tile loading time and run profiler",
+    "description": "Measure per-tile loading time and record viewer performance profiles."
+  }
+}

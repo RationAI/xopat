@@ -131,6 +131,24 @@ body::before {
   box-shadow: var(--glass-shadow);
 }
 
+/* Mobile menu drawer fix. The drawer (`.navbar-sidebar`) is `position: fixed`
+ * but lives inside `.navbar`. `backdrop-filter` on `.navbar` makes it the
+ * containing block for that fixed child, trapping the drawer inside the 60px
+ * bar so it can't cover the viewport; the translucent glass fill then let the
+ * page bleed through and the menu read as broken. While the drawer is open,
+ * drop the navbar blur (restores viewport-fixed positioning) and give the
+ * drawer a solid background (nothing legitimate sits behind a full-screen
+ * drawer, so the blur is unnecessary there too). */
+.navbar.navbar-sidebar--show {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.navbar-sidebar {
+  background: var(--glass-base);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* 3. Reading column — stronger frosted panel for text contrast. */
 .theme-doc-markdown {
   padding: 1.5rem 1.75rem;

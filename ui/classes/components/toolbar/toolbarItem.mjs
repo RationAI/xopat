@@ -1,6 +1,7 @@
 import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import { iconComponentFor } from "../../elements/ph-icon.mjs";
+import { bindToolbarOrientation } from "./toolbarOrientation.mjs";
 
 /**
  * @class ToolbarItem
@@ -9,7 +10,7 @@ import { iconComponentFor } from "../../elements/ph-icon.mjs";
  *
  * @param {object} options - Configuration options for the toolbar item.
  * @param {string} [options.id] - The ID for the component.
- * @param {string|BaseComponent} options.icon - Icon name string ("fa-…" or "ph-…") or a pre-built icon component instance (FAIcon / PhIcon).
+ * @param {string|BaseComponent} options.icon - Phosphor icon name string ("ph-…") or a pre-built icon component instance (PhIcon / ImageIcon).
  * @param {string} [options.label] - Visible text for the button (used by parents like ToolbarChoiceGroup to render dropdown rows). When `tooltip` is not provided, also used as the title attribute.
  * @param {string} [options.tooltip] - Hover tooltip (title attribute). Falls back to `label`.
  * @param {Function} [options.onClick] - The function to execute when the button is clicked.
@@ -31,10 +32,13 @@ class ToolbarItem extends BaseSelectableComponent {
 
         this._button = new Button({
             id: this.id,
+            // `base` is read off the top-level options by Button's constructor
+            // (`classMap.base = options.base || "btn"`), so passing it inside
+            // `extraClasses` silently loses `join-item` and breaks the group pill.
+            base: "btn join-item",
             onClick: this.options.onClick,
             size: Button.SIZE.SMALL,
             extraClasses: {
-                base: "btn join-item",
                 ...(this.options.extraClasses || {})
             },
             extraProperties: {
@@ -43,7 +47,18 @@ class ToolbarItem extends BaseSelectableComponent {
             }
         }, iconComp);
 
-        return this._button.create();
+        const el = this._button.create();
+        // Vertical toolbar: every control collapses to the same 32px square, so
+        // the column is one icon wide. (Stretching items to `w-full` instead
+        // only lines them up with whatever the widest member happens to be —
+        // which used to be a 58px choice-group header.) Horizontal keeps the
+        // intrinsic, roomier button.
+        bindToolbarOrientation(el, (dir) => {
+            const vertical = dir === "vertical";
+            el.classList.toggle("toolbar-btn-vertical", vertical);
+            el.classList.remove("w-full");
+        });
+        return el;
     }
 
     /**

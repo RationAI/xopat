@@ -27,11 +27,60 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
 ##### Built-in keys
 
   - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
-  - `name` is the plugin name 
+  - `name` is the plugin name
   - `description` is a text displayed to the user to let them know what the plugin does: it should be short and concise
+  - `longDescription` is an optional longer text for places with room for it (docs catalogue page)
   - `author` is the plugin author
-  - `icon` is the plugin icon
+  - `icon` is the plugin icon: either an **icon class** (`ph-*`, see `src/libs/phoshor-icons/style.css`) or an **image URL**. Both forms work everywhere an icon is mounted (plugin list, menus). Markup strings are not supported. Omit or `null` for the generic placeholder.
   - `version` is the plugin version
+  - `categories` is a list of grouping labels; the first one decides the group in the Plugins Menu and in the docs catalogue. The recommended set is `Annotations`, `AI`, `IO`, `Viewer`, `Navigation`, `Integration`, `Development` — these have translated labels (`plugins.category.*`); any other string is shown verbatim, so prefer the existing ones.
+  - `keywords` is a list of search terms; never displayed, only matched by the Plugins Menu search box
+  - `homepage`, `repository`, `bugs`, `docsUrl` are links rendered next to the plugin name and on its docs page. Only absolute `http(s)` URLs are accepted; anything else is silently dropped.
+  - `license` is an SPDX identifier, shown in the docs catalogue only
+  - `engines` declares compatibility, e.g. `"engines": {"xopat": ">=3.0.0"}`. Only the `xopat` key is understood. Supported ranges: `*`, `>=`/`>`/`<=`/`<`/`=`, `^`, `~`, and space-separated conjunctions (`">=3.0.0 <4.0.0"`). The plugin is **refused at load time** when the app version is out of range, and the Plugins Menu marks it incompatible. Prerelease tags of the app version are ignored, so `>=3.0.0` matches a `3.0.0-beta.1` build; deployments that report no usable version skip the check entirely.
+
+##### Translating `name` / `description` / `longDescription`
+
+These three values may be a `"%key%"` reference instead of literal text. The key
+is resolved against the plugin's own locale bundle (`locales/<lang>.json`, whose
+i18next namespace is the plugin id — see *Translation* in the root `AGENTS.md`):
+
+````json
+{ "id": "slide-info", "name": "%meta.name%", "description": "%meta.description%" }
+````
+
+with `locales/en.json` holding `{"meta": {"name": "Slides", "description": "…"}}`.
+Anything without the `%…%` wrapper stays literal, and a reference that cannot be
+resolved degrades to the raw manifest value. `pluginMeta(id, key)` /
+`getStaticMeta(key)` resolve it for you; the Plugins Menu loads the bundle of a
+plugin that is not loaded yet so unloaded plugins list correctly too.
+
+Resolution needs the bundle to be registered, which is asynchronous: until your
+`loadLocale()` resolves, the metadata reads back as the raw `%key%` string. Read
+it after that promise (a constructor read is too early), and note that code
+reading *another*, possibly unloaded element — a menu listing components, a
+picker — must load that element's bundle first:
+
+````js
+await loadElementLocale("plugins", "slide-info");   // or "modules"
+pluginMeta("slide-info", "name");                   // -> "Slides"
+````
+
+`loadElementLocale(kind, id, locale?)` is idempotent (repeated calls do not
+re-fetch) and resolves to nothing when the element has no bundle for that
+language — metadata then stays raw rather than failing.
+
+##### Global metadata helpers
+
+| Global | Purpose |
+|---|---|
+| `pluginMeta(id, key)` | presentation metadata of any plugin: `name`, `description`, `longDescription`, `author`, `version`, `icon`, `stability`, `categories`, `keywords`, `homepage`, `repository`, `bugs`, `docsUrl`, `license`, `engines`. Anything else (internal wiring, deployment config) returns `undefined` — use `getStaticMeta` from inside the owning element instead. |
+| `moduleMeta(id, key)` | the same for modules; not restricted to the list above |
+| `loadElementLocale(kind, id, locale?)` | register the locale bundle of an element that is not loaded, so its `%key%` metadata resolves |
+| `ensureElementMeta(kind, id)` | the promise needed before the element's metadata renders, or `undefined` synchronously when there is nothing to fetch (literal metadata, or a bundle already registered — which is every element in production, where locales are baked). Start it early, await it only where a name is shown. |
+| `elementName(kind, id)` | resolved name for a user-facing message, falling back to the element id. Use it instead of `pluginMeta(id, "name")` in messages: it never leaks a raw `%key%` or `undefined` when the bundle is missing. |
+| `isUnresolvedMetaRef(value)` | true for a `%key%` that did not resolve — for UI that wants its own fallback instead of the id |
+| `elementIncompatibility(kind, id)` | why an element cannot run here (`engines`, incl. a plugin's module chain), or `null`. For UI that lists elements it does not load itself. |
   - `includes` is a list of JavaScript files relative to the plugin folder to include 
   - `modules` array of id's of required modules (libraries)
       - note that in case a new library you need is probably not useful to the whole system, include it internally via the plugin's `"includes"` list 
@@ -39,8 +88,10 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
   - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
+  - `stability` is a maturity marker, one of `"stable"` (the default when the key is absent), `"experimental"` or `"deprecated"`. It is presentation-only and never gates loading: the Plugins Menu renders a badge next to the plugin name and the docs catalogue renders a matching badge on the plugin page. A deployment can override it through the `ENV.plugins[<id>]` block, and code can read it with `getStaticMeta("stability")` or `pluginMeta(id, "stability")`.
+  - `devOnly: true` **does** gate loading, and is the one marker that does: the plugin is refused unless the server reports dev mode (`--dev` / `XOPAT_DEV_MODE`), as is any plugin whose module chain contains a `devOnly` module. Declare it on a development harness — anything that exists to give a developer, or a model driving one, access the application would not otherwise grant. Keep the element's own runtime check too; this is the wall in front of it.
   - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the plugin's `<id>` namespace that must be configured by the deployment for the plugin to be shipped under the `"available"` server-side plugin-selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty-string value:
-      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` array.
+      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` object, keyed by plugin id.
       2. **Server-secure block** — `CORE.server.secure.plugins[<id>]`, supplied via env.json's `core.server.secure.plugins`. Never shipped to the browser. The natural home for secret-adjacent values (API key bindings, proxy aliases referencing a secret).
     Booleans `false` and the number `0` count as configured. **Include.json defaults are NOT consulted** — even if a plugin's own include.json sets `serviceUrl: "http://localhost:8042"` as a default, that does not satisfy the gate. Only what the deployment explicitly sets in either bucket counts. This makes include.json defaults safe for dev convenience under `"all"` mode without accidentally satisfying production-availability checks. The plugin author declares *what* keys must exist; the deployment admin decides *where* each value lives based on sensitivity. Ignored under selection modes `"all"` and `"whitelist"`. See `server/README.md` for the mode reference.
 
@@ -73,7 +124,7 @@ reference the viewer. There is also ``viewer.id`` which is suitable to use only 
 position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
-> respect the ``APPLICATION_CONTEXT.secure`` parameter
+> respect the ``APPLICATION_CONTEXT.secureMode`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
 
 ### NPM Support and UI
@@ -158,6 +209,8 @@ in this function instead of the constructor, especially if
 #### `XOpatPlugin::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets automatically exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. For cookie support, prefer this method.
+
+> **⚠️ Security / trust boundary.** `getOption` reads **per-session, third-party-controllable** config (`params` = `config.plugins[id]`, seeded from POST_DATA / the viewer URL / imported peer sessions). **Never** base an authentication/authorization decision (auth mode, auth context, `requiresLogin`, credential or endpoint selection, scripting limits) on `getOption` — a hostile bundle could downgrade it. Read such deployment settings with `getStaticMeta` (ENV/`include.json`, operator-controlled) instead. Also note `getOption(key, explicitDefault)` will **not** fall back to the static `include.json`/ENV value — the fallback only applies when no default is passed; and `config.plugins[id]` is reset to `{}` on load for plugins loaded without params. See root `AGENTS.md` §3 / §7.
 
 #### `XOpatPlugin::setOption(key, value, cookies=true)`
 Stores value under arbitrary `key`, caches it, if allowed within cookies The value must be already serialized as a string
@@ -331,8 +384,8 @@ if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
 There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings),
 three different options are available:
 
- 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_.
- 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json`.
+ 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_. **Untrusted: third-party/session-controlled — never use for auth or security decisions (see the `getOption` security note above).**
+ 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json` **merged with the deployment `ENV.plugins.<id>` block**. Operator-controlled = trusted; use this for auth mode/context and any security-relevant knob.
  3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available.
     - use for user configurations caching to avoid re-setting in each session.
 
@@ -415,18 +468,14 @@ annotation logic, HTML sanitization, vega graphs, threading worker or keyframe s
 > to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
 
 ### Available Third-party Code and UI
-- You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
+- You should use new UI components, see [the UI system guide](../ui/README.md)
 
 You can use
- - [jQuery](https://jquery.com/), 
- - [Phosphor Icons (Light)](https://phosphoricons.com/) — preferred for new code.
+ - [Phosphor Icons (Light)](https://phosphoricons.com/) — the only icon font shipped.
    Use `new UI.PhIcon({ name: "ph-gear" })` or raw markup `<i class="ph-light ph-gear"></i>`.
-   Icon names are listed in `src/libs/phoshor-icons/style.css`.
- - [Font Awesome 6 Free icons](https://fontawesome.com/) — legacy; still loaded for
-   coverage. Existing `<i class="fa-auto fa-..."></i>` markup keeps working and is
-   transparently swapped to Phosphor as entries are added to
-   `src/libs/phoshor-icons/fa-overrides.css` (any unmapped `fa-*` class falls back to
-   Font Awesome). When you add a new icon, prefer Phosphor directly.
+   Icon names are listed in `src/libs/phoshor-icons/style.css`. `UI.FAIcon` still
+   resolves for old third-party code but is deprecated and translates only a small
+   set of legacy names.
  - DaisyUI + TailwindCSS styling
  - The CORE UI Component system (see `ui/`)
  - Pre-defined, documented CSS in the core ``src/assets/style.css``
@@ -453,6 +502,33 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+
+##### Production minification (`bundle`)
+When the deployment runs with `client.production: true` (build with `npm run
+minify`), each plugin/module is served as **minified bundle(s)** instead of the
+raw include list:
+- local classic `.js` includes are concatenated + minified into `index.min.js`;
+- local `.mjs` ES modules are esbuild-bundled + minified into `index.min.mjs`
+  (served as `type="module"`, syntax preserved — e.g. `import.meta`);
+- workspace (npm-package) items ship `index.workspace.min.js`.
+
+An item with both classic and module includes gets both files. Entries that
+*cannot* be bundled are detected automatically and keep loading as their own
+files: remote `http(s)` URLs, already-`.min.js` bundles, and any object-form
+include (SRI/attributes).
+
+If a **local `.js`** file must NOT be folded into the bundle — e.g. a Web Worker
+source that only looks foldable by its `.js` suffix — mark it with
+`"bundle": false` (object form). It then always loads as its own file and is
+never concatenated:
+````json
+{
+    "includes": [
+        "app.js",
+        { "src": "my.worker.js", "bundle": false }
+    ]
+}
+````
 ## Viewer Multiplexing
 There can be multiple viewers open at once. You might need to create:
 - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
@@ -482,46 +558,83 @@ your worker or import a module. Relative paths must begin in the repository root
 modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
 ``this.MODULE_ROOT`` respectively, against which you can import local files.
 
+## Production Baking
+When the deployment runs with `client.production` enabled, the server inlines
+certain per-plugin assets directly into the served page so the client makes no
+runtime requests for them. To benefit, follow the conventions:
+ - **Locales**: ship `locales/<lang>.json`; it is baked into the page's i18next
+   resources under your plugin id (the same namespace `this.loadLocale()`
+   registers). A missing language file simply falls back to the runtime fetch.
+ - **Scripting type declarations**: place `.d.ts` files in `scripting/*.d.ts`
+   (preferred) or as `<plugin-dir>/*.scripts.d.ts`, and reference them from your
+   `dtypesSource` via a URL under `APPLICATION_CONTEXT.url`. See
+   `src/classes/scripting/README.md` → "Shipping type declarations".
+
+Only scanned+enabled elements are baked; disabled or config-gated elements cost
+nothing. Dev mode never bakes — files stay hot-editable, and the client falls
+back to cached fetches. Production bakes are computed once per server process;
+restart the server to pick up changed files.
+
 ## Caveats
-The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
-the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state
+Plugins should persist their state through the **IO pipeline** (`initIO({exportBundle,
+importBundle})` / `defineResource(...)`, see [`../src/IO_PIPELINE.md`](../src/IO_PIPELINE.md)),
+otherwise the user will have to re-create the state on each reload - which might be fatal wrt.
+user experience. Raw export/import events are the low-level fallback, not the first choice.
+Also, you can set dirty state
 using ``APPLICATION_CONTEXT.setDirty()`` so that the user gets notified if they want to leave.
 
 Furthermore, the layout canvas setup can vary - if you work with canvas in any way relying on dimensions
 or certain tile sources, make sure you subscribe to events related to modification of the canvas and update
 the functionality appropriately. Also, **do not store reference** to any tiled images or sources you do not control.
-Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
-all measures should be done.
+Instead, use ``viewer.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
+all measures should be done — where `viewer` is the instance you derived from the event
+(`e.eventSource`) or from `VIEWER_MANAGER`, never the global `window.VIEWER`.
 
-For authentication, ``HttpClient`` is avaiable and strongly recommended. It integrates with
+For authentication, ``HttpClient`` is available and strongly recommended. It integrates with
 the viewer auth flows directly, and you can use custom contexts for authentication too.
-Moreover, you can use proxies to hide API keys: the proxy can be used only trusted services: you should use ``HttpClient`` to talk to the proxy, and not ``fetch``
+Moreover, you can use proxies to hide API keys: the proxy can be used only for trusted services — you should use ``HttpClient`` to talk to the proxy, and not ``fetch``.
+
+**Declare a context, never a method.** A plugin says *where* it authenticates
+(`authMode` / `authContext` in `include.json`, i.e. deployment-controlled static
+meta) and lets whichever auth module the deployment ships (OIDC, SAML, …) own the
+mechanism. Never instantiate a broker client yourself, and never `requires` an
+auth module — see [`../src/AUTH.md`](../src/AUTH.md).
+
 ````javascript
-// here is some login that logs within contextId
-const authClient = new OIDCAuthClient(oidcConfig, {
-    userContextId: "my-service",
-    serviceName,
-    authMethod: "popup",
-});
+// 1. Declare the requirement — reads this plugin's own authMode/authContext meta.
+this.requireAuthContext();
 
 const client = new HttpClient({
     proxy: "proxy-key",           // the config key in server.secure.proxies
     baseURL: "/v1",               // optional base path inside the proxy
-    auth: {                       // optional authentication, if configured, directly integrates with xOpatUser API
+    auth: {                       // optional; integrates directly with the xOpatUser API
         contextId: "my-service",
-        types: ["jwt"],
+        // Do NOT pass `types` — secret types are resolved per request from the
+        // auth module owning the context (APPLICATION_CONTEXT.auth.getSecretTypes),
+        // so the same client works under OIDC, SAML, or anything added later.
+        required: true,           // wait for the context to settle instead of racing login
     },
 });
 ````
  
 ## Hints
-If you have a panel registered under your ID, you can use `loading` class to show a loading spinner
+Busy state is a DaisyUI utility, not a bespoke style — render a
+`loading loading-spinner` element (see `ui/classes/components/autocomplete.mjs`)
+and drive it reactively from your component state:
+
 ````JavaScript
-appendToMainMenuExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
-$(`#${id}`).addClass("loading");
+const { span } = van.tags;
+
+// inside BaseComponent.create()
+span({ class: () => this.busy.val ? "loading loading-spinner loading-xs" : "hidden" });
 ````
-And remove it after you are done. In fact, do not be shy and open `assets/custom.css`
-file to see pre-defined classes for uniform UI (button hovering, error message containers and more).  
+
+jQuery is **not loaded** — `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), so
+`$("#id")` is a TypeError. For the rare touch of pre-existing markup use the
+platform API (`document.getElementById`, `classList`). Panels/menus are
+registered through the UI services (`AppBar`, `MainPanel`, `Menu`) — see the
+[UI services guide](../ui/services/README.md); `assets/custom.css` still holds a
+few pre-defined shared classes.
 
 ---
 ### Building UI
@@ -570,3 +683,82 @@ Rely on **DaisyUI + TailwindCSS** utility classes (on top of DaisyUI's
 
 If you genuinely need your own CSS, create a `style.css` file in your plugin root
 directory — it is included automatically.
+
+## Developing a Plugin in Its Own Repository
+
+A plugin does not have to live inside this repository to be developed and
+tested against a real viewer. The server only cares that a directory exists
+under `plugins/<id>/` at request time — `fs.realpathSync` resolves symlinks,
+so a symlink works exactly like a real directory:
+
+```bash
+ln -s /absolute/path/to/my-plugin-repo plugins/my-plugin
+```
+
+The scanner, the Grunt watch tasks (`watch-plugins`), and Cypress's test
+discovery (see below) all pick this up with no further configuration. Your
+plugin's own repository stays the source of truth; nothing here needs to
+know about it beyond the symlink.
+
+Set `include.json`'s `repository` field to your plugin's actual repository
+URL (not this one) so generated docs link to the right place.
+
+### Testing
+
+Ship tests inside your plugin's repository under
+`test/{unit,integration,e2e}/*.test.mjs` (relative to the plugin root, i.e.
+`plugins/my-plugin/test/unit/*.test.mjs` once linked) and they run as part of
+`npm test`. Import the harness by package name — no install of your own, and no
+relative path back into this repository:
+
+```js
+import { test, expect } from "@xopat/test-harness";
+
+test("my plugin reaches a live instance", { tag: ["@e2e"] }, async ({ xopat }) => {
+    await xopat.launch();
+    await xopat.page.waitForFunction(() => Boolean(window.plugin("my-plugin")));
+});
+```
+
+Declare what your tests need in `include.json`:
+
+```json
+"tests": {
+  "dir": "test",
+  "envs": ["default"],
+  "requires": { "browser": true, "server": true, "slides": false }
+}
+```
+
+`envs` names the deployment projects the tests apply to (`default`, `secure`,
+`production`, `synthetic` — see [`test/README.md`](../test/README.md)); omit it
+to run everywhere. Two things behave differently for a plugin that is *linked*
+rather than living in this repository:
+
+- Its suites are collected through `test/harness/external/` rather than by the
+  runner's own file scan, which stops at a link. This is automatic — the runner
+  reports which linked-in elements it found.
+- `tests.envs` is **not** enforced for it (the runner cannot ignore files it
+  never saw). Use tags — `@secure-only`, `@production-only` — instead.
+
+#### Legacy: Cypress
+
+Cypress also collects spec files from `plugins/*/test/**/*.cy.{js,jsx,ts,tsx}`
+(see `cypress.config.js`). Ship your own tests inside your plugin's
+repository under `test/e2e/<something>.cy.js` (relative to the plugin root,
+i.e. `plugins/my-plugin/test/e2e/*.cy.js` once symlinked) and they run
+automatically as part of the full suite (`npm test`).
+
+This was verified end-to-end against a genuine symlink (an external
+directory symlinked into `plugins/<id>/`, not a real subdirectory):
+Cypress's spec discovery follows the symlink and picks up the spec, and
+relative imports inside it (e.g.
+`import utils from "../../../../path/back/into/xopat/test/support/utilities"`)
+resolve correctly — Cypress/webpack resolve them against the symlink's
+real (external) target, which happens to walk back into this repo's
+actual `test/` directory. So `cy.launch`/`cy.canvas`/`cy.key`/`cy.draw`
+(global commands, no import needed) and the `waitForViewer`/`config`
+helpers documented in [`test/README.md`](../test/README.md) are both
+available to an external plugin's spec — no changes to this repo's
+`test/` directory needed. The import path just has to walk back through
+the symlink to this repo's real `test/support`/`test/fixtures` location.

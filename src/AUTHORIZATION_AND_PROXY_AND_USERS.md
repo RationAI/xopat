@@ -79,6 +79,8 @@ XOpatUser.instance().addHandler("secret-needs-update", async ({ type, contextId 
 
 If multiple auth strategies are present, they may all listen for the event; the first one that successfully sets a secret resolves the client’s await.
 
+> **Note:** for orchestrating login (which auth method runs for a context, and multi-strategy fallback), the current model is the pluggable **auth broker** — see [`src/AUTH.md`](AUTH.md). It supersedes wiring login through `before-app-init` event priorities; the `secret`/`secret-needs-update` mechanics described here still apply underneath.
+
 ---
 
 ## 2) Contextual Authentication in the UI
@@ -139,10 +141,17 @@ HttpClient.registerAuthHandler("apiKey", async ({ secret }) => ({ "X-API-Key": s
 ```
 
 ### Automatic refresh on 401
-If `refreshOn401` is `true` and a request returns **401**, the client will emit a single refresh cycle:
-1. Calls `user.requestSecretUpdate(type, contextId)` for each `type` in order.
+If `refreshOn401` is `true` and a request returns a status listed in `refreshOnStatuses`
+(**default `[401]`**), the client will emit a single refresh cycle:
+1. Calls `user.requestSecretUpdate(type, contextId)` for each `type` in order — including
+   the case where the request carried **no** credential at all, which is the only way a
+   context that lost its secret can recover.
 2. Waits for your auth module to handle `secret-needs-update` and call `setSecret`.
 3. Replays the request once with the new headers.
+
+Widen `refreshOnStatuses` only for an upstream that reports a *missing* credential with
+something other than 401 — FastAPI's bearer scheme answers 403 (see
+`modules/empaia-workbench`). Never for "authenticated but not allowed".
 
 If the refresh fails or another non-retriable error occurs, the original error is thrown.
 
@@ -151,9 +160,18 @@ If the refresh fails or another non-retriable error occurs, the original error i
 - **Timeouts:** Requests are aborted after `timeoutMs` using `AbortController`.
 
 ### Response parsing
-- `expect: "json"` → parse JSON, `expect: "text"` → text, default is **auto**:
+- `expect: "json"` → parse JSON (an unparseable body throws an `HTTPError`, not a
+  bare `SyntaxError`, so it is not replayed by the retry arm), `expect: "text"` →
+  text, default is **auto**:
     1. If `content-type` includes `application/json`, parse JSON.
-    2. Otherwise, try JSON, then fall back to text.
+    2. Otherwise read the body once, then: refuse an **HTML document** (by
+       content-type or by sniff) with an `HTTPError` — what answers `text/html`
+       to an API call is an intermediary, and returning that markup as a result
+       hands third-party HTML to a caller that may render it (AGENTS.md §7) —
+       parse it as JSON if it parses, otherwise return it as text. An empty body
+       returns `{}`.
+
+  See `src/HTTP_CLIENT.md` for the full contract.
 
 ### Errors (`HTTPError`)
 `HttpClient` throws a specialized `HTTPError` that extends `Error` and includes:

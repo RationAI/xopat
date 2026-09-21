@@ -84,7 +84,10 @@ OSDAnnotations.Convertor = class {
                 delete convertor.options[opt];
                 continue;
             }
-            option.changed = `OSDAnnotations.Convertor.get('qupath').${opt} = value;`;
+            // Bind a setter callback (not an eval'd code string) so the settings
+            // UI never has to compile arbitrary source. `format`/`opt` are
+            // captured, which also fixes the previous hardcoded 'qupath' target.
+            option.changed = (value) => { OSDAnnotations.Convertor.get(format)[opt] = value; };
             convertor[opt] = option.default;
         }
         this.CONVERTERS[format] = convertor;

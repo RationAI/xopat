@@ -38,8 +38,11 @@ The pipeline is exposed at runtime as **`window.IO_PIPELINE`** and aliased on **
 Three concepts:
 
 - **Capability** — what an owner advertises. `{ id: 'bundle-export', kind: 'bundle' }`, `{ id: 'crud:annotation', kind: 'crud' }`, `{ id: 'kv:cache', kind: 'kv' }`.
-- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships four built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`).
+- **Sink / KV driver** — what a module/plugin offers. Bundle/CRUD sinks implement `writeBundle/readBundle/create/read/update/delete`; KV drivers implement the localStorage interface (`getItem/setItem/removeItem/key/length/clear`) — `window.localStorage` plugs in directly. Modules register sinks at runtime via `IO_PIPELINE.registerSink(...)`; the pipeline ships five built-in sinks (`post-data`, `file-download`, `file-upload`, `http-rest`, `session-memory`). To write your own, see [`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md).
 - **Binding** — the admin's choice of which sinks/drivers serve a given (owner, capability) pair. Multiple sinks can serve the same capability (e.g. file download AND a remote upload; localStorage AND a server mirror).
+- **Owner** — who the namespace belongs to: `core`, or `<module|plugin>.<id>` exactly as `XOpatElement` builds its uid. Elements register in their constructor; everyone else is registered by `IO_PIPELINE.kv(uid, cap)` on first call, deriving `ownerId`/`xoType` from the uid shape. So a core service (`src/classes/playground`) or a plain-script module with no `XOpatModule` subclass (`modules/oidc-client-ts`) gets a working namespace without declaring anything, and `ENV.client.io.bindings["<uid>"]` applies to it either way. An owner registered implicitly is upserted — not replaced — if the real element appears later.
+
+  Why this is not merely convenient: an *unregistered* owner used to resolve to zero drivers, and the handle it produced dropped every write and returned `null` on every read without throwing or warning. Auth state and editor drafts were being written into nothing. If a namespace resolves to no driver even *after* registration (bound to nothing, or to an unknown driver id) `kv()` now warns once, naming `<ownerUid>::<capability>`.
 
 ---
 
@@ -69,7 +72,12 @@ Three concepts:
 
 #### Rights integration (auto-derived)
 
-For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and — for CRUD — installs `pre-create` / `pre-update` / `pre-delete` guards that refuse with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and installs a guard on the matching pre-phase — `pre-create` / `pre-read` / `pre-update` / `pre-delete` for CRUD, `pre-export` / `pre-import` for bundles — refusing with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+
+Because those gates live in the pipeline rather than in each owner or sink, an
+operator denying a capability stops the traffic at every destination at once —
+and **a sink must never implement its own permission check**. See
+[`IO_SINK_AUTHORING.md`](IO_SINK_AUTHORING.md) §0.
 
 Opt out on a per-capability basis:
 
@@ -191,7 +199,11 @@ Rules (applied pairwise: latest pending entry of same identity vs new op):
 
 Concretely, `create A; undo; redo; undo` collapses on the wire to `create A; delete A` (the middle pair cancels). The local timeline is fully expressed in `APPLICATION_CONTEXT.history`; the server only sees the net effect.
 
-Coalesced-out ops resolve their `.settled` to `{ ok: true, payload: { coalesced: true } }` so awaiting callers don't hang. `clientOpId` is preserved on the surviving op (servers dedup retries via that id alone).
+Coalesced-out ops resolve their `.settled` to `{ ok: true, payload: { coalesced: true } }` so awaiting callers don't hang — for every rule, including the two that cancel a pair outright. `clientOpId` is preserved on the surviving op (servers dedup retries via that id alone).
+
+**Ordering is never disturbed.** The surviving op of a `keep-latest` / `drop-update` rewrite takes over the superseded entry's *queue slot* rather than being appended, so `update A; update B; update A` still reaches the wire as `A, B` — the coalescing pass only ever removes work, never reorders it.
+
+**Coalescing depends on stable identity.** `identityOf` is read off the payload for creates and off `itemId` otherwise; when neither yields a key the entry gets a synthetic one and silently stops coalescing forever. That is why history replays must carry a real body (see [`inversePayload`](#inversepayload--the-inverse-op-needs-its-own-body)) — an undo that dispatches an empty `create` cannot be cancelled by the redo's `delete`, and both hit the wire.
 
 #### Queue events
 
@@ -210,7 +222,9 @@ The pipeline emits these on `VIEWER_MANAGER` so the UI can show a status badge:
 
 #### Rollback through the queue
 
-`rollbackOnAsyncRefuse: true` works via the queue too: on terminal refusal of op N (after retries exhausted), the pipeline drives `APPLICATION_CONTEXT.history.undo()`. The undo callback enqueues an inverse op through the same outbox — so it tails any N+1, N+2 already pending and runs in order. If the original create was still unstarted at the time of refusal, the inverse delete coalesces it out.
+Revert-on-refusal works through the queue too. On terminal refusal of op N (after retries exhausted), the resource runs **that call's** `inverseApply` and invalidates the history entry it pushed. It does not enqueue an inverse op: the forward op never reached the sink, so the destination has nothing to undo.
+
+It deliberately does *not* call `APPLICATION_CONTEXT.history.undo()`. Dispatch is queued, so by the time op N is refused the top of the undo stack is rarely op N — and `undo()` is offered to every `XOpatHistoryProvider` first, any of which may consume it instead. Reverting through the entry's own handle hits the right item and cannot be intercepted. An entry the user already undid is skipped, so a revert never double-applies.
 
 ### Persistent outbox (durability across reloads)
 
@@ -239,7 +253,7 @@ this.annotationResource = this.defineResource({
 
 Three layers prevent runaway storage:
 
-1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and if the caller passed `rollbackOnAsyncRefuse: true` the local apply is reverted via `history.undo()`. **Never silently drops user work.**
+1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.**
 2. **Age-based eviction** (`persistMaxAgeMs`, default 7 days). Sweep runs on boot. Stale ops are unlikely to be acceptable to the server anyway; emits `io:outbox-pruned` with the count.
 3. **Quota awareness** via `navigator.storage.estimate()`. At 80% of available storage, emit `io:outbox-quota-warn` so the UI can surface a "your sync queue is filling up" banner.
 
@@ -254,19 +268,33 @@ On boot the resource:
    - **Skips `apply()`** — the local state is whatever the bundle/cache restored it to; the persisted ops only need to sync the server.
    - **Skips history push** — the entry is just for sink-side catch-up.
    - Sets `meta.fromReplay: true` so sinks / guards can react if they want (most don't need to).
-4. New user actions enqueue normally and tail any replayed ops. Strict causal order: server sees pre-reload ops before post-reload ops.
-5. Emits `io:outbox-replayed` (`{ ownerUid, resourceName, count }`) when boot replay finishes.
+4. New user actions enqueue normally and tail any replayed ops. Strict causal order: server sees pre-reload ops before post-reload ops. This is enforced, not merely expected — the worker does not start until replay has finished re-enqueueing, so an op the user issues *during* boot cannot overtake ops that happened before it.
+5. Emits `io:outbox-replayed` (`{ ownerUid, resourceName, count }`) when boot replay finishes — **including** when there was nothing to replay because IndexedDB is unavailable. A consumer waiting on it to learn that boot sync settled must not hang in the deployments where durability is missing.
 
 #### Online / offline
 
 The pipeline subscribes to `window.online` / `window.offline` once at construction. While offline, the worker pauses (no `withRetry` budget burned on doomed fetches); ops pile up in the queue. `io:queue-stalled` fires immediately on first enqueue offline. On `online`, the worker resumes from the head; `io:queue-resumed` fires.
 
+#### A bound sink that has not registered yet
+
+A sink is allowed to appear late. A module that must complete a handshake before it can serve anything registers seconds after boot, while the operator's `ENV.client.io.bindings` entry naming it exists from the first frame. That window is **not** a misconfiguration, and treating it as one is how a correct deployment ended up telling its users "data is being discarded" at every launch.
+
+- `bindingsPending(ownerUid, capabilityId)` distinguishes the two situations an empty `bindingsFor` cannot: *nothing bound* (inert by design — normal, silent) versus *bound, but the sink is not here*.
+- The worker **holds** on it, exactly as it holds when offline: the entry stays at the head of the outbox, `io:queue-stalled` fires once, and nothing is dispatched or rolled back. `registerSink` emits `io:sink-registered`, and every resource resumes on it.
+- `dispatch` refuses with `W_IO_SINK_NOT_READY` rather than the `{ok: true}` it answers for a genuinely unbound capability — that `{ok: true}` was a write reported as stored and lost.
+- `flush()` does **not** await a held queue. `flushAllResources()` sits behind the user's Save button with a spinner, and an entry waiting for a sink that may never register would spin forever; it answers `W_IO_SINK_NOT_READY` (or `W_IO_OFFLINE`) with a user-facing message and leaves the work queued.
+- **A sink that never registers** therefore shows as a permanently stalled queue plus one operator-level `io:invalid-binding` — not as silent loss. There is deliberately no grace timer: any timeout would be wrong for somebody, and the stall event plus the outbox cap already bound the failure.
+- Reporting is operator-facing only (console + event, never a toast), and the missing-sink case is keyed under the sentinel sink id `*` so it can never alias a real sink's key. It used to pass the joined id list, which for the common single-entry binding produced exactly the key the real sink would later use — so a genuine `supports` mismatch discovered after registration was dropped as "already reported".
+
+A missing **kv driver** keeps the old loud treatment: KV has no queue to wait in, its handle would accept every write and return null forever, and the built-in drivers are all registered at bootstrap — so a name that is missing there is a typo, not a race.
+
 #### Failure modes
 
 | Failure | Behavior |
 |---|---|
-| IndexedDB unavailable (private mode, very old browser) | Resource degrades to in-memory queue (Phase 9 behavior). Emit `io:outbox-unavailable` once. App still works in-session; reload loses pending ops. |
-| IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; auto-rollback if `rollbackOnAsyncRefuse: true`. |
+| IndexedDB unavailable (private mode, very old browser, opaque origin) | Resource degrades to in-memory queue (Phase 9 behavior). Emits `io:outbox-unavailable` (`{ ownerUid, resourceName, reason }`) once per persisted resource, and records the verdict on `XOpatStorageAvailability` so nothing else rediscovers it. Logged at `info`: a sandboxed iframe is a supported deployment, not a fault. App still works in-session; reload loses pending ops. |
+| `def.serialize` throws | Op refused with `code: "W_IO_SERIALIZE_THREW"`, logged as an error, rolled back like any post-commit refusal. Deliberately **not** a stall signal — it is a local defect, not the network. (Before this, the throw escaped the worker: the entry was never settled and never removed, so every later write for that resource queued behind it forever.) |
+| IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; local commit reverted unless `rollbackOnAsyncRefuse: false`. |
 | Per-resource cap reached | Op refused with `code: "W_IO_OUTBOX_FULL"`; `io:outbox-full` fires; auto-rollback if opted in. |
 | Stale persisted op (server returns 4xx because the entity changed elsewhere) | Existing post-commit `io:refused` flow handles it; entry removed from IDB; rollback fires if opted in. |
 | User navigates away mid-flush | Persisted entries remain; they replay on next boot. `await resource.flush()` resolves only when IDB is fully drained — call it from `beforeunload` if you need certainty. |
@@ -372,18 +400,24 @@ Three additions make the sync-core design strictly safer than blocking on dispat
       retryOn: r => r.code === 'W_IO_HTTP_NETWORK',
   }));
   ```
-- **`rollbackOnAsyncRefuse: true`** (per-call opt-in): if the queued dispatch resolves to refusal after retries are exhausted, the pipeline drives `APPLICATION_CONTEXT.history.undo()` so the auto-history entry is popped AND `inverseApply` runs exactly once. Default off — local input stays visible; user is informed via `io:refused` (`phase: 'post-commit'`) toast; manual rollback is the caller's choice. Annotations opts in for `create` and `delete`.
+- **`rollbackOnAsyncRefuse`** (**default `true`**): if the queued dispatch resolves to refusal after retries are exhausted, the resource runs *that call's* `inverseApply` and invalidates the history entry it pushed, then emits `io:reverted`. The destination is authoritative, so a change it refused does not stay on screen. Reverting needs `inverseApply` — without it the resource warns once and leaves local state alone. Set `false` only where flicker is genuinely worse than divergence; the user is then informed by the `io:refused` (`phase: 'post-commit'`) toast and the owner reacts manually. **Know what that costs against a remote sink**: the refused change stays on screen and the destination keeps the old one, permanently, until something re-reads. It is a defensible trade for a local sink and a bad one for a networked destination — a sink author cannot see this flag from their side, so an owner choosing it should say why in a comment. `replaceAnnotation` used to opt out, on exactly the flicker argument, and no longer does: the refusals it can predict (a read-only annotation, an object another scope owns, an input a running analysis holds) are all caught at `pre-update` before anything is committed, so nothing snaps back for them, and what is left post-commit is a destination that really rejected the write — the case where divergence is least acceptable.
 
 ### Sync guards only
 
 `registerGuard` handlers must return `IOResult` synchronously. Async checks (server permission round-trips, "are you sure?" dialogs that need user input) have two recommended patterns:
 
 1. **Resolve at the call site**: the caller `await Dialogs.confirm(...)` BEFORE calling `resource.delete(...)`. Keeps UX patterns out of the pipeline.
-2. **Server-side via sink**: the sink itself runs the round-trip during dispatch; refusal surfaces post-commit via `io:refused` and (if opted in) `rollbackOnAsyncRefuse` reverts.
+2. **Server-side via sink**: the sink itself runs the round-trip during dispatch; refusal surfaces post-commit via `io:refused`, and `rollbackOnAsyncRefuse` (on by default) reverts the local commit.
+
+There is no async-guard registry, and adding one would not help: a guard runs *before* the local commit, so awaiting there would either block the UI or let it commit anyway. The two patterns above are the whole story.
+
+`runGuards` enforces this: a handler that returns a thenable is refused with `code: "W_IO_GUARD_ASYNC"` and its `ownerId` is logged. (Before that check existed, an `async` handler refused *every* operation it saw with `reason: undefined` — a Promise is truthy and has no `ok` — which read as a silent no-op with an empty toast.)
 
 ### Auto-history (undo/redo for free)
 
-Every `IOResource.create / update / delete` call that includes both an `apply` and an `inverseApply` callback automatically pushes a history entry through `APPLICATION_CONTEXT.history` synchronously, immediately after `apply()` succeeds. Authors get undo/redo without writing a single `pushExecuted` call.
+Every `IOResource.create / update / delete` call that includes both an `apply` and an `inverseApply` callback automatically pushes a history entry through `APPLICATION_CONTEXT.history`, in the caller's frame, right after `apply()` succeeds. (The push is queued on the history's internal promise chain, so the entry *commits* on the next tick — `await history.whenIdle()` if you need to observe it.) Authors get undo/redo without writing a single `pushExecuted` call.
+
+Pass `apply` **without** `inverseApply` when an outer `history.push` already owns undo for a whole gesture. If you still want per-item revert-on-refusal there, pass `inverseApply` **and** `skipHistory: true` — otherwise each item records a second, redundant entry.
 
 ```ts
 // inside the owner module
@@ -396,21 +430,50 @@ await this.annotationResource.create(item, {
 // User presses Cmd-Z later → APPLICATION_CONTEXT.history.undo() runs:
 //   1. inverseApply()                       (local rollback)
 //   2. annotationResource.delete(id, { meta: { fromUndo: true, … } })
-//      ↳ guards run, sinks run, but skipHistory=true so no recursive push
+//      ↳ sinks run; skipGuards=true (the forward op was already vetted) and
+//        skipHistory=true so there is no recursive push
 //
 // Cmd-Shift-Z (redo):
 //   1. apply()                              (local re-commit)
 //   2. annotationResource.create(item, { meta: { fromRedo: true, … } })
-//      ↳ same skipHistory=true semantics
+//      ↳ same skipGuards / skipHistory semantics
 ```
 
 **Inverse direction table** (the pipeline's only domain knowledge):
 
-| Original direction | Inverse on undo |
-|---|---|
-| `create` | `delete` |
-| `delete` | `create` |
-| `update` | `update` (the `inverseApply` closure carries the rollback patch) |
+| Original direction | Inverse on undo | Wire body the inverse carries |
+|---|---|---|
+| `create` | `delete` | none — addressed by the id derived from the created item via `identityOf` |
+| `delete` | `create` | `inversePayload` — the full item snapshot |
+| `update` | `update` | `inversePayload` — the *reverting* patch |
+
+#### `inversePayload` — the inverse op needs its own body
+
+`inverseApply` repairs **local** state. It says nothing about what the sink
+receives, and the inverse op's body is *not* the forward op's: undoing a
+`delete` means re-creating the whole item, undoing an `update` means sending
+the patch that reverts it. Supply it whenever you pass `apply` + `inverseApply`
+on a `delete` or an `update`:
+
+```ts
+const restoreClone = factory.copy(annotation);           // snapshot before removal
+this.annotationResource.delete(annotation.incrementId, {
+  apply:          () => this._deleteAnnotation(annotation),
+  inverseApply:   () => this._addAnnotation(restoreClone),
+  inversePayload: restoreClone,        // ← what the sink re-creates on undo
+});
+```
+
+A thunk (`inversePayload: () => snapshot()`) defers the capture to undo time.
+Omitting it where required is not fatal — the resource logs one warning per
+resource+direction and dispatches the inverse without a body, so a sink that
+undeletes by id still works — but the server will otherwise resurrect an empty
+record. Creates need nothing: the inverse `delete` is addressed by the id
+`identityOf` reads off the created item.
+
+This matters most **with coalescing on**: `create A; delete A` cancels out
+before either reaches the wire, so the `create` emitted by the subsequent undo
+is the only one the server ever sees. Without `inversePayload` it is empty.
 
 **Reserved `ctx.meta` keys** the pipeline writes (sinks / guards may read):
 
@@ -420,6 +483,7 @@ await this.annotationResource.create(item, {
 | `meta.fromUndo: true` | This dispatch is the undo replay of a previously-recorded entry. |
 | `meta.fromRedo: true` | This dispatch is the redo replay. |
 | `meta.phase: 'post-commit'` | Set on the queued dispatch context (so sinks / `io:refused` listeners can distinguish sync local commit from async server outcome). |
+| `meta.localId` | The owner's own stable identity for the item (`def.identityOf`), on **every** direction — including `create`, where `ctx.itemId` is absent by design (the id is the destination's to assign, and a REST sink would otherwise `POST /resource/<id>`). A sink that stores remotely uses it to correlate the id it gets back with the object the caller is looking at; without it, `create` gives a sink nothing to key on. Absent only when the owner declares no `identityOf` (the pipeline's synthetic coalescing key is a uniqueness device, not an identity, and is never published). |
 
 **Sinks do not need to know about history.** They keep implementing `create / update / delete` exactly as they would for user-driven calls. If they want to opt out of replays, they read `ctx.meta`:
 
@@ -454,18 +518,84 @@ Default (no `accepts` filter) is the safe choice for most server-backed sinks: u
 
 **Coexistence with the existing `XOpatHistoryProvider` registry** (`src/classes/history.ts`): the Provider chain keeps gating "can we undo right now?" via `canUndo / canRedo` (annotations' free-form tool, e.g., uses this to handle micro-undo of a brush stroke without unwinding a full IO entry). IO-pushed entries live in the same stack the providers fall back to. No change to the public history API.
 
-### Abortable CRUD via guards
+### Abortable operations via guards
 
-A **guard** is a registered handler that runs in the `pre-create` / `pre-update` / `pre-delete` phase. It can abort the operation before any local commit or sink call. Any code may register a guard against any resource — including resources owned by other modules. This is the duplication-killer: plugin authors declare a resource and get external-vetoable CRUD for free, instead of inventing their own `*-before-*` event protocol.
+A **guard** is a registered handler that runs in a `pre-*` phase and can abort
+the operation before any local commit or sink call. Any code may register a
+guard against any resource — including resources owned by other modules. This is
+the duplication-killer: plugin authors declare a resource and get
+external-vetoable IO for free, instead of inventing their own `*-before-*` event
+protocol.
+
+There are six phases:
+
+| Phase | Runs before | `resource` matches |
+| --- | --- | --- |
+| `pre-create` / `pre-update` / `pre-delete` | the owner's local commit (`IOResource`) | `ctx.resourceName` |
+| `pre-read` | any sink read (`dispatch`) and `queryStream` | `ctx.resourceName` |
+| `pre-export` | the owner's `exportBundle` hook; once per route | only `"*"` — bundle contexts have no `resourceName` |
+| `pre-import` | the owner's `importBundle` hook, on both the sink-restore and caller-supplied paths; once per route | only `"*"` |
+
+`direction: "*"` covers the three **CRUD write** phases and nothing else. It
+predates `pre-export` / `pre-import` / `pre-read`; widening it would turn every
+existing domain guard into a veto over exports and reads it was never written to
+judge. Name the newer phases explicitly.
+
+A refused `pre-read` yields an empty stream rather than throwing, because every
+caller is a hydration loop that treats "nothing" as a valid answer.
+
+**`pre-export` / `pre-import` run once per route.** Every bundle dispatch carries
+`ctx.route`, and a guard sees each value separately:
+
+| `ctx.route` | The destination | Typically judged by |
+| --- | --- | --- |
+| `"sink"` (default) | anything bound in `ENV.client.io.bindings` | the owner's capability |
+| `"local"` | the `file-download` last resort, the `file-upload` sink, `IO_PIPELINE.importBundle` with a user-picked payload | the core `core.io.local-file` capability |
+
+A guard that ignores `route` sees every dispatch and therefore denies both —
+which is what guards written before the field existed do, unchanged. A sink
+states which route it *is* with `IOSink.route`, and that wins over the batch's,
+so an explicitly bound `file-download` is still judged as local.
+
+The local fallback runs only when nothing was stored, the local route is open,
+and **no sink declined on policy grounds** (`{accept: false, policy: true}` from
+`accepts()`). Before that condition existed it keyed off how many sinks were
+*bound* rather than how many ran, so a sink refusing on policy handed the user
+the same bytes as a download. A shape decline still triggers the fallback: that
+means no suitable destination was configured, and a local copy is the rescue.
+
+See `src/USER_ROLES.md` → "Two routes".
+
+**A refusal for work the user did not request is an event, not a dialog.** The
+dispatch context carries `trigger: "user" | "system"`, defaulting to `"user"`.
+`surfaceRefusal` always raises `io:refused`; it only reaches the notifier when
+the trigger is `"user"`. A `"system"` refusal is logged through
+`APPLICATION_CONTEXT.log("core.io")` instead — silencing must not lose the fact.
+
+Automatic means the pipeline's own bookkeeping: boot hydration, the restore
+after a slide opens, the flush of the slide being vacated. Those four call sites
+pass `trigger: "system"` explicitly. The default stays loud so a new automatic
+caller over-warns rather than swallowing a real refusal:
+
+```ts
+await IO_PIPELINE.tryRestoreImport({ viewerId, trigger: "system" });
+await IO_PIPELINE.flushBundleExport({ viewerId, backgroundId, trigger: "system" });
+```
+
+This is the mechanism the roles layer uses (`src/USER_ROLES.md`), which is why
+**sinks contain no authorization code**: the veto has already run by the time
+any destination is contacted.
 
 ```ts
 // e.g. inside a permission-check plugin:
 const dispose = IO_PIPELINE.registerGuard({
   ownerId: "permission-check",
   resource: "annotation",          // matches ctx.resourceName, "*" = any
-  direction: "pre-delete",          // "pre-create" | "pre-update" | "pre-delete" | "*"
+  direction: "pre-delete",          // one phase from the table above, or "*"
   priority: 100,                    // higher runs first; default 0
-  handler: async (ctx, payload) => {
+  // SYNC. A handler that returns a Promise is refused with `W_IO_GUARD_ASYNC`
+  // and named in the console — see "Sync guards only" above.
+  handler: (ctx, payload) => {
     if (currentUser.role !== "admin") {
       return {
         ok: false, refused: true,
@@ -495,11 +625,20 @@ If any of 1, 2, 3 refuses, steps 4–5 are skipped. The refusal is returned to t
 **Two-step idiom** for callers that want to gate a local commit and run persistence in a separate step:
 
 ```ts
-const veto = await ann.canDelete(itemId);
-if (!veto.ok) return;                       // guard refused — toast already shown
+// `surface: true` — this aborts a user gesture, so the user must hear why.
+const veto = ann.canDelete(itemId, meta, { surface: true });
+if (!veto.ok) return;                       // guard refused — toast shown
 removeFromCanvas(itemId);                   // local commit
-await ann.delete(itemId, { skipGuards: true });  // persist; don't re-run guards
+ann.delete(itemId, { skipGuards: true });   // persist; don't re-run guards
 ```
+
+**The probes are silent by default.** `canCreate / canUpdate / canDelete` are *questions* — UI
+that greys out a control by asking "may I delete this?" would otherwise emit a user-facing error
+toast on every render. Pass `{ surface: true }` only from the place that aborts an actual gesture
+on the answer; a probe whose "no" merely disables a button should stay quiet and put the reason in
+the control's tooltip.
+
+This is also how you vet a *group* all-or-nothing: `canDelete` every item first, bail on the first veto, then run the real calls with `skipGuards: true`, so a mid-loop refusal cannot leave half a gesture applied (`annotations-canvas.js` `deleteObject` / `deleteSelection`).
 
 Per-viewer logic lives inside the guard handler (read `ctx.viewerId`); the spec has no `viewerId` field so authors can express any condition.
 
@@ -548,26 +687,20 @@ IO_PIPELINE.registerSink({
     // The owning module is responsible for assembling baseURL etc.; this
     // is just the runtime read.
     const opts = composeLiveSyncOptions();   // defaults + IO_PIPELINE.sinkOverrides("live-sync")
-    const url = `${opts.baseURL}/${ctx.resourceName}?` + new URLSearchParams({
-      backgroundId: String(params.backgroundId),
-      bbox: JSON.stringify(params.bbox),
-      zoom: String(params.zoom),
-    });
     const signal = (ctx.meta as any).signal as AbortSignal | undefined;
-    const res = await fetch(url, { signal });
-    if (!res.ok) return;
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) if (line) yield JSON.parse(line);
-    }
-    if (buffer) yield JSON.parse(buffer);
+    // HttpClient — never native fetch: it carries JWT/CSRF, proxy aliases and
+    // secureMode policy, and `stream()` parses NDJSON line by line for us.
+    const client = new HttpClient({ baseURL: opts.baseURL });
+    const stream = await client.stream(ctx.resourceName, {
+      method: "POST",
+      body: {
+        backgroundId: params.backgroundId,
+        bbox: params.bbox,
+        zoom: params.zoom,
+      },
+      signal,
+    });
+    for await (const item of stream.lines()) yield item;
   },
   // + create / read / update / delete for live per-item sync.
 });
@@ -582,10 +715,22 @@ IO_PIPELINE.registerSink({
 ### Triggering a programmatic flush
 
 ```ts
-await this.io.flush();                              // export this owner now
+await this.io.flush();                              // every outbound bundle capability
 await this.io.flush({ viewerId: someViewer });      // for one viewer
-await this.io.flush({ capabilityId: 'bundle-export' });
+await this.io.flush({ capabilityId: 'bundle-submit' });   // just this one
 ```
+
+An owner may declare more than one **outbound** bundle capability — say
+`bundle-export` for session state and `bundle-submit` for a user's completed
+form — and an operator can then route and gate them separately. `capabilityId`
+is how a button drives one without pushing the others. An unscoped flush covers
+all of them.
+
+"Outbound" means *any* bundle capability whose id does not contain `import`; the
+word `export` is not special. Getting that wrong is invisible in the worst way —
+a `bundle-submit` bound to a real destination reads as "nothing remote is
+configured", so `Save` degrades to a local file and the write silently never
+happens.
 
 `UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go.
 
@@ -660,11 +805,18 @@ The shape of `client.<key>.io`:
   "disabled": ["some-plugin-id"],
 
   // Bindings keyed by ownerId (the include.json id) and capabilityId.
+  // An entry is a sink id, OR `{ "sink": id, "config": {...} }` to configure
+  // that sink for THIS (owner, capability) only — see "Per-binding config".
   "bindings": {
     "annotations": {
       "bundle-export": ["file-download", "http-rest:annotations-bundles"],
       "crud:annotation": ["http-rest:annotations-live"],
       "crud:preset": []
+    },
+    "recorder": {
+      "bundle-export": [
+        { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+      ]
     },
     "core": {
       "bundle-export": ["post-data"]
@@ -687,13 +839,125 @@ The shape of `client.<key>.io`:
 
 ### Resolution order (highest to lowest)
 
-1. `ENV.client.io.disabled` includes the owner → IO inert.
+1. `ENV.client.io.disabled` includes the owner (or `disabledCapabilities` names the pair) → IO inert.
 2. `ENV.client.io.bindings[owner][capability]` defined → that exact list.
+2.5. a **runtime binding claim** for that pair → the claimed list (see below).
 3. include.json `io.defaultBindings[capability]` defined → that list.
 4. capability `kind === "bundle"` → fallback to `["post-data"]` (legacy session export).
 5. capability `kind === "crud"` → `[]` (inert).
 
 Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`) to introspect.
+
+### Runtime binding claims
+
+`registerSink` lets a module *offer* a destination; it does not let it *become*
+one. Only the operator (rule 2) or the capability's own author (rule 3) can route
+anything to it. That is the right default for a sink that competes with others —
+and the wrong one for a module that **is** the backend the deployment runs
+against. An embedded host (EMPAIA Workbench, a LIS shell) registers a sink that
+is the only correct destination for the session it created, and if an operator
+forgets a binding line the feature is not degraded, it is silently inert. That is
+how integrations end up persisting *beside* the pipeline instead of through it.
+
+```ts
+this._claims = [
+    IO_PIPELINE.claimBinding("annotations", "crud:annotation", ["my-sink"], this.uid),
+];
+// dispose on teardown
+```
+
+- The claim is **below** `ENV.client.io.bindings`: an operator who writes a
+  binding still decides, and `disabled` / `disabledCapabilities` still silences
+  everything. The claim only fills a hole; it never overrides a decision.
+- `owner` is the **capability owner** (`"annotations"`, or its uid), not the
+  claimant. `claimantUid` is yours, and is what conflict reports name.
+- Several claimants for one pair are merged and de-duplicated, with one warning
+  and an `io:binding-claimed` event. For CRUD (`until-refusal`) two claimants
+  means two destinations, which is nearly always a packaging mistake.
+- Trust-wise a claim is code, at the same level as `registerSink` — anything that
+  can claim could already have registered the sink. It cannot read or widen
+  anything the operator closed.
+
+`IO_PIPELINE.listBindingClaims()` shows what claimed what, including claims an
+explicit binding is currently overriding.
+
+Claim only what you genuinely own. A sink that is *an* option among several
+(a storage backend, an export target) belongs in the operator's config, not in
+a claim.
+
+### Per-binding config — one sink, many differentiated outputs
+
+`sinkOverrides` is keyed by **sink id alone**, so every owner routed to `github`
+shared one `pathTemplate`. And an admin cannot register a second instance:
+sink ids are hardcoded by the module that registers them (`github`, `mlflow`),
+so the "distinct ids" pattern below is available to *module authors*, not to
+someone editing `ENV.client.io`.
+
+A binding entry may therefore carry its own config:
+
+```jsonc
+"bindings": {
+  "annotations": {
+    "bundle-export": [
+      { "sink": "github", "config": { "pathTemplate": "cases/{backgroundId}/annotations.json" } }
+    ]
+  },
+  "recorder": {
+    "bundle-export": [
+      { "sink": "github", "config": { "repo": "org/media",
+                                      "pathTemplate": "cases/{backgroundId}/rec/{viewerId}.json" } }
+    ]
+  }
+}
+```
+
+Precedence inside the sink's own option composition (highest first):
+
+```
+binding.config  →  sinkOverrides[sink]  →  include.json block  →  module defaults
+```
+
+Bare strings keep working and are equivalent to `{ sink: id }`. The pipeline
+never interprets `config` — it normalizes, freezes it, and hands it back
+through `IO_PIPELINE.bindingConfig(ownerUid, capabilityId, sinkId)`, which the
+sink calls from its own `getOptions(ctx)`. Nothing is threaded through the
+dispatch sites, so runtime `.mjs` sinks work unchanged.
+
+**Trust.** `ENV.client.io` is server-delivered and is *not* reachable from URL
+params or an imported session bundle, so `config` sits at exactly the same
+trust level as `sinkOverrides` — `proxy` / `baseURL` / `auth` / `repo` are
+legitimate here. If bindings ever become contributable by a less trusted
+source, that invariant must be re-litigated first.
+
+### Path templating & sanitization
+
+Sinks address storage by interpolating context fields into an operator
+template. Use `IO_PIPELINE.formatPath(template, ctx, options)` — never a
+hand-rolled interpolator.
+
+| token | value |
+|-------|-------|
+| `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` | verbatim |
+| `{capabilityGroup}` | `bundle-*`→`bundle`, `crud:x`→`crud`, `kv:x`→`kv` |
+| `{viewerId}` | `_global` when the dispatch is global-scope |
+| `{backgroundId}` | `_any` when the owner is not slide-scoped |
+| `{key}` | the bundle key (`<viewerId>::<backgroundId>`), `_default` when empty |
+| `{resourceName}` `{itemId}` | CRUD only |
+
+Two rules that bite:
+
+- **`{capabilityId}` is not round-trip safe.** Export dispatches carry
+  `bundle-export`, restores carry `bundle-import`, so a template using it
+  reads back from a different location than it wrote. Use
+  `{capabilityGroup}`.
+- **Substituted values are untrusted.** `viewerId` / `backgroundId` come from
+  the session config, `itemId` from the CRUD caller (a remote peer in live
+  collaboration). `formatPath` reduces every value to a single segment
+  matching `[A-Za-z0-9._-]`, never `.`/`..`, never empty, ≤128 chars. The
+  *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
+  other non-addressing text) only strips control characters.
+
+Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legacy: io/"`).
 
 ---
 
@@ -704,13 +968,54 @@ Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`
 | `post-data` | `bundle` | Writes into the global `POST_DATA` dict. Preserves the legacy HTML-form session export emitted by `serializeApp()`. Default fallback for unbound bundle capabilities. |
 | `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`. |
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
-| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW` and 5xx only). Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `session-memory` | `bundle` | In-memory, keyed by `ctx.key`. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
+
+## Module-provided sinks
+
+Shipped as modules rather than built in: they register a sink at load time and are inert unless an admin binds a capability to them. Enable the module, then bind. Each holds its upstream credential **server-side** in a `server.secure.proxies.<alias>` block — never on the client.
+
+| id | Provided by | Supports | Purpose |
+|----|-------------|----------|---------|
+| `github` | `modules/io-github-sink` | `bundle` | One file per bundle in a git repo; every export is a commit. ≤ 1 MB per file. See its [README](../modules/io-github-sink/README.md). |
+| `mlflow` | `modules/io-mlflow-sink` | `bundle`, `crud` | Records become MLflow experiments/runs/metrics/tags. The record layout is chosen by a named template or a registered mapper, so the same owner data can take different shapes per deployment. See its [README](../modules/io-mlflow-sink/README.md). |
+| `dicom-sr-annotations` | `plugins/dicom` | `bundle`, owners `["annotations"]` | Annotations as DICOM SR, STOW'd to the configured DICOMweb store. Declares its owner restriction, so binding anything else to it is reported at boot. |
+
+Both `github` and `mlflow` count as **remote** bundle sinks — `NON_REMOTE_BUNDLE_SINKS` is an explicit deny-list (`file-download`, `post-data`, `session-memory`, `file-upload`), so anything else drives the Save-vs-Export decision via `hasRemoteBundleSinks()`.
 
 ### Round-trip contract
 
 A transport sink **must round-trip payloads byte-equivalent**. The sink may decode wire encodings (base64, gzip, …) so the owner gets back the same logical payload it produced, but it **must not interpret the payload's semantics** — no `JSON.parse`, no schema-aware reshaping, no whitespace stripping. Decoding bundle contents (string → object, array → typed model, etc.) belongs in the owner's `importBundle`, because only the owner knows the payload's format. Sinks that violate this contract silently break any owner that round-trips a JSON string the owner expects to parse itself.
 
-Custom sinks are registered with `IO_PIPELINE.registerSink(mySink)` — they're plain objects implementing the `IOSink` ambient interface. Distinct ids let the admin route different owners to different `http-rest` instances; the owning module composes its own defaults with the admin override slot:
+### Sink support contract
+
+`IOSink.supports` is the sink's declaration of what it can serve, and the
+pipeline reads it:
+
+```ts
+supports: ["bundle"]                                        // legacy short form
+supports: { kinds: ["bundle"], owners: ["annotations"] }    // full descriptor
+```
+
+`owners` / `capabilities` / `resources` are anchored globs (`*` = any run of
+characters); an absent field means "any". Declare statically-known limits here
+rather than in `accepts` — the pipeline then validates every resolved binding
+at registration time and reports `io:invalid-binding` (console error + event)
+for each mismatch, *before* any data is at risk. `accepts` remains the right place for
+genuinely runtime conditions (missing config, wrong viewer state) and may
+return `{ accept: false, reason, userMessage }` instead of a bare `false` so
+its reason reaches the user when nothing else takes the dispatch.
+
+**Declining is quiet only while another bound sink succeeds.** Bind
+`["dicom-sr-annotations", "post-data"]` for several owners and each takes what
+it serves, silently. But if *every* bound sink declines, the dispatch resolves
+to a `W_IO_NO_SINK_ACCEPTED` refusal quoting the collected reasons — it does
+**not** resolve to `{ok:true}`. (It used to: the CRUD full-refusal check was
+gated on `attempted`, which sinks that declined never incremented, so an
+all-declined write returned success and `IOResource` committed an item that no
+destination ever stored.)
+
+Custom sinks are registered with `IO_PIPELINE.registerSink(mySink)` — they're plain objects implementing the `IOSink` ambient interface. Distinct ids let a module author route different owners to different `http-rest` instances (for an admin, prefer per-binding config above); the owning module composes its own defaults with the admin override slot:
 
 ```ts
 IO_PIPELINE.registerSink(makeHttpRestSink({
@@ -724,7 +1029,7 @@ IO_PIPELINE.registerSink(makeHttpRestSink({
 
 ---
 
-## Refusal & conflict semantics
+## Refusal semantics
 
 Any hook (validator, sink, or owner method) may return:
 
@@ -732,19 +1037,31 @@ Any hook (validator, sink, or owner method) may return:
 { ok: false, refused: true, reason: "...", userMessage?: "...", code?: "..." }
 ```
 
-- For **CRUD**: the first refusal short-circuits and is returned to the caller. The pipeline emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, 5000, MSG_WARN)` automatically. The caller can use the result to roll back local state.
-- For **bundle**: refusals from one sink don't stop sibling sinks for the same owner. Each refusal still emits `io:refused`.
-- **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals.
+### How many sinks run
+
+A binding list can name several sinks. There are exactly two iteration policies, plus one selection rule for streams — every path funnels through the same gate (`selectGatedSinks`) and the same outcome classifier (`runSinkPass`), so declines, throws and `io:*` events look identical whichever applies.
+
+| Policy | Used by | Meaning |
+|---|---|---|
+| **all** | bundle export, restore | Every gated sink runs. One refusing does not stop the rest — a local file copy is still worth having when the remote refused. |
+| **until-refusal** | CRUD dispatch | Sinks run in binding order until one refuses; that refusal is the result. A sink that *cannot perform the op* (`W_IO_UNSUPPORTED`) is a misrouted binding, not a verdict on the data, so it does not stop the others. |
+| **first-match** *(selection, not a pass)* | streamed `query` | One stream, one sink: the first gated sink implementing `query`. |
+
+Restore additionally applies **last non-empty payload wins** — every readable sink is read, and each non-empty payload is handed to `importBundle` in binding order.
+
+- **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals. A throwing sink never short-circuits its siblings.
+- A refusal emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, …)` automatically. For CRUD the caller also gets it back via `.settled`, and the resource reverts the local commit by default (see [`rollbackOnAsyncRefuse`](#sync-core-queued-dispatch)).
 
 ### Three distinct refusal events
 
 | Event | When |
 |-------|------|
 | `io:refused`              | A sink tried (`writeBundle` / `readBundle` / `create` / …) and returned `{ refused: true }`, or threw. Toast shown automatically. |
-| `io:rejected-by-accepts`  | A bound sink's `accepts(ctx)` returned `false` — it opted out before attempting. Informational; pairs with a `console.info`. Payload field: `sinkId`. |
-| `io:fully-refused`        | Every bound sink for one dispatch ended in refusal/error/accept-rejection — the call wrote nothing. Always a sign of a misconfigured binding. Pairs with a `console.warn`. |
+| `io:rejected-by-accepts`  | A bound sink opted out before attempting — either its declared `supports` does not cover this context, or `accepts(ctx)` declined. Informational; pairs with a `console.info`. Payload fields: `sinkId`, `reason`. |
+| `io:fully-refused`        | Every bound sink for one dispatch ended in refusal/error/decline — the call wrote nothing. Always a sign of a misconfigured binding. Carries the synthesized `W_IO_NO_SINK_ACCEPTED` result in `result`, plus `declines`. Surfaced to the user unless an individual sink already showed its own `userMessage`. |
+| `io:invalid-binding`      | Config-time, not dispatch-time: a resolved binding names a sink whose `supports` cannot serve it (wrong kind/owner/capability/resource), or names only unregistered sinks/drivers. Reported once per (owner, capability, sink) as a `console.error` + this event — operator-facing, so no toast (it fires during boot and the end user cannot act on it). |
 
-These three events let monitoring code distinguish between "sink said no, but other sinks may have succeeded" (`io:refused`), "this sink was the wrong one for this ctx" (`io:rejected-by-accepts`), and "nothing wrote anywhere" (`io:fully-refused`).
+These events let monitoring code distinguish between "sink said no, but other sinks may have succeeded" (`io:refused`), "this sink was the wrong one for this ctx" (`io:rejected-by-accepts`), "nothing wrote anywhere" (`io:fully-refused`), and "this binding was never going to work" (`io:invalid-binding`).
 
 For Use case B from the verification plan — admin binds `module.some-other.bundle-export = ["remote-anno"]` by mistake, and `remote-anno` only handles annotations — the user sees:
 
@@ -775,13 +1092,16 @@ Beyond bundle export/import and per-element CRUD, every owner — including a sy
 A KV driver is **any object satisfying the localStorage interface** (`getItem/setItem/removeItem/key/length/clear`). `window.localStorage` plugs in unchanged; the host registers it at pipeline bootstrap. Drivers self-describe sync vs. async, "shared" vs. "owned" (shared drivers get automatic `<ownerUid>::<sanitizedKey>` prefixing to prevent collisions), and optional `contextAware` mode where the driver receives the active `IOContext` to route per-context itself.
 
 ```ts
+// Remote-backed drivers talk through HttpClient, never native fetch.
+const kvApi = new HttpClient({ baseURL: "/kv" });
+
 IO_PIPELINE.registerKVDriver({
   id: "redis-bridge",
   mode: "async",
   shared: true,
-  async getItem(k) { return await fetch(`/kv/${k}`).then(r => r.text()); },
-  async setItem(k, v) { await fetch(`/kv/${k}`, { method: "PUT", body: v }); },
-  async removeItem(k) { await fetch(`/kv/${k}`, { method: "DELETE" }); },
+  async getItem(k) { return await kvApi.request(encodeURIComponent(k), { expect: "text" }); },
+  async setItem(k, v) { await kvApi.request(encodeURIComponent(k), { method: "PUT", body: v }); },
+  async removeItem(k) { await kvApi.request(encodeURIComponent(k), { method: "DELETE" }); },
   // … key, length, clear
 });
 ```
@@ -823,9 +1143,93 @@ A `kv` capability bound to **multiple drivers** mirror-writes to all of them on 
 
 User keys pass through `IO_PIPELINE.sanitizeKey(s)` — anything outside `[A-Za-z0-9._-]` is replaced with `_`. On shared drivers the result is then prefixed with `<ownerUid>::` to avoid cross-owner collisions. Owners with `shared: false` drivers see the raw sanitized key.
 
+Owner is the **only** namespace axis. KV keys are deliberately *not* scoped by the deployment cache key (`src/classes/app/deployment-key.ts`) — that key scopes the boot session caches and the plugin-autoload cookie only. Two deployments on one origin therefore share `AppCache` / `AppCookies` entries; a deployment that must not share them binds `kv:*` to the `memory` driver in `ENV.client.io.bindings.core`.
+
+### Value encoding
+
+Drivers are string-only (`localStorage`, `document.cookie`), so `handle.set(key, value)` encodes:
+
+| Value | Stored as |
+| --- | --- |
+| `string` | verbatim — every pre-existing entry keeps its exact bytes |
+| `number` / `boolean` | `String(value)`; `get` coerces `"true"`/`"false"` back to booleans |
+| anything else | `"json:" + JSON.stringify(value)`, decoded by `get` |
+| `undefined` | nothing — the key is deleted |
+
+The envelope is an explicit U+0001 sentinel rather than a `{`/`[` heuristic, so a user string that happens to look like JSON stays a string. `getItem`/`setItem` are the raw, unencoded pair — that is what `XOpatStorage.*.getStore()` hands to libraries requiring a real `Storage` (oidc-client-ts).
+
+Before the envelope existed, `set` did `String(value)`, which wrote the literal `"[object Object]"` for every object and silently destroyed it. Such values are unrecoverable: `get` reports them as absent and removes the key.
+
 ### Bootstrap exception
 
-The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) is the **one storage flow not routed through the pipeline**. It must be readable before `initXOpatLoader` runs (it carries the boot config the pipeline depends on). The paired write therefore also stays on raw `sessionStorage`. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")`.
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) and the boot session cache (`xoSessionCache`, `src/parse-input.js`) are the **storage flows not routed through the pipeline**. They stay on raw `sessionStorage`/`localStorage`, and every access is **probe-gated** (see below) and wrapped in `try/catch`.
+
+This is a structural exception, not an oversight. Three reasons, in the order they bite:
+
+1. **`__xopat_session__` carries the ENV that configures the pipeline.** It is read at `app.ts:80` and replaces `ENV` / `PLUGINS` / `MODULES` / `POST_DATA` wholesale. Anything ENV-configured must run after it, so it can never be one of its own consumers.
+2. **The pipeline needs the FINAL `POST_DATA` object.** `makePostDataKVDriver` captures it by reference (`io/kv-drivers.ts`), as do the `post-data` bundle sink and the pipeline itself — and `xOpatParseConfiguration` *replaces POST_DATA's identity* when it restores a cached session (`parse-input.js`, `postData = data`). A pipeline built before parsing would hold a detached bucket for every `kv:data` read/write and for bundle export. That is why `bootstrapIOPipeline` sits **after** the parse call in `app.ts`, and why the boot cache cannot wait for it.
+3. The cookie policy is snapshotted eagerly at bootstrap (`io/bootstrap.ts`), so the pipeline must also come after the `__ORIGIN__` domain resolution.
+
+What the boot path reproduces by hand instead: probe-gating (`XOpatStorageAvailability`), per-access `try/catch`, a mirror of the `bypassCache` semantics from `store.ts`, and deployment scoping via the key in `src/classes/app/deployment-key.ts`.
+
+**The transports that bypass storage entirely.** The address-bar hash
+(`UTILITIES.syncSessionToUrl`, written on every shader edit) and a self-POST body live in the
+*history entry*, so they survive an ENV swap, a server restart and any cache eviction — and
+`parse-input.js` reads them **before** the boot cache. `serializeAppConfig` therefore stamps
+`__envKey` on every session the viewer serializes: a foreign-stamped session still loads (with
+a warning), but is refused entry to `xoSessionCache`. That refusal is the load-bearing part —
+otherwise one stale hash is laundered into the cache under the *new* deployment's key and
+restored legitimately forever. An unstamped session (embedder, demo link) is accepted as before.
+
+**Invariant — `bypassCache` gates restore and save, never eviction.** A boot that opts out of the cache still drops an entry belonging to a *different* deployment. The flag is a preference about using one's own cache; it is not permission for another deployment's session to sit in this origin's storage waiting for the flag to flip. Folding the two together is what let a stale session survive an `XOPAT_ENV` switch untouched.
+
+**Known gap.** `ENV.client.io.bindings.core["kv:cache"]` does **not** reach these flows — bind `kv:cache` to `memory` and the boot path still writes localStorage. Nothing outside the pipeline instance can resolve a binding (`resolveBindings` is the only reader), and duplicating that into the boot path would be a second policy engine. The switch that does reach the boot cache is `setup.bypassCache: true`.
+
+**Adding boot-time state?** If it must be readable before `initXOpatLoader`, it belongs here — stamp it with the deployment key, honour `bypassCache`, probe-gate it, and add a `storage-audit` allowlist entry stating the reason. Everything else — including anything a plugin or module wants — uses `IO_PIPELINE.kv(uid, "kv:session")` (or the `XOpatStorage.Session` façade).
+
+### Sandboxed / opaque-origin operation
+
+xOpat can be embedded in an iframe with a `sandbox` attribute that omits `allow-same-origin` — the EMPAIA Workbench does exactly this. The document then has an **opaque origin**, and:
+
+- reading the `window.localStorage` / `window.sessionStorage` **property** throws `SecurityError` — `if (window.localStorage)` is a *throw site*, not a feature detection;
+- `document.cookie` throws on write;
+- the bare `indexedDB` identifier throws on read.
+
+Three mechanisms keep the viewer alive there.
+
+**1. One canonical probe.** `XOpatStorageAvailability` (`src/store.ts`, installed by `dist/store.js` — the first app script, so it is reachable from `parse-input.js` onwards):
+
+```js
+XOpatStorageAvailability.localStorage    // boolean, memoized
+XOpatStorageAvailability.check("cookies")
+XOpatStorageAvailability.opaqueOrigin    // sandboxed iframe without allow-same-origin
+XOpatStorageAvailability.degraded        // any of local/session/cookies unusable
+XOpatStorageAvailability.report()        // per-API verdict + failure reason
+```
+
+Each probe does a real round-trip write, so it also catches Safari private mode and partitioned/blocked third-party storage — cases where the object exists but writes are rejected or silently dropped.
+
+**2. Memory substitution under the same driver id.** `createIOPipeline` probes before registering `local-storage` / `session-storage` / `cookies`; when a probe fails it registers a memory driver **under the original id**, labelled `"<name> (unavailable — in-memory)"`. Keeping the id matters: the built-in namespace fallback (rule 5 above) only applies when the fallback driver id is registered, so an absent `local-storage` would make `kv:cache` resolve to `[]` — silently inert. Keeping the ids also means existing `ENV.client.io.bindings` referring to them keep resolving. Each substitute gets its own map: the three stores are independent in the browser, and `this.cookies` must not be readable through `this.cache`.
+
+One `console.warn` is emitted, listing exactly which drivers were substituted. There is no toast — an embedded viewer degrading as designed is not an error the user can act on.
+
+**3. In-driver degradation for late failures.** A `Storage` can also fail *after* boot: `QuotaExceededError` on a full disk, Safari ITP eviction, a partitioning policy that flips mid-session. On the first throw, `makeStorageDriver`/`makeCookiesDriver` swap their own backing store to an in-memory `Map`, warn once, and keep serving. The swap happens **inside the driver object** on purpose — `IOPipeline.kv()` resolves ids to concrete objects and handles keep that array, and `AppCache`/`AppCookies` memoize their handle forever, so re-registering a replacement would reach none of them.
+
+**The server session is a separate problem with a separate fix.** Client storage degrading to memory keeps the *viewer* alive; it does nothing for the *session*, because the browser will not send an `xopat_session` cookie from an opaque origin (or from any frame whose third-party cookies are blocked), so `/proxy/` and `/__rpc/` answer 401. That is handled server-side by `core.server.security.cookielessSessions`, which publishes the id into the framed document and accepts it back as `X-XOPAT-Session` — see [Embedding the viewer in a third-party page](../server/README.md#embedding-the-viewer-in-a-third-party-page). Do not confuse the two: memory drivers are why *preferences* do not persist, the cookieless session is why *requests* work at all.
+
+**Consequence for plugin authors:** `this.cache` / `this.cookies` / `this.data` and `IO_PIPELINE.kv(...)` **never throw** because of storage availability. Reads return the default, writes are kept in memory for the session. Never touch `localStorage` / `sessionStorage` / `document.cookie` / `indexedDB` directly — `npm run storage-audit` fails the build on it.
+
+**Forcing memory storage without relying on detection.** A deployment that is *always* embedded can opt out up front — no new config key, just the existing bindings block:
+
+```jsonc
+"client": { "<active>": { "io": { "bindings": { "core": {
+    "kv:cache":   ["memory"],
+    "kv:cookies": ["memory"],
+    "kv:session": ["memory"]
+} } } } }
+```
+
+Rule 4 (inherit from `core`) propagates this to every plugin and module owner. This is operator policy and therefore lives in the server-only `ENV.client.io` block — deliberately *not* a `setup.*` flag, since `setup` is readable and overridable through `getOption` (session / POST_DATA / URL). The pre-existing `setup.bypassCache` / `bypassCookies` flags stay where they are: those are genuine user preferences about persistence.
 
 ---
 

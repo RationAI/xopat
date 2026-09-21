@@ -4,7 +4,18 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.annotations = [];
-        this._lastAlpha = null;
+        // Cache key for the last computed pass. The mask is NOT seeded from the
+        // cursor - _getBinaryMask marks every pixel above the alpha threshold -
+        // so the result depends only on (snapshot identity, is the sample over
+        // the overlay). Keying on that pair is what makes the short-circuit
+        // safe; the old boolean `_lastAlpha` could not tell two snapshots apart
+        // and wedged the mode permanently once a pass produced nothing.
+        this._lastSampleKey = null;
+        // Why the last pass produced no annotation, so a click can explain it.
+        // One of: null | 'ok' | 'covers-viewport' | 'empty' | 'snapshot-failed'.
+        this._lastResult = null;
+        // Hover runs async at pointer rate; only the newest pass may mutate state.
+        this._hoverSeq = 0;
         this.ratio = OpenSeadragon.pixelDensityRatio;
         this._tiRef = null;
 
@@ -13,11 +24,45 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this._invalidData = Date.now();
         });
 
+        // Seed only. The constructor runs before the first slide is open, so this
+        // snapshot of the config would say "nothing to segment" for the whole
+        // session; prepareShaderConfig() re-reads the live shader stack, the same
+        // way magic-wand.js does.
         this.disabled = APPLICATION_CONTEXT.config.visualizations.length < 1;
-        this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length;
 
         this._invalidate = () => { this._invalidData = Date.now(); };
         this._framewatchViewer = null;
+    }
+
+    get log() {
+        if (!this._log) this._log = APPLICATION_CONTEXT.log("module.annotations:viewport-segmentation");
+        return this._log;
+    }
+
+    /**
+     * The tiled image every screen<->image coordinate mapping goes through.
+     * Resolved lazily and re-resolved after a viewer switch: it used to be
+     * assigned only in setFromAuto(), so in a multi-viewport grid the mode kept
+     * mapping through the viewer it was activated in (AGENTS.md section 6).
+     */
+    _referenceTiledImage() {
+        const viewer = this.context.viewer;
+        if (!viewer || !viewer.scalebar) return null;
+        if (!this._tiRef || this._tiRefViewer !== viewer) {
+            this._tiRef = viewer.scalebar.getReferencedTiledImage();
+            this._tiRefViewer = viewer;
+        }
+        return this._tiRef;
+    }
+
+    /**
+     * Invalidate every cached derivation of the current snapshot. Called
+     * wherever the snapshot itself stops being authoritative, so a stale
+     * short-circuit can never outlive the pixels it was computed from.
+     */
+    _resetPassCache() {
+        this._lastSampleKey = null;
+        this._lastResult = null;
     }
 
     _bindFrameWatchers(viewer) {
@@ -72,10 +117,11 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
             this.annotations = [];
             this._allowCreation = false;
-            this._lastAlpha = null;
-        } else {
-            this.context.setMode(this.context.Modes.AUTO);
+            this._resetPassCache();
         }
+        // A click with nothing detected is a no-op: the tool stays active so
+        // the user can keep hovering. Leaving is done through the toolbar,
+        // another mode shortcut, or Escape.
 
         return true;
     }
@@ -84,12 +130,22 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const noViz = !this._renderConfig || Object.keys(this._renderConfig).length === 0;
         if (!objectFactory || this.disabled || noViz) {
             this.abortClick(isLeftClick);
-            let msg;
-            if (this.disabled) msg = 'There are no overlays to segment!';
-            else if (noViz) msg = 'No visualization layer to segment from. Toggle one on, or load a visualization.';
-            else msg = 'Select a preset to annotate!';
-            Dialogs.show(msg);
+            let key;
+            if (this.disabled) key = 'autoSelect.noOverlays';
+            else if (noViz) key = 'autoSelect.noVisualizationLayer';
+            else key = 'autoSelect.noPreset';
+            Dialogs.show($.t(key, { ns: 'annotations' }));
             return;
+        }
+
+        // Hovering is deliberately silent - a mode that detects on every pointer
+        // move cannot talk. The click is where the user asks for a result, so it
+        // is also the only place a refusal is worth explaining, and it explains
+        // the ACTUAL cause: "refused because it would have covered everything"
+        // and "the offscreen read failed" used to look identical (both nothing).
+        if (!this.annotations || this.annotations.length === 0) {
+            const reason = this._refusalLocaleKey();
+            if (reason) Dialogs.show($.t(reason, { ns: 'annotations' }), 4000, Dialogs.MSG_INFO);
         }
 
         this._allowCreation = true;
@@ -97,17 +153,60 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._isLeft = isLeftClick;
     }
 
+    /**
+     * Locale key explaining why the last pass produced nothing, or null when
+     * there is nothing to explain (a result exists, or the user never hovered).
+     * @return {string|null}
+     */
+    _refusalLocaleKey() {
+        switch (this._lastResult) {
+            case 'covers-viewport': return 'autoSelect.coversViewport';
+            case 'snapshot-failed': return 'autoSelect.snapshotFailed';
+            case 'empty':           return 'autoSelect.nothingHere';
+            default:                return null;
+        }
+    }
+
     locksViewer(oldViewerRef, newViewerRef) {
         const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
         if (!willKeepViewer) {
             this._cleanState();
             this._unbindFrameWatchers();
+            // The snapshot, the coordinate reference and every cached derivation
+            // belong to the viewer we are leaving. Re-bind against the new one so
+            // the mode keeps working instead of mapping through the old slide.
+            this.data = null;
+            this._tiRef = null;
+            this._tiRefViewer = null;
+            this._lastViewportKey = null;
+            this._resetPassCache();
+            this._invalidData = Date.now();
+            if (newViewerRef) this._bindFrameWatchers(this.context.viewer);
         }
         return willKeepViewer;
     }
 
-    async handleMouseHover(event, point) {
-        if (!this.context.presets.left || this.isZooming) {
+    /**
+     * Hover is dispatched un-awaited from annotations-canvas.js, so it must never
+     * reject: an unhandled rejection is invisible to the user and leaves the mode
+     * looking dead. Everything is funnelled through _hover() and any throw is
+     * recorded as a refusal the next click can explain.
+     */
+    handleMouseHover(event, point) {
+        const seq = ++this._hoverSeq;
+        return this._hover(point, seq).catch(e => {
+            if (seq !== this._hoverSeq) return;
+            this.log.warn("viewport segmentation hover failed", e);
+            this._lastResult = 'snapshot-failed';
+            this._cleanState();
+        });
+    }
+
+    async _hover(point, seq) {
+        // Bind a preset on hover, not only on click-down: this mode detects
+        // while hovering, so waiting for annotations-canvas' click-down
+        // fallback left the very first activation of the tool completely dead.
+        if (!this.context.presets.ensureActivePreset(true) || this.isZooming) {
             this._invalidData = Date.now();
             return;
         }
@@ -118,48 +217,70 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         this._isLeft = true;
 
-        const viewer = this.context.viewer;
-        const b = viewer.viewport.getBoundsNoRotateWithMargins(true);
-        const key = [
-            b.x, b.y, b.width, b.height,
-            viewer.viewport.getRotation(true),
-            viewer.viewport.getZoom(true)
-        ].join(",");
+        const key = this._viewportKey();
 
+        // `|| this._snapshotPromise` mirrors magic-wand.js: while a snapshot is in
+        // flight the cached pixels still describe the PREVIOUS viewport, so a hover
+        // arriving mid-flight must join that pass rather than trust `this.data`.
         const needsNewScreenshot =
             !this.data ||
             this._invalidData ||
+            this._snapshotPromise ||
             this._lastViewportKey !== key;
 
         if (needsNewScreenshot) {
             // Yield one frame so the main viewer's first-pass for the current
             // viewport has a chance to render before we steal its textures.
             await new Promise(r => requestAnimationFrame(r));
-            await this.prepareViewportScreenshot();
-            this._lastViewportKey = key;
-            // Snapshot changed — drop the alpha short-circuit so the recompute
-            // below runs even if currentAlpha matches the previous hover.
-            this._lastAlpha = null;
+            const snapshot = await this._requestSnapshot();
+            // A newer hover took over while we waited - it owns the state now.
+            if (seq !== this._hoverSeq) return;
+
+            // Only claim the key when the viewport still matches what was
+            // captured. _requestSnapshot joins an in-flight pass, which may have
+            // been started for a different viewport; stamping the key regardless
+            // is what used to freeze the mode on a stale frame until the next
+            // pan/zoom.
+            const settledKey = this._viewportKey();
+            this._lastViewportKey = (snapshot && settledKey === key) ? key : null;
+            this._resetPassCache();
+            if (!snapshot) {
+                this._lastResult = 'snapshot-failed';
+                this._cleanState();
+                return;
+            }
         }
 
         if (!this.data) return;
 
-        const currentAlpha = this._getPixelAlpha(point);
-        if (!currentAlpha) {
-            // Cursor is over background — _getBinaryMask would invert and trace the
-            // whole non-visualization area, which the user perceives as "the
-            // polygon doesn't shrink, it grows huge". Clear any stale helper
-            // polygon and wait for the cursor to come back over the heatmap.
-            if (this.annotations && this.annotations.length) this._cleanState();
-            this._lastAlpha = currentAlpha;
-            return;
-        }
-        if (this._lastAlpha === currentAlpha) {
-            return;
-        }
+        const overOverlay = this._getPixelAlpha(point);
+        // The mask is not seeded from the cursor, so the only thing the sample
+        // contributes is whether we are over the overlay at all. Key the cache on
+        // that plus the snapshot identity - never on the sample alone, which
+        // cannot distinguish two different snapshots and used to wedge the mode.
+        const sampleKey = `${this._lastViewportKey}|${overOverlay ? 1 : 0}`;
 
-        this.data.binaryMask = this._getBinaryMask(this.data.data, this.data.width, this.data.height, currentAlpha);
-        if (!this.data.binaryMask.bounds) return;
+        if (!overOverlay) {
+            // Cursor is over background. There is nothing to trace: tracing the
+            // complement would select the entire non-visualization area, which is
+            // exactly the "it grows huge" behaviour the coverage guard exists to
+            // prevent. Clear any stale preview and wait.
+            if (this.annotations && this.annotations.length) this._cleanState();
+            this._lastSampleKey = sampleKey;
+            this._lastResult = 'empty';
+            return;
+        }
+        if (this._lastSampleKey === sampleKey) {
+            return;
+        }
+        this._lastSampleKey = sampleKey;
+
+        this.data.binaryMask = this._getBinaryMask(this.data.data, this.data.width, this.data.height);
+        if (!this.data.binaryMask.bounds) {
+            this._lastResult = 'empty';
+            this._cleanState();
+            return;
+        }
 
         this.data.binaryMask = this.MagicWand.gaussBlurOnlyBorder(this.data.binaryMask, 5);
 
@@ -168,9 +289,23 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         let { outerContours, innerContours } = this._categorizeContours(contours);
         let annotationsPoints = this._processContours(outerContours, innerContours);
+        if (seq !== this._hoverSeq) return;
 
         this._createAnnotations(annotationsPoints);
-        this._lastAlpha = currentAlpha;
+
+        if (this.annotations.length > 0) this._lastResult = 'ok';
+        else if (this._droppedCovering > 0) this._lastResult = 'covers-viewport';
+        else this._lastResult = 'empty';
+    }
+
+    _viewportKey() {
+        const viewport = this.context.viewer.viewport;
+        const b = viewport.getBoundsNoRotateWithMargins(true);
+        return [
+            b.x, b.y, b.width, b.height,
+            viewport.getRotation(true),
+            viewport.getZoom(true)
+        ].join(",");
     }
 
     scrollZooming(event, delta) {
@@ -178,10 +313,34 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     setFromAuto() {
-        this._tiRef = this.context.viewer.scalebar.getReferencedTiledImage();
+        // Detection is hover-driven, so a mode that cannot detect anything is
+        // simply dead: refuse to enter it and say why, instead of waiting for
+        // a click to surface the same message.
+        if (!this.context.presets.ensureActivePreset(true)) {
+            Dialogs.show($.t('autoSelect.noPreset', { ns: 'annotations' }));
+            return false;
+        }
+
+        // Resolve the coordinate reference and the shader stack BEFORE testing
+        // `disabled`: it is only seeded in the constructor, which runs before the
+        // first slide opens, and prepareShaderConfig() is what makes it describe
+        // the live renderer.
+        this._tiRef = null;
+        this._tiRefViewer = null;
+        this._referenceTiledImage();
         this.prepareShaderConfig();
+        if (this.disabled) {
+            Dialogs.show($.t('autoSelect.noOverlays', { ns: 'annotations' }));
+            return false;
+        }
+        if (!this._renderConfig || Object.keys(this._renderConfig).length === 0) {
+            Dialogs.show($.t('autoSelect.noVisualizationLayer', { ns: 'annotations' }));
+            return false;
+        }
+
         this._bindFrameWatchers(this.context.viewer);
-        this.prepareViewportScreenshot();
+        this._resetPassCache();
+        this._requestSnapshot();
 
         this.context.setOSDTracking(false);
         this.context.setCursors("crosshair");
@@ -193,26 +352,62 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._unbindFrameWatchers();
 
         this.data = null;
+        // Any snapshot still in flight belongs to the session we are leaving.
+        this._lastViewportKey = null;
+        this._resetPassCache();
+        this._hoverSeq++;
+        this._invalidData = Date.now();
         if (temporary) return false;
         this.context.setOSDTracking(true);
         return true;
     }
 
-    accepts(e) {
-        return e.code === "KeyU" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-    }
-
-    rejects(e) {
-        return e.code === "KeyU";
+    get defaultKeyCombo() {
+        return "KeyU";
     }
 
     prepareShaderConfig() {
+        // Fired from a global 'visualization-used' broadcast too, which can land
+        // before this viewer has a drawer at all.
+        const viewer = this.context.viewer;
+        if (!viewer || !viewer.drawer || !viewer.drawer.renderer) return;
+
         // for some reason change in drawer completely wrongs the logics
         // of reading the texture, so the drawer must be recreated
 
         if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
-            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
+            // Dev-only render capture; no-op unless the debug window is open.
+            APPLICATION_CONTEXT.renderDebug?.unregisterDrawer?.(this.drawer);
+            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer, {
+                // The segmentation mask IS the alpha channel, so this pass has to
+                // composite onto transparency instead of the viewer's backdrop.
+                // Without it a deployment with an opaque `setup.backgroundColor`
+                // (white, the common case) returns alpha 255 for every pixel, the
+                // mask becomes the whole viewport and the coverage guard rejects
+                // it - "the detected region fills the whole viewport" on a heatmap
+                // that plainly does not.
+                //
+                // Both are construction-time only: presentationClearColor has no
+                // setter, and backgroundColor (the shader-stack seed) is inert
+                // until the next shader compile.
+                presentationClearColor: [0, 0, 0, 0],
+                backgroundColor: "#00000000",
+                // Pin a private WebGL context: in shared-context mode the default
+                // framebuffer behind `renderer.gl` is the shared scratch canvas,
+                // not this drawer's output, and prepareViewportScreenshot's
+                // readPixels would sample a blank surface.
+                sharedContextKey: null,
+            });
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(this.drawer, {
+                label: "viewport-segmentation", viewer: this.context.viewer, kind: "offscreen"
+            });
         }
+
+        // Re-read the layer stack every time. `disabled` is seeded in the
+        // constructor, which runs before the first slide is open, so without this
+        // it would report "nothing to segment" for the whole session - the same
+        // reason magic-wand.js recomputes it here.
+        this.disabled = this.context.viewer.drawer.renderer.getShaderLayerOrder().length < 1;
 
         this._renderConfig = this._buildEffectiveConfig();
         if (Object.keys(this._renderConfig).length === 0) {
@@ -228,10 +423,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     _buildEffectiveConfig() {
         const renderer = this.context.viewer.drawer.renderer;
         const order = renderer.getShaderLayerOrder() || [];
-        const bgIds = this._collectBackgroundShaderIds();
         const out = {};
-        for (const id of order) {
-            if (bgIds.has(id)) continue;
+        for (const id of this._visualizationShaderIds(order)) {
             const cfg = renderer.getShaderLayerConfig(id);
             if (!cfg || cfg.error) continue;
             if (cfg.visible === 0 || cfg.visible === false) continue;
@@ -240,29 +433,70 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             // construct(). Do not spread cache into params — slider controls need
             // their full {default, min, max, step, …} definition from the shader
             // type's defaultControls, which a scalar in params would collapse.
-            out[id] = { ...cfg };
+            //
+            // ...but force compositing to "show". Every other use_mode blends
+            // against the layer UNDERNEATH: the 'mask' blend function is
+            // literally `if (fg.a == 0) return vec4(0); return bg;`. This pass
+            // deliberately omits the background layers, so "underneath" is the
+            // transparent seed colour and a heatmap configured as a mask
+            // composites to fully transparent — the readback comes back empty
+            // and the tool detects nothing at all. We only care where each layer
+            // paints, not what it looks like over the slide.
+            //
+            // The cache is COPIED, never mutated: it is the same object the live
+            // renderer reads, and use_mode is resolved from it whenever the
+            // config value is not forced (flex-renderer loadProperty).
+            out[id] = {
+                ...cfg,
+                use_mode: "show",
+                cache: { ...(cfg.cache || {}), use_mode: "show" }
+            };
         }
         return out;
     }
 
-    // Subtracts background shaders from the renderer's shader stack so the
-    // segmentation pass only sees visualization layers. Renderer ids are
-    // sanitized via $.FlexRenderer.sanitizeKey, so the raw bg.id derived from
-    // canonical-scene must be sanitized to match the order returned by
-    // renderer.getShaderLayerOrder().
-    _collectBackgroundShaderIds() {
-        const out = new Set();
-        const sanitize = (k) => OpenSeadragon.FlexRenderer.sanitizeKey(k);
-        const scene = window.__SCENE;
-        const bgArr = APPLICATION_CONTEXT.config.background || [];
-        for (const bg of bgArr) {
-            if (!bg || !bg.id) continue;
-            const ids = (scene && typeof scene.backgroundShaderRendererIds === "function")
-                ? scene.backgroundShaderRendererIds(bg)
-                : ((Array.isArray(bg.shaders) ? bg.shaders : [null]).map((_, i) => i === 0 ? bg.id : `${bg.id}-${i}`));
-            for (const id of ids) out.add(sanitize(id));
+    /**
+     * The visualization slice of the renderer's shader-layer order, i.e. the
+     * overlays with the slide subtracted.
+     *
+     * Reuses the same signal the visualization inspector uses to tell the two
+     * apart: `assembleRenderOutput` emits backgrounds first, so the boundary is
+     * a POSITION, not an id. Matching ids does not work - a live viewer
+     * namespaces every renderer id with `v<viewer.id>_` and sanitizes it, so
+     * comparing against config background ids matches nothing and the opaque
+     * slide silently stays in the pass, painting every pixel and making the
+     * coverage guard reject the whole viewport.
+     */
+    _visualizationShaderIds(order) {
+        const getSplit = UTILITIES && UTILITIES.getBackgroundShaderSplitIndex;
+        if (typeof getSplit !== "function") {
+            this.log.warn("UTILITIES.getBackgroundShaderSplitIndex missing; cannot subtract the slide");
+            return [];
         }
-        return out;
+        const split = getSplit(this.context.viewer);
+        return order.slice(Number.isInteger(split) && split > 0 ? split : 0);
+    }
+
+    /**
+     * Serialized, failure-tolerant entry point to prepareViewportScreenshot.
+     * The offscreen drawer clears and re-reads a single GL surface, so two
+     * overlapping passes corrupt each other's pixels; and a rejection here
+     * (e.g. the standalone extraction finding no tiles) must not escape as an
+     * unhandled rejection - the mode has to stay usable and retry on the next
+     * hover, which _invalidData already arranges.
+     * @return {Promise<object|null>} the snapshot, or null when it failed
+     */
+    _requestSnapshot() {
+        if (!this._snapshotPromise) {
+            this._snapshotPromise = this.prepareViewportScreenshot().catch(e => {
+                this.log.warn("viewport snapshot failed", e);
+                this.data = null;
+                return null;
+            }).finally(() => {
+                this._snapshotPromise = null;
+            });
+        }
+        return this._snapshotPromise;
     }
 
     async prepareViewportScreenshot(x, y, w, h) {
@@ -297,7 +531,11 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         // leak the previous frame's pixels — making it impossible for the
         // traced polygon to shrink when the heatmap shrinks. Mirrors the same
         // pattern in modules/annotations/magic-wand.js:100.
+        // clearColor is sticky GL state, so a bare clear() would inherit whatever
+        // the previous pass left bound. State it explicitly: this surface must
+        // start fully transparent for the alpha mask to mean anything.
         const gl = this.drawer.renderer.gl;
+        gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         await this.drawer.drawWithConfiguration(
@@ -335,23 +573,23 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return this.data;
     }
 
-    _getBinaryMask(data, width, height, alpha) {
+    /**
+     * Mark every pixel carrying visualization coverage. Deliberately has no
+     * "invert" mode: tracing the complement selects the whole non-visualization
+     * area, which is the exact misdetection coversViewport() exists to reject.
+     * Callers must therefore only reach this once the sample is known to sit on
+     * the overlay.
+     */
+    _getBinaryMask(data, width, height) {
         let mask = new Uint8ClampedArray(width * height);
         let maxX = -1, minX = width, maxY = -1, minY = height, bounds;
-
-        let compareAlpha;
-        if (!alpha) {
-            compareAlpha = (a) => a <= 10;
-        } else {
-            compareAlpha = (a) => a > 10;
-        }
 
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const index = (y * width + x) * 4;
                 const a = data[index + 3];
 
-                if (compareAlpha(a)) {
+                if (a > 10) {
                     const idx = y * width + x;
                     mask[idx] = 1;
 
@@ -378,7 +616,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         // to device px before indexing — without this, Hi-DPI displays sample the
         // upper-fraction of the buffer for a cursor at the visual middle (the bug
         // that caused hovers over the heatmap to read as transparent).
-        const windowPoint = this._tiRef.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        const tiRef = this._referenceTiledImage();
+        if (!tiRef || !this.contentSize) return 0;
+
+        const windowPoint = tiRef.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
 
         const cx = (windowPoint.x - this.contentSize.x) * this.ratio;
         const cy = (windowPoint.y - this.contentSize.y) * this.ratio;
@@ -418,8 +659,23 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const polygonFactory = this.context.getAnnotationObjectFactory("polygon");
 
         let annotationsPoints = [];
+        // Counted so a click can tell "refused, it covered everything" apart from
+        // "found nothing at all" - on screen both are simply no polygon.
+        this._droppedCovering = 0;
 
         outerContours.forEach(outer => {
+            // A blob that saturates the viewport is a misdetection, not a
+            // selection: it hides the image behind an opaque near-rectangle
+            // and nobody would ever commit it. Drop it - silently on screen,
+            // but traceably in the log and explained if the user clicks.
+            if (polygonUtils.coversViewport(outer, this.data.width, this.data.height, this.contentSize)) {
+                this._droppedCovering++;
+                this.log.debug("dropped a contour covering the viewport", {
+                    width: this.data.width, height: this.data.height, points: outer.length
+                });
+                return;
+            }
+
             const bboxOuter = polygonUtils.getBoundingBox(outer);
 
             let containedInners = innerContours.filter(inner => {
@@ -482,9 +738,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     _convertToImageCoordinates(points) {
+        const tiRef = this._referenceTiledImage();
         return points.map(point =>
             // we must call viewerElementToImageCoordinates since we don't want to strip the offset of the viewer
-            this._tiRef.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
+            tiRef.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
         );
     }
 }

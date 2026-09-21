@@ -126,6 +126,22 @@ Multi-viewport integrations must always use:
 
 ## Recommended integration pattern (Annotations + Generic API)
 
+> **Persistence belongs to the IO pipeline — not to hand-written event wiring.**
+> Annotation state is exactly what the pipeline is for: declare `io.capabilities`
+> in `include.json` and either `await this.initIO({exportBundle, importBundle,
+> bundleScope: "per-viewer-background"})` for whole-bundle state, or
+> `this.defineResource({...})` for per-item `create`/`update`/`delete`. The
+> pipeline already keys state by `(viewerId, backgroundId)`, flushes on
+> slide-out, restores on slide-in, runs the capability guards, and routes to
+> whichever sink the deployment binds — so you get the multi-viewport scoping
+> below **for free**. See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+>
+> The event-driven pattern in this section is the **advanced / fallback** route.
+> Reach for it when you bridge an existing backend that has no sink yet, or when
+> you must react to a user-triggered action such as `save-annotations`. It is
+> shown here because it is the case where picking the *wrong viewer* is easiest
+> — the viewer-scoping rules are the point of the example, not the transport.
+
 ### Generic API (example)
 
 Assume a minimal REST API:
@@ -134,6 +150,14 @@ Assume a minimal REST API:
 - `POST /api/annotations?slideId=...` with body `{ objects: [...] }`
 
 Where `slideId` comes from the viewer’s opened content metadata.
+
+All upstream calls go through `HttpClient` — never native `fetch` (it bypasses
+JWT/CSRF injection, proxy aliases and secureMode policy). One client per
+integration, created once at module scope:
+
+```js
+const api = new HttpClient({ baseURL: "/api" });
+```
 
 ---
 
@@ -158,12 +182,12 @@ VIEWER_MANAGER.broadcastHandler("open", async (e) => {
   await fabric.loadObjects({ objects: [] }, true);
 
   // 3) Fetch and load objects into THIS viewport only
-  const res = await fetch(`/api/annotations?slideId=${encodeURIComponent(slideId)}`, {
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) return;
-
-  const imported = await res.json(); // { objects: [...] }
+  let imported;                              // { objects: [...] }
+  try {
+    imported = await api.request("annotations", { query: { slideId } });
+  } catch (e) {
+    return;                                  // HttpClient throws HTTPError on failure
+  }
 
   if (imported?.objects?.length) {
     await fabric.loadObjects(imported, true); // clear=true is safe on slide switch
@@ -182,11 +206,18 @@ VIEWER_MANAGER.broadcastHandler("open", async (e) => {
 
 ### Best practice: pass the viewer explicitly in the save event payload
 
-Note that this part is simplified, if your API supports it, you should store annotations
-per element, bidnig to events like ``annotation-created``. Here, we provide a handler
-for 'save' action performed by user, which, if not handled and the annotations **plugin** is active,
-downloads the annotations as a file. So even if you implemented per-element saving, you still would
-likely want to implement this to save annotations on user demand, instead of downloading files.
+This part is simplified. Per-element persistence is **not** something you should
+hand-wire to `annotation-created` & co.: declare `crud:annotation` in
+`io.capabilities` and dispatch through `this.defineResource({...})`, which gives
+you guards, the offline outbox, undo/redo and viewer scoping (see
+[`IO_PIPELINE.md`](IO_PIPELINE.md)). Bind to raw annotation events only when the
+pipeline genuinely cannot express your backend.
+
+The `save-annotations` handler below is a different thing — a **user-triggered
+action**, not the storage path. If nothing handles it while the annotations
+**plugin** is active, the annotations are downloaded as a file, so even with
+per-element saving in place you likely want to handle it to save on user demand
+instead.
 
 ```js
 annotations.raiseEvent("save-annotations", { viewer });
@@ -210,13 +241,12 @@ module.addHandler("save-annotations", async (e) => {
   const exported = await fabric.exportObjects(); // { objects: [...] } (example API)
   if (!exported?.objects?.length) return;
 
-  const res = await fetch(`/api/annotations?slideId=${encodeURIComponent(slideId)}`, {
+  // Throws HTTPError on failure — let it propagate, the caller reports it.
+  await api.request("annotations", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(exported),
+    query: { slideId },
+    body: exported,
   });
-
-  if (!res.ok) throw new Error("Save failed");
   e.setHandled?.("Annotations saved.");
 });
 ```
@@ -255,6 +285,53 @@ module.addHandler("save-annotations", (e) => {
 VIEWER_MANAGER.broadcastHandler("open", (e) => loadFor(e.eventSource));
 VIEWER_MANAGER.addHandler("viewer-reset", (e) => cleanupFor(e.viewer));
 ```
+
+---
+
+## Viewport sync & automatic registration
+
+Cross-viewport navigation sync is a two-layer stack:
+
+- **Transport** — `OpenSeadragon.Tools.link(context, mapper)` (`src/classes/osd/tools.ts`): the first viewer to move becomes the leader for that frame and pushes its `{zoom, center, rotation, flip}` through every other subscriber's mapper.
+- **Alignment** — `ViewportSyncAPI` (`src/classes/osd/scalebar/viewport-sync-api.ts`, reachable as `viewer.scalebar.ViewportSyncAPI`): keeps a class-static session `{leaderId, transforms, flipParity}`. The first joined viewer's image space is the reference space; every other viewer stores a similarity transform `p_viewer = A · p_reference + b`, and the mapper converts viewport centres through it (zoom is converted through *image* pixels, so slides of different pixel size/placement stay at matching magnification).
+
+`enable({mode})` decides where that transform comes from:
+
+| mode | behaviour |
+|---|---|
+| `"auto"` (default) | `OpenSeadragon.ViewportRegistration.estimate(ref, target)` — no clicks. Falls back to the three-point picker if nothing is confident enough (`allowManual: false` disables that fallback for batch callers). |
+| `"manual"` | straight to the three-point picker (`Shift`/`Alt`-click the scalebar SYNC button). |
+
+`enable()` upgrades `"auto"` to `"manual"` on its own for any viewer flagged in `ViewportSyncAPI._manualPending` — see *Clearing* below. The flag is class-static, not a session field, because clearing is the very act that destroys the session; it is transient UI intent and never enters the canonical scene. `allowManual: false` suppresses the upgrade, keeping batch callers (`autoSyncAll`, scene restore) non-interactive; a successful calibration or an explicit `autoCalibrate()` clears it.
+
+The picker keeps mouse navigation enabled, because the three landmarks are rarely all on screen at once. It distinguishes intent by **motion, not duration**: a press that moves more than 5 px pans as usual and places nothing; a stationary click marks a point. (OSD's own `event.quick` is not used — it additionally demands the 300 ms `clickTimeThreshold`, which would reject a slow, careful click.) `Backspace` removes the last point, `Esc` cancels.
+
+### Clearing
+
+- **Per-viewport eraser** (joined to the SYNC button in the scalebar chrome) → `resetViewer()`: drops *that* viewer's transform, unlinks it, flags it manual-pending, and evicts the matching entries from `ViewportRegistration._pairCache` (`clearCacheFor(viewer)`). Everything else stays synced. Clearing the **reference** viewer no longer destroys the session — `_reelectLeader` promotes a still-calibrated peer `Y` and re-bases every transform into `Y`'s image space (`A' = A · invA_Y`, `b' = b − A'·b_Y`, flip parity XOR-ed, leader points carried across), so the remaining viewports keep their relative alignment and the `REF` badge simply moves.
+- **Tools → Clear sync session** → `resetSession()`: unlinks *every* viewer (iterating a copy — `Tools.unlink` splices the live `subscribed` array), nulls the session, calls `ViewportRegistration.clearCache()`, and flags every viewer manual-pending.
+
+Both arm a manual re-align, on the principle that a user who discards an alignment is rejecting the automatic estimate — recomputing the same answer on the next LINK would be useless. Both repaint the chrome of all viewers, not only the linked ones.
+
+### Registration providers
+
+`src/classes/osd/viewport-registration.ts` runs a priority chain and returns the first result at or above `MIN_CONFIDENCE`; a weaker result is passed to the next provider as `ctx.seed` and, if nothing better appears, returned flagged `approximate` (the UI warns instead of pretending it is aligned).
+
+Built-ins: `metadata` (100) — identical `tileSourceId`, virtual regions of one parent (exact, via `virtual-region-protocol`), or a µm/px seed; `thumbnail` (50) — tissue-silhouette similarity search over ≤384 px thumbnails, refined in `src/workers/registration-worker.js` (off the main thread; similarity only — rotation, uniform scale, translation, optional mirror).
+
+Add your own (server-side registration, feature matching, …):
+
+```js
+OpenSeadragon.ViewportRegistration.registerProvider("my-registrar", {
+    priority: 200,
+    async estimate({ refViewer, targetViewer, refSource, targetSource, seed, signal }) {
+        // null = not applicable
+        return { A: [a, b, c, d], b: { x, y }, flip: false, confidence: 0.9 };
+    },
+});
+```
+
+UI entry points: per-viewer SYNC/REF button on the scalebar; session-wide *Auto-align all viewports* / *Calibrate sync manually* / *Clear sync session* in the app-bar **Tools** menu. The session is serialized into the canonical scene (`CanonicalScene.sync`), so exported sessions restore their alignment.
 
 ---
 

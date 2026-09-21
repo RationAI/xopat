@@ -1,0 +1,11 @@
+{
+  "name": "pathology-foundation",
+  "version": "0.1.0",
+  "description": "Generic pathology foundation-model broker (capture + drivers + mask→annotation) exposing the `pathology` scripting namespace",
+  "keywords": [],
+  "buildEntry": "index.ts",
+  "author": "xOpat",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

@@ -3,6 +3,93 @@ window.AdvancedMenuPages = class extends XOpatModule {
     vegaInit = {};
 
     /**
+     * Escape a value for interpolation into markup. Attribute values are the
+     * reason this exists: `SanitizeHtml` escapes text nodes with
+     * `escapeHtml(text, false)` (modules/sanitize-html/sanitize.js), which
+     * deliberately leaves `"` intact — so a sanitized string is still not safe
+     * inside `class="..."`. Sanitizing is not a substitute for escaping here.
+     * @param {*} value
+     * @return {string}
+     */
+    static escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[c]);
+    }
+
+    /**
+     * Sanitization policy for raw `{type:"html"}` page content. This module owns
+     * its policy the same way `HTML_ALLOWLIST` (ui/classes/baseComponent.mjs) and
+     * `TOAST_ALLOWLIST` (ui/classes/components/toast.mjs) own theirs; a caller
+     * `sanitizeConfig` object is merged OVER this, never used alone.
+     *
+     * The config is complete on purpose: `SanitizeHtml(html, options)` does a
+     * shallow `Object.assign` over its own defaults, so a partial override
+     * replaces a whole key rather than extending it.
+     *
+     * Wider than `HTML_ALLOWLIST` by exactly two groups: `details`/`summary`
+     * (this module's collapse idiom) and inert text-structure tags. Plus the
+     * `id` attribute, which is the module's documented "fill this placeholder
+     * after render" contract. Note `id` on untrusted markup enables DOM
+     * clobbering of another element's `getElementById` target — an integrity
+     * nuisance, not code execution; drop it via `sanitizeConfig` if that matters.
+     *
+     * Deliberately absent: `script`/`style`/`iframe`/`object`/`embed`/`form` and
+     * every form control (code execution, phishing, navigation control), any
+     * `on*` attribute, the `style` attribute, the `data-*` glob (`data-action`
+     * drives delegated app handlers), and `svg` (`<foreignObject>`/`<animate>`
+     * script surface, and htmlparser2 lowercases attribute names so `viewBox`
+     * would break without `parser: {lowerCaseAttributeNames: false}` anyway —
+     * an operator who needs inline SVG opts in explicitly via `sanitizeConfig`).
+     */
+    static SANITIZE_DEFAULTS = {
+        allowedTags: [
+            'a','b','strong','i','em','u','s','br','hr','code','pre','span','div','p',
+            'sub','sup','small','ul','ol','li','table','thead','tbody','tfoot','tr','td','th',
+            'caption','col','colgroup','h1','h2','h3','h4','h5','h6','img',
+            'details','summary',
+            'figure','figcaption','blockquote','dl','dt','dd','abbr','kbd','mark','time'
+        ],
+        allowedAttributes: {
+            '*': ['class','id','title','aria-label','aria-hidden','role','dir','lang'],
+            a: ['href','target','rel'],
+            img: ['src','alt','width','height','loading'],
+            td: ['colspan','rowspan'],
+            th: ['colspan','rowspan','scope'],
+            col: ['span'],
+            colgroup: ['span'],
+            details: ['open'],
+            time: ['datetime']
+        },
+        disallowedTagsMode: 'discard',
+        allowedSchemes: ['http','https','mailto','tel'],
+        allowedSchemesByTag: { img: ['http','https','data'] },
+        transformTags: {
+            a: (tagName, attribs) => {
+                if (attribs.target) attribs.rel = 'noopener noreferrer';
+                return { tagName, attribs };
+            }
+        },
+    };
+
+    /**
+     * Element types a page spec may name. A page spec is data — it may name a
+     * *presentational* element, never an application shell. Without this gate
+     * `resolveUIClass` reaches the whole `UI` namespace, including components
+     * that `innerHTML` their own input (`UI.RawHtml` its children, `UI.StatusBar`
+     * its `initialMessage`), which is script execution with no `{type:"html"}`
+     * node involved at all.
+     *
+     * This is the mapping table documented in README.md; anything else is built
+     * in code, not declared in JSON.
+     */
+    static JSON_ELEMENTS = new Set([
+        "Div","Button","PhIcon","FAIcon","ImageIcon","Join","Dropdown","Menu","MenuTab",
+        "MultiPanelMenu","FullscreenMenu","TabsMenu","Checkbox","Select","Input","Badge",
+        "Title","Collapse","Loading","Alert","StretchGrid"
+    ]);
+
+    /**
      * Create AdvancedMenuPages instance.
      * @param {string} ownerId id of the owning element (e.g. the plugin id). Pages
      *   are mounted under this element's plugin menu entry via
@@ -34,7 +121,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             const _this = this;
             UTILITIES.loadModules(function() {
                 _this.loadVega(true);
-            }, APPLICATION_CONTEXT.secure ? "vega-secure" : "vega");
+            }, APPLICATION_CONTEXT.secureMode ? "vega-secure" : "vega");
             return;
         }
 
@@ -117,7 +204,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      *   non-traceable generated id is used
      * @property {string} title - required; submenu title shown in the Plugins menu
      * @property {string} [subtitle] - optional tooltip subtitle
-     * @property {string} [icon] - optional Font Awesome icon class
+     * @property {string} [icon] - optional Phosphor icon class, e.g. `ph-gear`
      * @property {[object]} page - array of element specifications
      */
 
@@ -126,8 +213,11 @@ window.AdvancedMenuPages = class extends XOpatModule {
      *   or types that map to the compiled UI system.
      *
      * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
-     * @param {boolean|object} sanitizeConfig configuration for sanitize-html,
-     *   or simple on/off flag for default behaviour
+     * @param {boolean|object} sanitizeConfig sanitization POLICY for raw
+     *   `{type:"html"}` content. `false`/`true` both mean the module default
+     *   allowlist ({@link AdvancedMenuPages.SANITIZE_DEFAULTS}); an object is
+     *   merged over it. There is no way to disable sanitization — a page config
+     *   may arrive with a session, so "raw" cannot be one of its choices.
      */
     buildMetaDataMenu(config, sanitizeConfig=false) {
         if (!config) return;
@@ -154,7 +244,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     unique,
                     data.title,
                     html.join(""),
-                    data.icon || "fa-fw"
+                    data.icon || ""
                 );
             }
             this._count += config.length;
@@ -166,17 +256,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             config = [config];
         }
 
-        if (typeof sanitizeConfig === "object") {
-            UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str, sanitizeConfig));
-            }, "sanitize-html");
-        } else if (sanitizeConfig) {
-            UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str));
-            }, "sanitize-html");
-        } else {
-            build(config, false);
-        }
+        this._withSanitizer(config, sanitizeConfig, sanitizer => build(config, sanitizer));
     }
 
     /**
@@ -212,17 +292,8 @@ window.AdvancedMenuPages = class extends XOpatModule {
             );
             this.loadVega();
         };
-        if (typeof sanitizeConfig === "object") {
-            UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str, sanitizeConfig), selector);
-            }, "sanitize-html");
-        } else if (sanitizeConfig) {
-            UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str), selector);
-            })
-        } else {
-            build(config, false, selector);
-        }
+        this._withSanitizer(config, sanitizeConfig,
+            sanitizer => build(config, sanitizer, selector));
     }
 
     /**
@@ -232,7 +303,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
      * @param {function|false} sanitizer
      * @param {string} id stable menu id (pass the same id across re-renders so the
      *   per-viewer menu updates in place instead of duplicating)
-     * @return {{id: string, title: string, icon: string, body: string}}
+     * @return {{id: string, title: string, icon: string, body: [Node]}}
      */
     _pageToViewerItem(data, sanitizer, id = this.getMenuId(data.id, this._count++)) {
         const html = [];
@@ -244,9 +315,40 @@ window.AdvancedMenuPages = class extends XOpatModule {
         return {
             id,
             title: data.title,
-            icon: data.icon || "fa-cog",
-            body: html.join("")
+            icon: data.icon || "ph-gear",
+            // Nodes, not the joined string. A string body travels into the menu
+            // component as a van.js child, where `BaseComponent.toNode` routes it
+            // through the UNTRUSTED-TEXT renderer: without `SanitizeHtml` loaded
+            // it renders the markup as literal text, and with it loaded the
+            // allowlist strips `id`, breaking every page that fills a placeholder
+            // post-render.
+            //
+            // Safe because `renderUIFromJson` sanitizes where untrusted content
+            // ENTERS - raw `{type:"html"}` against SANITIZE_DEFAULTS, attribute
+            // values via `escapeHtml`, component types against JSON_ELEMENTS -
+            // never at the end. Sanitizing the assembled string here instead
+            // would mangle the component markup that the ids live on, which is
+            // the regression this whole shape exists to avoid.
+            body: this._pageBody(html)
         };
+    }
+
+    /**
+     * Turn built page markup into DOM nodes. Wrapped in a single container so
+     * that bare text (a `{type:"html"}` page carrying no tags) survives —
+     * `parseDomNodes` keeps element children only. An empty page stays falsy,
+     * which is what marks a tab as transient (no content panel).
+     * @param {[string]} html
+     * @return {[Node]|string}
+     * @private
+     */
+    _pageBody(html) {
+        const markup = html.join("");
+        if (!markup) return "";
+        // The side-menu tab wrapper contributes no padding, so the page body
+        // carries its own — same `px-2` rhythm every other panel in the column
+        // uses, otherwise page text sits flush against the panel edge.
+        return UI.BaseComponent.parseDomNodes(`<div class="w-full px-2 py-1">${markup}</div>`);
     }
 
     /**
@@ -258,36 +360,43 @@ window.AdvancedMenuPages = class extends XOpatModule {
     /**
      * Register a dynamic, per-viewer menu in the global viewer (right-side) menu.
      * The getter is re-invoked per viewer and on content change.
-     * @param {ViewerHtmlConfigGetter} getter
+     *
+     * The getter may be **async**: `registerViewerMenu` already understands a
+     * promised item, and a plugin whose titles come from a locale bundle must be
+     * able to await that fetch. Building synchronously against an unloaded
+     * bundle bakes the raw i18n key into the menu title *and* into the
+     * `AppBar.View` registration derived from it, where it never self-heals.
+     *
+     * @param {ViewerHtmlConfigGetter} getter sync or async
      * @param sanitizeConfig
      */
     buildViewerMenu(getter, sanitizeConfig=false) {
         // Allocate a stable fallback id once so re-invocations of the getter for
         // id-less configs update the same menu rather than spawning new ones.
         const fallbackId = this._count++;
-        const build = (viewer, sanitizer) => {
+        const options = this._sanitizeOptions(sanitizeConfig);
+        const sanitizer = markup => this._sanitizeHtml(markup, options);
+
+        // Registration stays synchronous - the config is only known once the
+        // getter has run, so the sanitizer wait (if any) happens inside it.
+        // `registerViewerMenu` already understands a promised item.
+        const build = async (viewer) => {
             let config = null;
             try {
-                config = getter(viewer);
+                config = await getter(viewer);
             } catch (e) {
                 console.error(`Error in module menu builder for ${getter}:`, e);
             }
 
             if (!config) return;
+            if (typeof globalThis.SanitizeHtml !== "function"
+                && AdvancedMenuPages.needsSanitizer(config)) {
+                await this._sanitizerReady();
+            }
             return this._pageToViewerItem(config, sanitizer, this.getMenuId(config.id, fallbackId));
         };
 
-        if (typeof sanitizeConfig === "object") {
-            UTILITIES.loadModules(() => {
-                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str, sanitizeConfig)));
-            }, "sanitize-html");
-        } else if (sanitizeConfig) {
-            UTILITIES.loadModules(() => {
-                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str)));
-            }, "sanitize-html");
-        } else {
-            this.registerViewerMenu(viewer => build(viewer, false));
-        }
+        this.registerViewerMenu(build);
     }
 
     /**
@@ -296,7 +405,8 @@ window.AdvancedMenuPages = class extends XOpatModule {
      * content is static — the same for every viewer. Use this for the "viewer"
      * placement target; use `buildMetaDataMenu` for the "plugins" target.
      * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
-     * @param {boolean|object} sanitizeConfig sanitize-html config, or on/off flag
+     * @param {boolean|object} sanitizeConfig sanitization policy, see
+     *   {@link buildMetaDataMenu}
      */
     buildMetaDataViewerMenu(config, sanitizeConfig=false) {
         if (!config) return;
@@ -314,13 +424,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             }
         };
 
-        if (typeof sanitizeConfig === "object") {
-            UTILITIES.loadModules(() => register(str => SanitizeHtml(str, sanitizeConfig)), "sanitize-html");
-        } else if (sanitizeConfig) {
-            UTILITIES.loadModules(() => register(str => SanitizeHtml(str)), "sanitize-html");
-        } else {
-            register(false);
-        }
+        this._withSanitizer(config, sanitizeConfig, register);
     }
 
     // -----------------------------
@@ -340,7 +444,9 @@ window.AdvancedMenuPages = class extends XOpatModule {
         // Compiled UI element aliases
         "div": "Div",
         "button": "Button",
-        "faicon": "FAIcon", "icon": "FAIcon", "fa-auto": "FAIcon",
+        // `faicon`/`fa-auto` are legacy spellings kept so old page declarations
+        // keep parsing; they all build a Phosphor icon now.
+        "faicon": "PhIcon", "icon": "PhIcon", "fa-auto": "PhIcon",
         "phicon": "PhIcon", "ph-icon": "PhIcon", "ph-light": "PhIcon",
         "join": "Join",
         "dropdown": "Dropdown",
@@ -361,52 +467,142 @@ window.AdvancedMenuPages = class extends XOpatModule {
         "newline": true
     };
 
-    // Try several name shapes against UI
+    /**
+     * Try several name shapes against UI, then check the RESOLVED name against
+     * {@link AdvancedMenuPages.JSON_ELEMENTS}. Name matching stays forgiving;
+     * what a page spec is allowed to instantiate does not.
+     */
     resolveUIClass(type){
         if (!type || !globalThis.UI) return null;
         const UI = globalThis.UI;
+        const allowed = AdvancedMenuPages.JSON_ELEMENTS;
+        const pick = name => (name && allowed.has(name) && UI[name]) ? UI[name] : null;
 
-        // exact hit first
-        if (UI[type]) return UI[type];
-
-        // PascalCase
-        const pas = this.pascalize(type);
-        if (UI[pas]) return UI[pas];
-
-        // alias
+        // exact hit first, then PascalCase, then alias
         const ali = this.ALIAS[this.norm(type)];
-        if (ali && ali !== true && UI[ali]) return UI[ali];
-
-        // legacy namespaces if any exist on your build
-        if (UI.Components?.[pas]) return UI.Components[pas];
-        if (UI.Elements?.[pas])   return UI.Elements[pas];
-
-        return null;
+        return pick(type)
+            || pick(this.pascalize(type))
+            || pick(ali === true ? null : ali)
+            || null;
     }
 
-    // Deep-sanitize helper (strings via sanitizer; objects/arrays recursively)
-    sanitizeDeep(node, sanitizer){
-        const t = typeof node;
-        if (!sanitizer) return node; // no-op if sanitizer not provided
-        if (t === "string") return sanitizer(node);
-        if (Array.isArray(node)) return node.map(n => this.sanitizeDeep(n, sanitizer));
-        if (t === "object" && node) {
-            const result = {};
-            for (let p in node) {
-                // these props are not allowed in UI options
-                if (p === "type" || p === "children") {
-                    continue;
-                }
-                result[p] = this.sanitizeDeep(node[p], sanitizer);
+    // -----------------------------
+    // Sanitization
+    // -----------------------------
+
+    /**
+     * Resolve a `sanitizeConfig` argument to a sanitize-html options object.
+     * `false`/`true`/undefined all mean "the module default allowlist" — there is
+     * no raw mode. An object is merged OVER the defaults (shallow, because
+     * sanitize-html itself merges shallowly), which is how an operator widens
+     * the policy from ENV/include.json.
+     * @param {boolean|object} [sanitizeConfig]
+     * @return {object}
+     */
+    _sanitizeOptions(sanitizeConfig) {
+        return (sanitizeConfig && typeof sanitizeConfig === "object")
+            ? { ...AdvancedMenuPages.SANITIZE_DEFAULTS, ...sanitizeConfig }
+            : AdvancedMenuPages.SANITIZE_DEFAULTS;
+    }
+
+    /**
+     * Degrade CLOSED: with no sanitizer available the markup is rendered as
+     * escaped text, never injected. Same contract as `HtmlRenderer`
+     * (ui/classes/baseComponent.mjs) and `modules/markdown`.
+     * @param {string} markup
+     * @param {object} options
+     * @return {string}
+     */
+    _sanitizeHtml(markup, options) {
+        const sanitize = globalThis.SanitizeHtml;
+        if (typeof sanitize === "function") {
+            try {
+                return sanitize(markup, options);
+            } catch (e) {
+                console.warn("AdvancedMenuPages: sanitize failed, degrading to text.", e);
             }
-            return result;
         }
-        return node;
+        this._requestSanitizer();
+        return AdvancedMenuPages.escapeHtml(markup);
+    }
+
+    /** One-shot lazy load so a degrade is temporary rather than permanent. */
+    _requestSanitizer() {
+        if (this._sanitizerRequested) return;
+        this._sanitizerRequested = true;
+        try {
+            UTILITIES.loadModules(() => {}, "sanitize-html");
+        } catch (_) { /* best effort */ }
+    }
+
+    /** Memoized "sanitize-html is loaded" promise; resolves even on failure. */
+    _sanitizerReady() {
+        if (!this._sanitizerReadyPromise) {
+            this._sanitizerReadyPromise = new Promise(resolve => {
+                try {
+                    UTILITIES.loadModules(() => resolve(), "sanitize-html");
+                } catch (e) {
+                    console.warn("AdvancedMenuPages: could not load sanitize-html.", e);
+                    resolve();
+                }
+            });
+        }
+        return this._sanitizerReadyPromise;
+    }
+
+    /**
+     * Does this config contain anything that needs the sanitizer at all? Only
+     * `{type:"html"}` does. Everything else builds from components, so the common
+     * case must not pay an async module load — `buildMetaDataMenu` callers open
+     * the menu on the very next line.
+     * @param {*} config
+     * @param {number} [depth]
+     * @return {boolean}
+     */
+    static needsSanitizer(config, depth = 0) {
+        if (!config || depth > 12) return false;
+        if (Array.isArray(config)) {
+            return config.some(n => AdvancedMenuPages.needsSanitizer(n, depth + 1));
+        }
+        if (typeof config !== "object") return false;
+        if (typeof config.type === "string"
+            && config.type.toLowerCase().replace(/[^a-z0-9]/g, "") === "html") return true;
+        return Object.values(config).some(v => AdvancedMenuPages.needsSanitizer(v, depth + 1));
+    }
+
+    /**
+     * Run `builder` with a sanitizer bound to `sanitizeConfig`, synchronously
+     * whenever that is safe. Defers only when the config carries raw HTML and the
+     * sanitizer is not loaded yet — otherwise the first render would degrade to
+     * escaped text for no reason.
+     * @param {*} config
+     * @param {boolean|object} sanitizeConfig
+     * @param {function(function(string): string): void} builder
+     */
+    _withSanitizer(config, sanitizeConfig, builder) {
+        const options = this._sanitizeOptions(sanitizeConfig);
+        const sanitizer = markup => this._sanitizeHtml(markup, options);
+        if (typeof globalThis.SanitizeHtml === "function"
+            || !AdvancedMenuPages.needsSanitizer(config)) {
+            builder(sanitizer);
+        } else {
+            this._sanitizerReady().then(() => builder(sanitizer));
+        }
     }
 
     // Render a UI component (and nested children) to HTML string
     renderUIFromJson(jsonNode, sanitizer){
         if (!jsonNode || typeof jsonNode !== "object") return "";
+
+        // A caller may override the sanitization POLICY; it may not opt out of
+        // one. This output is `innerHTML`-ed by three independent consumers
+        // (`_pageBody`, `USER_INTERFACE.addHtml`, and slide-info's technical
+        // block, which renders remote `getDisplayMetadata()` with no sanitizer
+        // argument at all), so "safe" cannot be the caller's decision to skip.
+        if (typeof sanitizer !== "function") {
+            sanitizer = markup => this._sanitizeHtml(markup, AdvancedMenuPages.SANITIZE_DEFAULTS);
+        }
+        const esc = AdvancedMenuPages.escapeHtml;
 
         // Special types handled here (keep parity with legacy builder)
         const t = this.norm(jsonNode.type);
@@ -415,8 +611,9 @@ window.AdvancedMenuPages = class extends XOpatModule {
         try {
             switch (t) {
                 case "vega": {
-                    // container + enqueue vega init
-                    const classes = jsonNode.classes ? (sanitizer ? sanitizer(jsonNode.classes) : jsonNode.classes) : "";
+                    // container + enqueue vega init. `classes` lands in an attribute,
+                    // so it is ESCAPED, not sanitized - see `escapeHtml`.
+                    const classes = esc(jsonNode.classes || "");
                     const uid = `vega-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
                     // store the ORIGINAL (unsanitized object is fine; spec is not injected into DOM)
                     this.vegaInit[uid] = jsonNode;
@@ -424,20 +621,21 @@ window.AdvancedMenuPages = class extends XOpatModule {
                 }
 
                 case "html": {
-                    if (sanitizer) return sanitizer(jsonNode.html || "");
-                    if (!APPLICATION_CONTEXT.secure) return String(jsonNode.html || "");
-                    return ""; // secure mode blocks raw-html unless sanitizer is provided
+                    // The only entry point for author-supplied markup. There is no
+                    // raw pass-through: `sanitizeConfig` chooses the POLICY (an
+                    // operator may widen the allowlist from ENV/include.json), never
+                    // whether one applies.
+                    return sanitizer(String(jsonNode.html || ""));
                 }
 
                 case "columns": {
                     // Render columns as a flex row; each child becomes a flex-1 column.
-                    const classes = jsonNode.classes ? (sanitizer ? sanitizer(jsonNode.classes) : jsonNode.classes) : "";
+                    const classes = esc(jsonNode.classes || "");
                     const children = Array.isArray(jsonNode.children) ? jsonNode.children : [];
                     const cols = children.map(ch => {
                         const cj = (typeof ch === "object" && ch) ? { ...ch } : { type: "div", children: [ch] };
                         // Append flex-1 to each column's classes without clobbering user classes
-                        const colClasses = (cj.classes ? (sanitizer ? sanitizer(cj.classes) : cj.classes) : "");
-                        cj.classes = (colClasses + " flex-1").trim();
+                        cj.classes = (String(cj.classes || "") + " flex-1").trim();
                         return this.renderUIFromJson(cj, sanitizer);
                     }).join("");
                     return `<div class="flex ${classes}">${cols}</div>`;
@@ -459,9 +657,12 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     // of sanitization: e.g. Button has its own `type` option whose value
                     // must be a function (Button.TYPE.*), so leaking the string discriminator
                     // throws in BaseComponent._applyOptions.
-                    const { type, children, ...optionData } = jsonNode;
-                    // Sanitize the remaining options (strings-only) if a sanitizer is provided
-                    const safeOptions = this.sanitizeDeep(optionData, sanitizer);
+                    // Options are NOT sanitized: they are applied through van
+                    // attribute/property setters (DOM APIs, which escape), never
+                    // interpolated into markup. The components that did `innerHTML`
+                    // an option value are unreachable from JSON - see JSON_ELEMENTS.
+                    // Sanitizing here only double-escaped every title and label.
+                    const { type, children, ...safeOptions } = jsonNode;
 
                     // Render children: allow strings/HTML or nested {type:...}
                     const kids = [];
@@ -475,9 +676,12 @@ window.AdvancedMenuPages = class extends XOpatModule {
                                 // append all produced nodes (could be 1+)
                                 kids.push(...tmp.childNodes);
                             } else {
-                                // Raw string/number/boolean → coerce to string (sanitized if configured)
-                                const str = (typeof ch === "string" ? (sanitizer ? sanitizer(ch) : ch) : String(ch ?? ""));
-                                kids.push(str);
+                                // Raw string/number/boolean → coerce to string. NOT
+                                // sanitized: `BaseComponent`'s children getter routes
+                                // every string through `toNode`, i.e. the allowlisted
+                                // `HtmlRenderer` or an inert text span. Sanitizing here
+                                // instead rendered "Tumor & stroma" as "Tumor &amp; stroma".
+                                kids.push(typeof ch === "string" ? ch : String(ch ?? ""));
                             }
                         }
                     }
@@ -494,7 +698,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             }
         } catch (e) {
             console.warn("AdvancedMenuPages: Failed to generate HTML.", jsonNode, e);
-            return `<div class="error-container">${$.t('elementsBuilderErr')}</div>`;
+            return `<div class="error-container">${AdvancedMenuPages.escapeHtml($.t('elementsBuilderErr'))}</div>`;
         }
     }
 

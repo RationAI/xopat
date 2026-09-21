@@ -1,12 +1,64 @@
 // noinspection JSUnresolvedVariable
 
 /**
+ * Describe the pixel encoding of a TIFF transfer out of a WSI-Service slide-info
+ * response. The service describes the slide, not the transfer: `channel_depth`
+ * is the native bit depth and only survives a TIFF transfer, so callers gate on
+ * that themselves.
+ *
+ * Shape is the `getSampleEncoding()` convention consumed by the `geotiff` module
+ * (`TiffSampleEncoding` in `modules/geotiff/geotiff.d.ts`) — a plain data
+ * contract, no dependency on that module. Version 0: values arrive in the file's
+ * own range and the consumer normalizes.
+ *
+ * @param {object} data slide info as returned by `/info`
+ * @return {TiffSampleEncoding|undefined} undefined when the service says nothing usable
+ */
+function encodingFromSlideInfo(data) {
+    if (!data) return undefined;
+    const bits = Number(data.channel_depth);
+    const channels = Array.isArray(data.channels) ? data.channels : undefined;
+    if (!Number.isFinite(bits) || bits <= 0) return undefined;
+
+    const count = channels?.length || 1;
+    const max = Math.pow(2, bits) - 1;
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const ch = channels?.[i];
+        out.push({
+            bits,
+            sampleFormat: 1,
+            scale: max,
+            offset: 0,
+            name: typeof ch === 'object' ? ch?.name : undefined,
+            color: typeof ch === 'object' ? ch?.color_hint || ch?.color : undefined,
+        });
+    }
+    return {
+        version: 0,
+        channels: out,
+        interpretation: count === 3 || count === 4 ? "image" : "data",
+        origin: "wsi-service:info",
+    };
+}
+
+/**
  * @class RationaiStandaloneV3TileSource
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
  * @param {object} options configuration either empaia info response or list of these objects
  */
 OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileSource {
+
+    /**
+     * Opt into direct construction by the slide-protocol registry — a
+     * `slide_protocols` entry may name this class via
+     * `"tileSourceClass": "RationaiStandaloneV3TileSource"`, which skips OSD's
+     * autodetection entirely. Requires configuring `this` in place from
+     * `getImageInfo` (see below) and an idempotent `setSourceOptions`.
+     * Contract: `src/tile-source.ts`.
+     */
+    static xopatSelfConfiguring = true;
 
     constructor(options) {
         super(options);
@@ -21,6 +73,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         // 401 via its own pipeline. Protocols without a registered HttpClient
         // fall back to bare fetch with whatever `ajaxHeaders` OSD passes.
         this._qArgs = "";
+        // Info-endpoint query fragment (see setSourceOptions). Only non-empty when
+        // options were applied before the metadata request, i.e. for a source the
+        // slide-protocol registry constructed directly.
+        this._infoQuery = "";
         this._dataFormat = "rasterBlob";
         // Initialize so getMetadata() / getDisplayMetadata() always return
         // a usable shape even before _getInfo resolves or when it fails.
@@ -50,9 +106,16 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      * @param {?'all'|Array<number>} options.channels - applies only for 'tiff' format, channels to fetch
      * @param {?String} options.plugin - name of the WSI-Service slide-reader plugin to use
      *     (e.g. 'openslide', 'tifffile', 'wsidicom'). When unset, the server auto-detects.
-     *     Forwarded as the `plugin` query parameter on tile/thumbnail/label/ICC requests.
-     *     To also influence the initial slide-info fetch, embed `plugin=…` directly in the
-     *     `slide_protocols` URL template.
+     *     Forwarded as the `plugin` query parameter on tile/thumbnail/label/ICC requests,
+     *     and — when this source was constructed directly by the slide-protocol registry
+     *     (`"tileSourceClass": "RationaiStandaloneV3TileSource"`) — on the initial
+     *     slide-info fetch as well.
+     *
+     * Called up to twice with the same object (before the info request, and again
+     * once the metadata is known); see the contract in `src/tile-source.ts`. Hence
+     * every parameter is `delete`d before being conditionally re-`set`: the argument
+     * is the COMPLETE desired option set, so dropping an option must drop the
+     * corresponding query parameter too.
      */
     setSourceOptions(options) {
         const params = new URLSearchParams(this._qArgs || '');
@@ -63,18 +126,28 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 ? options.format
                 : (channelCount !== undefined && channelCount !== 3 && channelCount !== 4 ? 'tiff' : undefined);
 
+        params.delete('image_format');
         if (format) {
             params.set('image_format', format);
         }
         this._dataFormat = format === 'tiff' ? 'rawTiff' : 'rasterBlob';
 
+        params.delete('image_quality');
         if (options.quality) {
             params.set('image_quality', options.quality);
         }
 
+        params.delete('plugin');
         if (options.plugin) {
             params.set('plugin', String(options.plugin));
         }
+
+        // Info-endpoint query: a deliberate allow-list, not a passthrough of the
+        // whole (session-supplied) options bag onto the operator's info URL.
+        // `image_format` / `image_quality` / `image_channels` are tile-only.
+        const infoParams = new URLSearchParams();
+        if (options.plugin) infoParams.set('plugin', String(options.plugin));
+        this._infoQuery = infoParams.toString();
 
         const channelsOpt =
             options.channels !== undefined
@@ -157,8 +230,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     configure( data, url, postData ) {
         if (data.type === "empaia-standalone" && !data.id) {
-            // data.url is set, which will trigger getImageInfo() and call configure second time with real data
-            data._handlesOwnImageLoadLogics = true;
+            // Legacy JSON-blob template path: `data.url` is set, so the constructed
+            // instance re-enters getImageInfo() and configure() runs a second time
+            // with the real slide info. Prefer the `tileSourceClass` protocol entry
+            // (see README) — it also gets the options in before the info request.
             // Placeholder; real slide metadata will be configured after _getInfo resolves.
             data._isVector = false;
             return data;
@@ -231,9 +306,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 _isVector: false,
                 width: size.x,
                 height: size.y,
-                _tileWidth: tile.x,
-                _tileHeight: tile.y,
-                tileSize: tile.x,
+                // Emit unprefixed tileWidth/tileHeight (NOT tileSize): OSD's ready
+                // handler treats `tileSize` as square and would overwrite a
+                // non-square _tileHeight, spawning a phantom extra tile row.
+                tileWidth: tile.x,
+                tileHeight: tile.y,
                 maxLevel: data.levels.length-1,
                 minLevel: 0,
                 tileOverlap: 0,
@@ -241,6 +318,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 tilesUrl: data.tilesUrl,
                 innerFormat: data.format,
                 multifetch: false,
+                // Focal-plane (z-stack) axis. WSI-Service reports the plane count
+                // as extent.z; the tile/hash-key depth query rides on `?z=`.
+                // Static call — `this` may be a base TileSource here (see method doc).
+                ...OpenSeadragon.RationaiStandaloneV3TileSource._buildZStack(size, chosenMq),
                 // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
                     // empaia stores pixel size in nanometers, we need microns
@@ -302,9 +383,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             _isVector: false,
             width: width, /* width *required */
             height: height, /* height *required */
-            _tileWidth: tileSizeX,
-            _tileHeight: tileSizeY,
-            tileSize: tileSizeX, /* tileSize *required */
+            // Unprefixed tileWidth/tileHeight so OSD honors non-square base tiles
+            // (a `tileSize` here would force square and add a phantom tile row).
+            tileWidth: tileSizeX,
+            tileHeight: tileSizeY,
             tileOverlap: tileOverlap, /* tileOverlap *required */
             minLevel: 0, /* minLevel */
             maxLevel: maxLevel-1, /* maxLevel */
@@ -312,6 +394,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             innerFormat: data[0].format,
             tilesUrl: data[0].tilesUrl,
             multifetch: true,
+            ...OpenSeadragon.RationaiStandaloneV3TileSource._buildZStack(represent?.extent, chosenMq),
             data: represent,
             dataSet: data,
             metadata: {
@@ -319,6 +402,50 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 micronsY: chosenMq?.y / 1000,
             },
         };
+    }
+
+    /**
+     * Build the z-stack (focal-plane) descriptor from slide-info extent.
+     * Returns props merged onto the real instance via configure(): `zStack`
+     * (read by the core ViewerDepthController) and `_activeZ`. Absent /
+     * single-plane slides report `count: 1` so the depth navigator stays hidden
+     * and tile URLs / hash keys are unchanged.
+     *
+     * STATIC on purpose: OSD invokes `configure()` with `this` bound to a base
+     * `$.TileSource` autodetect instance (it calls the real type's configure via
+     * `RealType.prototype.configure.apply(genericInstance, …)`), so `this` there
+     * does NOT have subclass instance methods. Call it by the global class name.
+     * @param {?{x:Number,y:Number,z:Number}} extent
+     * @param {?{z:Number}} pixelSizeNm
+     */
+    static _buildZStack(extent, pixelSizeNm) {
+        const count = Math.max(1, parseInt(extent?.z, 10) || 1);
+        const spacingNm = pixelSizeNm?.z;
+        return {
+            _activeZ: 0,
+            zStack: {
+                count,
+                index: 0,
+                spacingUm: (Number.isFinite(spacingNm) && spacingNm !== 1000000) ? spacingNm / 1000 : undefined,
+            },
+        };
+    }
+
+    /**
+     * Set the active focal plane. Only mutates identity state (URL + hash key);
+     * the core ViewerDepthController triggers the tile refetch after this call.
+     * @param {Number} index
+     */
+    setZDepth(index) {
+        if (!this.zStack || this.zStack.count <= 1) return;
+        const i = Math.max(0, Math.min(this.zStack.count - 1, parseInt(index, 10) || 0));
+        this._activeZ = i;
+        this.zStack.index = i;
+    }
+
+    /** Depth query suffix, empty for non-z-stack slides so URLs stay stable. */
+    _zQuery() {
+        return (this.zStack && this.zStack.count > 1) ? `&z=${this._activeZ || 0}` : "";
     }
 
     getLevelScale(level) {
@@ -337,9 +464,20 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         return dsBase / dsHere;
     }
 
+    /**
+     * Configures THIS instance in place from the WSI-Service `/info` response —
+     * the `xopatSelfConfiguring` contract. Runs whenever the instance was built
+     * with a url and is not ready yet, which covers both entry points:
+     *  - the slide-protocol registry constructing us directly from a
+     *    `tileSourceClass` entry (options already applied — see `_infoArgs`), and
+     *  - the legacy `{"url": …, "type": "empaia-standalone"}` template, where
+     *    `configure()` returns the bootstrap object.
+     *
+     * It never runs on an autodetected source: there OSD calls the BASE
+     * `getImageInfo` on a generic probe instance and builds the real one with
+     * `ready: true`.
+     */
     getImageInfo(url) {
-        if (!this._handlesOwnImageLoadLogics) return super.getImageInfo(url);
-
         let match = url.match(/^(\/?[^\/].*\/v3\/files)\/info/i);
         if (match) {
             this._setDownloadHandler(true);
@@ -350,10 +488,22 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             this._setDownloadHandler(false);
             return this._getInfo(url, match[1]);
         }
-        throw "The empaia standalone tile source is not configured with a proper URL!";
+        // Not a WSI-Service info endpoint — degrade to autodetection rather than
+        // throwing: this runs inside a setTimeout where nothing can catch it.
+        console.warn("RationaiStandaloneV3TileSource: not a WSI-Service /info URL, " +
+            "falling back to OSD autodetection:", url);
+        return super.getImageInfo(url);
     }
 
     _getInfo(url, tilesUrl) {
+        // Options that the /info endpoint itself understands (e.g. the slide
+        // reader `plugin`) are appended here — this is the only point at which
+        // `setSourceOptions` can influence the metadata request, and it works
+        // only because the registry applies options synchronously at
+        // construction, before OSD's deferred getImageInfo call.
+        if (this._infoQuery && !/[?&]plugin=/.test(url)) {
+            url = url + (url.includes("?") ? "&" : "?") + this._infoQuery;
+        }
         this._fetch(url, {
             headers: this.ajaxHeaders || {}
         }).then(async res => {
@@ -390,6 +540,21 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         return this.metadata;
     }
 
+    /**
+     * Pixel encoding of the samples this source actually delivers.
+     *
+     * Only a TIFF transfer preserves the slide's native bit depth — every 8-bit
+     * image format discards it — so the descriptor is `undefined` unless tiles
+     * come back as `rawTiff`. Note that `image_format` is a tile-only parameter
+     * (see `setSourceOptions`): the info response describes the *slide*, which
+     * is exactly what is needed here.
+     * @return {TiffSampleEncoding|undefined}
+     */
+    getSampleEncoding() {
+        if (this._dataFormat !== 'rawTiff') return undefined;
+        return encodingFromSlideInfo(this.data);
+    }
+
     getDisplayMetadata() {
         const m = this.metadata || {};
         if (m.error) return [{ title: "Slide unavailable", description: String(m.error) }];
@@ -411,6 +576,15 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         }
         if (this.fileId) fields.push({ label: "Slide ID", value: String(this.fileId) });
         if (this.innerFormat) fields.push({ label: "Format", value: String(this.innerFormat) });
+        // Transfer encoding + bit depth: the two things that decide whether the
+        // render can be quantitative at all. Cheap to show, and it turns "why is
+        // my 16-bit slide flat?" into a one-glance answer.
+        const channels = Array.isArray(this.data?.channels) ? this.data.channels.length : undefined;
+        if (channels) fields.push({ label: "Channels", value: channels });
+        if (Number.isFinite(Number(this.data?.channel_depth))) {
+            fields.push({ label: "Bit depth", value: `${Number(this.data.channel_depth)} bit` });
+        }
+        if (this._dataFormat) fields.push({ label: "Transfer", value: String(this._dataFormat) });
         return fields.length ? [{ title: "RationAI slide", fields }] : [];
     }
 
@@ -444,12 +618,13 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     getUrl( level, x, y, tiles=this.tilesUrl ) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
 
+        const z = this._zQuery();
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`;
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}${z}`;
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`;
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}${z}`;
     }
 
     async getThumbnail({ targetWidth = 512 } = {}) {
@@ -466,6 +641,37 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             `${this.tilesUrl}/label/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`
         );
         return res.blob();
+    }
+
+    /**
+     * The original slide file is downloadable when the service says so. WSI
+     * Service reports it per slide as `raw_download` on the info response —
+     * `false` when the deployment disabled raw access or the storage backend
+     * cannot serve the source file.
+     *
+     * Multiplexed `/v3/files` sources are excluded: that handle addresses N
+     * slides at once (`fileId` is a comma-joined list), so there is no single
+     * original file to hand back.
+     *
+     * @returns {boolean}
+     */
+    canDownloadSlideFile() {
+        return !this.multifetch && this.data?.raw_download === true;
+    }
+
+    /**
+     * Location of the original slide file. The `?slide_id=` form matches every
+     * other endpoint of this API (`/info`, `/thumbnail/...`, `/icc_profile`).
+     * The file is served with a `Content-Disposition`, so no name is forced.
+     *
+     * @returns {Promise<SlideFileDownload|undefined>}
+     */
+    async getSlideFileDownload() {
+        if (!this.canDownloadSlideFile()) return undefined;
+        return {
+            url: `${this.tilesUrl}/download?slide_id=${this.fileId}`,
+            client: this.__xopatHttpClient,
+        };
     }
 
     /**
@@ -587,10 +793,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     // Single-tile raster download path. Routes through the per-source HttpClient
     // (proxy + CSRF + auth) when present, falls back to bare fetch otherwise.
-    // Kept separate from downloadTileStart because this source needs to pass
-    // `this._dataFormat` ("rawTiff" for multi-channel TIFF, "rasterBlob"
-    // otherwise) to `imageJob.finish`; the prototype patch in `src/tile-source.ts`
-    // uses "rasterBlob" unconditionally.
+    // Kept separate from downloadTileStart so `_setDownloadHandler` can swap
+    // between this and the multiplex (zip) path. It passes `this._dataFormat`
+    // ("rawTiff" for multi-channel TIFF, "rasterBlob" otherwise) to
+    // `imageJob.finish` — the same contract the prototype patch in
+    // `src/tile-source.ts` now honors.
     _rasterDownloadTileStart(imageJob) {
         const controller = new AbortController();
         imageJob.userData.abortController = controller;
@@ -622,7 +829,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             return false;
         }
 
-        const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+        const AbstractMVT = OpenSeadragon.FlexRenderer?.AbstractMVTTileSource;
         if (!AbstractMVT) {
             return false;
         }
@@ -662,12 +869,12 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     downloadTileStart(context) {
         if (this._isVector) {
-            const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+            const AbstractMVT = OpenSeadragon.FlexRenderer?.AbstractMVTTileSource;
 
             if (!AbstractMVT || !this._ensureVectorPipeline()) {
                 const message =
                     "RationaiStandaloneV3TileSource: MVT vector tiles require " +
-                    "OpenSeadragon.FlexRenderer.MVT.AbstractTileSource. " +
+                    "OpenSeadragon.FlexRenderer.AbstractMVTTileSource. " +
                     "Ensure flex-renderer.js is loaded.";
 
                 if (typeof context.fail === "function") {
@@ -687,6 +894,13 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
+        // NOTE: deliberately z-INDEPENDENT. Focal-plane switching swaps tile data
+        // IN PLACE via the OSD invalidation pipeline (ViewerDepthController), so a
+        // tile keeps ONE stable MAIN identity across planes. Visited/prefetched
+        // planes are layered on top as extra per-tile cache records under
+        // `z://<plane>/<originalCacheKey>` (see ViewerDepthController /
+        // ZPlanePrefetcher), so revisits are served from memory; only uncached
+        // planes refetch their `&z=` URL.
         return `${x}_${y}/${level}/${this.fileId}`;
     }
 };

@@ -1,0 +1,25 @@
+{
+  "requiredConfig": [],
+  "providerDefaults": {
+    "id": "openai",
+    "label": "OpenAI",
+    "description": "OpenAI API endpoint",
+    "baseUrl": "https://api.openai.com/v1",
+    // Three-state, see chat-openai-host.server.ts: a string is the operator key,
+    // "" means "a key is required but none is configured" (model discovery stays
+    // off, the panel shows the BYOK hint), `false` declares the endpoint keyless.
+    // NEVER ship a placeholder string here — it is indistinguishable from a real
+    // key to `missingRequiredSecrets`, so discovery runs and 401s upstream.
+    "apiKey": "",
+    "defaultModelId": "",
+    "defaultTranscriptionModelId": "whisper-1",
+    // Biasing-prompt allowance for transcription, in characters (ceiling 1000). 0 =
+    // the prompt the client composes is dropped server-side. Off by default because
+    // a self-hosted whisper-large-v3 dropped audio in proportion to prompt length;
+    // OpenAI's gpt-4o-transcribe family takes the full ceiling (see
+    // env/parts/voice/openai-4o-transcribe.json). Deployer-only: not a configSchema
+    // field, so no RPC caller can raise its own cap.
+    "transcriptionPromptMaxChars": 0,
+    "modelsPath": "/models"
+  }
+}

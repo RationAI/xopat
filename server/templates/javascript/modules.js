@@ -3,7 +3,8 @@ const {
     safeScanDir,
     expandIncludeGlobs,
     resolvePluginSelectionMode,
-    requiredConfigSatisfied
+    requiredConfigSatisfied,
+    buildProdIncludes
 } = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, i18n) {
@@ -54,14 +55,29 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift(workspaceEntry);
-                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+                // Dedup: an item may already list its own workspace entry in
+                // include.json. Without this guard the entry is emitted twice →
+                // the module script evaluates twice (e.g. double sink
+                // registration). Mirrors the PHP loader's in_array check.
+                if (!data["includes"].includes(workspaceEntry)) {
+                    data["includes"].unshift(workspaceEntry);
+                }
 
                 data["id"] = data["id"] || packageData["name"];
-                data["name"] = data["name"] || packageData["description"];
+                data["name"] = data["name"] || packageData["name"];
                 data["author"] = data["author"] || packageData["author"];
                 data["version"] = data["version"] || packageData["version"];
                 data["description"] = data["description"] || packageData["description"];
+            }
+
+            // Glob expansion + include existence validation runs for EVERY
+            // element, not only those carrying a `package.json`. Most plugins
+            // and ~17 modules (e.g. `annotations`) have none, and those are
+            // exactly the ones whose renamed/uncompiled include used to 404
+            // silently and resurface as a downstream ReferenceError.
+            if (data) {
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"] || [],
+                    `module '${data["id"] || dir}'`);
             }
 
             // Author server manifest (server.json) — see plugins.js for
@@ -131,7 +147,22 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 const configSatisfied = pluginSelectionMode !== "available"
                     || requiredConfigSatisfied(data["requiredConfig"], envBlock, secBlock);
                 if (enabledNotFalse && configSatisfied) {
+                    // Precompute the production single-file overlay (leaves
+                    // `includes` canonical); consumed by printDependencies and
+                    // the client dynamic loader alike.
+                    buildProdIncludes(fullPath, data, core.parseBool(core.CORE?.client?.production) === true, fileExists);
                     MODULES[data["id"]] = data;
+                } else if (enabledNotFalse && Array.isArray(data["requiredConfig"])) {
+                    // Worst case of a silent drop: a config-gated module
+                    // surfaces only as a *plugin's* missing-dependency error
+                    // naming the module, never the unconfigured path.
+                    const missing = data["requiredConfig"].filter(
+                        p => !requiredConfigSatisfied([p], envBlock, secBlock));
+                    if (missing.length) {
+                        console.warn(`[modules] '${data["id"]}' not shipped: requiredConfig ` +
+                            `${missing.join(", ")} unset in both ENV.modules["${data["id"]}"] and ` +
+                            `core.server.secure.modules["${data["id"]}"].`);
+                    }
                 }
             }
         } catch (e) {
@@ -246,15 +277,14 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
             result = `<link rel="stylesheet" href="${item["styleSheet"]}?v=${version}" type='text/css'>\n`;
         }
 
-        if (production && fileExists(`${directory}${item["directory"]}/index.min.js`)) {
-            return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
-        }
+        // In production the item may carry a precomputed `prodIncludes` overlay
+        // (foldable files collapsed into index.min.js / index.workspace.min.js,
+        // non-foldable entries kept in place). Fall back to the canonical
+        // `includes` in dev or when no min artifact exists. See buildProdIncludes.
+        const includesList = ((core.parseBool(production) === true) && Array.isArray(item["prodIncludes"]))
+            ? item["prodIncludes"] : item["includes"];
 
-        if (production && fileExists(`${directory}${item["directory"]}/index.workspace.min.js`)) {
-            return result + `    <script src="${directory}${item["directory"]}/index.workspace.min.js?v=${version}"></script>\n`;
-        }
-
-        for (let file of item["includes"]) {
+        for (let file of includesList) {
             if (isType(file, "string")) {
                 result += file.endsWith(".mjs") ?
                     `    <script src="${directory}${item["directory"]}/${file}?v=${version}" type="module"></script>\n` :
@@ -302,7 +332,9 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
     }
 
     let moduleList = Object.values(MODULES);
-    //ascending
-    moduleList.sort((a, b) => a["_priority"] - b["_priority"]);
+    // Ascending by `_xoi`, the DFS post-order `scanDependencies` assigns above. This used to
+    // read `_priority`, a key nothing ever writes: `undefined - undefined` is NaN, so the
+    // comparator was inert and the "dependency order" was really directory-scan order.
+    moduleList.sort((a, b) => a["_xoi"] - b["_xoi"]);
     core._MODULE_ORDER = moduleList.map(mod => mod.id);
 }

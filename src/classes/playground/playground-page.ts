@@ -26,6 +26,7 @@
  */
 
 import { setupIsolatedViewer, type IsolatedViewerHandle } from "../app/setup-isolated-viewer";
+import { BackgroundConfig } from "../background-config";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "../app/assemble-render-output";
 import {
     serializeSceneFromViewer,
@@ -190,6 +191,12 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         if (activated || disposed) return;
         activated = true;
 
+        // Suppress menu-row emission until overrideConfigureAll applies the real
+        // (namespaced) config. openSourceMirror first calls viewer.open(items),
+        // which fabricates default identity shaders and would emit a throwaway
+        // build that races the override build and duplicates every row.
+        let shaderRowsEnabled = false;
+
         // 1) Mount the right-side menu FIRST. Its NavigatorSideMenu creates a
         //    container with id=navigatorId — OSD looks that id up at viewer
         //    construction time, so it must already be in the DOM.
@@ -218,17 +225,9 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                     },
                 );
                 const menuRoot = menuInstance.create() as HTMLElement;
-                // RightSideViewerMenu renders with `position: absolute; width: 400px;
-                // overflow-y: auto;` but no top/bottom inset and no height — so its
-                // own overflow-y never engages and tall menus push past the modal,
-                // hiding the action footer. In the playground we own the host
-                // overlay, so stretch the menu to fill it; production layouts
-                // (AppBar.View) keep their existing geometry untouched.
-                try {
-                    menuRoot.style.top = "0";
-                    menuRoot.style.bottom = "0";
-                    menuRoot.style.maxHeight = "100%";
-                } catch (e) { /* noop */ }
+                // RightSideViewerMenu renders `position: absolute; top/bottom: 0`
+                // and scrolls its panel stack internally, so it already fills the
+                // host overlay — no playground-side geometry patch needed.
                 menuOverlay.appendChild(menuRoot);
             } catch (e) {
                 console.error("[PlaygroundPage] failed to mount RightSideViewerMenu", e);
@@ -254,7 +253,12 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                 cellEl,
                 navigatorEl: navigatorHost || cellEl, // fallback so OSD doesn't crash
                 cellId,
+                // Clear like the mirrored slide: `background[i].fill` overrides the
+                // session default, and a playground rendering a fluorescence slide
+                // on the app's white would not be WYSIWYG against the source viewer.
+                backgroundColor: BackgroundConfig.resolveFillColor(pickBackgrounds(init)?.[0]),
                 htmlHandler: (shaderLayer: any, shaderConfig: any, htmlContext: any) => {
+                    if (!shaderRowsEnabled) return;
                     try {
                         menuInstance?.getShadersTab?.()?.createLayer?.(viewerHandle?.viewer, shaderLayer, shaderConfig, htmlContext);
                     } catch (e) {
@@ -316,7 +320,7 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         // playground's own visualization (init.visualization) on top — so the
         // user sees the proposed/edited config rendered, not whatever the source
         // viewer is currently displaying.
-        openSourceMirror(viewerHandle.viewer, init, namespace);
+        openSourceMirror(viewerHandle.viewer, init, namespace, () => { shaderRowsEnabled = true; });
 
         // Edit watcher: any 'cache-applied' / shader UI mutation should mark dirty.
         // FlexRenderer raises 'render' on every redraw; we instead listen for a
@@ -509,7 +513,12 @@ function renderViewerSetupError(host: HTMLElement, err: any) {
  * Numeric refs inside shader configs (`tiledImages`, `dataReferences`, cache
  * control values) are otherwise left untouched.
  */
-function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, namespace: string) {
+function openSourceMirror(
+    playgroundViewer: any,
+    init: PlaygroundPageInit,
+    namespace: string,
+    enableRows?: () => void,
+) {
     if (!playgroundViewer) return;
     const VM: any = (window as any).VIEWER_MANAGER;
     const sourceViewer = init.sourceViewerUniqueId && VM
@@ -610,6 +619,10 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, names
     // namespaced ids — no DOM id collision with the parent viewer's controls.
     const apply = () => {
         try {
+            // Enable menu-row emission only for the override build. The prior
+            // open(items) identity pass must stay silent (its rows would race
+            // with these — see the gate in activate()).
+            enableRows?.();
             playgroundViewer.drawer?.overrideConfigureAll?.(renamedMap, renamedOrder);
         } catch (e) {
             console.warn("[PlaygroundPage] overrideConfigureAll failed", e);

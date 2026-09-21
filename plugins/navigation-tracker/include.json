@@ -1,12 +1,13 @@
 {
     "id": "nav-tracker",
-    "name": "Navigation viewport tracker",
+    "name": "%meta.name%",
     "author": "Jirka Horák",
     "version": "1.0.0",
-    "description": "Record the movement of navigator in the viewer.",
-    "icon": null,
+    "description": "%meta.description%",
+    "categories": ["Navigation"],
+    "keywords": ["navigation", "tracker", "record"],
+    "icon": "ph-crosshair",
     "includes" : ["tracker.js"],
-    "permaLoad": true,
     "hidden": true,
     "animate": true
 }

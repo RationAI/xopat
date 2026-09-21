@@ -1,0 +1,2119 @@
+/// <reference path="../../src/types/globals.d.ts" />
+/// <reference path="../../src/types/loader.d.ts" />
+
+import {AudioCapture, CaptureError, CaptureResult, SegmentMeta} from "./audioCapture";
+import type {CaptureAliveBeat, CaptureErrorCode, CaptureHealth, SileroOptions, VadEngine} from "./audioCapture";
+import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult} from "./drivers/driver";
+import {RemoteWhisperConfig, RemoteWhisperDriver} from "./drivers/remoteWhisper";
+import {WasmWhisperConfig, WasmWhisperDriver} from "./drivers/wasmWhisper";
+import {VercelTranscribeConfig, VercelTranscribeDriver} from "./drivers/vercelTranscribe";
+import {createRepetitionLock} from "./repetitionLock";
+import {stripPromptEcho} from "./promptEcho";
+import {trimOverlap} from "./joinSegments";
+import {LanguagePin, primaryLanguage} from "./languagePin";
+import {bypassesVoicedFloor} from "./speechGate";
+import {MicButton, MicButtonOptions} from "./ui/MicButton";
+import {CaptionOverlay} from "./ui/CaptionOverlay";
+
+/**
+ * Deadline for one archive window (~90 s of audio). Generous because it runs in the
+ * background where nobody is waiting on it, but bounded so a stuck request cannot
+ * hold up the whole chain behind it.
+ */
+const WINDOW_TIMEOUT_MS = 110_000;
+// Below the server's own 120 s bound, deliberately: equal deadlines race, and the client
+// timer also counts request-scheduler queue time, so a window queued behind live segments
+// used to be aborted client-side — opaquely — while the server was still decoding it.
+
+/**
+ * How long a window's audio waits for a local decode probe (diagnostic only). A blob
+ * that decodes fine here but came back empty from the backend is a backend problem; one
+ * that fails here is ours. Bounded so a stuck decoder cannot hold a warning hostage.
+ */
+const LOCAL_DECODE_PROBE_MS = 4000;
+
+/**
+ * Handle returned by {@link SpeechToTextModule.startDictation}: lets the caller
+ * stop capture and (for hands-free flows) await the final transcript.
+ */
+export interface DictationHandle {
+    /** Stop capture; the pending transcription then resolves via `done`. */
+    stop(): void;
+    /** Resolves with the transcript once capture stops and the driver returns. */
+    done: Promise<TranscriptionResult>;
+}
+
+/** Incremental update delivered as each in-order segment finishes transcribing. */
+export interface ContinuousPartial {
+    /** The full concatenated transcript so far. */
+    text: string;
+    /** Just the newly-appended segment text (what this update added). */
+    appended: string;
+    /** 0-based capture index of the segment this update corresponds to. */
+    index: number;
+    /** The raw driver result for the appended segment. */
+    result: TranscriptionResult;
+    /** What this segment cost and what it was made of — see {@link SegmentMetrics}. */
+    metrics?: SegmentMetrics;
+}
+
+/**
+ * Per-segment facts a consumer needs to tell a BAD MODEL apart from BAD AUDIO.
+ *
+ * Without them a three-word transcript of a ten-second segment and a three-word transcript
+ * of a three-word utterance are the same event. That is not hypothetical: attributing the
+ * whisper-large-v3 segment collapse in the 9-10 reporting round needed the source read,
+ * because the telemetry carried only `{text, index, accepted, mode}`.
+ */
+export interface SegmentMetrics {
+    /**
+     * The capture's own segment index — the authoritative one.
+     *
+     * A consumer counting accepted segments itself gets a different number, and a REJECTED
+     * segment then reports the index the next accepted one will take: two records claiming
+     * to be segment 2, one of which is not. Carry the real index so a trace can be read in
+     * order.
+     */
+    index?: number;
+    /** Wall-clock length of the captured segment, silence included. */
+    audioMs?: number;
+    /** Detected voiced duration within it. `audioMs` >> `voicedMs` means mostly silence. */
+    voicedMs?: number;
+    /** False when Web Audio was unavailable, so the two figures above are absent, not zero. */
+    tracked?: boolean;
+    /** Encoded audio actually sent to the driver. */
+    bytes?: number;
+    /** Driver round-trip for this segment. */
+    latencyMs?: number;
+    /**
+     * Audio duration the BACKEND measured, in ms, when it reports one.
+     *
+     * Compare it with `audioMs`: they should agree. A segment the capture timed at 15 s
+     * and the backend measured at ~0 never decoded — `MediaRecorder` writes a live-stream
+     * container with no duration in its header, and a decoder that reads that as zero
+     * returns an empty transcript and no error.
+     */
+    reportedDurationMs?: number;
+    /**
+     * Characters of rolling context the decoder was primed with; `0` when it was given
+     * only the static glossary.
+     *
+     * Recorded because the prompt is the variable that most changes what comes back, and
+     * a dump without it cannot explain why one segment decoded a third of the speech the
+     * previous one did.
+     */
+    contextChars?: number;
+    /**
+     * Which driver and model produced the text — the one that ANSWERED. Stamped from the
+     * result, never from the configured driver, so a fallback's output is never filed
+     * under the primary model's name.
+     */
+    driverId?: string;
+    model?: string;
+    /** First-to-last speech frame within the segment (ms); 0 when none was detected. */
+    speechSpanMs?: number;
+    /** Highest peak amplitude seen (0..1); 0 is digital silence. */
+    maxPeak?: number;
+    /** The trailing-silence window that cuts a segment (ms), for ratio rules. */
+    silenceMs?: number;
+    /** Audio this recording shared with its successor (ms) — see SegmentMeta.overlapMs. */
+    overlapMs?: number;
+    /** Whisper's own decode verdicts when the backend reports them (see TranscriptionResult). */
+    noSpeechProb?: number;
+    avgLogprob?: number;
+    compressionRatio?: number;
+    /** Text filters that altered the driver's raw output (see TranscriptionResult.filtered). */
+    filtered?: string[];
+    /** Which detector judged the segment: `silero` (WAV from its frames), `amplitude`, or `none`. */
+    vad?: VadEngine;
+    /** The language the recognizer reported for this segment (BCP-47 primary subtag), when it did. */
+    language?: string;
+    /** The language hint the request carried; undefined = the recognizer detected it (see `language`). */
+    languageHint?: string;
+    /** Emitted despite a VAD discard verdict, to test the (amplitude) gate. */
+    probe?: boolean;
+    /** The whole session bypasses the voiced-ms gate. */
+    failOpen?: boolean;
+    /** The final flush segment, emitted regardless of speech evidence. */
+    flush?: boolean;
+}
+
+/** One completed speaking turn delivered by `onTurn` (see {@link ContinuousDictationOptions}). */
+export interface ContinuousTurn {
+    /** The concatenated, accepted text of this turn. Never empty. */
+    text: string;
+    /** 0-based sequence number of the turn within the session. */
+    index: number;
+}
+
+export interface ContinuousDictationOptions extends TranscriptionOptions {
+    /** Silence window (ms) that cuts one segment. Falls back to the module default. */
+    silenceMs?: number;
+    /**
+     * Live 0..1 input level, fired per VAD frame for a recording meter; `speaking`
+     * is the detector's verdict for that frame (drives a "speaking" indicator).
+     */
+    onLevel?: (level: number, speaking?: boolean) => void;
+    /**
+     * Capture heartbeat (see {@link CaptureAliveBeat}) — recorder bytes landing, or a
+     * confirmed-healthy poll. A consumer watching for a dead session must measure
+     * staleness from THIS, not from `onLevel`: the level clock stalls for reasons
+     * that say nothing about the microphone, and a watchdog reading it as capture
+     * liveness ends dictations that are working fine.
+     */
+    onAlive?: (beat: CaptureAliveBeat) => void;
+    /** Fired as each in-order segment is transcribed and appended. */
+    onPartial?: (partial: ContinuousPartial) => void;
+    /** Max transcriptions in flight at once (throttles a remote endpoint). Default 2. */
+    maxConcurrent?: number;
+    /**
+     * Longer, session-level silence (ms) marking the end of a speaking turn.
+     * When set, `onTurnIdle` fires once the speaker has been quiet this long after
+     * speaking. Capture keeps running; the consumer decides whether to `stop()`.
+     */
+    turnSilenceMs?: number;
+    /** Fired when `turnSilenceMs` of silence follows speech (re-arms on new speech). */
+    onTurnIdle?: () => void;
+    /** VAD: how far above the noise floor a peak must sit to count as speech (default 3.0). */
+    speechFloorMult?: number;
+    /** VAD: min sustained ms above the gate before a peak is speech onset (default 200). */
+    minSpeechMs?: number;
+    /**
+     * Content gate: return false to reject a transcribed segment as non-speech
+     * (background noise / mistranscription). Rejected segments are NOT concatenated
+     * and do NOT fire `onPartial` — so noise never enters the turn. Applied on top
+     * of the built-in empty-text skip. `stripNonSpeech`/operator filters run first.
+     *
+     * `metrics` describes the audio the text came from (see {@link SegmentMetrics}), so
+     * the gate can weigh a transcript against how much speech produced it. Absent when
+     * the capture had no VAD evidence — treat that as "cannot tell", not as zero.
+     */
+    validateSegment?: (result: TranscriptionResult, metrics?: SegmentMetrics) => boolean;
+    /**
+     * Minimum voiced milliseconds a segment must contain to be transcribed at all.
+     * Sub-threshold segments (a click or cough that snuck past the onset gate)
+     * never reach a driver — no audio egress, no hallucination. Falls back to the
+     * module's `minVoicedMs` static meta (default 400).
+     */
+    minVoicedMs?: number;
+    /**
+     * Turn-based delivery for conversation consumers. When set, the session keeps
+     * capturing indefinitely and each time the speaker goes quiet for
+     * `turnSilenceMs`, the accepted segments since the previous turn are
+     * concatenated and delivered here as one completed turn (only once every
+     * in-flight transcription of the turn has drained — text is never split or
+     * lost). Silent stretches produce no turns at all. `stop()` ends the session
+     * and DISCARDS an unfinished (not-yet-idle) turn — though it remains part of
+     * the final `done` transcript. `finish()` instead ends the session gracefully
+     * and delivers those trailing pieces as one last turn (see the handle).
+     */
+    onTurn?: (turn: ContinuousTurn) => void;
+    /**
+     * Safety cap (ms) for `finish()`'s graceful drain: if the trailing
+     * transcriptions do not complete within this window the in-flight work is
+     * aborted so `finish()` can never hang. Default 8000.
+     */
+    finishTimeoutMs?: number;
+    /**
+     * Hard cap (ms) on a single segment's length. During uninterrupted speech the
+     * segment is cut at this bound even without a silence boundary, so partial
+     * text keeps flowing (`onPartial`) mid-monologue instead of waiting for the
+     * speaker to pause. Falls back to the capture default (60000).
+     */
+    maxSegmentMs?: number;
+    /**
+     * How many characters of already-transcribed text to feed back as the biasing
+     * prompt of the NEXT segment (from the `contextPromptChars` static meta, default
+     * **0 — off**). Segments are decoded independently, so in principle this gives
+     * the model the surrounding dictation instead of starting each one blind.
+     *
+     * **Measure it before switching it on.** It is a feedback path into the decoder and
+     * its effect is model-dependent, in both directions. On `whisper-large-v3` it
+     * truncated output badly: the only segment of each capture decoded without a tail
+     * ran at 2.9 words per second of voiced audio, every later one at 0.6–1.2, and the
+     * decline compounded as the degraded tail fed itself forward — and the direct
+     * endpoint test later showed ANY prompt does this on that backend (see the README).
+     * Capped by `promptMaxChars`, which is 0 by default, so this is doubly opt-in.
+     */
+    contextPromptChars?: number;
+    /**
+     * Keep a continuous recording of the whole session, retrievable from the handle
+     * via `getSessionAudio()` once it ends. Lets a consumer re-transcribe everything
+     * in one pass ({@link SpeechToTextModule.transcribeAudio}) for a materially more
+     * accurate final transcript than the concatenated per-segment text. Off by
+     * default — it retains audio in memory for the session's lifetime.
+     */
+    archive?: boolean;
+    /** Cap the archive (bytes / ms); past it recording stops and `archiveTruncated` is set. */
+    archiveMaxBytes?: number;
+    archiveMaxMs?: number;
+    /**
+     * With `archive`, seal the recording into WINDOWS of roughly this length (ms) and
+     * transcribe each in the background as it closes, instead of leaving the whole
+     * recording to be decoded at the end. Default 90 s; `0` restores one end-of-session
+     * pass. See {@link SpeechToTextModule.transcribeSessionAudio}.
+     */
+    windowMs?: number;
+    /**
+     * `eager` (default): each window is transcribed in the background as it seals and
+     * reported through `onWindow`. `lazy`: the sealed audio is only BANKED — no upload,
+     * no `onWindow` — and {@link SpeechToTextModule.transcribeSessionAudio} decodes the
+     * windows serially when (and only if) a consumer asks for the whole recording. For a
+     * consumer whose review starts from the live transcript and re-reads the recording
+     * only when that looks incomplete, eager decoding is an upload per window for text
+     * that is usually never read.
+     */
+    windowMode?: "eager" | "lazy";
+    /** Called with each window's transcript as it lands (in seal order, best-effort; eager mode only). */
+    onWindow?: (window: TranscribedWindow) => void;
+    /**
+     * This start CONTINUES the dictation the previous session belonged to — a resume after
+     * an edit pause, an in-place restart after a microphone stall. The retained recording
+     * and its windows are kept and the new capture's windows join them.
+     *
+     * Default `false`: a start is a NEW dictation, and everything retained from the
+     * previous one is dropped first. That is the module's responsibility, not the
+     * consumer's: `_windows` used to be cleared only by an explicit `clearSessionAudio()`
+     * that nobody called at start, so a review of case B was served case A's windows.
+     */
+    continuesSession?: boolean;
+    /** Browser DSP constraints for the microphone (see CaptureOptions); default = browser default. */
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+}
+
+/** A sealed archive window plus the text it transcribed to. */
+export interface TranscribedWindow {
+    index: number;
+    text: string;
+    /** Capture-relative segment span, for ordering — see `ArchiveWindow`. */
+    fromSegment: number;
+    toSegment: number;
+    final: boolean;
+}
+
+/**
+ * Handle for a continuous dictation session. Capture keeps running (the mic stays
+ * open across segments), so transcription of one segment overlaps recording of the
+ * next and nothing spoken during transcription is lost.
+ */
+export interface ContinuousDictationHandle {
+    /**
+     * Stop capture hard: abort in-flight transcriptions and resolve promptly. An
+     * unfinished (not-yet-idle) turn is discarded — see `onTurn`. Use for teardown
+     * or when the last utterance does not matter.
+     */
+    stop(): Promise<TranscriptionResult>;
+    /**
+     * Stop capture gracefully: let the trailing transcriptions drain (bounded by
+     * `finishTimeoutMs`) and deliver the open, not-yet-idle turn as one final
+     * `onTurn` before resolving — so the last thing the speaker said is not lost.
+     * Use when a manual stop means "finish and submit".
+     */
+    finish(): Promise<TranscriptionResult>;
+    /** Resolves when capture has ended and every segment has been transcribed. */
+    done: Promise<TranscriptionResult>;
+    /**
+     * The retained recordings when `archive` was requested, else null — one entry per
+     * capture (pause/resume yields several). Read after the session ended (a live read
+     * misses the unflushed tail). `truncated` marks an archive that hit its
+     * size/duration cap and stops short of the end.
+     */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null;
+}
+
+/**
+ * Lifecycle of an archive window's transcription.
+ *  - `pending`   — queued or decoding; text not in yet. Worth waiting for.
+ *  - `done`      — text landed; the audio was freed.
+ *  - `retryable` — the decode finished with no text (empty result, error, abort) and the
+ *                  audio is still held: a review-time retry can recover it.
+ *  - `failed`    — no text and no audio: the speech in it is gone.
+ * `pending` and `retryable` used to be one state ("no text, has blob"), so a window whose
+ * decode had failed minutes ago read as "about to arrive" and callers waited forever.
+ */
+export type WindowState = "pending" | "done" | "retryable" | "failed";
+
+interface WindowRecord {
+    index: number;
+    text: string;
+    fromSegment: number;
+    toSegment: number;
+    final: boolean;
+    blob: Blob | null;
+    state: WindowState;
+    /** The dictation this window belongs to (see `_windowSession`). */
+    session: number;
+    /** Which driver produced `text`. */
+    driverId?: string;
+}
+
+/**
+ * Speech-to-Text module.
+ *
+ * A standalone, viewer-agnostic capability: capture microphone audio and turn it
+ * into text through a pluggable driver (remote self-hosted Whisper by default,
+ * in-browser WASM fallback). It owns no UI beyond an optional reusable mic button
+ * that any consumer (chat, annotations, plugins) can mount; consumers reach it
+ * via `singletonModule('speech-to-text')`.
+ *
+ * Security: driver/endpoint selection comes only from `getStaticMeta` (ENV,
+ * trusted), never from per-session `getOption` (§7). All upstream audio goes
+ * through `HttpClient`; the WASM library is hash-verified before import.
+ */
+class SpeechToTextModule extends (XOpatModuleSingleton as any) {
+    private _drivers: Map<string, TranscriptionDriver>;
+    private _activeDriverId: string | null;
+    private _capture: AudioCapture;
+    private _defaults: { language?: string; silenceMs?: number; prompt?: string };
+    /** The language hint policy of the current dictation (see languagePin.ts). */
+    private _langPin: LanguagePin = new LanguagePin("auto");
+    private _langPinMode = "auto";
+    /**
+     * Ceiling on the biasing prompt a deployment may enable. The effective cap is
+     * `promptMaxChars` static meta, default **0 — no prompt is sent at all**.
+     *
+     * Measured on the deployment's own Whisper endpoint with one 93 s dictation: no prompt
+     * → the full transcript; a 60-char prompt → full; 120 chars → text thinning; 200 chars →
+     * the first 30 s gone; the 495-char base glossary → the last third gone; glossary plus
+     * report terms (~870 chars) → 30 s of the middle and nothing else. Every "dropped
+     * content" symptom of the last field rounds was this. That measurement is why the
+     * DEFAULT is off, not why the ceiling is low: OpenAI's `gpt-4o-transcribe` family shows
+     * no such pathology, and the composed prompt (glossary + report terms + context tail)
+     * needs the room. The ceiling matches the server's (`TRANSCRIBE_MAX_PROMPT_CHARS`), so
+     * the per-provider `transcriptionPromptMaxChars` is the only cap a deployment reasons about.
+     */
+    private static readonly MAX_PROMPT_CHARS = 1000;
+    /** Effective prompt cap for this deployment (see MAX_PROMPT_CHARS); 0 = never send one. */
+    private _promptMaxChars: number;
+
+    /** Cut `s` to at most `cap` characters on a word boundary — half a word biases toward nonsense. */
+    private static _cutAtWord(s: string, cap: number): string {
+        if (s.length <= cap) return s;
+        const cut = s.slice(0, cap);
+        const space = cut.lastIndexOf(" ");
+        return (space > cap / 2 ? cut.slice(0, space) : cut).trim();
+    }
+    private _localeReady: Promise<void>;
+    /** Operator-configured extra non-speech patterns (on top of the built-ins). */
+    private _filterPatterns: RegExp[];
+    /** Minimum voiced ms a capture/segment needs before it may reach a driver. */
+    private _minVoicedMs: number;
+    /** Default rolling-context length fed back as the next segment's prompt. 0 = off. */
+    private _contextPromptChars: number;
+    /**
+     * Abort controller of the current continuous session, if any. `stop()` aborts
+     * it so in-flight transcriptions are cancelled and the session's drain can
+     * finalize even if a driver (e.g. a hung local model load) would otherwise
+     * never resolve. One-shot dictation is deliberately NOT bound to this — its
+     * `stop()` means "finish and transcribe", not "discard".
+     */
+    private _continuousAbort: AbortController | null = null;
+    /**
+     * Backstop timeout (ms) for a single blob transcription. Even a driver that
+     * ignores the abort signal cannot stall the continuous ordered-drain forever:
+     * on timeout the chain advances / the segment is recorded empty. 0 disables.
+     */
+    private _transcribeTimeoutMs: number;
+
+    /**
+     * Archive windows and their transcripts. `blob` is held only until the window has
+     * been decoded — audio is both sensitive and the bulk of the memory a long
+     * dictation holds, and the text is what every consumer actually wants.
+     */
+    private _windows: WindowRecord[] = [];
+    /**
+     * Identifies the dictation the windows belong to. Bumped by every start that is not
+     * a continuation and by `clearSessionAudio`; a background decode that lands after
+     * the bump belongs to a recording the consumer has already discarded.
+     */
+    private _windowSession = 0;
+    /** Aborts every in-flight window upload when the recording is cleared. */
+    private _windowAbort: AbortController | null = null;
+    /**
+     * Whether the LIVE segment path may fall back to another driver (WASM tiny) when the
+     * configured one fails. Off by default: a fallback answering silently produced a
+     * worse transcript under the primary model's name, with nothing in the UI to say so.
+     * Operators who prefer degraded text over a visible failure opt in via ENV.
+     */
+    private _liveFallback: boolean;
+    /**
+     * Serializes window transcription. Windows are big requests and strictly lower
+     * priority than live segments: one at a time means they fill the gaps in the
+     * scheduler's reserved urgent slot instead of competing with the captions and
+     * extraction the pathologist is watching.
+     */
+    private _windowChain: Promise<void> | null = null;
+
+    /** Live-caption overlay (lazily built the first time captions are enabled). */
+    private _captions: CaptionOverlay | null = null;
+    /** How many caption consumers have asked for captions (ref-counted enable). */
+    private _captionRefs = 0;
+    /** Recent shown segments (newest last); only the last few are rendered. */
+    private _captionRecent: string[] = [];
+    /** Bound event handlers while captions are on, so they can be detached. */
+    private _captionHandlers: Array<[string, (e: any) => void]> = [];
+    private _captionIdleTimer: any = null;
+    private _captionHideTimer: any = null;
+    private _captionRecording = false;
+    /** How many recent segments to keep on screen at once. */
+    private static readonly CAPTION_LINES = 2;
+    /** Clear the shown text after this long with no new segment (subtitle fade). */
+    private static readonly CAPTION_IDLE_MS = 6000;
+    /** Keep the last caption this long after recording stops, then hide. */
+    private static readonly CAPTION_LINGER_MS = 2500;
+
+    constructor() {
+        super();
+        this._drivers = new Map();
+        this._activeDriverId = null;
+        // The VAD worklet is a static module asset (never bundled); with the URL
+        // the capture drives speech evidence from the audio render thread, so a
+        // hidden/unfocused tab keeps capturing (rAF-only VAD froze there).
+        let workletUrl: string | undefined;
+        let moduleRoot: string | undefined;
+        try { moduleRoot = this.MODULE_ROOT; workletUrl = `${moduleRoot}/vad-worklet.js`; }
+        catch (_e) { workletUrl = undefined; /* uninitialized module: rAF fallback */ }
+        // Silero VAD (default engine). Deployment knob, hence static meta (§7); the
+        // assets are copied out of node_modules into dist/silero/ by the module build.
+        const vadCfg = (this.getStaticMeta("vad", {}) || {}) as Record<string, any>;
+        let silero: SileroOptions | undefined;
+        if (vadCfg.engine !== "amplitude" && moduleRoot) {
+            // ABSOLUTE: onnxruntime-web resolves its wasm glue with `new URL(file, wasmPaths)`,
+            // which throws on a relative base, and then falls back to `import(wasmPaths + file)`
+            // — a bare module specifier the browser refuses. The page-relative form fetches
+            // the model fine (plain fetch), so the failure only showed at the WASM backend.
+            const assetsUrl = new URL(String(vadCfg.assetsUrl || `${moduleRoot}/dist/silero/`), document.baseURI).href.replace(/\/?$/, "/");
+            silero = {
+                assetsUrl,
+                positiveSpeechThreshold: Number(vadCfg.positiveSpeechThreshold) || 0.5,
+                negativeSpeechThreshold: Number(vadCfg.negativeSpeechThreshold) || 0.35,
+                loadTimeoutMs: Number(vadCfg.loadTimeoutMs) || 15000,
+            };
+        }
+        this._capture = new AudioCapture({workletUrl, silero});
+        this._localeReady = this.loadLocale().catch((e: any) =>
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "locale load failed"));
+
+        const language = this.getStaticMeta("language", undefined) as string | undefined;
+        const silenceMs = this.getStaticMeta("silenceMs", 0) as number;
+        // Deployment-wide domain biasing prompt (trusted ENV/include.json, §7).
+        // Per-call `opts.prompt` overrides it; consumers (e.g. chat) usually supply
+        // a richer, live prompt at the call site.
+        const prompt = this.getStaticMeta("prompt", undefined) as string | undefined;
+        this._defaults = {language, silenceMs: this.getStaticMeta("autoStop", false) ? (silenceMs || 1500) : silenceMs, prompt};
+        // A real word carries ≥ ~400ms of voice; anything the VAD heard less of is a blip
+        // that must never reach a transcription model (hallucination source). Raised from
+        // 250: a segment with 359 ms of voice in 10.8 s of audio cleared the old floor,
+        // was sent to whisper-large-v3, and came back as "the" — an invented word in a
+        // medical transcript, and a round-trip spent to get it. Deployment-tunable, and
+        // overridable per call; the audio is still archived either way, so the
+        // whole-audio pass can still hear anything a quiet speaker said.
+        this._minVoicedMs = Math.max(0, Number(this.getStaticMeta("minVoicedMs", 400)) || 0);
+        // OFF by default. Feeding the previous segment's text back as the next segment's
+        // biasing prompt is a feedback path into the decoder, and its sign is
+        // model-dependent: on whisper-large-v3 it truncated output to roughly the first
+        // few seconds of every segment after the first, compounding as the shrinking tail
+        // fed itself forward (2.9 words/voiced-second with no tail, 0.6–1.2 with one).
+        // Deployments that have MEASURED a gain on their own transcription provider turn
+        // it on in ENV. See the README.
+        this._contextPromptChars = Math.max(0, Number(this.getStaticMeta("contextPromptChars", 0)) || 0);
+        // OFF by default: this is a TOTAL wall-clock bound and a driver's transcribe
+        // may legitimately include a slow first-time model download (~40 MB), which
+        // must not be killed. The real hang guards are abort-on-stop and the WASM
+        // driver's own progress-aware load stall timeout; this is an opt-in extra
+        // for operators who want a hard per-segment ceiling. 0 disables.
+        this._transcribeTimeoutMs = Math.max(0, Number(this.getStaticMeta("transcribeTimeoutMs", 0)) || 0);
+        this._liveFallback = this.getStaticMeta("liveFallback", false) === true;
+        this._promptMaxChars = Math.max(0, Math.min(SpeechToTextModule.MAX_PROMPT_CHARS,
+            Math.floor(Number(this.getStaticMeta("promptMaxChars", 0)) || 0)));
+
+        // Extra hallucination filters. Models vary in how they render non-speech
+        // audio (e.g. "*Buzzing*", "(coughs)"); the built-in stripNonSpeech covers
+        // the common syntaxes, and operators can add regex strings for the rest.
+        const rawFilters = this.getStaticMeta("filterPatterns", []);
+        this._filterPatterns = (Array.isArray(rawFilters) ? rawFilters : [])
+            .map((src: unknown) => {
+                if (typeof src !== "string") { APPLICATION_CONTEXT.log("module.speech-to-text").warn(src, `ignoring non-string filterPatterns entry`); return null; }
+                try { return new RegExp(src, "gi"); }
+                catch (e) { APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `invalid filterPatterns entry ${JSON.stringify(src)}`); return null; }
+            })
+            .filter(Boolean) as RegExp[];
+        if (!Array.isArray(rawFilters) && rawFilters != null) {
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(rawFilters, `filterPatterns must be an array; ignoring`);
+        }
+
+        this._buildConfiguredDrivers();
+    }
+
+    /**
+     * The language MODE a caller asked for: an explicit BCP-47 code, else the module
+     * default, else `"auto"`. Never the UI locale — the viewer's locale says what
+     * language the buttons are in, not what the pathologist speaks, and pinning
+     * transcription to it turned Japanese dictation into English filler.
+     */
+    private _languageMode(language?: string): string {
+        const s = String(language ?? this._defaults.language ?? "").trim();
+        return s || "auto";
+    }
+
+    /**
+     * The language hint for one request: a fixed code as given; under `auto` the
+     * session's pin once two segments have agreed, else nothing (the recognizer
+     * detects). See {@link LanguagePin}.
+     */
+    private _resolveLanguage(language?: string): string | undefined {
+        return this._pinFor(this._languageMode(language)).hint();
+    }
+
+    /** The pin for a language mode — the module-level one when it already matches. */
+    private _pinFor(mode: string): LanguagePin {
+        if (this._langPinMode !== mode) {
+            this._langPin = new LanguagePin(mode);
+            this._langPinMode = mode;
+        }
+        return this._langPin;
+    }
+
+    /** True when the session's language is known and is not English. */
+    private _nonEnglishSession(): boolean {
+        const lang = primaryLanguage(this._langPin.language);
+        return !!lang && lang !== "en";
+    }
+
+    /** Effective biasing prompt (call override, else module default), length-capped. */
+    private _resolvePrompt(prompt?: string): string | undefined {
+        // The module's own default glossary is English; handed to a recognizer decoding
+        // another language it is a pull toward English output, not vocabulary help. A
+        // caller's prompt is its own responsibility (the chat composes one in the
+        // session's language).
+        const fallback = this._nonEnglishSession() ? undefined : this._defaults.prompt;
+        const p = (prompt ?? fallback);
+        const s = String(p ?? "").trim();
+        if (!s || this._promptMaxChars <= 0) return undefined;
+        return SpeechToTextModule._cutAtWord(s, this._promptMaxChars);
+    }
+
+    /**
+     * Compose the per-segment biasing prompt: the static domain glossary followed
+     * by the tail of what has already been transcribed this session.
+     *
+     * A segment is decoded with no knowledge of the segments around it, which is
+     * precisely where Whisper-family models mis-hear domain vocabulary and invent
+     * plausible words — a fragment starting mid-sentence has nothing to anchor it.
+     * Whisper's `prompt` is the supported channel for that missing context, so we
+     * feed the previous words back in. Recent transcript goes LAST: it is the
+     * strongest bias and belongs closest to the audio being decoded, so when the
+     * combined text exceeds the cap the glossary is what gets trimmed.
+     *
+     * Returns the composed prompt plus the context tail it used, since echo
+     * stripping treats the two parts differently (see {@link _stripPromptEcho}).
+     */
+    private _composePrompt(glossary: string | undefined, transcript: string, contextChars: number): { prompt?: string; context?: string } {
+        const base = String(glossary || "").trim();
+        const cap = this._promptMaxChars;
+        if (cap <= 0) return {};
+        const cut = SpeechToTextModule._cutAtWord;
+        if (contextChars <= 0) return {prompt: base ? cut(base, cap) : undefined};
+        const full = String(transcript || "").replace(/\s+/g, " ").trim();
+        if (!full) return {prompt: base ? cut(base, cap) : undefined};
+        // Cut the tail on a word boundary — half a word biases toward nonsense.
+        let tail = full.slice(-Math.min(contextChars, cap));
+        if (tail.length < full.length) {
+            const space = tail.indexOf(" ");
+            if (space > 0) tail = tail.slice(space + 1);
+        }
+        const room = cap - tail.length - 1;
+        const head = room > 0 ? cut(base, room) : "";
+        const prompt = head ? `${head} ${tail}` : tail;
+        return {prompt, context: tail};
+    }
+
+    /** Apply operator-configured extra filters; returns "" when nothing remains. */
+    private _applyExtraFilters(text: string): string {
+        let t = String(text || "");
+        for (const re of this._filterPatterns) {
+            try { re.lastIndex = 0; t = t.replace(re, " "); } catch (_e) { /* ignore */ }
+        }
+        return t.replace(/\s+/g, " ").trim();
+    }
+
+    /**
+     * Strip biasing-prompt echo from a transcript.
+     *
+     * Whisper-family models, fed a long domain-biasing prompt (the pathology
+     * glossary the chat sends) over (near-)silent audio, regurgitate that prompt
+     * verbatim as the "transcript" — often repeated and interleaved with markers
+     * like "context:" / "###". Left in, that echo is treated as real speech: it
+     * floods the transcript, and (worse) a probe segment that "transcribes to
+     * text" flips the whole session fail-open, disabling the voiced-ms gate so
+     * ALL later silence gets transcribed too. Removing the prompt's own phrases
+     * blanks such a segment, and an empty transcript is "no speech" everywhere
+     * downstream — so the echo never renders and never trips fail-open.
+     *
+     * Only removes runs that ARE the prompt (≥25 chars, so individual glossary
+     * words a pathologist genuinely says survive); real dictation mixed with an
+     * echo keeps its real words.
+     *
+     * `context` — the rolling previous-transcript tail (see {@link _composePrompt}) —
+     * is matched only as a WHOLE run, never split into sentences: a speaker
+     * legitimately repeating a phrase they just said ("mild loose fibrosis and mild
+     * dense fibrosis") must keep it, while a model regurgitating the entire context
+     * block instead of transcribing must not.
+     */
+    private _stripPromptEcho(text: string, prompt?: string, context?: string): string {
+        return stripPromptEcho(text, prompt, context);
+    }
+
+    /** Instantiate drivers declared in ENV/include.json and pick the active one. */
+    private _buildConfiguredDrivers(): void {
+        const requested = String(this.getStaticMeta("driver", "remote"));
+
+        const remote = this.getStaticMeta("remote", null) as RemoteWhisperConfig | Record<string, RemoteWhisperConfig> | null;
+        if (remote) {
+            // Accept either a single endpoint object or a map of { id: config }.
+            const entries: Array<[string, RemoteWhisperConfig]> = (remote as any).path
+                ? [["remote", remote as RemoteWhisperConfig]]
+                : Object.entries(remote as Record<string, RemoteWhisperConfig>);
+            for (const [id, cfg] of entries) {
+                try {
+                    this.registerDriver(new RemoteWhisperDriver(id, cfg));
+                } catch (e) {
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `failed to build remote driver "${id}"`);
+                }
+            }
+        }
+
+        // Vercel-chat transcription driver(s). Reuse the vercel-ai-chat-sdk
+        // provider registry (server-held endpoint + key) via its runTranscription
+        // RPC, which brokers AI SDK transcription models — the bound provider's
+        // adapter must support transcription (see listTranscriptionProviders).
+        // Registered before WASM so they're preferred, with WASM as the fallback.
+        // `providerId` is OPTIONAL: without it the server picks a transcription-capable
+        // provider itself, so `{"driver": "vercel"}` alone is a complete configuration.
+        const vercel = this.getStaticMeta("vercel", null) as VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | boolean | null;
+        if (vercel || requested === "vercel") {
+            for (const [id, cfg] of this._vercelEntries(vercel)) {
+                try {
+                    this.registerDriver(new VercelTranscribeDriver(id, cfg));
+                } catch (e) {
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `failed to build vercel driver "${id}"`);
+                }
+            }
+        }
+
+        // WASM (in-browser transformers.js) driver. Always registered as the
+        // guaranteed offline fallback (it needs no config — sensible CDN library +
+        // default Whisper model), so a preferred remote/cloud model can be missing
+        // or fail and we still degrade to local Whisper. Opt out with
+        // `disableWasmFallback: true`. isAvailable() still gates it in secureMode.
+        const wasm = this.getStaticMeta("wasm", null) as WasmWhisperConfig | null;
+        if (this.getStaticMeta("disableWasmFallback", false) !== true) {
+            try {
+                // Inject a progress hook so the (potentially slow, ~40 MB first-run)
+                // in-browser model load surfaces as a `model-loading` event the UI
+                // can reflect instead of looking frozen.
+                this.registerDriver(new WasmWhisperDriver("wasm", {
+                    ...(wasm || {}),
+                    onProgress: (p) => this._onModelProgress("wasm", p),
+                }));
+            } catch (e) {
+                APPLICATION_CONTEXT.log("module.speech-to-text").error(e, "failed to build wasm driver");
+            }
+        }
+
+        // Prefer the explicitly requested driver, else the first registered one.
+        if (this._drivers.has(requested)) this._activeDriverId = requested;
+        else if (this._drivers.size) this._activeDriverId = this._drivers.keys().next().value;
+    }
+
+    /**
+     * Normalize the `vercel` meta into `[id, config]` pairs. Three shapes are accepted:
+     * `true`/absent (a single auto driver), one config object, or a `{id: config}` map.
+     *
+     * The map is recognised by "every value is an object" rather than by the presence of
+     * `providerId` — since that key became optional, a single auto config `{timeoutMs: 1000}`
+     * would otherwise be read as a map of one driver named "timeoutMs".
+     */
+    private _vercelEntries(meta: VercelTranscribeConfig | Record<string, VercelTranscribeConfig> | boolean | null): Array<[string, VercelTranscribeConfig]> {
+        if (!meta || typeof meta !== "object") return [["vercel", {}]];
+        const values = Object.values(meta as Record<string, unknown>);
+        const isMap = values.length > 0 && values.every(v => v !== null && typeof v === "object" && !Array.isArray(v));
+        if (!isMap) return [["vercel", meta as VercelTranscribeConfig]];
+        return Object.entries(meta as Record<string, VercelTranscribeConfig>);
+    }
+
+    // ---- driver registry (consumers may add their own transport) ----
+
+    registerDriver(driver: TranscriptionDriver): void {
+        if (!driver?.id || typeof driver.transcribe !== "function") {
+            throw new Error("[speech-to-text] a driver needs an id and a transcribe() method.");
+        }
+        this._drivers.set(driver.id, driver);
+        if (!this._activeDriverId) this._activeDriverId = driver.id;
+        this.raiseEvent("drivers-changed");
+    }
+
+    unregisterDriver(id: string): void {
+        const d = this._drivers.get(id);
+        try { d?.dispose?.(); } catch (_e) { /* ignore */ }
+        this._drivers.delete(id);
+        if (this._activeDriverId === id) {
+            this._activeDriverId = this._drivers.size ? this._drivers.keys().next().value : null;
+        }
+        this.raiseEvent("drivers-changed");
+    }
+
+    listDrivers(): Array<{ id: string; label: string; local: boolean; active: boolean }> {
+        return Array.from(this._drivers.values()).map(d => ({
+            id: d.id, label: d.label, local: d.local, active: d.id === this._activeDriverId,
+        }));
+    }
+
+    getActiveDriverId(): string | null {
+        return this._activeDriverId;
+    }
+
+    /** Switch the active driver by id (no-op if unknown). */
+    setActiveDriver(id: string): boolean {
+        if (!this._drivers.has(id)) return false;
+        this._activeDriverId = id;
+        this.raiseEvent("active-driver-changed", {id});
+        return true;
+    }
+
+    private _activeDriver(): TranscriptionDriver | null {
+        return this._activeDriverId ? this._drivers.get(this._activeDriverId) || null : null;
+    }
+
+    // ---- capability probe ----
+
+    /** True when capture is supported, permission is grantable, and a driver is reachable. */
+    async isAvailable(): Promise<boolean> {
+        const driver = this._activeDriver();
+        if (!driver) return false;
+        if (!(await this._capture.canCapture())) return false;
+        try {
+            return await driver.isAvailable();
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    // ---- transcription ----
+
+    /**
+     * True when a capture carries too little speech evidence to be worth (or safe)
+     * transcribing. Tracked-but-speechless audio is the hallucination vector:
+     * Whisper-family models invent plausible phrases ("Thank you.", "Okay.") from
+     * silence, and those phrases are model-dependent, so the only reliable defense
+     * is to never send such audio to a driver. Untracked captures (no Web Audio)
+     * degrade open.
+     */
+    private _isNoSpeech(evidence: { heardSpeech: boolean; voicedMs: number; tracked: boolean }, minVoicedMs?: number): boolean {
+        if (!evidence.tracked) return false;
+        if (!evidence.heardSpeech) return true;
+        return evidence.voicedMs < Math.max(0, minVoicedMs ?? this._minVoicedMs);
+    }
+
+    /**
+     * Capture a single utterance and resolve to its transcript. Auto-stops on
+     * silence when `silenceMs`/`autoStop` is configured; otherwise stops at the
+     * safety max duration or when {@link stop} is called. A capture without
+     * detected speech resolves `{text: "", noSpeech: true}` without ever sending
+     * the audio to a driver.
+     */
+    async transcribeOnce(opts: TranscriptionOptions & { silenceMs?: number; minVoicedMs?: number; onLevel?: (level: number, speaking?: boolean) => void } = {}): Promise<TranscriptionResult> {
+        const driver = this._activeDriver();
+        if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
+
+        // Warm the model while the user speaks so download/compile overlaps the
+        // utterance instead of being serialized in front of inference.
+        try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
+
+        this.raiseEvent("recording-started");
+        let cap: CaptureResult;
+        try {
+            cap = await this._capture.record({
+                silenceMs: opts.silenceMs ?? this._defaults.silenceMs,
+                onLevel: opts.onLevel,
+                onDeviceError: (err) => this._reportCaptureWarning(err),
+            });
+        } finally {
+            this.raiseEvent("recording-stopped");
+        }
+
+        const language = this._resolveLanguage(opts.language);
+        if (this._isNoSpeech(cap, opts.minVoicedMs)) {
+            return {text: "", language, noSpeech: true};
+        }
+        this.raiseEvent("transcription-started");
+        return this._transcribeBlob(cap.blob, {language, prompt: this._resolvePrompt(opts.prompt), signal: opts.signal});
+    }
+
+    /**
+     * Run one audio blob through the driver fallback chain: try the active driver
+     * first, then any others, with local (WASM) drivers last as the guaranteed
+     * offline fallback. This is what makes a remote/cloud model safe to prefer even
+     * when it isn't guaranteed to be present — if it's unavailable or errors, we
+     * degrade to in-browser Whisper instead of failing. Shared by the one-shot and
+     * continuous paths; emits `transcription` / `transcription-error`.
+     */
+    private async _transcribeBlob(audio: Blob, opts: TranscriptionOptions & { context?: string; allowFallback?: boolean; channel?: "live" | "window" } = {}): Promise<TranscriptionResult> {
+        const {language, prompt, signal, context, timeoutMs} = opts;
+        const channel = opts.channel || "live";
+        const active = this._activeDriver();
+        if (!active) throw new CaptureError("capture-failed", "no transcription driver");
+        const chain = opts.allowFallback === false ? [active] : this._driverChain(active);
+        let lastError: any = null;
+        // A permanent (config/auth) failure from a preferred driver must not be lost
+        // when a later driver — WASM sorts LAST — also fails: it is the actionable
+        // one. Keep the first permanent error and let it win the final event so the
+        // operator sees "transcription is misconfigured", not the fallback's generic
+        // failure (which reads as transient and hides the real cause).
+        let permanentError: any = null;
+        for (const d of chain) {
+            try {
+                if (signal?.aborted) throw signal.reason;
+                // The ACTIVE driver is gated too: `isAvailable()` is the only way a driver can
+                // decline *before* the audio is uploaded (the vercel driver in auto mode asks
+                // the server whether any transcription provider exists at all). Drivers keep it
+                // cheap and fail open, so a declining one is a real "cannot serve this", and the
+                // chain simply moves on to the next — WASM last — instead of paying an egress.
+                if (!(await d.isAvailable())) continue;
+                const raw = await this._withTimeout(d.transcribe(audio, {language, prompt, signal, timeoutMs}), this._transcribeTimeoutMs);
+                // Built-in stripNonSpeech ran in the driver; apply operator filters
+                // and strip biasing-prompt echo on top so a hallucinated non-speech
+                // transcript is blanked (and thus never submitted by consumers).
+                const afterOperator = this._applyExtraFilters(raw.text);
+                const cleaned = this._stripPromptEcho(afterOperator, prompt, context);
+                const filtered = [...(raw.filtered || [])];
+                if (afterOperator !== String(raw.text || "").replace(/\s+/g, " ").trim()) filtered.push("operator-filter");
+                if (cleaned !== afterOperator) filtered.push("prompt-echo");
+                const result: TranscriptionResult = {
+                    ...raw,
+                    text: cleaned,
+                    driverId: d.id,
+                    ...(d.modelId ? {model: d.modelId} : {}),
+                    ...(filtered.length ? {filtered} : {}),
+                    ...(cleaned ? {} : {noSpeech: true}),
+                };
+                // A filter that changed what the model said is worth seeing, and one that
+                // EMPTIED it is the loudest thing that can happen to a segment: that used
+                // to be indistinguishable from silence at every layer above this one.
+                if (filtered.length) {
+                    this.raiseEvent("segment-filtered", {
+                        driverId: d.id, filters: filtered, channel,
+                        emptied: !cleaned, rawChars: String(raw.text || "").length, chars: cleaned.length,
+                        rawText: String(raw.text || "").slice(0, 400),
+                    });
+                }
+                this.raiseEvent(channel === "window" ? "window-transcription" : "transcription", {result, driverId: d.id});
+                return result;
+            } catch (e) {
+                if (signal?.aborted || (e as any)?.name === "AbortError") throw e;
+                lastError = e;
+                const permanent = (e as any)?.permanent === true;
+                if (permanent && !permanentError) permanentError = e;
+                // Surface every per-driver failure (fallback may still succeed and
+                // swallow it otherwise). Permanent = configuration error (e.g. a
+                // vercel driver bound to a provider that cannot transcribe) — that
+                // is an operator problem, so log it as an error, not a warning.
+                this.raiseEvent("driver-error", {driverId: d.id, error: e, permanent});
+                if (permanent) {
+                    APPLICATION_CONTEXT.log("module.speech-to-text").error(e, `driver "${d.id}" is misconfigured; trying fallback`);
+                } else {
+                    APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `driver "${d.id}" failed; trying fallback`);
+                }
+            }
+        }
+        // Prefer the permanent config error over the last (typically WASM-fallback)
+        // one so consumers can distinguish "operator must fix this" from transient.
+        const finalError = permanentError ?? lastError;
+        this.raiseEvent(channel === "window" ? "window-transcription-error" : "transcription-error", {error: finalError, permanent: !!permanentError});
+        throw finalError ?? new CaptureError("capture-failed", "transcription failed");
+    }
+
+    /**
+     * Transcribe an audio blob the caller already has — no capture involved.
+     *
+     * The reason this exists is quality: a consumer that recorded a whole session
+     * (see `archive` in {@link startContinuousDictation}) can re-transcribe it in one
+     * pass, which reads far better than the concatenation of independently-decoded
+     * segments — the model sees the entire context instead of a few seconds of it.
+     * Meant for an end-of-session upgrade of the authoritative transcript, not for
+     * the live path.
+     *
+     * `allowFallback` defaults to **false** here, unlike the live path: silently
+     * degrading a one-shot authoritative pass to the in-browser tiny model would
+     * produce a *worse* transcript than the segments it is meant to replace, with
+     * nothing in the UI to say so. Failing loudly lets the caller keep what it has.
+     */
+    async transcribeAudio(audio: Blob, opts: TranscriptionOptions & { allowFallback?: boolean } = {}): Promise<TranscriptionResult> {
+        if (!(audio instanceof Blob) || audio.size <= 0) {
+            throw new CaptureError("capture-failed", "no audio to transcribe");
+        }
+        // Pairs with the `transcription` / `transcription-error` events raised by
+        // _transcribeBlob, which is what clears a "transcribing" indicator.
+        this.raiseEvent("transcription-started");
+        return this._transcribeBlob(audio, {
+            language: this._resolveLanguage(opts.language),
+            prompt: this._resolvePrompt(opts.prompt),
+            signal: opts.signal,
+            timeoutMs: opts.timeoutMs,
+            allowFallback: opts.allowFallback === true,
+        });
+    }
+
+    /** Active driver first, then the rest with local (offline) drivers last. */
+    private _driverChain(active: TranscriptionDriver): TranscriptionDriver[] {
+        const others = Array.from(this._drivers.values()).filter(d => d !== active);
+        others.sort((a, b) => Number(a.local) - Number(b.local)); // local drivers last
+        return [active, ...others];
+    }
+
+    /**
+     * Start manual (push-to-talk) dictation. Returns a handle whose `stop()`
+     * ends capture; `done` resolves with the transcript. Useful when the caller
+     * drives start/stop from its own UI instead of silence detection.
+     */
+    startDictation(opts: TranscriptionOptions = {}): DictationHandle {
+        const done = this.transcribeOnce({...opts, silenceMs: 0});
+        return {
+            stop: () => this._capture.stop(),
+            done,
+        };
+    }
+
+    /**
+     * Start a **continuous** dictation session. Unlike {@link transcribeOnce}, the
+     * microphone is kept open across many segments: each silence-delimited segment
+     * is transcribed *while the next one is already being recorded*, so nothing the
+     * user says during transcription is lost. Segments transcribe concurrently but
+     * are concatenated strictly in capture order; empty/invalid segments are skipped
+     * without dropping their neighbors.
+     *
+     * This is a first-class, reusable API — any consumer wanting a live mic stream
+     * fed incrementally to a model can use `onPartial` and await the final transcript:
+     *
+     * ```ts
+     * const h = singletonModule('speech-to-text').startContinuousDictation({
+     *     language: 'en',
+     *     onPartial: ({ appended }) => feedToModel(appended),
+     * });
+     * const final = await h.stop();
+     * ```
+     */
+    startContinuousDictation(opts: ContinuousDictationOptions = {}): ContinuousDictationHandle {
+        const driver = this._activeDriver();
+        if (!driver) throw new CaptureError("capture-failed", "no transcription driver");
+
+        // Warm the model so the first segment's inference isn't stalled by download.
+        try { driver.prewarm?.(); } catch (_e) { /* best-effort */ }
+
+        // The language policy for this dictation: a fixed code, or auto-detect with a
+        // soft pin. Read per request (`langPin.hint()`), never captured — the pin lands
+        // mid-session, once two segments agree.
+        const langPin = this._pinFor(this._languageMode(opts.language));
+        const glossary = this._resolvePrompt(opts.prompt);
+        // Rolling context: each segment is biased with the tail of what has already
+        // been transcribed, so the model decodes it with the surrounding dictation in
+        // view instead of blind (see _composePrompt).
+        const contextChars = Math.max(0, Number(opts.contextPromptChars ?? this._contextPromptChars) || 0);
+        const requestedConcurrency = Number(opts.maxConcurrent);
+        const maxConcurrent = Number.isFinite(requestedConcurrency)
+            ? Math.min(8, Math.max(1, Math.floor(requestedConcurrency)))
+            : 2;
+        const minVoicedMs = Math.max(0, opts.minVoicedMs ?? this._minVoicedMs);
+        const silenceMs = opts.silenceMs ?? this._defaults.silenceMs;
+        // A new dictation drops what the previous one retained — its recording and its
+        // windows — before any audio accumulates. A continuation keeps them.
+        if (!opts.continuesSession) this.clearSessionAudio();
+        const windowSession = this._windowSession;
+
+        // The session owns an abort controller so `stop()` (or the module-level
+        // `stop()`) cancels in-flight transcriptions — otherwise a hung driver
+        // (e.g. a stuck local model load) would keep `active > 0` and the drain
+        // could never finalize. Merged with any consumer-supplied signal.
+        const abort = new AbortController();
+        this._continuousAbort = abort;
+        const signal = this._mergeSignal(opts.signal, abort.signal);
+        const releaseAbort = () => { if (this._continuousAbort === abort) this._continuousAbort = null; };
+
+        let fullText = "";
+        let lastAppended = "";                         // previous piece, for seam trimming
+        let nextEmit = 0;                              // next segment index to append
+        const ready = new Map<number, TranscriptionResult>();
+        const queue: Array<{ blob: Blob; index: number; probe?: boolean }> = [];
+        let active = 0;                                // transcriptions in flight
+        let captureEnded = false;                      // no more segments incoming
+        let settled = false;
+        // Set by finish(): deliver the trailing (not-yet-idle) turn as one last
+        // onTurn before resolving, instead of stop()'s discard.
+        let finishing = false;
+
+        // Rolling context is a feedback path: what the model emits becomes the bias for
+        // the next segment, so a prompt-obedient model that re-emits its own tail
+        // reinforces itself. See repetitionLock.ts for why the response is asymmetric.
+        const repetitionLock = createRepetitionLock();
+        /** Context each in-flight segment was decoded with, for the echo test on arrival. */
+        const contextOf = new Map<number, string>();
+        /** What each segment was made of and what it cost — see {@link SegmentMetrics}. */
+        const metricsOf = new Map<number, SegmentMetrics>();
+        /**
+         * The consumer gate's verdict for a probe, taken when its result lands (it decides
+         * fail-open) and reused by the drain — the gate reports rejections to observers, and
+         * asking it twice reported the same segment twice.
+         */
+        const gateVerdict = new Map<number, boolean>();
+
+        // ---- turn-based delivery (see ContinuousDictationOptions.onTurn) ----
+        let deliveredMax = -1;                         // highest index handed over by capture
+        let turnPieces: string[] = [];                 // accepted pieces of the open turn
+        let turnCount = 0;
+        // FIFO of turn boundaries: each entry is the highest segment index that
+        // belongs to the idled turn. A boundary is consumable once the ordered
+        // drain has advanced past it (all of the turn's transcriptions landed).
+        const turnBoundaries: number[] = [];
+
+        const flushTurns = (): void => {
+            if (!opts.onTurn) return;
+            while (turnBoundaries.length && nextEmit > turnBoundaries[0]) {
+                turnBoundaries.shift();
+                const text = turnPieces.join(" ").trim();
+                turnPieces = [];
+                if (!text) continue; // silence/noise-only turn: nothing to deliver
+                try { opts.onTurn({text, index: turnCount++}); } catch (_e) { /* consumer callback error is theirs */ }
+            }
+        };
+
+        let resolveDone!: (r: TranscriptionResult) => void;
+        let rejectDone!: (e: any) => void;
+        const done = new Promise<TranscriptionResult>((res, rej) => { resolveDone = res; rejectDone = rej; });
+
+        const settleError = (err: any, reject: boolean = true): void => {
+            if (settled) return;
+            settled = true;
+            captureEnded = true;
+            queue.length = 0;
+            releaseAbort();
+            this.raiseEvent("recording-stopped");
+            this.raiseEvent("transcription-error", {error: err});
+            if (reject) rejectDone(err);
+        };
+
+        const finalize = (): void => {
+            if (settled) return;
+            // Only finalize once capture has ended AND every queued/in-flight segment
+            // has drained. `captureEnded` is set by onStopped, which fires *after* the
+            // final segment was delivered — so we never resolve before the tail.
+            if (!captureEnded || active > 0 || queue.length > 0) return;
+            // Graceful finish: hand the trailing pieces of the still-open turn to
+            // the consumer as a final turn. stop() skips this (mid-turn = discard);
+            // finish() opts in so the last utterance is not lost.
+            if (finishing && opts.onTurn) {
+                const text = turnPieces.join(" ").trim();
+                turnPieces = [];
+                if (text) {
+                    try { opts.onTurn({text, index: turnCount++}); } catch (_e) { /* consumer callback error is theirs */ }
+                }
+            }
+            settled = true;
+            releaseAbort();
+            this.raiseEvent("recording-stopped");
+            resolveDone({text: fullText.trim(), language: langPin.language});
+        };
+
+        const drain = (): void => {
+            if (settled) return;
+            // Append every contiguous ready segment. _transcribeBlob already applied
+            // the non-speech + operator filters, so an empty text means "no speech" —
+            // skip it, but keep advancing so neighbors are never lost.
+            while (ready.has(nextEmit)) {
+                const r = ready.get(nextEmit)!;
+                ready.delete(nextEmit);
+                const idx = nextEmit;
+                nextEmit++;
+                const piece = String(r.text || "").trim();
+                // Skip empty (no speech) and consumer-rejected (noise / mistranscription)
+                // segments — they never enter the concatenated turn nor fire onPartial,
+                // but their index is still consumed so neighbors are not lost.
+                if (!piece) { metricsOf.delete(idx); contextOf.delete(idx); continue; }
+                if (opts.validateSegment) {
+                    let ok = true;
+                    // The metrics go with the text: whether one short word is a real answer
+                    // or the residue of a lost sentence is a question about the AUDIO, and
+                    // the consumer cannot answer it from spelling alone.
+                    if (gateVerdict.has(idx)) ok = gateVerdict.get(idx)!;
+                    else {
+                        try { ok = opts.validateSegment(r, metricsOf.get(idx)); }
+                        catch (e) {
+                            // A gate that crashed has not judged anything; letting the text
+                            // through would make a consumer bug the opposite of a gate.
+                            ok = false;
+                            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "validateSegment threw; rejecting the segment");
+                        }
+                    }
+                    gateVerdict.delete(idx);
+                    if (!ok) { metricsOf.delete(idx); contextOf.delete(idx); continue; }
+                }
+
+                const verdict = repetitionLock.note(piece, contextOf.get(idx));
+                contextOf.delete(idx);
+                // Raised on the transition only, so a long lock is one event, not one per
+                // segment. Consumers surface it as "the recognizer got stuck"; without it
+                // the lock reaches the transcript as ordinary short segments and reads as
+                // a microphone problem.
+                if (verdict.locked) this.raiseEvent("transcription-repeat-lock", {text: piece, index: idx});
+                if (verdict.drop) { metricsOf.delete(idx); continue; }
+
+                const metrics = metricsOf.get(idx);
+                metricsOf.delete(idx);
+                // Consecutive recordings share up to a timeslice of audio (the successor
+                // starts before the predecessor stops), and the recognizer transcribes the
+                // shared stretch twice. Trim the repeated head off this piece.
+                const join = trimOverlap(lastAppended, piece, metrics?.overlapMs ?? 0);
+                if (join.trimmedWords) {
+                    this.raiseEvent("segment-trimmed", {
+                        index: idx, words: join.trimmedWords, overlapMs: metrics?.overlapMs ?? 0,
+                        ...(join.text ? {} : {dropped: piece}),
+                    });
+                }
+                if (!join.text) continue;
+                const appended = join.text;
+                lastAppended = appended;
+                fullText = fullText ? `${fullText} ${appended}` : appended;
+                turnPieces.push(appended);
+                try {
+                    opts.onPartial?.({text: fullText, appended, index: idx, result: r, metrics});
+                } catch (_e) { /* consumer callback error is theirs */ }
+            }
+            flushTurns();
+            finalize();
+        };
+
+        const pump = (): void => {
+            if (settled) return;
+            // An aborted session must not START anything. stop() aborts and THEN ends
+            // capture, and the capture's final flush segment — emitted regardless of
+            // speech evidence — still arrives here asynchronously afterwards. Starting
+            // it would raise `transcription-started` for a blob `_transcribeBlob`
+            // rejects on the spot (signal.aborted, rethrown WITHOUT a terminal event),
+            // leaving every consumer's "transcribing" indicator up with nothing to
+            // bring it down: the chat composer sat behind a spinning overlay, input
+            // and all, until the panel was rebuilt.
+            if (signal?.aborted) {
+                // Same result the abort path already produces below, minus the phantom
+                // event and the pointless driver call: an empty result keeps the
+                // ordered drain moving so `done` still settles.
+                //
+                // This audio IS discarded — captured, queued, never transcribed. It is
+                // the one place the module can lose speech without anything saying so,
+                // and "the last thing I said before stopping never appeared" is
+                // indistinguishable from a hundred other faults without the event.
+                const abandoned: number[] = [];
+                while (queue.length) {
+                    const {index} = queue.shift()!;
+                    abandoned.push(index);
+                    ready.set(index, {text: ""});
+                }
+                if (abandoned.length) {
+                    this.raiseEvent("segments-abandoned", {
+                        indices: abandoned,
+                        bytes: abandoned.reduce((n, i) => n + (metricsOf.get(i)?.bytes || 0), 0),
+                        audioMs: abandoned.reduce((n, i) => n + (metricsOf.get(i)?.audioMs || 0), 0),
+                        reason: "aborted",
+                    });
+                    for (const index of abandoned) metricsOf.delete(index);
+                }
+                drain();
+                return;
+            }
+            while (active < maxConcurrent && queue.length) {
+                const {blob, index, probe} = queue.shift()!;
+                // Raised when a transcription batch actually begins (in-flight count
+                // leaves 0), so "transcribing" indicators reflect real work — not the
+                // whole session lifetime. Cosmetic limitation: with overlapping blobs
+                // the first per-blob `transcription` end event drops the indicator
+                // while a sibling is still in flight; it re-raises on the next 0→1.
+                // Rare at segment cadence — not worth a refcount protocol.
+                if (active === 0) this.raiseEvent("transcription-started");
+                active++;
+                // Composed per segment, not once per session: the context tail is
+                // whatever has drained so far. Out-of-order completions simply get a
+                // slightly older tail — still context, never wrong context. While the
+                // output is repeating itself the tail is withheld, because feeding it
+                // back is what makes a repetition self-sustaining (see the drain loop);
+                // the glossary half still goes, so the segment is biased, just not by
+                // the phrase it is stuck on.
+                const wantContext = repetitionLock.muted ? 0 : contextChars;
+                const {prompt, context} = this._composePrompt(glossary, fullText, wantContext);
+                contextOf.set(index, context || "");
+                // What the decoder was actually primed with. The single most useful field
+                // in a dictation dump: without it, "why is this segment a third as long as
+                // the one before it" is unanswerable from the trace.
+                const metrics = metricsOf.get(index);
+                if (metrics) metrics.contextChars = (context || "").length;
+                const startedAt = Date.now();
+                const stampLatency = () => {
+                    const m = metricsOf.get(index);
+                    if (m) m.latencyMs = Date.now() - startedAt;
+                };
+                const languageHint = langPin.hint();
+                this._transcribeBlob(blob, {language: languageHint, prompt, context, signal, allowFallback: this._liveFallback})
+                    .then((r) => {
+                        stampLatency();
+                        const m = metricsOf.get(index);
+                        if (m) {
+                            // Beside `audioMs` this says whether the upload decoded at all.
+                            if (Number.isFinite(r?.durationInSeconds as number)) {
+                                m.reportedDurationMs = Math.round((r.durationInSeconds as number) * 1000);
+                            }
+                            // The driver that ANSWERED, not the one configured.
+                            if (r.driverId) m.driverId = r.driverId;
+                            if (r.model) m.model = r.model;
+                            // What the recognizer heard the language as, beside what it was told.
+                            if (languageHint) m.languageHint = languageHint;
+                            if (r.language) m.language = primaryLanguage(r.language) || r.language;
+                            if (Number.isFinite(r.noSpeechProb as number)) m.noSpeechProb = r.noSpeechProb;
+                            if (Number.isFinite(r.avgLogprob as number)) m.avgLogprob = r.avgLogprob;
+                            if (Number.isFinite(r.compressionRatio as number)) m.compressionRatio = r.compressionRatio;
+                            if (r.filtered?.length) m.filtered = r.filtered;
+                        }
+                        ready.set(index, r);
+                        // A probe is a segment the VAD wanted to discard. Real SPEECH coming
+                        // back means the gate is misjudging — flip the capture to fail-open
+                        // and tell the UI. "Real speech" is judged by the same consumer gate
+                        // an ordinary segment faces, not by "non-empty": a hallucinated "The"
+                        // over a dead microphone used to pass here and flip an hour-long
+                        // session into uploading every 15 s of silence.
+                        const text = String(r.text || "").trim();
+                        if (!text) {
+                            // A driver returned nothing (a filter that emptied it has also
+                            // raised segment-filtered). Without this the segment simply never
+                            // appears anywhere — and an endpoint that answers 200 with an
+                            // empty body for two minutes looks exactly like silence.
+                            this.raiseEvent("segment-empty", {
+                                index, audioMs: m?.audioMs, voicedMs: m?.voicedMs, speechSpanMs: m?.speechSpanMs,
+                                maxPeak: m?.maxPeak, latencyMs: m?.latencyMs, driverId: r.driverId, model: r.model,
+                                noSpeechProb: r.noSpeechProb, avgLogprob: r.avgLogprob,
+                                reportedDurationMs: m?.reportedDurationMs, filtered: r.filtered, probe: !!probe,
+                            });
+                        }
+                        // A segment with text is a vote on the session's language; the
+                        // vote that pins it is announced so the UI can say which language
+                        // is being transcribed.
+                        if (text && langPin.vote(r.language)) {
+                            this.raiseEvent("language-pinned", {language: langPin.language});
+                        }
+                        let speech = !!text;
+                        if (probe && speech && opts.validateSegment) {
+                            try { speech = opts.validateSegment(r, m); } catch (_e) { speech = false; }
+                            gateVerdict.set(index, speech);
+                        }
+                        if (probe && speech && !captureEnded) {
+                            try { this._capture.enterFailOpen(); } catch (_e) { /* ignore */ }
+                            this._reportCaptureWarning(new CaptureError("vad-degraded"));
+                        }
+                    })
+                    .catch((_e) => {
+                        // A failed segment must not stall the ordered drain or drop
+                        // its neighbors: record an empty result so drain skips it.
+                        stampLatency();
+                        ready.set(index, {text: ""});
+                    })
+                    .finally(() => {
+                        active--;
+                        if (settled) return;
+                        drain();
+                        pump();
+                    });
+            }
+        };
+
+        this.raiseEvent("recording-started");
+        try {
+            let gatedInARow = 0;
+            this._capture.startSegmented({
+                silenceMs,
+                echoCancellation: opts.echoCancellation,
+                noiseSuppression: opts.noiseSuppression,
+                autoGainControl: opts.autoGainControl,
+                onLevel: opts.onLevel,
+                // Recording actually began — a UI that says "listening" before this
+                // invites the speaker to start a second early, and the opening words are
+                // never captured.
+                onStarted: () => this.raiseEvent("capture-started"),
+                onAlive: opts.onAlive,
+                turnSilenceMs: opts.turnSilenceMs,
+                onTurnIdle: () => {
+                    if (opts.onTurn) {
+                        // Everything delivered so far belongs to the turn that just
+                        // went idle; later segments open the next turn. The turn is
+                        // handed out by flushTurns() once its transcriptions drain.
+                        turnBoundaries.push(deliveredMax);
+                        flushTurns();
+                    }
+                    try { opts.onTurnIdle?.(); } catch (_e) { /* consumer callback error is theirs */ }
+                },
+                speechFloorMult: opts.speechFloorMult,
+                minSpeechMs: opts.minSpeechMs,
+                onDeviceError: (err) => this._reportCaptureWarning(err),
+                maxDurationMs: opts.maxSegmentMs,
+                archive: opts.archive,
+                archiveMaxBytes: opts.archiveMaxBytes,
+                archiveMaxMs: opts.archiveMaxMs,
+                windowMs: opts.windowMs,
+                // Only ask for windows when the caller archives — without archiving
+                // there is no recording to slice.
+                onWindow: opts.archive
+                    // Windows carry the SAME risk: `_enqueueWindow` primes each decode with
+                    // the joined text of the previous windows, so a tail that truncates a
+                    // 15 s segment truncates a 90 s window too — and the whole-audio
+                    // transcript is built from these. They get the PLAIN setting, never the
+                    // A/B arm: the archive transcript is authoritative, not an experiment.
+                    ? (w) => this._enqueueWindow(w, {language: () => langPin.hint(), glossary, contextChars, onWindow: opts.onWindow, session: windowSession, lazy: opts.windowMode === "lazy"})
+                    : undefined,
+                // A capture-side discard is the one loss no layer above could see.
+                onDiscard: (meta, reason) => {
+                    this.raiseEvent("segment-discarded", {
+                        reason, audioMs: meta.durationMs, voicedMs: meta.voicedMs,
+                        maxPeak: meta.maxPeak, tracked: meta.tracked, flush: !!meta.flush,
+                    });
+                },
+                onSegment: (blob, index, meta: SegmentMeta) => {
+                    if (settled) {
+                        // Late delivery after the session settled — still audio somebody
+                        // spoke. Say so, the same way the abort path does.
+                        this.raiseEvent("segments-abandoned", {
+                            indices: [index], bytes: blob?.size || 0, audioMs: meta?.durationMs || 0, reason: "settled",
+                        });
+                        return;
+                    }
+                    deliveredMax = index;
+                    // Voiced-content gate: a segment the VAD barely heard never
+                    // reaches a driver (no audio egress, no hallucination). Record
+                    // an empty result so the ordered drain still consumes its index.
+                    // Probe / fail-open / final-flush segments bypass the gate — the
+                    // whole point is to let the text filters judge them (the VAD
+                    // verdict is suspect or overridden by explicit user intent). The one
+                    // exception, a flush with no voiced audio at all, is the rule and the
+                    // reason in `bypassesVoicedFloor`.
+                    const bypassGate = bypassesVoicedFloor(meta);
+                    const metrics: SegmentMetrics = {
+                        index,
+                        audioMs: meta?.durationMs,
+                        voicedMs: meta?.voicedMs,
+                        speechSpanMs: meta?.speechSpanMs,
+                        maxPeak: meta?.maxPeak,
+                        silenceMs: silenceMs && silenceMs > 0 ? silenceMs : 1500,
+                        overlapMs: meta?.overlapMs,
+                        tracked: meta?.tracked,
+                        vad: meta?.vad,
+                        bytes: blob?.size,
+                        // Provisional: overwritten by the driver that actually answers.
+                        driverId: driver?.id,
+                        model: driver?.modelId,
+                        probe: !!meta?.probe,
+                        failOpen: !!meta?.failOpen,
+                        flush: !!meta?.flush,
+                    };
+                    metricsOf.set(index, metrics);
+                    if (!bypassGate && meta?.tracked && meta.voicedMs < minVoicedMs) {
+                        // Below the voiced floor the audio never reaches a driver. But a
+                        // quiet speaker's every short answer falls under it, so — like the
+                        // capture's own discard ladder — the third gated segment in a row
+                        // goes through as a probe, and the gate is reported either way.
+                        // Only for the amplitude gate: a Silero verdict is not second-guessed
+                        // by a transcript (probing silence is how hallucinations flipped
+                        // whole sessions fail-open).
+                        gatedInARow++;
+                        const asProbe = meta.vad !== "silero" && gatedInARow >= 3;
+                        this.raiseEvent("segment-gated", {
+                            index, voicedMs: meta.voicedMs, minVoicedMs, audioMs: meta.durationMs,
+                            speechSpanMs: meta.speechSpanMs, maxPeak: meta.maxPeak, probe: asProbe,
+                        });
+                        if (!asProbe) {
+                            ready.set(index, {text: "", noSpeech: true});
+                            metricsOf.delete(index);
+                            drain();
+                            return;
+                        }
+                        gatedInARow = 0;
+                        metrics.probe = true;
+                        queue.push({blob, index, probe: true});
+                        pump();
+                        return;
+                    }
+                    gatedInARow = 0;
+                    queue.push({blob, index, probe: !!meta?.probe});
+                    pump();
+                },
+                onStopped: () => {
+                    if (settled) return;
+                    captureEnded = true;
+                    finalize();
+                },
+                onError: (err) => { settleError(err); },
+            });
+        } catch (e) {
+            settleError(e, false);
+            throw e;
+        }
+
+        const stop = (): Promise<TranscriptionResult> => {
+            // Ends capture; the final segment is flushed via onSegment, then onStopped
+            // fires and finalize() resolves once the tail transcription completes.
+            // Also abort in-flight transcriptions so a hung driver can't hold the
+            // drain open — aborted segments resolve empty and let `done` settle.
+            try { abort.abort(); } catch (_e) { /* ignore */ }
+            this._capture.stop();
+            return done;
+        };
+
+        const finish = (): Promise<TranscriptionResult> => {
+            // Graceful stop: do NOT abort — let the trailing segment(s) transcribe
+            // and drain so finalize() can deliver the open turn (see above). Bound
+            // the wait with a safety timeout so a stuck driver can't hang finish().
+            finishing = true;
+            const capMs = Number(opts.finishTimeoutMs);
+            const timeoutMs = Number.isFinite(capMs) ? Math.max(0, capMs) : 8000;
+            if (timeoutMs > 0) {
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    APPLICATION_CONTEXT.log("module.speech-to-text").warn("finish() safety timeout — aborting trailing transcriptions");
+                    // Abort any stuck transcription, force the drain gate open and
+                    // finalize. If a driver ignores the abort (a hung model load) the
+                    // in-flight count never drops and finalize() would keep declining —
+                    // so after one more grace tick the session is settled by force:
+                    // `done` can never hang, whatever the driver does.
+                    try { abort.abort(); } catch (_e) { /* ignore */ }
+                    captureEnded = true;
+                    finalize();
+                    if (settled) return;
+                    setTimeout(() => {
+                        if (settled) return;
+                        const stuck = [...queue.map((q) => q.index)];
+                        queue.length = 0;
+                        if (active > 0 || stuck.length) {
+                            this.raiseEvent("segments-abandoned", {
+                                indices: stuck, bytes: 0, audioMs: 0, reason: "finish-timeout", inFlight: active,
+                            });
+                        }
+                        active = 0;
+                        finalize();
+                    }, 1000);
+                }, timeoutMs);
+                done.then(() => clearTimeout(timer), () => clearTimeout(timer));
+            }
+            this._capture.stop();
+            return done;
+        };
+
+        return {stop, finish, done, getSessionAudio: () => this.getSessionAudio()};
+    }
+
+    /**
+     * The recordings retained by `archive: true` dictation, or null when there are
+     * none. One entry per capture — pausing and resuming dictation yields several,
+     * which is why this is a list: separate recordings cannot be concatenated as
+     * bytes, so a caller transcribes each and joins the TEXT.
+     *
+     * Module-level rather than handle-only because the interesting moment is *after*
+     * the session ended, by which point consumers have usually dropped the handle.
+     * Retained until {@link clearSessionAudio} — pause/resume does not discard it.
+     */
+    getSessionAudio(): { blobs: Blob[]; truncated: boolean } | null {
+        const blobs = this._capture.getArchiveBlobs();
+        return blobs.length ? {blobs, truncated: this._capture.archiveTruncated} : null;
+    }
+
+    /**
+     * Live capture health (see {@link CaptureHealth}). Exposed on the module so a
+     * consumer in another module — which may not import across the boundary — can
+     * base its session watchdog on real capture liveness instead of the level meter.
+     */
+    getCaptureHealth(): CaptureHealth {
+        return this._capture.getHealth();
+    }
+
+    /**
+     * True when the archive hit its size/duration cap, so the recording — and any
+     * transcript derived from it — stops short of the dictation.
+     *
+     * Separate from {@link getSessionAudio} because with windowing on there are no
+     * retained blobs to carry the flag (each window is handed over as it seals), yet
+     * a consumer adopting the window transcripts as authoritative still has to know
+     * they may be incomplete.
+     */
+    get sessionAudioTruncated(): boolean {
+        return this._capture.archiveTruncated;
+    }
+
+    /**
+     * The whole dictation as one transcript, decoded with real context rather than a
+     * few seconds at a time. See {@link transcribeAudio} for why that beats the live
+     * per-segment text.
+     *
+     * With eager windowing most of this has ALREADY happened: each ~90 s window was
+     * transcribed in the background while the pathologist kept talking, so this joins
+     * the retained texts and only decodes whatever tail has not been sealed yet. With
+     * `windowMode: "lazy"` this is where the windows are decoded — serially, in seal
+     * order — so a consumer that rarely needs the recording pays for it only when it does.
+     *
+     * Returns "" when nothing was recorded; rejects if a pass fails. Any window whose
+     * background pass failed is retried here.
+     */
+    async transcribeSessionAudio(opts: TranscriptionOptions & { allowFallback?: boolean } = {}): Promise<string> {
+        // The final window is only ENQUEUED by the archive seal, which is a browser event
+        // after stop; awaiting just the chain returned before that window existed and the
+        // review missed the last minute and a half. Settle first, then let the background
+        // pass land rather than decoding it twice.
+        await this.whenSessionAudioSettled({signal: opts.signal});
+        if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+        const parts: string[] = [];
+        const errors: unknown[] = [];
+        for (const w of this._windows.filter((x) => x.session === this._windowSession)) {
+            if (w.text) { parts.push(w.text); continue; }
+            if (!w.blob) continue;                       // failed for good — nothing left to try
+            // One failing window must not throw away the ones that decoded: each is
+            // retried on its own, and what decoded is returned. The rest stay retryable.
+            let res: TranscriptionResult | null = null;
+            try {
+                w.state = "pending";
+                res = await this.transcribeAudio(w.blob, opts);
+            } catch (e) {
+                if (opts.signal?.aborted) { w.state = "retryable"; throw e; }
+                errors.push(e);
+                w.state = "retryable";
+                APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `window ${w.index} retry failed; keeping its audio`);
+                continue;
+            }
+            w.text = String(res?.text || "").trim();
+            // Free the audio ONLY once it has produced text. Nulling it regardless made a
+            // single empty decode permanent: the record kept no text and no blob, every
+            // later call skipped it, `transcribeSessionAudio` returned "", and the
+            // consumer fell back to the per-segment transcript for the rest of the
+            // session — with the recording it needed already discarded. A window that
+            // came back empty is exactly the one worth keeping the audio for.
+            if (w.text) { w.blob = null; w.state = "done"; parts.push(w.text); }
+            else {
+                w.state = "retryable";
+                void this._diagnoseEmptyWindow(w, res, "re-transcribed to nothing");
+            }
+        }
+        if (!parts.length && errors.length) throw errors[0];
+        // Un-windowed captures (windowMs 0, or an archive with no window consumer)
+        // still live as retained blobs.
+        const audio = this.getSessionAudio();
+        for (const blob of (audio?.blobs || [])) {
+            const res = await this.transcribeAudio(blob, opts);
+            const text = String(res?.text || "").trim();
+            if (text) parts.push(text);
+        }
+        return parts.join(" ");
+    }
+
+    /**
+     * Queue one sealed archive window for background transcription.
+     *
+     * Deliberately NOT bound to the dictation session's abort controller: a window
+     * sealed moments before the pathologist stops is exactly the audio the review
+     * transcript needs, and aborting it on stop would throw away the last minute and a
+     * half of the case. It is bounded instead by the driver timeout and by being one
+     * at a time.
+     * @private
+     */
+    private _enqueueWindow(
+        w: { blob: Blob; index: number; fromSegment: number; toSegment: number; final: boolean },
+        ctx: { language?: () => string | undefined; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; session: number; lazy?: boolean },
+    ): void {
+        // Sealed after the recording it belongs to was cleared: the consumer has already
+        // discarded that dictation, and its audio must not be uploaded now.
+        if (ctx.session !== this._windowSession) return;
+        const record: WindowRecord = {
+            index: w.index, text: "", fromSegment: w.fromSegment, toSegment: w.toSegment, final: w.final,
+            blob: w.blob as Blob | null, state: "pending", session: ctx.session,
+        };
+        this._windows.push(record);
+        // Lazy: banked, not decoded. `transcribeSessionAudio` picks it up by `!text && blob`
+        // if the consumer ever asks for the recording; until then nothing leaves the browser.
+        if (ctx.lazy) return;
+        if (!this._windowAbort) this._windowAbort = new AbortController();
+        const signal = this._windowAbort.signal;
+        const run = async () => {
+            if (record.session !== this._windowSession || !record.blob || signal.aborted) {
+                record.state = record.blob ? "retryable" : "failed";
+                return;
+            }
+            let res: TranscriptionResult | null = null;
+            try {
+                // Same rolling-context trick as segments, one level up: the tail of the
+                // PREVIOUS windows' transcript orients the model at this one's opening.
+                // Only EARLIER windows of THIS dictation — never a later one, never
+                // another case's text as bias for this one's audio.
+                const prior = this._windows
+                    .filter((x) => x !== record && x.session === record.session && x.index < record.index && x.text)
+                    .map((x) => x.text)
+                    .join(" ");
+                const {prompt, context} = this._composePrompt(ctx.glossary, prior, ctx.contextChars);
+                this.raiseEvent("window-transcription-started", {index: record.index, bytes: record.blob.size});
+                res = await this._transcribeBlob(record.blob, {
+                    // Read at decode time: a lazy window decodes at review, when the pin is final.
+                    language: ctx.language?.(),
+                    prompt,
+                    context,
+                    signal,
+                    // A tiny-model window would be worse than the segments it is meant
+                    // to replace, and nothing in the UI would say so.
+                    allowFallback: false,
+                    timeoutMs: WINDOW_TIMEOUT_MS,
+                    channel: "window",
+                });
+                record.text = String(res?.text || "").trim();
+                if (res?.driverId) record.driverId = res.driverId;
+                // An empty result throws nothing, so this was previously indistinguishable
+                // from "not decoded yet" — the state that then quietly outlived the
+                // recording. A window is ~90 s of speech; coming back with none of it is
+                // the loudest thing that can happen to a dictation.
+                if (!record.text) {
+                    record.state = "retryable";
+                    void this._diagnoseEmptyWindow(record, res, "transcribed to nothing");
+                } else {
+                    record.state = "done";
+                }
+            } catch (e) {
+                // Keep the blob so transcribeSessionAudio can retry it at review time.
+                record.state = "retryable";
+                if (!signal.aborted) APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, `window ${record.index} transcription failed; will retry at review`);
+                return;
+            } finally {
+                if (record.text) record.blob = null;   // decoded — free the audio
+            }
+            if (record.text && ctx.onWindow && record.session === this._windowSession) {
+                try {
+                    ctx.onWindow({index: record.index, text: record.text, fromSegment: record.fromSegment, toSegment: record.toSegment, final: record.final});
+                } catch (_e) { /* consumer error is theirs */ }
+            }
+        };
+        this._windowChain = (this._windowChain || Promise.resolve()).then(run, run);
+    }
+
+    /**
+     * Say WHY a window came back empty, with the one measurement that decides whose
+     * fault it is: whether the browser itself can decode the blob. A blob that decodes
+     * to its full length locally but produced nothing upstream is the backend's problem
+     * (raise it with the provider); one that fails to decode here is the capture's.
+     * `reportedSec` (the backend's measured duration) and `noSpeechProb` (the model's
+     * own silence verdict, when reported) sit beside it. Diagnostic only — never throws.
+     */
+    private async _diagnoseEmptyWindow(record: WindowRecord, res: TranscriptionResult | null, what: string): Promise<void> {
+        const blob = record.blob;
+        const local = blob ? await this._probeLocalDecode(blob) : null;
+        APPLICATION_CONTEXT.log("module.speech-to-text").warn({
+            window: record.index,
+            bytes: blob?.size ?? 0,
+            mime: blob?.type || "",
+            reportedSec: res?.durationInSeconds ?? null,
+            localDecodeSec: local?.seconds ?? null,
+            localDecodeError: local?.error ?? null,
+            noSpeechProb: res?.noSpeechProb ?? null,
+            avgLogprob: res?.avgLogprob ?? null,
+            filtered: res?.filtered ?? null,
+            driverId: res?.driverId ?? null,
+            note: "keeping its audio to retry at review",
+        }, `window ${record.index} ${what}`);
+        this.raiseEvent("window-empty", {
+            index: record.index, bytes: blob?.size ?? 0, reportedSec: res?.durationInSeconds ?? null,
+            localDecodeSec: local?.seconds ?? null, localDecodeError: local?.error ?? null,
+            noSpeechProb: res?.noSpeechProb ?? null, filtered: res?.filtered ?? null,
+        });
+    }
+
+    /** Decode a blob with Web Audio, bounded; `{seconds}` on success, `{error}` otherwise. */
+    private async _probeLocalDecode(blob: Blob): Promise<{ seconds?: number; error?: string } | null> {
+        const Ctx = (window as any).OfflineAudioContext || (window as any).AudioContext;
+        if (typeof Ctx !== "function") return null;
+        let ctx: any = null;
+        try {
+            const buf = await blob.arrayBuffer();
+            ctx = (window as any).OfflineAudioContext ? new Ctx(1, 16000, 16000) : new Ctx();
+            const decoded = await Promise.race([
+                ctx.decodeAudioData(buf),
+                new Promise((_r, reject) => setTimeout(() => reject(new Error("local decode timed out")), LOCAL_DECODE_PROBE_MS)),
+            ]);
+            return {seconds: Math.round(((decoded as AudioBuffer).duration || 0) * 10) / 10};
+        } catch (e) {
+            return {error: String((e as any)?.message || e)};
+        } finally {
+            try { await ctx?.close?.(); } catch (_e) { /* offline contexts have no close */ }
+        }
+    }
+
+    /**
+     * The audio of every window that produced no text and still holds its recording —
+     * for a developer to pull out of the page and decode elsewhere when the diagnostics
+     * above are not enough. Same lifetime as the windows; cleared with them.
+     */
+    getFailedWindowBlobs(): Array<{ index: number; blob: Blob; state: WindowState }> {
+        return this._windows
+            .filter((w) => w.session === this._windowSession && !w.text && w.blob)
+            .map((w) => ({index: w.index, blob: w.blob!, state: w.state}));
+    }
+
+    /**
+     * Download every retained failing window as `window-<index>.webm` — the console one-liner
+     * that got the decisive specimen out of the page, as a method. Returns how many were
+     * offered; 0 when nothing failed (or the recording was already cleared).
+     */
+    exportFailedWindows(): number {
+        const list = this.getFailedWindowBlobs();
+        for (const w of list) {
+            try {
+                const url = URL.createObjectURL(w.blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `window-${w.index}.${w.blob.type.includes("ogg") ? "ogg" : w.blob.type.includes("wav") ? "wav" : "webm"}`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            } catch (e) { APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "window export failed"); }
+        }
+        return list.length;
+    }
+
+    /**
+     * Wait until the session's recorded audio EXISTS and has been decoded.
+     *
+     * Two things happen after dictation stops that a synchronous read cannot see: the
+     * archive's final blob is produced in the recorder's `onstop` (a browser event), and
+     * the window it becomes is transcribed in the background. Between them,
+     * `getSessionAudio()` is null and `getSessionWindows()` is empty — a state
+     * indistinguishable from "nothing was recorded".
+     *
+     * That is not a theoretical race. For a dictation shorter than one window the
+     * stop-sealed window is the ONLY one, so a consumer asking immediately after stop
+     * always got "no audio" and silently fell back to the per-segment text — which is the
+     * text the whole-audio pass exists to replace.
+     *
+     * `signal` cancels the WAIT, not the work: the background decode keeps running, so a
+     * consumer that gave up and asks again a moment later is served immediately. Never
+     * rejects — an abort resolves, and the caller re-reads whatever state it finds.
+     */
+    async whenSessionAudioSettled(opts: { signal?: AbortSignal } = {}): Promise<void> {
+        const {signal} = opts;
+        if (signal?.aborted) return;
+        const raceAbort = <T>(p: Promise<T>): Promise<unknown> => {
+            if (!signal) return p;
+            return Promise.race([p, new Promise<void>((resolve) => {
+                signal.addEventListener("abort", () => resolve(), {once: true});
+            })]);
+        };
+        try {
+            await raceAbort(this._capture.whenArchiveSettled());
+            if (signal?.aborted) return;
+            // Awaited AFTER the seal: the final window is only enqueued by the seal, so
+            // awaiting the chain first would return before that window even exists.
+            if (this._windowChain) await raceAbort(this._windowChain.catch(() => {}));
+        } catch (_e) { /* a settle point must never reject */ }
+    }
+
+    /**
+     * How many archive windows exist, decoded or not.
+     *
+     * `getSessionWindows()` deliberately reports only DECODED ones — its callers want
+     * text. A caller asking "was anything recorded?" needs this instead; conflating the
+     * two is what made a pending decode look like an empty microphone.
+     */
+    get sessionWindowCount(): number {
+        return this._currentWindows().length;
+    }
+
+    /**
+     * Windows not decoded yet — text not in, a decode in flight or queued. In eager mode
+     * this reaches 0 once {@link whenSessionAudioSettled} resolves; in lazy mode it stays
+     * above 0 until {@link transcribeSessionAudio} decodes them (nothing arrives on its
+     * own, and that is the point).
+     */
+    get pendingWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "pending").length;
+    }
+
+    /**
+     * Windows whose decode finished WITHOUT text but whose audio is still held: a
+     * retry (the review's `transcribeSessionAudio`) can still recover the speech.
+     * Kept apart from `pending` — these are not about to arrive on their own.
+     */
+    get retryableWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "retryable").length;
+    }
+
+    /**
+     * Windows that produced no text and no longer hold their audio: nothing more can be
+     * done with them, and the speech they covered is gone.
+     *
+     * Counted apart from `pending` because conflating the two reports a dead window as
+     * one that is about to arrive. A caller then waits for something that will never
+     * land, and — worse — reads "still decoding" as reassurance while degrading.
+     */
+    get failedWindowCount(): number {
+        return this._currentWindows().filter((w) => w.state === "failed" || (!w.text && !w.blob)).length;
+    }
+
+    /** The windows of the CURRENT dictation only — a cleared dictation's are never served. */
+    private _currentWindows(): WindowRecord[] {
+        return this._windows.filter((w) => w.session === this._windowSession);
+    }
+
+    /** The transcribed windows so far, in seal order. Empty when windowing is off. */
+    getSessionWindows(): TranscribedWindow[] {
+        return this._currentWindows()
+            .filter((w) => w.text)
+            .map(({index, text, fromSegment, toSegment, final}) => ({index, text, fromSegment, toSegment, final}));
+    }
+
+    /**
+     * Drop the retained session recording once a consumer is done with it — and stop
+     * uploading it: a window already queued for its background decode is aborted, so
+     * "delete my recording" means no more of it leaves the browser afterwards.
+     */
+    clearSessionAudio(): void {
+        this._capture.clearArchive();
+        this._windowSession++;
+        // A new dictation may be in another language; the pin starts over with it.
+        this._langPin.reset();
+        for (const w of this._windows) w.blob = null;
+        this._windows = [];
+        try { this._windowAbort?.abort(new DOMException("session audio cleared", "AbortError")); } catch (_e) { /* ignore */ }
+        this._windowAbort = null;
+    }
+
+    /**
+     * Stop any in-progress capture (resolves the pending transcription). For a
+     * continuous session this also aborts in-flight transcriptions so the session
+     * finalizes promptly even if a driver is stuck (e.g. a hung local model load).
+     * One-shot dictation is unaffected — its capture stop means "finish and
+     * transcribe", so the transcript is still produced.
+     */
+    stop(): void {
+        try { this._continuousAbort?.abort(); } catch (_e) { /* ignore */ }
+        this._capture.stop();
+    }
+
+    /**
+     * Announce a non-fatal capture problem (the Web Audio device/renderer failing) so
+     * the UI can explain to the user why voice went dead. Recording still runs — the
+     * mic just lost VAD and metering — so this is a warning, never an error that aborts
+     * the turn. Consumers subscribe via `addHandler('capture-warning', e => …)`.
+     */
+    private _reportCaptureWarning(error: CaptureError): void {
+        APPLICATION_CONTEXT.log("module.speech-to-text").warn({code: error.code, message: error.message || ""}, "capture warning");
+        this.raiseEvent("capture-warning", {error, code: error.code});
+    }
+
+    /**
+     * Surface driver model-load progress so the UI can show "Loading local model…"
+     * instead of an indistinguishable-from-frozen spinner. `progress` is 0..1;
+     * `done` marks the terminal (ready or failed) tick. Consumers subscribe via
+     * `addHandler('model-loading', e => …)`.
+     */
+    private _onModelProgress(driverId: string, p: {
+        status?: string; file?: string; progress?: number;
+        loaded?: number; total?: number; done?: boolean;
+    }): void {
+        this.raiseEvent("model-loading", {
+            driverId,
+            status: p?.status,
+            file: p?.file,
+            progress: typeof p?.progress === "number" ? p.progress : undefined,
+            loaded: p?.loaded,
+            total: p?.total,
+            done: !!p?.done,
+        });
+    }
+
+    /** Reject `p` after `ms`; a stuck driver can never stall the ordered drain. */
+    private _withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+        if (!ms || ms <= 0) return p;
+        return new Promise<T>((resolve, reject) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (!settled) { settled = true; reject(new CaptureError("capture-failed", `transcription timed out after ${ms}ms`)); }
+            }, ms);
+            p.then(
+                (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } },
+                (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } },
+            );
+        });
+    }
+
+    /** A signal that aborts when EITHER input aborts (used to merge the session's own abort with a consumer signal). */
+    private _mergeSignal(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+        if (!a) return b;
+        if (!b) return a;
+        const anyFn = (AbortSignal as any).any;
+        if (typeof anyFn === "function") { try { return anyFn([a, b]); } catch (_e) { /* fall through */ } }
+        const ac = new AbortController();
+        const link = (s: AbortSignal) => {
+            if (s.aborted) { ac.abort((s as any).reason); return; }
+            s.addEventListener("abort", () => ac.abort((s as any).reason), {once: true});
+        };
+        link(a); link(b);
+        return ac.signal;
+    }
+
+    /**
+     * Why voice capture is unavailable in this environment, or null if it should work.
+     * A distinct `insecure-context` reason lets the caller tell "serve over https" apart
+     * from "your browser lacks the API" — the two are otherwise indistinguishable.
+     */
+    captureSupportIssue(): CaptureErrorCode | null {
+        return AudioCapture.supportIssue();
+    }
+
+    // ---- UI factory (consumers can't ES-import across boundaries) ----
+
+    /**
+     * Build a reusable mic button bound to this module. Mount it anywhere:
+     * `singletonModule('speech-to-text').createMicButton({onResult}).attachTo(el)`.
+     */
+    createMicButton(options: MicButtonOptions = {}): MicButton {
+        return new MicButton({...options, module: this});
+    }
+
+    // ---- Live captions (video-subtitle-style overlay over the viewer) ----
+
+    /**
+     * Turn the live-caption overlay on or off. Ref-counted, so multiple consumers
+     * (e.g. a report session + something else) can independently request it; the
+     * band shows while at least one wants it. The overlay reflects THIS module's
+     * own transcription events, so it works for any `startContinuousDictation`
+     * session regardless of who owns it — a consumer only has to toggle this.
+     *
+     * No word-level interim exists (drivers transcribe whole segments), so the
+     * band updates once per completed segment and shows "Listening…" in between.
+     */
+    setCaptionsEnabled(enabled: boolean): void {
+        if (enabled) {
+            this._captionRefs++;
+            if (this._captionRefs === 1) this._captionsOn();
+        } else {
+            this._captionRefs = Math.max(0, this._captionRefs - 1);
+            if (this._captionRefs === 0) this._captionsOff();
+        }
+    }
+
+    private _captionOverlay(): CaptionOverlay | null {
+        if (this._captions) return this._captions;
+        try {
+            this._captions = new CaptionOverlay();
+            // Mount into the viewer bounding box; absent (headless) => no captions.
+            if (document.getElementById(this._captions.mountId)) {
+                this._captions.attachTo(this._captions.mountId);
+            }
+        } catch (e) {
+            APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "caption overlay unavailable");
+            this._captions = null;
+        }
+        return this._captions;
+    }
+
+    private _captionsOn(): void {
+        const overlay = this._captionOverlay();
+        if (!overlay) return;
+        this._captionRecent = [];
+        overlay.clear().setHint(this.t("listening"));
+
+        const on = (name: string, fn: (e: any) => void) => {
+            try { this.addHandler(name, fn); this._captionHandlers.push([name, fn]); }
+            catch (_e) { /* events best-effort */ }
+        };
+        on("recording-started", () => {
+            this._captionRecording = true;
+            this._clearCaptionTimers();
+            overlay.setHint(this.t("listening")).setVisible(true);
+        });
+        on("transcription-started", () => {
+            if (!this._captionRecent.length) overlay.setHint(this.t("processing"));
+        });
+        on("transcription", (e: any) => this._onCaptionSegment(e));
+        on("recording-stopped", () => {
+            this._captionRecording = false;
+            // Keep the last words up briefly, then fade the band out.
+            if (this._captionHideTimer) clearTimeout(this._captionHideTimer);
+            this._captionHideTimer = setTimeout(() => overlay.setVisible(false),
+                SpeechToTextModule.CAPTION_LINGER_MS);
+        });
+        const onErr = (e: any) => {
+            overlay.setVisible(true).setText(this.t("transcriptionFailed"), {dim: true});
+        };
+        on("transcription-error", onErr);
+        on("driver-error", (e: any) => { if (e?.permanent) onErr(e); });
+
+        // Register with the top-bar "hide UI" button so it hides captions too.
+        try {
+            const chrome = (globalThis as any).USER_INTERFACE?.AppBar?.Chrome;
+            chrome?.register?.("speech-captions", {
+                is: () => overlay.isShown(),
+                on: () => overlay.setChromeHidden(false),
+                off: () => overlay.setChromeHidden(true),
+            });
+        } catch (_e) { /* hide-UI enrolment is best-effort */ }
+    }
+
+    private _captionsOff(): void {
+        for (const [name, fn] of this._captionHandlers) {
+            try { this.removeHandler(name, fn); } catch (_e) { /* ignore */ }
+        }
+        this._captionHandlers = [];
+        this._clearCaptionTimers();
+        this._captionRecording = false;
+        this._captionRecent = [];
+        try {
+            (globalThis as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.("speech-captions");
+        } catch (_e) { /* ignore */ }
+        this._captions?.clear().setVisible(false);
+    }
+
+    /** Fold one finished, post-filter segment into the caption band. */
+    private _onCaptionSegment(e: any): void {
+        const overlay = this._captions;
+        if (!overlay) return;
+        const result = e?.result;
+        const text = String(result?.text || "").trim();
+        if (!text || result?.noSpeech) return;   // silence/hallucination filtered upstream
+
+        this._captionRecent.push(text);
+        while (this._captionRecent.length > SpeechToTextModule.CAPTION_LINES) this._captionRecent.shift();
+        const dim = typeof result?.confidence === "number" && result.confidence < 0.5;
+        overlay.setVisible(true).setText(this._captionRecent.join("\n"), {dim});
+
+        // Subtitle fade: drop the text after a quiet spell (keep the band + hint
+        // while still recording, otherwise let recording-stopped hide it).
+        if (this._captionIdleTimer) clearTimeout(this._captionIdleTimer);
+        this._captionIdleTimer = setTimeout(() => {
+            this._captionRecent = [];
+            overlay.clear();
+            if (this._captionRecording) overlay.setHint(this.t("listening"));
+        }, SpeechToTextModule.CAPTION_IDLE_MS);
+    }
+
+    private _clearCaptionTimers(): void {
+        if (this._captionIdleTimer) { clearTimeout(this._captionIdleTimer); this._captionIdleTimer = null; }
+        if (this._captionHideTimer) { clearTimeout(this._captionHideTimer); this._captionHideTimer = null; }
+    }
+
+    /** Resolve a localized string from this module's namespace. */
+    t(key: string, options?: any): string {
+        return $.t(key, {ns: this.id, ...(options || {})});
+    }
+
+    /** Await first-time locale load (mainly for UI that renders labels immediately). */
+    whenLocaleReady(): Promise<void> {
+        return this._localeReady;
+    }
+}
+
+addModule("speech-to-text", SpeechToTextModule as any, true);
+
+export {SpeechToTextModule};

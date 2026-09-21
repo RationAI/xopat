@@ -1,10 +1,9 @@
 import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 
-const { div, button, input, span, h3, label } = globalThis.van.tags;
+const { div, button, span, h3 } = globalThis.van.tags;
 
 function iconButton(icon, title, onClick, active = false) {
-    const isPh = String(icon ?? '').trim().startsWith('ph-');
-    const iconCls = isPh ? `ph-light ${icon}` : `fa-auto ${icon}`;
+    const iconCls = `ph-light ${icon ?? ''}`.trim();
     return button({
         type: 'button',
         class: `btn btn-ghost btn-sm btn-square ${active ? 'btn-active' : ''}`.trim(),
@@ -213,43 +212,18 @@ export const viewerMenuMethods = {
             this._bindViewerFabricEvents(viewerId);
 
             state.enableButton = iconButton('ph-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
-            // Stable per-viewer ids so EnjoyHint tutorials can target the
+            // Stable per-viewer ids so tutorials can target the
             // button via `[id$="-annotations-enable-toggle"]` (matches the
             // active viewer's instance in multi-viewer sessions).
             state.enableButton.id = `${viewerId}-annotations-enable-toggle`;
-            state.outlineButton = input({
-                type: 'checkbox',
-                class: 'checkbox checkbox-sm checkbox-primary',
-                checked: !!this.context.getAnnotationCommonVisualProperty('modeOutline'),
-                onchange: (e) => this.setDrawOutline(e.currentTarget.checked)
-            });
+            // The single cog opens all annotation settings (the shared
+            // fullscreen menu). The shared visual properties (outline / border /
+            // opacity) and measurement labels now live there under "Display" —
+            // they are global, so a per-viewer inline panel was the wrong home.
             state.settingsButton = iconButton('ph-gear', this.t('annotations.viewerMenu.settings'), () => {
-                document.getElementById(`${viewerId}-annotations-settings-panel`)?.classList.toggle('hidden');
-            });
-            state.settingsButton.id = `${viewerId}-annotations-settings`;
-            state.moreButton = iconButton('ph-dots-three-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
                 USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared');
             });
-
-            state.borderInput = input({
-                type: 'range', min: '1', max: '10', step: '1',
-                class: 'flex-1 min-w-0',
-                value: String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth')),
-                oninput: (e) => {
-                    if (this.context.disabledInteraction) return;
-                    this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat(e.currentTarget.value));
-                }
-            });
-
-            state.opacityInput = input({
-                type: 'range', min: '0', max: '1', step: '0.1',
-                class: 'flex-1 min-w-0',
-                value: String(this.context.getAnnotationCommonVisualProperty('opacity')),
-                oninput: (e) => {
-                    if (this.context.disabledInteraction) return;
-                    this.context.setAnnotationCommonVisualProperty('opacity', Number.parseFloat(e.currentTarget.value));
-                }
-            });
+            state.settingsButton.id = `${viewerId}-annotations-settings`;
 
             // Classes: a compact, height-limited grid of preset chips (icon +
             // name) that wraps so several fit per row. Always visible — no tab
@@ -267,39 +241,20 @@ export const viewerMenuMethods = {
 
             state.annotationList = div({ class: 'flex-1 min-h-0 mt-2' }, state.boardPanel.create());
 
-            // Settings popup: toggle options grouped on top, the shared visual
-            // sliders below a divider. Slider value labels are intentionally
-            // omitted — the slider position conveys the value.
-            const sliderRow = (labelKey, inputEl) => div({ class: 'flex items-center gap-3' },
-                span({ class: 'text-[10px] uppercase font-bold opacity-50 w-14 shrink-0' }, this.t(labelKey)),
-                inputEl
-            );
-            state.settingsPanel = div({
-                    id: `${viewerId}-annotations-settings-panel`,
-                    class: 'hidden mb-4 px-3 pt-2 pb-3 border-y border-base-300 bg-base-100/40 flex flex-col gap-3'
-                },
-                div({ class: 'flex flex-col gap-1.5' },
-                    label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
-                        state.outlineButton,
-                        span(this.t('annotations.viewerMenu.outlineOnly'))
-                    )
-                ),
-                div({ class: 'flex flex-col gap-2.5 pt-2 border-t border-base-300/60' },
-                    sliderRow('annotations.viewerMenu.border', state.borderInput),
-                    sliderRow('annotations.viewerMenu.opacity', state.opacityInput)
-                )
-            );
+            // Workspace selector (virtual/overlaid only). Hidden unless this
+            // viewer hosts >1 region workspace; switching one active workspace
+            // shows only its annotations and constrains new ones to its area.
+            state.workspaceSelector = div({ id: `${viewerId}-annotations-workspaces`, class: 'px-2 mt-1 hidden' });
 
             const body = div({ class: 'flex flex-col w-full h-full' },
                 div({ class: 'flex flex-row items-center justify-between w-full mb-2 px-1' },
                     state.enableButton,
                     h3({ class: 'text-lg font-bold' }, this.t('annotations.viewerMenu.title')),
                     div({ class: 'flex items-center gap-1' },
-                        state.settingsButton,
-                        state.moreButton
+                        state.settingsButton
                     )
                 ),
-                state.settingsPanel,
+                state.workspaceSelector,
                 state.presetClasses,
                 state.annotationList
             );
@@ -316,13 +271,14 @@ export const viewerMenuMethods = {
                 // unconditionally so its rows render on first open.
                 state.boardPanel.mount();
                 this._refreshAnnotationFilterBadges(viewerId);
+                this._refreshWorkspaceSelector(viewerId);
                 this._updateViewerControls(viewerId);
             });
 
             return {
                 id: this.id,
                 title: this.t('annotations.viewerMenu.title'),
-                icon: 'ph-question',
+                icon: 'ph-pencil-simple',
                 body
             };
         });
@@ -451,15 +407,6 @@ export const viewerMenuMethods = {
             };
         }
 
-        let measurementsItem = null;
-        if (active && typeof this.showMeasurementsPopover === 'function') {
-            measurementsItem = {
-                title: 'View measurements',
-                icon: 'ph-chart-bar-horizontal',
-                action: () => this.showMeasurementsPopover(active),
-            };
-        }
-
         // Group — "From selection (N)" plus criterion-based grouping that
         // used to live on the board panel's right-click menu. Both paths
         // funnel into layer-based grouping (annotations move into a layer;
@@ -556,7 +503,6 @@ export const viewerMenuMethods = {
             if (groupParent) children.push(groupParent);
             if (zOrderItems) children.push(...zOrderItems);
             if (privateItem) children.push(privateItem);
-            if (measurementsItem) children.push(measurementsItem);
             return [{ title: 'Annotation', icon: 'ph-shapes', children }];
         }
 
@@ -583,7 +529,6 @@ export const viewerMenuMethods = {
             actions.push({ title: 'Modify annotation:' });
             actions.push(privateItem);
         }
-        if (measurementsItem) actions.push(measurementsItem);
         return actions;
     },
 
@@ -687,12 +632,15 @@ export const viewerMenuMethods = {
             });
         };
 
+        const workspaceChanged = () => this._refreshWorkspaceSelector(viewerId);
+
         state._fabricEventBindings = {
             fabric,
             annotationSelectionChanged,
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
+            workspaceChanged,
             contextMenuProviderId
         };
 
@@ -709,8 +657,17 @@ export const viewerMenuMethods = {
         fabric.addHandler('layer-added', sideRefresh);
         fabric.addHandler('layer-removed', sideRefresh);
 
+        fabric.addHandler('workspace-added', workspaceChanged);
+        fabric.addHandler('workspace-removed', workspaceChanged);
+        fabric.addHandler('workspace-changed', workspaceChanged);
+
         // Higher priority than the playground (10) so annotation entries appear first.
         window.CanvasContextMenu?.register(contextMenuProviderId, contextMenuProvider, 20);
+        // Teach the core menu what "selected" means for this viewer. Core owns
+        // no object model — without this it hands providers `[active]` only.
+        window.CanvasContextMenu?.registerSelectionResolver?.(contextMenuProviderId, (viewer) => (
+            viewer?.id === viewerId ? (fabric.getSelectedAnnotations?.() ?? []) : []
+        ));
     },
 
     _unbindViewerFabricEvents(viewerOrId) {
@@ -727,6 +684,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
+            workspaceChanged,
             contextMenuProviderId
         } = bindings;
 
@@ -741,9 +699,51 @@ export const viewerMenuMethods = {
         fabric.removeHandler('layer-added', sideRefresh);
         fabric.removeHandler('layer-removed', sideRefresh);
 
-        if (contextMenuProviderId) window.CanvasContextMenu?.unregister(contextMenuProviderId);
+        if (workspaceChanged) {
+            fabric.removeHandler('workspace-added', workspaceChanged);
+            fabric.removeHandler('workspace-removed', workspaceChanged);
+            fabric.removeHandler('workspace-changed', workspaceChanged);
+        }
+
+        if (contextMenuProviderId) {
+            window.CanvasContextMenu?.unregister(contextMenuProviderId);
+            window.CanvasContextMenu?.unregisterSelectionResolver?.(contextMenuProviderId);
+        }
 
         delete state._fabricEventBindings;
+    },
+
+    _refreshWorkspaceSelector(viewerOrId = undefined) {
+        const state = this._getViewerUI(viewerOrId);
+        if (!state?.workspaceSelector) return;
+        const viewerId = this._resolveViewerId(viewerOrId);
+        const fabric = this.context.getFabric(viewerId);
+        const root = state.workspaceSelector;
+
+        const list = fabric?.listWorkspaces?.() || [];
+        // Hidden for none/sidebyside (≤1 workspace); only overlaid has several.
+        if (list.length <= 1) {
+            root.classList.add('hidden');
+            root.replaceChildren();
+            return;
+        }
+        root.classList.remove('hidden');
+
+        const active = fabric.getActiveWorkspace?.();
+        const buttons = list.map(ws => button({
+            type: 'button',
+            class: `btn btn-xs join-item ${active && active.id === ws.id ? 'btn-active btn-primary' : 'btn-ghost'}`.trim(),
+            title: ws.name,
+            onclick: () => {
+                this.context.setActiveWorkspace(viewerId, ws.id);
+                this._refreshWorkspaceSelector(viewerId);
+            },
+        }, span({ class: 'truncate max-w-[90px]' }, ws.name)));
+
+        root.replaceChildren(
+            div({ class: 'text-[10px] uppercase font-bold opacity-50 mb-1' }, this.t('annotations.workspace.label')),
+            div({ class: 'join flex flex-wrap' }, ...buttons)
+        );
     },
 
     _renderPresetList(viewerOrId = undefined) {
@@ -779,11 +779,10 @@ export const viewerMenuMethods = {
                         return false;
                     }
                 },
-                (() => {
-                    const ico = preset.objectFactory.getIcon();
-                    const isPh = String(ico ?? '').trim().startsWith('ph-');
-                    return span({ class: `shrink-0 ${isPh ? `ph-light ${ico}` : `fa-auto ${ico}`}`, style: `color:${preset.color};` });
-                })(),
+                span({
+                    class: `shrink-0 ph-light ${preset.objectFactory.getIcon() ?? ''}`,
+                    style: `color:${preset.color};`
+                }),
                 span({ class: 'truncate min-w-0 text-left' }, category),
                 isLeft ? span({ class: 'ph-light ph-mouse-left-click shrink-0 text-primary text-sm', title: this.t('annotations.viewerMenu.leftClickPreset') }) : null,
                 isRight ? span({ class: 'ph-light ph-mouse-right-click shrink-0 text-secondary text-sm', title: this.t('annotations.viewerMenu.rightClickPreset') }) : null
@@ -881,15 +880,8 @@ export const viewerMenuMethods = {
             const enabled = !this.context.disabledInteraction;
 
             state.enableButton?.classList.toggle('btn-active', enabled);
-            if (state.outlineButton) state.outlineButton.checked = !!this.context.getAnnotationCommonVisualProperty('modeOutline');
-
-            if (state.borderInput) state.borderInput.value = String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
-            if (state.opacityInput) state.opacityInput.value = String(this.context.getAnnotationCommonVisualProperty('opacity'));
 
             const disableTargets = [
-                state.outlineButton,
-                state.borderInput,
-                state.opacityInput,
                 state.presetClasses,
                 state.annotationList
             ];

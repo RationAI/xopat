@@ -1,11 +1,33 @@
 {
-  "description": "Integration hub for AI chat models",
+  "name": "%meta.name%",
+  "icon": "ph-chats-circle",
+  "description": "%meta.description%",
   "requires": [
-    "oidc-client-ts",
-    "@xopat-npm-module/marked",
-    "sanitize-html"
+    "markdown",
+    "speech-to-text"
   ],
   "defaultPersonalityId": "pathology-assistant",
+  // Operator's preferred provider to auto-select when the user has no remembered choice (null = first
+  // available, or a server provider tagged metadata.role="default-provider").
+  // Accepts a provider REFERENCE, not just an instance id: a managed key
+  // ("<plugin>:<type>:default"), a plugin id ("chat-mixture") or a provider type id ("mixture").
+  // Instance ids are re-minted on every server start, so a reference is the only durable form.
+  // It must name a provider the picker can DISPLAY — a reference to a hidden provider is ignored
+  // here and the next rule applies. See modules/vercel-ai-chat-sdk/README.md.
+  "defaultProviderId": null,
+  // Remember the user's scripting-access consent locally so returning users are not re-greeted.
+  "rememberConsent": true,
+  "consentRememberDays": 30,
+  // Anonymize slide identity before it reaches the upstream LLM (§7 defense-in-depth). The
+  // model only ever sees stable opaque handles ("viewer-1", ...) as viewer contextId/background;
+  // tool-call round-trips (setActiveViewer/getGlobalInfo/viewer.*/annotations*) stay reliable
+  // because the handle is an opaque join key translated back host-side. Deployment (ENV) only —
+  // read via static meta, so an imported session bundle cannot downgrade it. One of:
+  //   "off"     - send the real background id/name (only if the operator asserts they carry no PII)
+  //   "handles" - opaque ids, but keep the real operator display name (imageName)
+  //   "full"    - opaque ids AND names; the friendly name is restored only when rendering to the
+  //               local user. Default.
+  "anonymizeViewerContext": "full",
   "personalities": [
     {
       "id": "pathology-assistant",
@@ -16,5 +38,30 @@
   "maxScriptSteps": 12,
   "maxScriptStepExtensions": 2,
   "scriptStepExtensionSize": 4,
-  "minSuccessfulProgressStepsBeforeExtension": 4
+  "minSuccessfulProgressStepsBeforeExtension": 4,
+  "defaultGrantedNamespaces": [
+    // Operator-trusted scripting namespaces granted to the chat agent without a
+    // per-user consent dialog, e.g. ["pathology"]. Deployment (ENV) config only —
+    // read via static meta, so an imported session bundle cannot inject grants.
+  ],
+  "voice": {
+    // See ChatVoiceControllerOptions (and the config table in
+    // modules/speech-to-text/README.md). `language`: "auto" (default — the
+    // speech-to-text module detects the dictation's language and pins the session
+    // once two segments agree; never the UI locale) or a BCP-47 code to pin it.
+    // `prompt`: deployment vocabulary appended to the built-in pathology glossary.
+    // `promptBudget` (default 1000): size of the composed biasing prompt (glossary
+    // + `prompt` + the terms a report plugin supplies); when short, the generic
+    // glossary is what gets trimmed, never the report's terms. Whether ANY prompt
+    // is sent is decided elsewhere: `speech-to-text.promptMaxChars` (client, default
+    // 0 = off) and the provider's `transcriptionPromptMaxChars` (server, default 0).
+    // Notable: `busyHoldMs` (default 4000)
+    // is how long the assistant may compute before hands-free speech is held as
+    // an editable composer draft instead of being auto-submitted; 0 disables.
+    // Also `staleSessionMs` (default 8000) — how long capture may go without a
+    // heartbeat before it counts as stalled — and `staleRestartAttempts`
+    // (default 2), how many times the microphone is re-opened in place before
+    // the session is declared lost. Raise the former only if a deployment
+    // genuinely needs it; a late watchdog tick is already discarded as evidence.
+  }
 }

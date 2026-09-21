@@ -143,7 +143,9 @@ Button.SIZE = {
     LARGE: function () { this.setClass("size", "btn-lg"); },
     NORMAL: function () { this.setClass("size", ""); },
     SMALL: function () { this.setClass("size", "btn-sm"); },
-    TINY: function () { this.setClass("size", "btn-xs"); }
+    TINY: function () { this.setClass("size", "btn-xs"); },
+    // btn-xxs is a custom tier defined in src/assets/custom.css (DaisyUI stops at btn-xs)
+    XTINY: function () { this.setClass("size", "btn-xxs"); }
 };
 
 Button.OUTLINE = {

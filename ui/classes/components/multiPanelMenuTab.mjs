@@ -11,6 +11,15 @@ const { span, div } = van.tags
 /**
  * @class MultiPanelMenuTab
  * @description A internal tab component for the multiPanelMenu component
+ *
+ * **Chrome contract.** The tab supplies exactly three things: the panel
+ * background (`bg-base-200`, uniform for every tab — there is deliberately no
+ * per-tab override), the leading corner radius, and the margin *between*
+ * tabs. It contributes **no padding and no inner margin**, so the background
+ * hugs the body exactly. Every body owns its own padding; follow the rhythm
+ * the annotations panel establishes (`px-1` on a header row, `px-2 mt-1` on
+ * content sections) so all panels line up.
+ *
  * @extends MenuTab
  * @example
  * this.menu = new UI.MultiPanelMenu({
@@ -23,6 +32,9 @@ class MultiPanelMenuTab extends MenuTab {
 
     /**
      * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {boolean} [item.hugContent=false] shrink the panel to its content and
+     *   keep it flush with the tab strip, instead of stretching to the menu column
+     *   width — for panels whose content is narrower than the column
      * @param {*} parent parent menu component
      **/
     constructor(item, parent) {
@@ -37,6 +49,9 @@ class MultiPanelMenuTab extends MenuTab {
         this.mainDiv;
         this.id = item.id;
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        // Pinned tabs stay visible through the AppBar.Chrome hide-UI sweep
+        // (that is the whole point of the pin — see main.bar.pinFullscreen).
+        this.visibilityManager.setPinnedProvider?.(() => !!this.parent._pinnedTabs[this.id]);
     }
 
     _createTab(item) {
@@ -47,15 +62,16 @@ class MultiPanelMenuTab extends MenuTab {
         this.iconName = inIcon.options.name;
         this.title = inText;
 
-        // Store visual properties for the wrapper
-        this._bgClass = item.background || "bg-base-200";
+        // Store visual properties for the wrapper. The background is fixed, not
+        // an item option: one opaque surface for every panel in the column.
+        this._bgClass = "bg-base-200";
         this._radiusClass = "rounded-tl-md rounded-bl-md";
 
         const pinIcon = new PhIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "ph-push-pin" });
         this.pin = new Button({
             id: this.parent.id + "-b-pin-" + item.id,
             type: Button.TYPE.NONE,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('main.bar.pinFullscreen') },
             onClick: (event) => {
@@ -69,7 +85,10 @@ class MultiPanelMenuTab extends MenuTab {
                     pinIcon.changeIcon("ph-push-pin");
                 }
 
-                if (USER_INTERFACE.AppBar.isFullScreen()) {
+                // Un-pinning while the chrome is hidden means the tab loses
+                // its exemption — hide it like the rest of the chrome. The
+                // Chrome snapshot (taken at hide-time) restores it on exit.
+                if (USER_INTERFACE.AppBar.isFullScreen() && !this.parent._pinnedTabs[this.id]) {
                     this.hide();
                 }
 
@@ -81,7 +100,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.closeButton = new Button({
             id: this.parent.id + "-b-close" + item.id,
             type: Button.TYPE.NONE,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('main.bar.close') },
             onClick: (event) => {
@@ -98,7 +117,7 @@ class MultiPanelMenuTab extends MenuTab {
             const reorderButton = (direction, icon, titleKey) => new Button({
                 id: this.parent.id + "-b-move-" + direction + "-" + item.id,
                 type: Button.TYPE.NONE,
-                size: Button.SIZE.TINY,
+                size: Button.SIZE.XTINY,
                 orientation: Button.ORIENTATION.HORIZONTAL,
                 extraProperties: { title: $.t(titleKey) },
                 onClick: (event) => {
@@ -118,7 +137,7 @@ class MultiPanelMenuTab extends MenuTab {
         // overlapped by the control buttons regardless of panel height.
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
-            size: Button.SIZE.TINY,
+            size: Button.SIZE.XTINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             extraClasses: { strip: "menu-strip-header" },
             extraProperties: {
@@ -133,12 +152,12 @@ class MultiPanelMenuTab extends MenuTab {
             },
         }, inIcon, span(inText));
 
-        // Hover flyout: pin + reorder arrows form a second column beside the
-        // always-visible close button. It is absolutely positioned, so
-        // revealing it on hover never reflows the strip (no layout jump), and
-        // it is a descendant of the hover host so moving the cursor from the
-        // strip onto it keeps it open.
-        const flyoutChildren = [this.pin];
+        // Hover flyout: close + pin + reorder arrows form a control column
+        // beside the strip. It is absolutely positioned, so revealing it on
+        // hover never reflows the strip (no layout jump), and it is a
+        // descendant of the hover host so moving the cursor from the strip
+        // onto it keeps it open.
+        const flyoutChildren = [this.closeButton, this.pin];
         if (this.moveUpButton) {
             flyoutChildren.push(this.moveUpButton, this.moveDownButton);
         }
@@ -149,22 +168,24 @@ class MultiPanelMenuTab extends MenuTab {
 
         // The strip is a plain div (not a button) so the control buttons are
         // siblings of the header button rather than invalid nested <button>s,
-        // and it is the hover host that reveals the flyout. The close button
-        // stays visible at the top; the header fills the middle.
+        // and it is the hover host that reveals the flyout. At rest only the
+        // header shows; every control lives in the hover flyout.
         this.strip = new Div(
             {
                 id: this.parent.id + "-strip-" + item.id,
                 extraClasses: { reveal: "menu-strip-hover-host", base: "menu-strip flex flex-col items-center" },
             },
-            this.closeButton, this.openButton, flyout
+            this.openButton, flyout
         );
 
-        // Define content div options without background/radius (now moved to mainDiv)
+        // Define content div options without background/radius (now moved to mainDiv).
+        // No margin here either: this node sits *inside* the panel background, so
+        // any inset shows up as a strip of bare background above and below the
+        // body. Inter-tab spacing lives on mainDiv, outside the background.
         const openDivOptions = {
             id: this.parent.id + "-opendiv-" + item.id,
             // Removed background and radius from here to apply to wrapper
             extraClasses: {display: "display-none", flex: "flex flex-row flex-1 min-w-0"},
-            extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
         };
 
         // Content fills the panel width minus the vertical tab strip;
@@ -177,9 +198,16 @@ class MultiPanelMenuTab extends MenuTab {
         }
 
         this.fullId = this.parent.id + "-c-" + item.id;
+        this._hugContent = !!item.hugContent;
         this.mainDiv = new Div({
             id: this.fullId,
-            extraClasses: {display: "", flex: "flex flex-row", position: "relative"},
+            extraClasses: {
+                display: "", flex: "flex flex-row", position: "relative",
+                // Cross-axis end of the menu's flex column = the tab-strip edge,
+                // and an end-aligned item sizes to its content instead of
+                // stretching. That is the whole hug behaviour, no width math.
+                align: this._hugContent ? "self-end" : ""
+            },
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;", "data-tab-id": item.id }
         }, this.openDiv, this.strip);
 
@@ -188,6 +216,18 @@ class MultiPanelMenuTab extends MenuTab {
             pinIcon.changeIcon("ph-push-pin-slash");
         }
         return [undefined, this.mainDiv];
+    }
+
+    /**
+     * Toggle content-hugging for this panel at runtime: a hugging panel shrinks
+     * to its content and stays flush with the tab strip instead of stretching to
+     * the menu column width — for panels whose content is intentionally narrower
+     * than the column and may resize while open (the navigator).
+     * @param {boolean} enabled
+     */
+    setHugContent(enabled) {
+        this._hugContent = !!enabled;
+        this.mainDiv?.setClass?.("align", this._hugContent ? "self-end" : "");
     }
 
     setTitle(title) {
@@ -273,6 +313,18 @@ class MultiPanelMenuTab extends MenuTab {
         this.openButton.iconRotate();
     }
 
+    /**
+     * Compact strip mode: icon-only at rest, sideways title revealed on strip
+     * hover (CSS-driven via `.menu-strip-compact`). Callers should pair this
+     * with the TITLEICON design so both icon and title nodes exist for the
+     * hover reveal.
+     * @param {boolean} enabled
+     */
+    setCompact(enabled) {
+        this._compact = !!enabled;
+        this.strip.setClass("compact", this._compact ? "menu-strip-compact" : "");
+    }
+
     togglePinned(){
         if (this.parent._pinnedTabs[this.id]){
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-pinned`, false);
@@ -284,7 +336,10 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     hide(){
-        this.mainDiv.setClass("display", "hidden");
+        // Route through the VisibilityManager so `this.hidden` stays in sync
+        // and a later on() (e.g. Chrome.show() restoring its snapshot)
+        // actually re-shows the tab. Non-persisting by design.
+        this.visibilityManager.off();
     }
 }
 

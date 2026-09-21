@@ -54,7 +54,7 @@ function initXOpatUI() {
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();
-            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom");
+            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition");
             view.setPosition(initialPosition);
             this._view = view;
             this._scheduler = new UI.Toast.Scheduler(view);
@@ -130,9 +130,17 @@ function initXOpatUI() {
          */
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px; z-index: 999999999; position: fixed;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
 
-            this._body = $("#drop-down-menu");
+            const menu = document.createElement("ul");
+            menu.id = "drop-down-menu";
+            menu.className = "menu menu-sm bg-base-100 rounded-box shadow";
+            menu.setAttribute("oncontextmenu", "return false;");
+            Object.assign(menu.style, {
+                display: "none", width: "auto", maxWidth: "300px",
+                zIndex: "999999999", position: "fixed",
+            });
+            document.body.appendChild(menu);
+            this._body = menu;
         },
 
         /**
@@ -193,34 +201,32 @@ function initXOpatUI() {
             if (mouseEvent === undefined) {
                 if (opened) {
                     this._calls = [];
-                    this._body.html("");
-                    this._body.css({
-                        display: "none",
-                        top: 99999,
-                        left: 99999,
+                    this._body.replaceChildren();
+                    Object.assign(this._body.style, {
+                        display: "none", top: "99999px", left: "99999px",
                     });
                 }
             } else {
                 if (opened) {
                     this._calls = [];
-                    this._body.html("");
+                    this._body.replaceChildren();
                 }
                 ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
 
                 let top = mouseEvent.pageY + 5;
                 let left = mouseEvent.pageX - 15;
 
-                if ((top + this._body.height()) > window.innerHeight) {
-                    top = mouseEvent.pageY - this._body.height() - 5;
+                // Measure only after the items are in — an empty menu has no size.
+                this._body.style.display = "block";
+                const menuRect = this._body.getBoundingClientRect();
+                if ((top + menuRect.height) > window.innerHeight) {
+                    top = mouseEvent.pageY - menuRect.height - 5;
                 }
-                if ((left + this._body.width()) > window.innerWidth) {
-                    left = mouseEvent.pageX - this._body.width() + 15;
+                if ((left + menuRect.width) > window.innerWidth) {
+                    left = mouseEvent.pageX - menuRect.width + 15;
                 }
-                this._body.css({
-                    display: "block",
-                    top: top,
-                    left: left
-                });
+                this._body.style.top = top + "px";
+                this._body.style.left = left + "px";
             }
         },
 
@@ -232,23 +238,73 @@ function initXOpatUI() {
                     clbck(opts.selected);
                     window.DropDown._toggle(undefined, undefined);
                 });
-                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0"
+                const icon = opts.icon ? `<span class="ph-light ${opts.icon} pl-0"
 style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
-onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
+                const li = document.createElement("li");
+                if (opts.selected) li.style.background = "var(--color-state-focus-border)";
+                const a = document.createElement("a");
+                a.className = `pl-1 dropdown-item pointer ${opts.containerCss || ''}`;
+                a.addEventListener("click", () => window.DropDown._calls[i]());
+                // Item titles may carry markup (icons, <b>, ...) - the same
+                // contract the jQuery `.append(html)` had.
+                a.innerHTML = `${icon}${opts.title}`;
+                li.appendChild(a);
+                this._body.appendChild(li);
             } else {
                 this._calls.push(null);
-                this._body.append(`<li class="px-2" style="font-size: 10px;
-    border-bottom: 1px solid var(--color-border-primary);">${opts.title}</li>`);
+                const li = document.createElement("li");
+                li.className = "px-2";
+                li.style.fontSize = "10px";
+                li.style.borderBottom = "1px solid var(--color-border-primary)";
+                li.innerHTML = opts.title;
+                this._body.appendChild(li);
             }
         }
     };
     DropDown.init();
 
     let pluginsToolsBuilder, tissueMenuBuilder;
+
+    /**
+     * Turn an `Errors.show` argument into a Node that can never execute script.
+     *
+     * The error screen is markup-capable by contract (payloads embed `<br>` and
+     * `<code>`), but its inputs are not all ours: `src/app.ts` renders
+     * `CONFIG.error` / `.description` / `.details`, which come straight from the
+     * session bundle (POST_DATA, `?visualization=`, the URL hash) — i.e. from
+     * whoever handed the user the link. Those used to be assigned to `innerHTML`
+     * verbatim. (AGENTS.md §7)
+     *
+     * A Node passes through untouched, which is how core callers avoid the
+     * sanitizer entirely: they build `<code>` themselves and hand over the text.
+     * A string with no `<` becomes a text node — no sanitizer needed, so a boot
+     * error still renders correctly before modules load. Only a string that
+     * genuinely carries markup goes through `BaseComponent.toNode`, which applies
+     * the component allowlist and degrades to text when `SanitizeHtml` is absent.
+     *
+     * @param {string|Node} value
+     * @return {Node}
+     */
+    function errorMessageNode(value) {
+        if (value instanceof Node) return value;
+        if (value === undefined || value === null) return document.createTextNode("");
+        const text = String(value);
+        if (!text.includes("<")) return document.createTextNode(text);
+        // `toNode` only treats a string as markup when it *starts* with `<`;
+        // wrap so an embedded `<br>`/`<code>` is sanitized, not shown verbatim.
+        const wrapped = text.trimStart().startsWith("<") ? text : `<span>${text}</span>`;
+        try {
+            return UI.BaseComponent.toNode(wrapped, false) ?? document.createTextNode(text);
+        } catch (e) {
+            // This is the error screen: it must render whatever happens, and a
+            // throw from inside it replaces a legible failure with a silent one.
+            console.warn("Errors.show: falling back to text rendering.", e);
+            return document.createTextNode(text);
+        }
+    }
 
     /**
      * Definition of UI Namespaces driving menus and UI-ready utilities.
@@ -263,8 +319,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          */
         highlightElementId(id, timeout = 2000, animated = true) {
             let cls = animated ? "ui-highlight-animated" : "ui-highlight";
-            $(`#${id}`).addClass(cls);
-            setTimeout(() => $(`#${id}`).removeClass(cls), timeout);
+            document.getElementById(id)?.classList.add(cls);
+            setTimeout(() => document.getElementById(id)?.classList.remove(cls), timeout);
         },
 
         /**
@@ -317,25 +373,53 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             active: false,
             /**
              * Show viewport-covering error
-             * @param title
-             * @param description
+             * @param {string|Node} title markup-capable; a string is sanitized,
+             *   a Node is used as-is (build one to keep control of the markup)
+             * @param {string|Node} description same contract as `title`
              * @param withHiddenMenu
              */
             show: function(title, description, withHiddenMenu = false) {
                 USER_INTERFACE.Tutorials._hideImpl(); //preventive
-                $("#system-message-title").html(title);
-                $("#system-message-details").html(description);
-                $("#system-message").removeClass("hidden");
-                $("body").addClass("disabled");
+                // Markup-capable (error payloads embed <code>), but never raw —
+                // see `errorMessageNode`: part of this content is session-supplied.
+                const titleNode = document.getElementById("system-message-title");
+                if (titleNode) titleNode.replaceChildren(errorMessageNode(title));
+                const detailNode = document.getElementById("system-message-details");
+                if (detailNode) detailNode.replaceChildren(errorMessageNode(description));
+                document.getElementById("system-message")?.classList.remove("hidden");
+                document.body.classList.add("disabled");
                 USER_INTERFACE.Tools.close();
                 this.active = true;
             },
             /**
+             * Build the standard `<message> <br><code><detail></code>` body as a
+             * Node. Prefer it over assembling that markup in a template string:
+             * the detail is usually an exception, and an exception's message can
+             * carry an upstream response body (a proxied error page, a DICOM
+             * server's 500). Here it is `textContent`, so it cannot be markup.
+             * @param {string} message translated lead-in text
+             * @param {*} [detail] exception or string; stringified, may be empty
+             * @return {Node} pass straight to {@link USER_INTERFACE.Errors.show}
+             */
+            detail: function(message, detail) {
+                const fragment = document.createDocumentFragment();
+                fragment.append(message === undefined || message === null ? "" : String(message));
+                const text = detail === undefined || detail === null ? "" : String(detail);
+                if (text) {
+                    fragment.append(document.createElement("br"));
+                    const code = document.createElement("code");
+                    code.textContent = text;
+                    fragment.append(code);
+                }
+                return fragment;
+            },
+
+            /**
              * Hide system-wide error.
              */
             hide: function() {
-                $("#system-message").addClass("hidden");
-                $("body").removeClass("disabled");
+                document.getElementById("system-message")?.classList.add("hidden");
+                document.body.classList.remove("disabled");
                 USER_INTERFACE.Tools.open();
                 this.active = false;
             }
@@ -354,7 +438,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 return UI.Services.FullscreenMenus.menu;
             },
             init: function () {
-                const ctx = $("#fullscreen-menu")[0] || document.getElementById("fullscreen-menu") || document.body;
+                const ctx = document.getElementById("fullscreen-menu") || document.body;
                 UI.Services.FullscreenMenus.init(ctx);
                 return UI.Services.FullscreenMenus.menu;
             },
@@ -403,10 +487,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} toolsMenuId unique menu id
              * @param {string} title
              * @param {UIElement|UIElement[]} html
-             * @param {string} [icon=fa-wrench]
+             * @param {string} [icon=ph-wrench]
              * @param {boolean} forceHorizontal
+             * @param {boolean} [defaultEmbedded=false] On first run (no persisted
+             *   preference) dock this toolbar into the app bar instead of floating.
              */
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "ph-wrench", forceHorizontal = false, defaultEmbedded = false) {
                 if (!Array.isArray(html)) {
                     html = [html];
                 }
@@ -417,6 +503,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         pluginRootClass: `plugin-${ownerPluginId}-root`,
                         embeddedTitle: title,
                         embeddedIcon: icon,
+                        defaultEmbedded: defaultEmbedded,
                     },
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
@@ -472,7 +559,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 // from `app.ts` and `viewer-open-pipeline.ts`; treat null and
                 // undefined the same (fall back to the session-config value).
                 if (theme === undefined || theme === null){
-                    theme = APPLICATION_CONTEXT.getOption("theme", "auto");
+                    theme = APPLICATION_CONTEXT.getOption("theme");
                 }
                 // Supported values: "dark" | "light" | "auto" (auto follows the
                 // OS preference). Unknown values resolve to "light".
@@ -492,7 +579,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * UI Fullscreen Loading
          */
         Loading: {
-            _visible: $("#fullscreen-loader").css('display') !== 'none',
+            // An absent element counts as visible, matching the previous jQuery
+            // read (`.css()` on an empty set returns undefined !== 'none').
+            _visible: (() => {
+                const el = document.getElementById("fullscreen-loader");
+                return !el || getComputedStyle(el).display !== 'none';
+            })(),
             _allowDescription: false,
             _textTimeout: null,
             isVisible: function () {
@@ -503,18 +595,21 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param loading
              */
             show: function(loading) {
-                const loader = $("#fullscreen-loader");
-                if (this._visible === loading) return;
+                const loader = document.getElementById("fullscreen-loader");
+                // `show(true)` while ALREADY visible is the boot case: the template
+                // renders #fullscreen-loader visible, so the state never changes and
+                // the arming timer below was never scheduled — which is why a stall
+                // during boot produced a wordless spinner that could never be given
+                // a message. Fall through to arm it; only a redundant hide is a no-op.
+                if (this._visible === loading && !(loading && !this._allowDescription && !this._textTimeout)) return;
                 if (loading) {
-                    loader.css('display', 'block');
+                    if (loader) loader.style.display = 'block';
                     // Make loading show
                     this._textTimeout = setTimeout(() => {
                         this._textTimeout = null;
                         this._allowDescription = true;
-                        // Use the namespace's own text() — NOT jQuery's
-                        // loader.text(true), which would overwrite the loader's
-                        // children (spinner + title nodes) with the literal
-                        // string "true", leaving the overlay up with no spinner.
+                        // Use the namespace's own text() - it updates the title
+                        // node, never the loader's children (spinner + title).
                         if (this.isVisible()) this.text(true);
                     }, 3000);
                 } else {
@@ -522,7 +617,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         clearTimeout(this._textTimeout);
                         this._textTimeout = null;
                     }
-                    loader.css('display', 'none');
+                    if (loader) loader.style.display = 'none';
                     this.text(false);
                 }
                 this._visible = loading;
@@ -636,9 +731,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             /**
              * Register a tutorial in the {@link UI.TutorialsModal} launcher.
              *
-             * Tutorials are driven by EnjoyHint under the hood — each step is
-             * an object whose **single** primary key is a jQuery selector
-             * string prefixed with an action verb (`"<action> <selector>"`),
+             * Tutorials are driven by `APPLICATION_CONTEXT.tutorials`
+             * (`src/classes/app/tutorial/`) — each step is an object whose
+             * **single** primary key is a CSS selector prefixed with an
+             * action verb (`"<action> <selector>"`),
              * and whose value is the descriptive text shown next to the
              * highlighted element. See `src/TUTORIALS.md` for the selector
              * cookbook (including the `[id$="-…"]` viewer-agnostic pattern)
@@ -649,12 +745,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              *   `${plugidId}-plugin-root` for scoped styling.
              * @param {string} name short title shown on the tutorial card.
              * @param {string} description one-line summary on the card.
-             * @param {string} icon Phosphor icon class (e.g. `"ph-compass"`)
-             *   or a legacy Font Awesome class (`"fa-school"`). New code
-             *   should prefer Phosphor. Defaults to `"fa-school"`.
+             * @param {string} icon Phosphor icon class (e.g. `"ph-compass"`).
+             *   Defaults to `"ph-graduation-cap"`.
              * @param {Array<Object>} steps ordered step list. Each step has
              *   the shape `{ "<action> <selector>": "<HTML text>", runIf?: () => boolean }`.
-             *   Supported actions: `next` (advance via the EnjoyHint NEXT
+             *   Supported actions: `next` (advance via the tour's NEXT
              *   button) and `click` (advance when the user actually clicks
              *   the selector — useful for opening a panel as part of the
              *   walk). Steps whose `runIf` returns false at run time are
@@ -664,7 +759,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {Function} [prerequisites] optional function executed
              *   when the tutorial actually starts (after the user clicks the
              *   card) — use it to put the UI into a known state (e.g. close
-             *   floating panels) before EnjoyHint takes over.
+             *   floating panels) before the tour takes over.
              *
              * @example
              * USER_INTERFACE.Tutorials.add(
@@ -684,7 +779,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this._entries.push({
                     name,
                     description,
-                    icon: icon || "fa-school",
+                    icon: icon || "ph-graduation-cap",
                     pluginName,
                     pluginRootClass: plugidId ? `${plugidId}-plugin-root` : "",
                 });
@@ -699,7 +794,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              *  see add(..) steps parameter
              */
             run: function(ctx) {
-                // Single gate for every EnjoyHint launch path — launcher
+                // Single gate for every tour launch path — launcher
                 // card click, extra-tutorials auto-run, direct programmatic
                 // call. Stops the tour before any DOM is allocated.
                 if (this._isMobile()) {
@@ -717,37 +812,24 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 //reset plugins visibility
-                $(".plugins-pin").each(function() {
-                    let pin = $(this);
-                    let container = pin.parents().eq(1).children().eq(2);
-                    pin.removeClass('pressed');
-                    container.removeClass('force-visible');
+                document.querySelectorAll(".plugins-pin").forEach((pin) => {
+                    // Grandparent's third child - the pinned panel body.
+                    const container = pin.parentElement?.parentElement?.children[2];
+                    pin.classList.remove('pressed');
+                    container?.classList.remove('force-visible');
                 });
 
-                let enjoyhintInstance = new EnjoyHint({
-                    onStart: function () {
-                        window.addEventListener("resize", enjoyhintInstance.reRender, false);
-                        window.addEventListener("click", enjoyhintInstance.rePaint, false);
-
-                        if (typeof prereq === "function") prereq();
-                    },
-                    onEnd: function () {
-                        window.removeEventListener("resize", enjoyhintInstance.reRender, false);
-                        window.removeEventListener("click", enjoyhintInstance.rePaint, false);
-                    },
-                    onSkip: function () {
-                        window.removeEventListener("resize", enjoyhintInstance.reRender, false);
-                        window.removeEventListener("click", enjoyhintInstance.rePaint, false);
-                    }
-                });
                 // VIEWER_MANAGER.viewerMenus is a Record<cellId, RightSideViewerMenu>,
                 // not an array — iterate values, not the object itself.
                 for (let viewerMenu of Object.values(VIEWER_MANAGER.viewerMenus)) {
                     viewerMenu?.menu?.focusAll?.();
                 }
-                enjoyhintInstance.set(data);
                 this.hide();
-                enjoyhintInstance.run();
+                // The engine owns its own resize/click listeners for the
+                // lifetime of the tour — see classes/app/tutorial/tour-engine.ts.
+                APPLICATION_CONTEXT.tutorials.run(data, {
+                    onStart: () => { if (typeof prereq === "function") prereq(); },
+                });
                 this.running = false;
             }
         },
@@ -760,8 +842,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          */
         addHtml: function(html, pluginId, selector="body") {
             try {
-                const jqNode = $(UI.BaseComponent.parseDomLikeItem(html));
-                jqNode.appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                const target = document.querySelector(selector);
+                if (!target) {
+                    console.error("Could not attach custom HTML: no element matches", selector);
+                    return false;
+                }
+                for (const element of UI.BaseComponent.parseDomNodes(html)) {
+                    element.classList.add(`${pluginId}-plugin-root`);
+                    target.appendChild(element);
+                }
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);
@@ -782,7 +871,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          */
         addViewerHtml: function (html, pluginId, uniqueViewerId) {
             try {
-                const jqNode = $(UI.BaseComponent.parseDomLikeItem(html));
+                const nodes = UI.BaseComponent.parseDomNodes(html);
                 const viewer = (uniqueViewerId instanceof OpenSeadragon.Viewer) ?
                     uniqueViewerId : VIEWER_MANAGER.getViewer(uniqueViewerId);
                 const cell = VIEWER_MANAGER.layout.findCellById(viewer?.id);
@@ -807,11 +896,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 // todo: viewer might get re-initialized, reusing the same cell - ensure we replace
-                jqNode.appendTo(parent).each((idx, element) => {
+                for (const element of nodes) {
                     element.classList.add(`${pluginId}-plugin-root`);
                     element.style.pointerEvents = 'auto';
                     element.dataset.id = pluginId;
-                });
+                    parent.appendChild(element);
+                }
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);
@@ -837,6 +927,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         // (_reason?: { status?: number; code?: string; message?: string; source?: string })
         handle: (_reason) => {
             if (this.isReloading) return true;
+
+            // An auth context whose credential merely expired is recoverable with
+            // a click — the recovery gate is already prompting for it, and the
+            // held requests will replay. Reloading would throw away the workspace
+            // to solve a problem that is being solved. Only a genuinely lost
+            // xOpat SERVER session (no gateable context) still needs the reload.
+            try {
+                const auth = window.APPLICATION_CONTEXT?.auth;
+                if (auth?.listContextsNeedingInteraction?.().length) return true;
+            } catch (_) { }
+
             this.isReloading = true;
 
             try { USER_INTERFACE.Loading.show(false); } catch (_) { }

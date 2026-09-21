@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!--
+  OIDC popup / silent-renew callback.
+
+  Deliberately loads NOTHING but the OIDC library: no viewer, no loader, no
+  plugins, no config fetch. This document exists for a few hundred milliseconds
+  and its whole job is to forward one URL to the window that started the sign-in.
+
+  Opt in per context with `contexts.<ctx>.useCallbackPage: true`, and register
+  this page's URL as an Authorized redirect URI at the identity provider:
+      <viewer-origin>/modules/oidc-client-ts/auth-callback.html
+
+  Scripts are external, not inline, so a deployment enforcing a Content-Security-
+  Policy does not have to allow `unsafe-inline` for a page that handles auth.
+-->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Signing in…</title>
+</head>
+<body>
+<!-- No i18n here on purpose: this page has no locale bundle and must not fetch
+     one. It is visible only if something went wrong, and only for a moment. -->
+<p id="xo-auth-callback-status">Completing sign-in — this window closes automatically.</p>
+<script src="oidc-client-ts.js"></script>
+<script src="auth-callback.js"></script>
+</body>
+</html>

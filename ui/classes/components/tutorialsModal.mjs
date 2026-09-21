@@ -86,7 +86,7 @@ export class TutorialsModal extends BaseComponent {
         this.onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
         this.onExit = typeof options.onExit === "function" ? options.onExit : null;
         this.onClose = typeof options.onClose === "function" ? options.onClose : null;
-        this.exitLabel = options.exitLabel || "Exit";
+        this.exitLabel = options.exitLabel || $.t("common.Exit");
 
         this._titleState = van.state(options.title || "");
         this._descriptionState = van.state(options.description || "");
@@ -290,7 +290,7 @@ export class TutorialsModal extends BaseComponent {
     }
 
     setExitLabel(text) {
-        this.exitLabel = text || "Exit";
+        this.exitLabel = text || $.t("common.Exit");
         this._exitLabelState.val = this.exitLabel;
     }
 
@@ -348,8 +348,7 @@ export class TutorialsModal extends BaseComponent {
             }, entry.pluginName));
         }
 
-        const _isPh = String(iconClass ?? '').trim().startsWith('ph-');
-        children.push(iTag({ class: `${_isPh ? 'ph-light' : 'fa-auto'} ${iconClass} text-3xl my-2 text-primary` }));
+        children.push(iTag({ class: `ph-light ${iconClass} text-3xl my-2 text-primary` }));
         children.push(div({ class: "card-title text-lg font-light justify-center" }, entry.name || ""));
         if (entry.description) {
             children.push(p({ class: "text-sm opacity-80" }, entry.description));

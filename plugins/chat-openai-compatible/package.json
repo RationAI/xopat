@@ -4,5 +4,8 @@
   "description": "OpenAI-compatible chat provider plugin (works with any GPT-like endpoint).",
   "keywords": [
   ],
-  "author": "Aiosa"
+  "author": "Aiosa",
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.31"
+  }
 }

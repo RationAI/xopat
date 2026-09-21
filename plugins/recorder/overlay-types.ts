@@ -49,6 +49,47 @@ export function anchorToCss(anchor: RecorderOverlayAnchor, padding = 16): Partia
     return css;
 }
 
+/**
+ * Translate a layout region into CSS. Unlike {@link anchorToCss}, which only
+ * pins a box whose size the author has to guess, a region also decides the
+ * box's extent — that is the point of regions: a "bottom" overlay is a band the
+ * width of the viewer, not a card that happens to sit at the bottom.
+ *
+ * Widths are viewer-relative (%) so the same recording reads correctly in a
+ * grid cell and in a fullscreen viewer.
+ */
+export function regionToCss(region: RecorderOverlayRegion, padding = 16): Partial<CSSStyleDeclaration> {
+    const p = `${padding}px`;
+    const css: Partial<CSSStyleDeclaration> = { position: "absolute" };
+
+    switch (region) {
+        case "center":
+            // Meant to be read instead of the slide: a wide, centered card.
+            css.top = "50%";
+            css.left = "50%";
+            css.transform = "translate(-50%, -50%)";
+            css.maxWidth = "min(60%, 640px)";
+            break;
+        case "top":
+        case "bottom":
+            // Informative band: spans the viewer, leaves the opposite half clear.
+            css[region] = p;
+            css.left = p;
+            css.right = p;
+            css.maxWidth = "none";
+            break;
+        case "left":
+        case "right":
+            // Side column. Narrow on purpose — these edges usually hold app UI.
+            css.top = "50%";
+            css[region] = p;
+            css.transform = "translateY(-50%)";
+            css.maxWidth = "min(30%, 360px)";
+            break;
+    }
+    return css;
+}
+
 export const ANCHOR_LIST: RecorderOverlayAnchor[] = [
     "tl", "tc", "tr",
     "ml", "mc", "mr",

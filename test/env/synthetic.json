@@ -1,0 +1,14 @@
+/**
+ * The `synthetic` project: the standalone deployment, serving a generated slide.
+ *
+ * There is nothing here but the layer list, on purpose. The protocol, the static
+ * root and the reasoning behind both live in `env/parts/data/synthetic-dzi.json`,
+ * so the deployment a developer reaches by `npm run up:dev -- synthetic` and the
+ * deployment this project tests are the same one rather than two copies that
+ * drift. `test/env/errors.json` chains off this file.
+ *
+ * Generate the pyramid first: `npm run fixtures:synthetic`.
+ */
+{
+  "$base": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off"]
+}

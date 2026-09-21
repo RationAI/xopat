@@ -1,7 +1,7 @@
 import type { TileLoadFailedEvent } from "openseadragon";
 import { BackgroundConfig } from "./classes/background-config";
 import { initXOpatLoader } from "./loader";
-import { InvertedWeakMap } from "./external/data-structures";
+import { ViewerFaultySourceRegistry } from "./classes/app/viewer-faulty-source-registry";
 import { XOpatHistory } from "./classes/history";
 import { bootstrapVisualizationHistory } from "./classes/visualization-history";
 import { bootstrapLiveConfigSync } from "./classes/app/live-config-sync";
@@ -9,7 +9,11 @@ import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
+import { ViewerInteractionController } from "./classes/app/viewer-interaction-controller";
+import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
+import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
+import { initDeploymentKey } from "./classes/app/deployment-key";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
 // Live shared sessions (WebRTC viewport/cursor/visualization sync) are
 // currently disabled — see src/SESSION.md. Re-import together with
@@ -17,19 +21,38 @@ import { ApplicationLifecycleController } from "./classes/app/application-lifecy
 // import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
 import { bootstrapSlideProtocols } from "./classes/slide-protocols";
+import { bootstrapVirtualizationDetectors } from "./classes/virtualization-detectors";
+import { registerVirtualRegionProtocol } from "./classes/virtual-region-protocol";
 import { createApplicationContext } from "./classes/app/application-context";
+import { installI18nNamespace, localizeDom } from "./classes/app/i18n-dom";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
+import { wireNetworkStatusUi } from "./classes/app/network-status-ui";
+import { wireAuthRecoveryUi } from "./classes/app/auth-recovery-ui";
+import { wireAuthUserMenu } from "./classes/app/auth-user-menu";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
+import { wireSessionLog } from "./classes/app/session-log";
+import { wireGlobalRuntimeErrorHandler } from "./classes/app/global-error-handler";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
 import "./classes/playground/playground-service";
 
+// Side-effect imports: OpenSeadragon namespace extensions that used to be
+// standalone <script> tags under `src/external/`. Importing them here folds
+// them into `dist/app.js` — one request instead of three. All three only
+// *install* onto the OSD namespace at load; every consumer (loader.ts's
+// `makeScalebar` / `new OpenSeadragon.Tools(viewer)`, scalebar's use of
+// `ViewportRegistration`) calls them at viewer-creation time, long after this
+// bundle has executed.
+import "./classes/osd/tools";
+import "./classes/osd/viewport-registration";
+import "./classes/osd/scalebar";
+
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
 declare function initXOpatLayers(): void;
-declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean): any;
+declare function xOpatParseConfiguration(config: any, i18n?: any, supportsPost?: boolean, ENV?: any): any;
 declare class ViewerManager { constructor(env: any, config: any);[key: string]: any; }
 
 /**
@@ -48,7 +71,14 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @private
  */
 export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
-    const savedState = ApplicationLifecycleController.restoreLocalState();
+    // Identity of the deployment the server just sent. Computed before anything
+    // reads persisted state, from the SERVED configuration — every boot cache is
+    // origin-scoped by the browser, and origins are shared between deployments
+    // (every env file on localhost), so state captured under a different one must
+    // be refused rather than silently replacing this one. Also read by
+    // `parse-input.js` off `window.XOPAT_DEPLOYMENT_KEY`.
+    const deploymentKey = initDeploymentKey(ENV, PLUGINS, MODULES);
+    const savedState = ApplicationLifecycleController.restoreLocalState(deploymentKey);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -70,33 +100,35 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         ENV.client.domain = window.location.origin;
     }
 
-    //Setup language and parse config if function provided
-    function localizeDom() {
-        jqueryI18next.init(i18next, $, {
-            tName: 't', // $.t = i18next.t
-            i18nName: 'i18n', // $.i18n = i18next
-            handleName: 'localize', // $(selector).localize(opts);
-            selectorAttr: 'data-i18n', // data-() attribute
-            targetAttr: 'i18n-target', // data-() attribute
-            optionsAttr: 'i18n-options', // data-() attribute
-            useOptionsAttr: false, // see optionsAttr
-            parseDefaultValueFromContent: true // parses default values from content ele.val or ele.text
-        });
-        //clean up
-        delete window.jqueryI18next;
-        delete window.i18next;
-        $('body').localize();
+    // Setup language and parse config if function provided.
+    // `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), not jQuery — see
+    // classes/app/i18n-dom.ts and AGENTS.md §3.
+    function bindTranslations() {
+        installI18nNamespace(i18next);
+        localizeDom(document.body);
     }
     if (i18next.isInitialized) {
-        localizeDom();
+        bindTranslations();
     } else {
         I18NCONFIG.fallbackLng = 'en';
+        // i18next escapes interpolated values for HTML by default, and xOpat renders
+        // translations as TEXT — van.js children, `textContent`, `title`/`aria-*`
+        // attributes. Escaping there is not safety, it is corruption: a date came out
+        // as `9&#x2F;12&#x2F;2026`, a quoted word as `&quot;knows&quot;`, and every
+        // file name with an ampersand the same way. The few places that do build HTML
+        // escape their own interpolations at the sink (`escapeHtml` in loader.ts) or
+        // sanitize (Dialogs/Toast) — which is where that decision belongs, since only
+        // the sink knows it is a sink.
+        (I18NCONFIG as any).interpolation = {
+            ...((I18NCONFIG as any).interpolation || {}),
+            escapeValue: false,
+        };
         i18next.init(I18NCONFIG, (err: any, t: any) => {
             if (err) throw err;
-            localizeDom();
+            bindTranslations();
         });
     }
-    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost) as Record<string, unknown>;
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost, ENV) as Record<string, unknown>;
     let CONFIG = POST_DATA.visualization as XOpatRuntimeConfig;
     if (!CONFIG) {
         CONFIG = {
@@ -165,23 +197,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     POST_DATA = POST_DATA || {};
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
-    // Configure js-cookie attributes before the IO pipeline's `cookies` KV
-    // driver reads `globalThis.Cookies`. If js-cookie is unavailable the
-    // driver falls back to in-memory storage.
-    if (window.Cookies) {
-        Cookies.withAttributes({
-            path: ENV.client.js_cookie_path,
-            domain: ENV.client.js_cookie_domain || ENV.client.domain,
-            expires: ENV.client.js_cookie_expire,
-            sameSite: ENV.client.js_cookie_same_site,
-            secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
-        });
-        Cookies.remove("test");
-    } else {
-        console.warn("Cookie.js seems to be blocked. The `cookies` KV driver will fall back to in-memory storage.");
+    if (!XOpatStorageAvailability.cookies) {
+        console.warn("Cookies are unavailable. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
     // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
+    // it carries the deployment cookie policy (`ENV.client.js_cookie_*`) into
+    // the `cookies` KV driver, which owns `document.cookie` directly.
     // AppCache/AppCookies façades resolve through `window.IO_PIPELINE` on first
     // use, so the pipeline must exist before any `getOption()` call.
     const IO_PIPELINE = bootstrapIOPipeline(ENV, POST_DATA);
@@ -190,6 +212,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // (which happens later in `initXOpatLoader`) so plugins can register
     // factory protocols (e.g. DICOMWebTileSource) in their constructors.
     bootstrapSlideProtocols(ENV);
+
+    // Bootstrap the virtualization-detector registry (one slide → many aligned
+    // virtual sources). Empty until an optional detector module registers a
+    // region-finder; absent that, `TileSource.probeVirtualization()` is a no-op.
+    bootstrapVirtualizationDetectors();
+
+    // Register the `virtual-region` slide protocol (cropped sub-source). Must
+    // run after SLIDE_PROTOCOLS bootstrap and after OpenSeadragon is loaded
+    // (CroppedTileSource extends OpenSeadragon.TileSource).
+    registerVirtualRegionProtocol();
 
     /**
      * @namespace APPLICATION_CONTEXT
@@ -240,6 +272,21 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // wiring (scaleBar / navigator) runs in loader.ts on each `viewer.open`.
     applyInitialUiVisibility();
 
+    // The session was serialized by a DIFFERENT deployment (stale address-bar
+    // hash, a re-submitted POST body, an imported export). It is loaded anyway —
+    // two deployments that differ only cosmetically fingerprint alike, so a
+    // genuinely shared link must keep working — but the user is told, because
+    // the usual symptom is data references that resolve to nothing here.
+    // `parse-input.js` also refuses to write it into the boot cache.
+    if ((CONFIG as any).__foreignDeployment) {
+        Dialogs.show($.t("messages.sessionOtherDeployment"), 12000, Dialogs.MSG_WARN);
+        // One-shot: the config is the object `serializeAppConfig` re-serializes,
+        // so leaving the flag on would re-stamp the session as foreign forever
+        // and repeat the toast on every reload. The next serialization carries
+        // THIS deployment's `__envKey`, which is how the session heals.
+        delete (CONFIG as any).__foreignDeployment;
+    }
+
     /**
      * Replace share button in static preview mode
      */
@@ -249,6 +296,22 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             color: UI.Badge.COLOR.WARNING,
         }, "Exported Session"));
     }
+
+    // Surface network connectivity: an app-bar pill visible only while offline,
+    // plus one-shot toasts on genuine transitions. Drives off
+    // APPLICATION_CONTEXT.networkStatus so it stays in sync with the IO
+    // pipeline's offline handling.
+    wireNetworkStatusUi();
+
+    // Recover gracefully when an auth context's credential expires mid-session:
+    // block the viewer (main context) or just flag the feature (sub-context),
+    // take the user's next click as the gesture a popup login needs, then
+    // re-request the tiles that died while the token was dead.
+    wireAuthRecoveryUi();
+
+    // The permanent counterpart of the scrim: account rows in the app-bar user
+    // menu, so signing in is possible on purpose and not only after a failure.
+    wireAuthUserMenu();
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -294,6 +357,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     });
 
     wireViewerErrorHandlers(VIEWER_MANAGER);
+    // Session timeline (boot / slides opened / auth / end) on the `session`
+    // channel. Silent unless a deployment enables it — see src/LOGGING.md.
+    // Wired here, after VIEWER_MANAGER exists, so the slide records are real.
+    wireSessionLog();
+    // Post-init: retire the boot-time blocking error card and route uncaught runtime
+    // errors to a non-blocking, deduped, rate-limited toast instead.
+    wireGlobalRuntimeErrorHandler();
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
@@ -317,12 +387,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }
     };
 
-    const installDebugStats = () => {
-        if (!APPLICATION_CONTEXT.getOption("debugMode")) {
-            return;
-        }
-        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })();
-    };
+    // const installDebugStats = () => {
+    //     if (!APPLICATION_CONTEXT.getOption("debugMode")) {
+    //         return;
+    //     }
+    //     (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/libs/stats.js'; document.head.appendChild(script); })();
+    // };
 
     const applicationLifecycle = new ApplicationLifecycleController(
         APPLICATION_CONTEXT,
@@ -334,6 +404,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     );
     viewerInspector.registerViewerHooks(VIEWER_MANAGER);
     viewerInspector.registerUtilities();
+    viewerInspector.registerInspectorMenu();
+
+    // FlexDrawer pointer forwarding, enabled per viewer only while a visible shader
+    // layer declares `requiresInteraction()` (e.g. the fisheye lens). Costs nothing
+    // otherwise — see viewer-interaction-controller.ts.
+    const viewerInteraction = new ViewerInteractionController(APPLICATION_CONTEXT);
+    viewerInteraction.registerViewerHooks(VIEWER_MANAGER);
+    viewerInteraction.registerUtilities();
+
+    // Track the viewer grid so `region-capture` events can be drawn on the viewer that
+    // was read. Cheap when the indicator is off — it only registers grid handlers.
+    APPLICATION_CONTEXT.captureIndicator.attachViewerManager(VIEWER_MANAGER);
+    APPLICATION_CONTEXT.captureIndicator.registerViewToggle();
 
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (
         data,
@@ -341,7 +424,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         visualizations: VisualizationItem[] | undefined = undefined
     ) {
         await applicationLifecycle.beginApplicationLifecycle(data, background, visualizations, initXOpatLayers, PLUGINS);
-        installDebugStats();
+        // installDebugStats();
+
+        // Dev-only; both calls are no-ops without debugMode. Capture itself is
+        // installed later, when the user actually opens the debug window.
+        APPLICATION_CONTEXT.renderDebug.attachViewerManager(VIEWER_MANAGER);
+        APPLICATION_CONTEXT.renderDebug.registerToolsMenu();
     };
 
     APPLICATION_CONTEXT.replaceVisualizations = async function (
@@ -361,6 +449,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     };
 
     const visualizationRuntime = new ViewerVisualizationRuntime(APPLICATION_CONTEXT);
+    // Published so a visualization can be checked without being opened. The open
+    // pipeline is otherwise the only caller, which made the renderer's own
+    // schema findings reachable only by opening a session and reading a console
+    // warning — and left authoring tools and tests to re-implement the check,
+    // i.e. to pin a second opinion that drifts from the deciding one.
+    APPLICATION_CONTEXT.visualizationRuntime = visualizationRuntime;
     const viewerStateBindings = new ViewerStateBindingController(APPLICATION_CONTEXT);
     const viewerOpenPipeline = new ViewerOpenPipeline({
         appContext: APPLICATION_CONTEXT,
@@ -403,6 +497,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         return viewerOpenPipeline.updateViewerSelection(viewerIndex, selection, opts);
     };
 
+    (APPLICATION_CONTEXT as any).setVirtualizationMode = async function (
+        parentBgId: string,
+        mode: VirtualizationMode,
+        opts = {}
+    ) {
+        return viewerOpenPipeline.setVirtualizationMode(parentBgId, mode, opts);
+    };
+
     // Refresh Page & Storage state are defined here since we have reference to the incoming config
     UTILITIES.storePageState = function (includedPluginsList: Record<string, any> | undefined = undefined) {
         try {
@@ -434,10 +536,22 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
             // Bootstrap-only path — paired with the read in
             // ApplicationLifecycleController.restoreLocalState. See
-            // src/IO_PIPELINE.md "Bootstrap exception".
+            // src/IO_PIPELINE.md "Bootstrap exception". Probe-gated for the
+            // same reason the read is: the property access itself throws in a
+            // sandboxed iframe.
+            if (!XOpatStorageAvailability.sessionStorage) return false;
             sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
-                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG
+                ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG,
+                // Which deployment this was captured under. The payload carries `ENV`
+                // and is applied wholesale on restore, so replaying it into a viewer
+                // that was served a DIFFERENT configuration silently swaps that
+                // configuration out. The read side refuses a mismatch.
+                //
+                // NOT underscore-prefixed: `safeStringify` below drops every key
+                // starting with `_`, so a `__deployment` would be silently discarded
+                // and the guard would never fire.
+                deploymentStamp: deploymentKey,
             }));
             return true;
         } catch (e) {
@@ -464,11 +578,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     }
 
     if (CONFIG.error) {
-        USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,
-            true);
+        // Every part of this is session-supplied (POST_DATA / `?visualization=` /
+        // the URL hash), so none of it is markup: `Errors.detail` renders the
+        // detail as `textContent` and `Errors.show` sanitizes the title.
+        USER_INTERFACE.Errors.show(CONFIG.error,
+            USER_INTERFACE.Errors.detail(CONFIG.description, CONFIG.details), true);
     }
 
-    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
+    APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize"));
     // Defer until viewers have actually been opened so reseedAll() can read
     // viewer.uniqueId without falling into the "no unique ID" warning path
     // in findViewerUniqueId (loader.ts).
@@ -477,138 +594,395 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         bootstrapLiveConfigSync();
     });
 
-    // Key event handlers - todo create shortcut manager
-    $.extend($.scrollTo.defaults, { axis: 'y' });
-
-    let failCount = new InvertedWeakMap();
+    // Retrospective faulty-source detection: a source can instantiate fine
+    // (its info.json / DZI loads) yet have its individual tile requests fail
+    // during viewing. We count *consecutive* per-source failures (reset on any
+    // successful tile) and, once the registry's threshold is crossed, mark the
+    // source faulty so the navigator title + shader-menu alert surface it —
+    // WITHOUT removing the image: OSD keeps requesting tiles (warn-only, the
+    // source may recover). The verdict is keyed by source identity, so it
+    // survives visualization switches.
     VIEWER_MANAGER.broadcastHandler('tile-load-failed', function (e: TileLoadFailedEvent) {
         if (e.message === "Image load aborted") return;
-        let index = e.eventSource.world.getIndexOfItem(e.tiledImage);
-        let failed = failCount.get(index) || 0;
-        const ti = e.tiledImage as any;
-        if (!failed || failed != ti) {
-            failCount.set(index, ti);
-            ti._failedCount = 1;
-        } else {
-            let d = e.time - ti._failedDate;
-            if (d < 500) {
-                ti._failedCount++;
-            } else {
-                ti._failedCount = 1;
-            }
-            if (ti._failedCount > 5) {
-                ti._failedCount = 1;
-                //to-docs
-                e.worldIndex = index;
-                /**
-                 * The Viewer might decide to remove faulty TiledImage automatically.
-                 * The removal is not done automatically, but this event is fired.
-                 * The owner is recommended to remove the tiled image instance.
-                 * @property {TiledImage} e
-                 * @memberOf VIEWER
-                 * @event tiled-image-problematic
-                 */
-                e.eventSource.raiseEvent('tiled-image-problematic', e);
+        const viewer = e.eventSource as any;
+        const registry = viewer?.__faultySources;
+        if (!registry) return;
+        // An expired credential fails every tile until the user signs in again.
+        // Those failures say nothing about the source, and five of them would
+        // otherwise push it past the threshold and leave a warning that survives
+        // the re-login. Skip the RECORDING, not just the notification — counting
+        // and then suppressing the toast would still poison the source.
+        const auth = (APPLICATION_CONTEXT as any).auth;
+        if (auth?.listContextsNeedingInteraction?.().length) return;
+        const key = ViewerFaultySourceRegistry.keyForItem(e.tiledImage as any);
+        // Scale the tolerance to the source: a single-tile overlay cannot produce
+        // five failures, so holding it to a pyramid's budget meant it failed in
+        // silence. See `tileFailureBudgetFor`.
+        const budget = ViewerFaultySourceRegistry.tileFailureBudgetFor(e.tiledImage as any, registry.faultyThreshold);
+        const becameFaulty = registry.recordTileFailure(
+            key, e.message ? String(e.message) : undefined, budget);
+        if (becameFaulty) {
+            /**
+             * Fired once when a tile source crosses from healthy to faulty —
+             * either failing instantiation or accumulating too many consecutive
+             * tile-request failures. Consumers surface a warning; the image is
+             * NOT removed automatically.
+             * @property {OpenSeadragon.Viewer} viewer the affected viewer
+             * @property {string} key source-identity key in the faulty registry
+             * @property {string} error human-readable failure reason
+             * @memberOf VIEWER
+             * @event source-marked-faulty
+             */
+            viewer.raiseEvent('source-marked-faulty', { viewer, key, error: registry.getError(key) });
+            try {
+                viewerStateBindings.refreshViewerVisualizationBindings(viewer, 0);
+            } catch (err) {
+                console.warn("Failed to refresh navigator after marking source faulty.", err);
             }
         }
-        ti._failedDate = e.time;
+    });
+    // Reset the consecutive-failure counter on any successful tile load.
+    VIEWER_MANAGER.broadcastHandler('tile-loaded', function (e: any) {
+        const registry = (e.eventSource as any)?.__faultySources;
+        registry?.recordTileSuccess?.(ViewerFaultySourceRegistry.keyForItem(e.tiledImage));
     });
 
+    // Central keyboard-shortcut dispatch (APPLICATION_CONTEXT.shortcuts, see
+    // src/SHORTCUTS.md). The manager listens on the viewer manager's re-raised
+    // document key events; core commands below register declaratively so users
+    // can remap them in the Keymap fullscreen-menu panel.
+    APPLICATION_CONTEXT.shortcuts.attach(VIEWER_MANAGER);
+
+    // Viewport focus exchange: copies the current viewport to the clipboard,
+    // or — when the clipboard already holds a copied viewport — aligns this
+    // viewer to it. Transferable between different viewer windows. Shared by
+    // the keymap shortcut and the app-bar Tools menu entry.
+    function viewportCopyOrAlign(viewer?: OpenSeadragon.Viewer | null) {
+        const v = viewer || VIEWER;
+        navigator.clipboard.readText().then(text => {
+            let focus: any = {};
+            try {
+                if (text && text.length < 100) focus = JSON.parse(text);
+            } catch (e) {
+                //pass
+            }
+            const px = Number.parseFloat(focus?.point?.x);
+            const py = Number.parseFloat(focus?.point?.y);
+            const pz = Number.parseFloat(focus?.zoomLevel);
+            if (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz)) {
+                // todo maybe zoomTo second arg can be the point directly?
+                v.viewport.panTo(new OpenSeadragon.Point(px, py), false);
+                v.viewport.zoomTo(pz, undefined, false);
+                UTILITIES.copyToClipboard("{}");
+            } else {
+                UTILITIES.copyToClipboard(JSON.stringify({
+                    point: v.viewport.getCenter(),
+                    zoomLevel: v.viewport.getZoom(),
+                }));
+                Dialogs.show($.t('messages.viewportCopied'), 1500, Dialogs.MSG_INFO);
+            }
+        }).catch(() => {
+            Dialogs.show($.t('messages.clipboardBlocked'), 1500, Dialogs.MSG_ERR);
+        });
+    }
+
     if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {
-        function adjustBounds(speedX: number, speedY: number) {
-            let bounds = VIEWER.viewport.getBounds();
+        const shortcuts = APPLICATION_CONTEXT.shortcuts;
+        const canvasScope = { requiresCanvasFocus: true };
+        const NAV_PATH = ["keymap.cat.core", "keymap.cat.navigation"];
+        const APP_PATH = ["keymap.cat.core", "keymap.cat.application"];
+        const VIEW_PATH = ["keymap.cat.core", "keymap.cat.view"];
+
+        function adjustBounds(viewer: OpenSeadragon.Viewer, speedX: number, speedY: number) {
+            let bounds = viewer.viewport.getBounds();
             bounds.x += speedX * bounds.width;
             bounds.y += speedY * bounds.height;
-            VIEWER.viewport.fitBounds(bounds);
+            viewer.viewport.fitBounds(bounds);
         }
 
-        function isEditableTarget(target: EventTarget | null) {
-            const el = target instanceof HTMLElement ? target : document.activeElement;
-            return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
-                el instanceof HTMLSelectElement || (el as any).isContentEditable);
-        }
+        const NAV_SPEED = 0.3;
+        const registerPan = (dir: string, combo: string, dx: number, dy: number) => shortcuts.register({
+            id: `core.viewport.pan${dir}`, titleKey: `keymap.core.pan${dir}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope, preventDefault: false,
+            handler: ({ viewer }) => adjustBounds(viewer || VIEWER, dx, dy),
+        });
+        registerPan("Up", "ArrowUp", 0, -NAV_SPEED);
+        registerPan("Down", "ArrowDown", 0, NAV_SPEED);
+        registerPan("Left", "ArrowLeft", -NAV_SPEED, 0);
+        registerPan("Right", "ArrowRight", NAV_SPEED, 0);
 
-        // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
-        // preventDefault() suppresses the browser's native "Save page" dialog,
-        // which fires on keydown.
-        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: boolean }) {
-            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
-                if (isEditableTarget(e.target)) return;
-                e.preventDefault();
-                // Async; fire-and-forget — save() manages its own loading UI and toasts.
-                UTILITIES.save();
-            }
+        const registerZoom = (dir: string, combo: string, factor: number) => shortcuts.register({
+            id: `core.viewport.zoom${dir}`, titleKey: `keymap.core.zoom${dir}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope, preventDefault: false,
+            handler: ({ viewer }) => {
+                const v = viewer || VIEWER;
+                const zoom = v.viewport.getZoom();
+                v.viewport.zoomTo(zoom + zoom * factor);
+            },
+        });
+        // Single-character combos match e.key (layout- and numpad-agnostic).
+        registerZoom("In", "+", NAV_SPEED * 3);
+        registerZoom("Out", "-", -NAV_SPEED * 2);
+
+        const registerRotation = (name: string, combo: string, rotate: (viewport: any) => void) => shortcuts.register({
+            id: `core.viewport.${name}`, titleKey: `keymap.core.${name}`,
+            // trigger "down" (not "up"): rotate combos live in the browser's
+            // Alt+<letter> menu-accelerator namespace (Chrome Alt+E/Alt+F menu,
+            // Firefox Edit menu), so preventDefault must fire on keydown to
+            // suppress them — on keyup it is too late. Rotate is a one-shot
+            // 90° step, so keydown is the right phase anyway.
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "down",
+            scope: canvasScope,
+            handler: ({ viewer }) => rotate((viewer || VIEWER).viewport),
+        });
+        registerRotation("rotateLeft", "Alt+KeyQ", vp => vp.setRotation(vp.getRotation() - 90));
+        registerRotation("rotateRight", "Alt+KeyE", vp => vp.setRotation(vp.getRotation() + 90));
+        registerRotation("rotateReset", "Alt+KeyR", vp => vp.setRotation(0));
+
+        // Modifier + drag → free rotation (per-viewer ViewerRotationController).
+        // Binding-only, modifier-only combo: the controller owns the gesture and
+        // queries pointerModifiersMatch(); the manager owns which modifier arms
+        // it. Remappable from the Keymap panel (modifier capture). Default
+        // Primary = Ctrl (Win/Linux) / ⌘ (macOS).
+        shortcuts.register({
+            id: ROTATE_DRAG_SHORTCUT_ID, titleKey: "keymap.core.rotateDrag",
+            descriptionKey: "keymap.core.rotateDragDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["Primary"], type: "press",
+            capture: "modifiers", scope: canvasScope,
         });
 
-        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
-            if (e.focusCanvas) {
-                if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                    let zoom = null,
-                        speed = 0.3;
-                    switch (e.key) {
-                        case "Down": // IE/Edge specific value
-                        case "ArrowDown":
-                            adjustBounds(0, speed);
-                            break;
-                        case "Up": // IE/Edge specific value
-                        case "ArrowUp":
-                            adjustBounds(0, -speed);
-                            break;
-                        case "Left": // IE/Edge specific value
-                        case "ArrowLeft":
-                            adjustBounds(-speed, 0);
-                            break;
-                        case "Right": // IE/Edge specific value
-                        case "ArrowRight":
-                            adjustBounds(speed, 0);
-                            break;
-                        case "+":
-                            zoom = VIEWER.viewport.getZoom();
-                            VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                            return;
-                        case "-":
-                            zoom = VIEWER.viewport.getZoom();
-                            VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                            return;
-                        default:
-                            return; // Quit when this doesn't handle the key event.
+        // Joystick navigation mode toggle. App-wide (all viewers); while on, a
+        // primary-button press drops an anchor and the mouse drives a continuous
+        // pan (see ViewerJoystickController). Default `J` (e.code, layout-agnostic);
+        // remappable via the Keymap panel.
+        shortcuts.register({
+            id: "core.viewport.toggleJoystick", titleKey: "keymap.core.toggleJoystick",
+            descriptionKey: "keymap.core.toggleJoystickDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["KeyJ"], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: () => {
+                const on = ViewerJoystickController.toggle();
+                Dialogs.show($.t(on ? "messages.joystickOn" : "messages.joystickOff"),
+                    2500, Dialogs.MSG_INFO);
+            },
+        });
+
+        // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
+        // Also driven by the navigator depth slider and the Alt+wheel gesture
+        // (see loader.ts canvas-scroll). Combos `]` / `[` match e.code so they
+        // sit next to the bracket keys regardless of layout.
+        const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
+            id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
+            categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
+            scope: canvasScope,
+            handler: ({ viewer }) => ((viewer || VIEWER) as any)?.__depthController?.step(delta),
+        });
+        registerDepth("Next", "BracketRight", 1);
+        registerDepth("Prev", "BracketLeft", -1);
+
+        // Primary+S => global save. trigger "down" (not "up") so preventDefault()
+        // suppresses the browser's native "Save page" dialog, which fires on keydown.
+        shortcuts.register({
+            id: "core.app.save", titleKey: "keymap.core.save",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+KeyS"], type: "press", trigger: "down",
+            // Async; fire-and-forget — save() manages its own loading UI and toasts.
+            handler: () => UTILITIES.save(),
+        });
+        shortcuts.register({
+            id: "core.app.undo", titleKey: "keymap.core.undo",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+KeyZ"], type: "press", trigger: "up",
+            handler: () => APPLICATION_CONTEXT.history.undo(),
+        });
+        shortcuts.register({
+            id: "core.app.redo", titleKey: "keymap.core.redo",
+            categoryPath: APP_PATH, defaultCombos: ["Primary+Shift+KeyZ"], type: "press", trigger: "up",
+            handler: () => APPLICATION_CONTEXT.history.redo(),
+        });
+        shortcuts.register({
+            id: "core.app.screenshot", titleKey: "keymap.core.screenshot",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyS"], type: "press", trigger: "down",
+            handler: (ctx) => UTILITIES.makeScreenshot(ctx?.viewer),
+        });
+        shortcuts.register({
+            id: "core.app.viewportCopy", titleKey: "keymap.core.viewportCopy",
+            descriptionKey: "keymap.core.viewportCopyDesc",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyW"], type: "press", trigger: "down",
+            handler: ({ viewer }) => viewportCopyOrAlign(viewer),
+        });
+
+        // ── Peek at background: hold "h" to momentarily hide the visualization
+        // overlay in the FOCUSED viewer (only the background image shows); release
+        // to restore. Momentary opacity toggle on the flex-renderer's
+        // visualization world items — no viewer rebuild / history / events.
+        //
+        // TODO: toggling opacity on the TiledImage is not ideal — the SAME
+        // TiledImage can back both a background and a (non-bg) visualization layer,
+        // so hiding it by TiledImage opacity can affect more than the overlay. The
+        // correct fix is to set opacity per shader/visualization LAYER rather than
+        // per TiledImage. Kept as TiledImage opacity for now (simpler; good enough
+        // for the common single-visualization case).
+        const peekState = new Map<any, Array<{ item: any; opacity: number }>>();
+        shortcuts.register({
+            id: "core.view.peek", titleKey: "keymap.core.peek",
+            descriptionKey: "keymap.core.peekDesc",
+            categoryPath: VIEW_PATH, defaultCombos: ["KeyH"], type: "hold", scope: canvasScope,
+            onPress: ({ viewer }) => {
+                if (!viewer || !viewer.world) return;
+                if (peekState.has(viewer)) return;
+                const saved: Array<{ item: any; opacity: number }> = [];
+                const n = typeof viewer.world.getItemCount === "function" ? viewer.world.getItemCount() : 0;
+                for (let i = 0; i < n; i++) {
+                    const item: any = viewer.world.getItemAt(i);
+                    if (item && typeof item.getConfig === "function" && item.getConfig("visualization")) {
+                        const opacity = typeof item.getOpacity === "function" ? item.getOpacity() : item.opacity;
+                        saved.push({ item, opacity });
+                        item.setOpacity(0);
                     }
                 }
-                //rotation with alt
-                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                    switch (e.key) {
-                        case "r":
-                        case "R":
-                            VIEWER.viewport.setRotation(0);
-                            e.preventDefault();
-                            return;
-                        case "q":
-                        case "Q": // Rotate Left
-                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() - 90);
-                            e.preventDefault();
-                            return;
-                        case "e":
-                        case "E": // Rotate Right
-                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() + 90);
-                            e.preventDefault();
-                            return;
-                        default:
-                            return;
+                peekState.set(viewer, saved);
+            },
+            // Restore all (not just the focused viewer) in case focus changed while
+            // held. The manager also fires this on window blur so a window switch
+            // while "h" is held never leaves the overlay stuck hidden.
+            onRelease: () => {
+                for (const saved of peekState.values()) {
+                    for (const { item, opacity } of saved) {
+                        try { item.setOpacity(opacity); } catch (_) { /* item may be gone (viewer closed) */ }
                     }
                 }
-            }
+                peekState.clear();
+            },
+        });
 
-            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
-                if (isEditableTarget(e.target)) return;
-                e.preventDefault();
+        viewerInteraction.registerShortcuts(shortcuts, VIEW_PATH, canvasScope);
 
-                return e.shiftKey ? APPLICATION_CONTEXT.history.redo() : APPLICATION_CONTEXT.history.undo();
-            }
-
+        // Escape is a contextual dismiss key (like Enter/Delete in widgets) —
+        // deliberately NOT in the keymap registry, so it stays a fixed handler.
+        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent) {
             if (e.key === 'Escape') {
                 USER_INTERFACE.Tutorials.hide();
                 USER_INTERFACE.DropDown.hide();
             }
+        });
+    }
+
+    // Surface the utility actions in the app-bar "Tools" menu too, with the
+    // live (possibly remapped) shortcut rendered next to the label. Registered
+    // outside the preventNavigationShortcuts gate — the menu entries work even
+    // when keyboard shortcuts are disabled (they then just show no kbd text).
+    {
+        const shortcuts = APPLICATION_CONTEXT.shortcuts;
+        const toolEntries = [
+            {
+                id: "core.screenshot", shortcutId: "core.app.screenshot", icon: "ph-camera",
+                titleKey: "keymap.core.screenshot",
+                action: () => UTILITIES.makeScreenshot(),
+            },
+            {
+                id: "core.viewport-copy", shortcutId: "core.app.viewportCopy", icon: "ph-crosshair-simple",
+                titleKey: "keymap.core.viewportCopy", hintKey: "keymap.core.viewportCopyDesc",
+                action: () => viewportCopyOrAlign(),
+            },
+        ];
+        const refreshToolEntries = () => {
+            for (const entry of toolEntries) {
+                const combos = shortcuts.getBinding(entry.shortcutId)?.combos || [];
+                USER_INTERFACE.AppBar.Tools.register(entry.id, {
+                    label: $.t(entry.titleKey),
+                    icon: entry.icon,
+                    hint: entry.hintKey ? $.t(entry.hintKey) : undefined,
+                    kbd: combos.length ? shortcuts.comboDisplayParts(combos[0]).join("+") : undefined,
+                    onClick: entry.action,
+                });
+            }
+        };
+        refreshToolEntries();
+        shortcuts.addHandler("binding-changed", refreshToolEntries);
+        shortcuts.addHandler("bindings-reset", refreshToolEntries);
+    }
+
+    // Viewport sync — the per-viewer toggle lives on the scalebar (SYNC button);
+    // the session-wide actions belong here. `ViewportSyncAPI` is reachable only
+    // through a viewer's scalebar, so the statics go through its constructor.
+    {
+        const anySyncApi = () => {
+            const viewers = VIEWER_MANAGER.viewers || [];
+            const active = VIEWER_MANAGER.get?.();
+            return (active?.scalebar?.ViewportSyncAPI)
+                || viewers.map((v: any) => v?.scalebar?.ViewportSyncAPI).find(Boolean)
+                || null;
+        };
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.auto", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            // `ph-crosshairs-simple` does not exist in the Phosphor set (it is
+            // `ph-crosshair-simple`, already used by core.viewport-copy) and
+            // rendered as a blank glyph.
+            icon: "ph-arrows-in",
+            label: $.t('sync.autoSyncAll'),
+            hint: $.t('sync.autoSyncAllHint'),
+            onClick: async () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                if ((VIEWER_MANAGER.viewers?.length || 0) < 2) {
+                    Dialogs.show($.t('sync.needsTwoSlides'), 2000, Dialogs.MSG_INFO);
+                    return;
+                }
+                try {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", true);
+                    const r = await api.constructor.autoSyncAll();
+                    if (!r.aligned) {
+                        Dialogs.show($.t('sync.autoSyncNone'), 3000, Dialogs.MSG_WARN);
+                    } else if (r.failed || r.approximate) {
+                        Dialogs.show($.t('sync.autoSyncPartial', r), 4000, Dialogs.MSG_WARN);
+                    } else {
+                        Dialogs.show($.t('sync.autoSyncDone', r), 2000, Dialogs.MSG_INFO);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                } finally {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.auto", false);
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.recalibrate", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-cursor-click",
+            label: $.t('sync.recalibrate'),
+            hint: $.t('sync.recalibrateHint'),
+            onClick: async () => {
+                const viewer: any = VIEWER_MANAGER.get?.() || VIEWER_MANAGER.viewers?.[0];
+                const api: any = viewer?.scalebar?.ViewportSyncAPI;
+                if (!api) return;
+                try {
+                    api.resetViewer();
+                    await api.enable({ mode: "manual" });
+                    Dialogs.show($.t('sync.enabled'), 1500, Dialogs.MSG_INFO);
+                } catch (e: any) {
+                    if (!/cancel/i.test(e?.message || "")) {
+                        console.error(e);
+                        Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
+                    }
+                }
+            },
+        });
+
+        USER_INTERFACE.AppBar.Tools.register("core.sync.reset", {
+            section: "sync", sectionTitle: $.t('sync.toolsSection'), order: 10,
+            icon: "ph-eraser",
+            label: $.t('sync.resetAll'),
+            hint: $.t('sync.resetAllHint'),
+            onClick: () => {
+                const api: any = anySyncApi();
+                if (!api) return;
+                // resetSession() drops the memoized registrations itself.
+                api.resetSession();
+                Dialogs.show($.t('sync.sessionCleared'), 1500, Dialogs.MSG_INFO);
+            },
         });
     }
 

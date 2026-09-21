@@ -1,0 +1,28 @@
+{
+    "name": "Tutorial App 01 v3",
+    "name_short": "TA01v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_01.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangle": {
+            "type": "rectangle",
+            "reference": "io.my_wsi"
+        },
+        "tumor_cell_count": {
+            "type": "integer"
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "my_wsi",
+                "my_rectangle"
+            ],
+            "outputs": [
+                "tumor_cell_count"
+            ]
+        }
+    }
+}

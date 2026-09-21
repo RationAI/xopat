@@ -1,0 +1,150 @@
+/// <reference path="../../../src/types/globals.d.ts" />
+
+import {TranscriptionDriver, TranscriptionOptions, TranscriptionResult, normalizeResult, bareTypeBlob} from "./driver";
+
+/**
+ * Deployment-controlled config for a remote Whisper-compatible endpoint. Read
+ * from `getStaticMeta("remote", ...)` — trusted (ENV/include.json), never from
+ * per-session `getOption` (§7).
+ */
+export interface RemoteWhisperConfig {
+    /** Optional label for diagnostics. */
+    name?: string;
+    /** Base URL of the server (e.g. a self-hosted whisper.cpp / faster-whisper). */
+    path: string;
+    /** Path appended to `path` for transcription. Defaults to an OpenAI-compatible route. */
+    endpoint?: string;
+    /** Model id the server should use, when it accepts one. */
+    model?: string;
+    /** Form field name for the audio file. Defaults to "file". */
+    fileField?: string;
+    /** Optional health-probe path (GET). Defaults to trying the endpoint with OPTIONS. */
+    probe?: string;
+    /**
+     * Auth context id whose JWT should be attached (via HttpClient). Omit for an
+     * unauthenticated same-origin/self-hosted server.
+     */
+    contextId?: string;
+    /** Require auth to be present (fail closed) when a contextId is given. */
+    requiresLogin?: boolean;
+    /**
+     * Client-side deadline per transcription, ms (default {@link DEFAULT_TIMEOUT_MS}).
+     * Without it the request inherits `HttpClient`'s 30 s default, which also counts
+     * the request scheduler's queue wait — under tile load a queued utterance is
+     * aborted before it reaches the server and its words are lost. `0` disables the
+     * client timer.
+     */
+    timeoutMs?: number;
+}
+
+/** Room for a long utterance plus scheduler wait, on a self-hosted (often slow) box. */
+const DEFAULT_TIMEOUT_MS = 90_000;
+
+/**
+ * Default driver: POST captured audio to a self-hosted, Whisper-compatible
+ * server through `window.HttpClient` so JWT/CSRF injection, proxy-alias
+ * resolution, and secureMode policy all apply (§0/§4). Audio leaves the browser
+ * only to the operator's own server — never to a third-party cloud.
+ *
+ * One `HttpClient` is built per driver instance, mirroring the SAM tool's
+ * per-GPU-server client pattern (`plugins/sam-segment-tool-experimental/samInference.ts`).
+ */
+export class RemoteWhisperDriver implements TranscriptionDriver {
+    readonly id: string;
+    readonly label: string;
+    readonly local = false;
+    /** Configured model, or undefined when the endpoint picks its own. @see TranscriptionDriver */
+    get modelId(): string | undefined { return this._cfg.model || undefined; }
+
+    private _cfg: RemoteWhisperConfig;
+    private _client: any;
+    private _endpoint: string;
+    private _fileField: string;
+
+    constructor(id: string, cfg: RemoteWhisperConfig) {
+        if (!cfg?.path) throw new Error("[speech-to-text] remote driver requires a 'path'.");
+        this.id = id;
+        this.label = cfg.name || `Remote Whisper (${id})`;
+        this._cfg = cfg;
+        this._endpoint = cfg.endpoint || "v1/audio/transcriptions";
+        this._fileField = cfg.fileField || "file";
+
+        const HttpClientCtor = (window as any).HttpClient;
+        // `types` is deliberately OMITTED: HttpClient resolves it per request from
+        // XOpatAuth.getSecretTypes, so a driver constructed before its context is
+        // configured still follows the owning auth module. Passing it here would
+        // freeze whatever was known at construction time — usually the ["jwt"]
+        // default, which is wrong for e.g. a basic-auth context.
+        const auth = cfg.contextId
+            ? {
+                contextId: cfg.contextId,
+                required: cfg.requiresLogin !== false,
+                refreshOn401: true,
+            }
+            : undefined;
+        this._client = new HttpClientCtor({baseURL: cfg.path, ...(auth ? {auth} : {})});
+    }
+
+    async isAvailable(): Promise<boolean> {
+        try {
+            if (this._cfg.probe) {
+                await this._client.request(this._cfg.probe, {method: "GET", priority: "background"});
+                return true;
+            }
+            // No dedicated probe: assume configured endpoints are reachable and let
+            // the first real transcription surface any error to the user. Avoids a
+            // spurious pre-flight against servers that reject OPTIONS/HEAD.
+            return true;
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    async transcribe(audio: Blob, opts: TranscriptionOptions = {}): Promise<TranscriptionResult> {
+        const form = new FormData();
+        const ext = (audio.type && audio.type.includes("wav")) ? "wav"
+            : (audio.type && audio.type.includes("ogg")) ? "ogg" : "webm";
+        // Re-wrap without the codec parameter. `MediaRecorder` is asked for
+        // `audio/webm;codecs=opus` — the browser needs the codec to pick an encoder — and
+        // that full string becomes the Blob's `type`, hence the multipart part's
+        // `Content-Type`. Upstreams read the audio format out of that header and reject
+        // the parameterised value verbatim: `Unsupported file format webm;codecs=opus`.
+        // The container is what they need; the codec is inside the file.
+        form.append(this._fileField, bareTypeBlob(audio), `audio.${ext}`);
+        if (this._cfg.model) form.append("model", this._cfg.model);
+        if (opts.language) form.append("language", opts.language);
+        // Domain/vocabulary biasing (Whisper `prompt` / whisper.cpp `initial_prompt`).
+        if (opts.prompt) form.append("prompt", opts.prompt);
+        // `verbose_json` carries the detected language (and the decoder's own verdicts);
+        // a server that rejects it is remembered and asked for plain `json` from then on.
+        form.append("response_format", this._responseFormat);
+        // Deterministic decoding (matches the WASM driver): sampling randomness
+        // mostly manufactures hallucinations on the silence tail of a segment.
+        form.append("temperature", "0");
+
+        const send = (body: FormData) => this._client.request(this._endpoint, {
+            method: "POST",
+            body,
+            signal: opts.signal,
+            // Dictation is latency-sensitive: jump the bulk background queue (still
+            // scheduler-managed, still yields to live tiles) so it isn't stuck behind slow
+            // extraction chunks — matching the default Vercel transcribe driver.
+            priority: "background-urgent",
+            timeoutMs: opts.timeoutMs ?? this._cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        });
+        let raw: any;
+        try {
+            raw = await send(form);
+        } catch (e: any) {
+            const status = Number(e?.status ?? e?.response?.status);
+            if (this._responseFormat !== "verbose_json" || status !== 400) throw e;
+            this._responseFormat = "json";
+            form.set("response_format", "json");
+            raw = await send(form);
+        }
+        return normalizeResult(raw);
+    }
+
+    /** `verbose_json` until the endpoint refuses it once; then `json` for this driver's lifetime. */
+    private _responseFormat: "verbose_json" | "json" = "verbose_json";
+}

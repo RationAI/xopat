@@ -1,0 +1,25 @@
+{
+  "core": {
+    "gateway": "/",
+    "active_client": "localhost",
+    "client": {
+      "localhost": {
+        "domain": "http://localhost:<% XOPAT_NODE_PORT:-9002 %>",
+        "path": "/",
+        "slide_protocols": {
+          "wsi_service": {
+            "url": "`/v3/slides/info?slide_id=${data}`",
+            "baseURL": "http://localhost:<% WSI_PORT:-8080 %>"
+          }
+        },
+        "default_background_protocol": "wsi_service",
+        "default_visualization_protocol": "wsi_service",
+        "secureMode": false
+      }
+    },
+    "setup": {
+      "locale": "en",
+      "theme": "auto"
+    }
+  }
+}

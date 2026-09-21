@@ -1,0 +1,22 @@
+{
+  "id": "chat-openai",
+  "name": "%meta.name%",
+  "author": "Aiosa",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "categories": ["AI"],
+  "keywords": ["chat", "llm", "openai", "gpt", "whisper", "transcription", "speech-to-text"],
+  "icon": "ph-chat-circle",
+  "modules": ["vercel-ai-chat-sdk"],
+  // Login is OPT-IN and method-agnostic: "none" (the default) works out of the
+  // box, any other value requires login for `authContext`. Null/"core" = the
+  // viewer's main auth context; whichever auth module owns it (oidc-client-ts,
+  // oidc-server-ts, saml-auth, …) supplies the mechanism — this plugin never
+  // names one. Deployments that authenticate the chat separately set both keys
+  // in ENV (ENV.plugins["chat-openai"]) and load an auth module declaring that
+  // context. Back-compat inline config: authBroker + authConfig, applied only
+  // when no auth module claims the context. See src/AUTH.md.
+  "authMode": "none",
+  "authContext": null,
+  "requiredConfig": []
+}

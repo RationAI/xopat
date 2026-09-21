@@ -1,3 +1,13 @@
+// `$` is xOpat's i18n namespace (`$.t` / `$.i18n`), NOT jQuery — jQuery is no
+// longer shipped. The UI bundle is emitted BEFORE the core scripts, so the
+// placeholder is installed here too; whichever runs first wins, and `src/app.ts`
+// later swaps `t` for the real i18next translator. Idempotent by design — see
+// `src/classes/app/i18n-dom.ts` and AGENTS.md §3.
+if (!globalThis.$) globalThis.$ = {};
+if (typeof globalThis.$.t !== "function") {
+    globalThis.$.t = (key) => String(key).split(".").findLast(Boolean);
+}
+
 globalThis.UI = {};
 globalThis.VANCOMPONENTS = {};
 
@@ -9,6 +19,7 @@ import { BaseComponent } from "./classes/baseComponent.mjs";
 import { Button } from "./classes/elements/buttons.mjs";
 import { FAIcon } from "./classes/elements/fa-icon.mjs";
 import { PhIcon } from "./classes/elements/ph-icon.mjs";
+import { ImageIcon } from "./classes/elements/image-icon.mjs";
 import { Join } from "./classes/elements/join.mjs";
 import { Div } from "./classes/elements/div.mjs";
 import { Dropdown } from "./classes/elements/dropdown.mjs";
@@ -55,7 +66,12 @@ import { TutorialsModal } from "./classes/components/tutorialsModal.mjs";
 import { LoginModal } from "./classes/components/loginModal.mjs";
 import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
+import { Autocomplete } from "./classes/components/autocomplete.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
+import { KeymapPanel } from "./classes/components/keymapPanel.mjs";
+import { RenderDebugPanel } from "./classes/components/renderDebugPanel.mjs";
+import { UserRolesPanel } from "./classes/components/userRolesPanel.mjs";
+import { SuggestionEditor } from "./classes/components/suggestionEditor.mjs";
 
 // SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
@@ -113,15 +129,15 @@ class ServiceContainer {
 
 const UI = {
     BaseComponent,
-    Button, FAIcon, PhIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
+    Button, FAIcon, PhIcon, ImageIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
     StretchGrid, Input, Badge, Title, Collapse, Loading,
 
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
     FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
-    Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect,
-    ContextMenu,
+    Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect, Autocomplete,
+    ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor, UserRolesPanel,
 
     Services: new ServiceContainer(),
     Mixins: {

@@ -4,8 +4,7 @@ const ROW_BASE = "rounded-md border border-base-300/70 bg-base-100 hover:border-
 const ROW_SELECTED = "rounded-md border border-primary bg-base-100 ring-1 ring-primary/30";
 
 function iconNode(icon, extraClass = "", style = "") {
-    const isPh = String(icon ?? '').trim().startsWith('ph-');
-    const cls = isPh ? `ph-light ${icon} ${extraClass}` : `fa-auto ${icon} ${extraClass}`;
+    const cls = `ph-light ${icon ?? ''} ${extraClass}`;
     return i({ class: cls.trim(), style });
 }
 
@@ -17,15 +16,29 @@ function iconNode(icon, extraClass = "", style = "") {
  *
  * View only: domain logic flows through `callbacks` so the card stays
  * decoupled from the plugin.
+ *
+ * `lock` renders fields the destination owns as read-only. A class vocabulary
+ * (`presets.setVocabulary`) is enforced at the IO checkpoint whatever the UI does,
+ * so an editable field here would only be a control the user cannot succeed with.
+ * The card stays domain-agnostic: it is handed the key set, not the vocabulary.
+ * @typedef {object} PresetCardLock
+ * @property {Set<string>} [metaKeys] meta keys rendered read-only, never deletable
+ * @property {boolean} [title] whether the display name is fixed too
+ * @property {string} [reason] tooltip explaining why
  */
 export class PresetCard extends UI.BaseComponent {
-    constructor({ preset, isSelected, enableModify, allowedFactories, t, callbacks }) {
+    constructor({ preset, isSelected, enableModify, allowedFactories, t, callbacks, lock }) {
         super({ extraClasses: {} });
         this.preset = preset;
         this.enableModify = !!enableModify;
         this.allowedFactories = allowedFactories || [];
         this.t = typeof t === "function" ? t : (k) => k;
         this.cb = callbacks || {};
+        this.lock = {
+            metaKeys: lock?.metaKeys instanceof Set ? lock.metaKeys : new Set(),
+            title: !!lock?.title,
+            reason: lock?.reason || "",
+        };
         this._expanded = !!isSelected;
 
         this.classMap = {
@@ -61,7 +74,11 @@ export class PresetCard extends UI.BaseComponent {
         const preset = this.preset;
 
         const colorChip = input({
-            class: "p-0 border border-base-300 bg-transparent cursor-pointer w-5 h-5 rounded overflow-hidden shrink-0",
+            class: "border border-base-300 bg-transparent cursor-pointer rounded overflow-hidden shrink-0",
+            // Native input[type=color] ignores purge-prone w-/h- utilities and
+            // falls back to its ~44px UA size; pin dimensions inline so the row
+            // stays compact regardless of the shipped Tailwind build.
+            style: "width:1.15rem;height:1.15rem;padding:0",
             type: "color",
             value: preset.color,
             disabled: !this.enableModify,
@@ -70,7 +87,7 @@ export class PresetCard extends UI.BaseComponent {
             onchange: (e) => this.cb.onColorChange?.(preset.presetID, e.target.value),
         });
 
-        const titleNode = this.enableModify
+        const titleNode = this.enableModify && !this.lock.title
             ? input({
                 class: "input input-xs bg-transparent border-none focus:bg-base-200 hover:bg-base-200/60 transition-colors flex-1 min-w-0 px-2 font-medium",
                 placeholder: this.t("annotations.presets.unnamed") || "Unnamed Class",
@@ -78,8 +95,10 @@ export class PresetCard extends UI.BaseComponent {
                 onclick: (e) => e.stopPropagation(),
                 onchange: (e) => this.cb.onMetaChange?.(preset.presetID, "category", e.target.value),
             })
-            : span({ class: "text-sm font-medium px-2 truncate flex-1" },
-                preset.meta.category?.value || (this.t("annotations.presets.unnamed") || "Unnamed Class"));
+            : span({
+                class: "text-sm font-medium px-2 truncate flex-1",
+                title: this.lock.title ? this.lock.reason : undefined,
+            }, preset.meta.category?.value || (this.t("annotations.presets.unnamed") || "Unnamed Class"));
 
         const factoryIcon = iconNode(
             preset.objectFactory.getIcon?.() || "ph-shapes",
@@ -107,7 +126,7 @@ export class PresetCard extends UI.BaseComponent {
         );
 
         return div({
-            class: "group flex items-center gap-2 px-2 py-1.5 cursor-pointer",
+            class: "group flex items-center gap-2 px-2 py-0.5 cursor-pointer",
             onclick: () => this.cb.onSelect?.(this.preset.presetID, this),
         }, this._chevron, colorChip, titleNode, factoryIcon, metaBadge, deleteBtn);
     }
@@ -164,18 +183,20 @@ export class PresetCard extends UI.BaseComponent {
 
     _metaInput(key, meta, allowDelete, classes) {
         const wrap = div({ class: "relative group/meta flex-1" });
+        const locked = this.lock.metaKeys.has(key);
         const inputNode = input({
             class: `input input-bordered focus:input-primary transition-all ${classes}`.trim(),
             placeholder: meta.name || (this.t("annotations.presets.valuePlaceholder") || "Value..."),
             type: "text",
             value: meta.value,
-            disabled: !this.enableModify,
+            disabled: !this.enableModify || locked,
+            title: locked ? this.lock.reason : undefined,
             onclick: (e) => e.stopPropagation(),
             onchange: (e) => this.cb.onMetaChange?.(this.preset.presetID, key, e.target.value),
         });
         wrap.appendChild(inputNode);
 
-        if (allowDelete && this.enableModify) {
+        if (allowDelete && this.enableModify && !locked) {
             wrap.appendChild(button({
                 class: "btn btn-ghost btn-xs btn-square absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/meta:opacity-100 text-error",
                 onclick: (e) => {

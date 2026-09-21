@@ -1,0 +1,79 @@
+{
+  "$meta": {
+    "description": "Every conversational provider registered at once — each takes its operator key from the environment, or degrades to bring-your-own-key",
+    "dimension": "chat",
+    "requires": [],
+    "defaults": { "CERIT_BASE_URL": "https://llm.ai.e-infra.cz/v1" }
+  },
+  /**
+   * The other `chat/*` fragments enable ONE provider, because a preset whose
+   * subject is the assistant wants an unambiguous answer to "which one
+   * produced that". This one is for deployments whose subject is something
+   * else — persistence, roles, storage retention — where what matters is that
+   * *a* chat exists and the operator configures whichever key they hold.
+   *
+   * `apiKey` is three-state (`plugins/chat-openai/server.json`): a string is
+   * the operator's key, `""` means "a key is required but none is configured"
+   * (model discovery stays off, the panel shows the bring-your-own-key hint),
+   * and `false` declares the endpoint keyless. An UNSET `<% VAR %>` resolves to
+   * `""` — the middle state — which is why `requires` is empty: set
+   * `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `CERIT_API_KEY` in `env/.env` and
+   * that provider works out of the box; leave one unset and it is still listed,
+   * still selectable, and asks the user for a key (chat settings → "Providers &
+   * API keys"). NEVER write a placeholder *string* here: it is
+   * indistinguishable from a real key, so discovery runs and 401s.
+   *
+   * Per-user keys are stored server-side, scoped `user:<id>` / `sess:<id>`, in
+   * a `kv:secrets` namespace declared sensitivity "secret" — so it refuses to
+   * bind to a persistent driver. Under a durable-storage deployment that is the
+   * point, not a gap: the history survives a restart, the key does not.
+   *
+   * Login: nothing here asks for it. `plugins.<id>.authMode: "jwt"` +
+   * `authContext: "core"` is what makes a provider report `requiresLogin`, and
+   * the `auth/*` fragment's `rpcVerifiers` entry is what enforces it.
+   *
+   * Vision is a separate question: `chat/medgemma-vision` is dimensionless and
+   * stacks on top of this fragment.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-anthropic": {
+            "providerDefaults": {
+              "apiKey": "<% ANTHROPIC_API_KEY %>"
+            }
+          },
+          "chat-openai": {
+            "providerDefaults": {
+              "apiKey": "<% OPENAI_API_KEY %>"
+            }
+          },
+          "chat-openai-compatible": {
+            "providerDefaults": {
+              "label": "Cerit Provider",
+              "baseUrl": "<% CERIT_BASE_URL:-https://llm.ai.e-infra.cz/v1 %>",
+              "requiresLogin": false,
+              /* Verified accepted by llm.ai.e-infra.cz (2026-09-04); without it
+                 the Token usage panel stays blank, because the SDK only sends
+                 `stream_options.include_usage` when the provider is built with
+                 it. Repoint `CERIT_BASE_URL` at a local vLLM/Ollama and turn
+                 this back off — a backend that rejects the unknown field breaks
+                 `doStream`, i.e. chat itself and not merely the readout. */
+              "includeUsage": true,
+              "apiKey": "<% CERIT_API_KEY %>"
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-anthropic": { "enabled": true, "permaLoad": true },
+    "chat-openai": { "enabled": true, "permaLoad": true },
+    "chat-openai-compatible": { "enabled": true, "permaLoad": true }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": true }
+  }
+}

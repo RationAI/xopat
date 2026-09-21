@@ -1,0 +1,14 @@
+{
+  "name": "markdown-module",
+  "version": "1.0.0",
+  "description": "Shared markdown rendering and the #xopat-<kind> link registry for xOpat",
+  "keywords": [],
+  "buildEntry": "markdown.ts",
+  "author": "RationAI",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "marked": "^18.0.11"
+  }
+}

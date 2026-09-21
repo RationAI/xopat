@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useState} from 'react';
 import Link from '@docusaurus/Link';
 import CodeBlock from '@theme/CodeBlock';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -20,6 +20,11 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
  *            (avoids the cramped mobile menus in the narrow docs column).
  *   showSource - when a `config` is given, render an expandable block with the
  *            pretty-printed session JSON so readers can see how it is built.
+ *   localSetup - commands that make this demo runnable locally. Passing it
+ *            declares that the session names data only a local fixture server
+ *            resolves, so the public deployment cannot render it: the frame is
+ *            replaced by those commands plus the session, rather than an iframe
+ *            that boots a viewer and then shows nothing.
  */
 export default function DemoFrame({
   path = '',
@@ -27,10 +32,29 @@ export default function DemoFrame({
   config = null,
   scale = 1,
   showSource = true,
+  localSetup = null,
 }) {
   const {siteConfig} = useDocusaurusContext();
   const demoUrl = siteConfig.customFields.demoUrl;
 
+  // The embedded viewer is heavy (full xOpat app + WSI tile streams + WebGL).
+  // Track load so we can show a placeholder instead of an empty box until the
+  // iframe fires `onLoad`. Combined with `loading="lazy"` below, a demo that is
+  // scrolled off-screen doesn't boot at all until the reader reaches it.
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  const sourceBlock = config && showSource && (
+    <details>
+      <summary>View session configuration</summary>
+      <CodeBlock language="json" title="xOpat session config">
+        {JSON.stringify(config, null, 2)}
+      </CodeBlock>
+    </details>
+  );
+
+  // Two reasons an iframe would be dishonest, and they are separate questions:
+  // there is no deployment to point at, or there is one but it cannot serve
+  // this session's data.
   if (!demoUrl) {
     return (
       <div className="alert alert--info" role="alert">
@@ -39,6 +63,19 @@ export default function DemoFrame({
         <Link to="/generated/getting-started/quick-start">Quick Start</Link>{' '}
         guide.
       </div>
+    );
+  }
+
+  if (localSetup) {
+    return (
+      <>
+        <div className="alert alert--info" role="alert">
+          This demo reads fixture data that only a local file server resolves,
+          so it cannot run on the hosted demo. Reproduce it in five commands:
+        </div>
+        <CodeBlock language="bash">{localSetup.join('\n')}</CodeBlock>
+        {sourceBlock}
+      </>
     );
   }
 
@@ -52,30 +89,84 @@ export default function DemoFrame({
 
   const heightCss = typeof height === 'number' ? `${height}px` : height;
   const zoom = scale > 0 && scale < 1;
-  const frame = zoom ? (
+
+  // Shared iframe attributes. `loading="lazy"` defers booting the viewer until
+  // it is near the viewport; `onLoad` reveals it (and hides the placeholder).
+  const iframeProps = {
+    src,
+    title: 'xOpat live demo',
+    allow: 'fullscreen',
+    loading: 'lazy',
+    onLoad: () => setIsLoaded(true),
+  };
+  const revealStyle = {
+    opacity: isLoaded ? 1 : 0,
+    transition: 'opacity 0.3s ease',
+  };
+
+  const inner = zoom ? (
     // Container clips the oversized iframe to the visible box; the iframe is
     // rendered `1/scale` larger then scaled back down from the top-left corner.
     <div style={{width: '100%', height: heightCss, overflow: 'hidden'}}>
       <iframe
-        src={src}
+        {...iframeProps}
         style={{
           width: `${100 / scale}%`,
           height: `calc(${heightCss} / ${scale})`,
           border: 0,
           transform: `scale(${scale})`,
           transformOrigin: '0 0',
+          ...revealStyle,
         }}
-        title="xOpat live demo"
-        allow="fullscreen"
       />
     </div>
   ) : (
     <iframe
-      src={src}
-      style={{width: '100%', height: heightCss, border: 0}}
-      title="xOpat live demo"
-      allow="fullscreen"
+      {...iframeProps}
+      style={{width: '100%', height: heightCss, border: 0, ...revealStyle}}
     />
+  );
+
+  const frame = (
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: heightCss,
+        background: 'var(--ifm-background-surface-color)',
+        borderRadius: 'var(--ifm-global-radius)',
+        overflow: 'hidden',
+      }}>
+      {inner}
+      {!isLoaded && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.75rem',
+            color: 'var(--ifm-color-emphasis-700)',
+            pointerEvents: 'none',
+          }}>
+          {/* Self-contained SMIL spinner — no extra CSS file/keyframes needed. */}
+          <svg width="40" height="40" viewBox="0 0 50 50" aria-hidden="true"
+               style={{color: 'var(--ifm-color-primary)'}}>
+            <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor"
+                    strokeWidth="5" strokeLinecap="round" strokeDasharray="90 60">
+              <animateTransform attributeName="transform" type="rotate"
+                                from="0 25 25" to="360 25 25" dur="1s"
+                                repeatCount="indefinite" />
+            </circle>
+          </svg>
+          <span>Loading demo…</span>
+        </div>
+      )}
+    </div>
   );
 
   return (
@@ -86,14 +177,7 @@ export default function DemoFrame({
           Open the demo in a new tab ↗
         </a>
       </p>
-      {config && showSource && (
-        <details>
-          <summary>View session configuration</summary>
-          <CodeBlock language="json" title="xOpat session config">
-            {JSON.stringify(config, null, 2)}
-          </CodeBlock>
-        </details>
-      )}
+      {sourceBlock}
     </>
   );
 }

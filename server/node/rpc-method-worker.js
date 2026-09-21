@@ -19,6 +19,10 @@ async function loadModule(loadPath) {
         if (workerData.runtime) {
             installGlobalServerHelpers(workerData.runtime);
         }
+        // NOTE: `workerData.ctx` is a structured clone, so it carries no `req`/`res`.
+        // If this path is ever wired up, `ctx.principal` / `ctx.principalKind` MUST be
+        // in the serialized set (identity would otherwise vanish inside the worker),
+        // and `XOPAT_SERVER.requireRpcAuthContext` cannot run here — it needs `req`.
         const mod = await loadModule(workerData.loadPath);
         const fn = mod[workerData.exportName];
         if (typeof fn !== "function") {

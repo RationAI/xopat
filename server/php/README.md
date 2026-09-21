@@ -1,5 +1,9 @@
 TODO: describe the server usage and configuration
 
+> Environment variables read by the PHP core server (`APP_BASE_PATH`, `XOPAT_ENV`,
+> `<% VAR %>` substitution, JWT `secretEnv`) are documented in
+> [`server/ENVIRONMENT.md`](../ENVIRONMENT.md).
+
 ````php
 define('PHP_INCLUDES', ABSPATH . 'server/php/inc/');
 define('VIEWER_SOURCES_ABS_ROOT', ABSPATH . 'src/');
@@ -9,7 +13,6 @@ define('ABS_PLUGINS', ABSPATH . 'plugins/');
 //Relative Paths For the Viewer
 defined('PROJECT_ROOT') || define('PROJECT_ROOT', "");
 define('PROJECT_SOURCES', PROJECT_ROOT . 'src/');
-define('EXTERNAL_SOURCES', PROJECT_SOURCES . 'external/');
 define('LIBS_ROOT', PROJECT_SOURCES . 'libs/');
 define('ASSETS_ROOT', PROJECT_SOURCES . 'assets/');
 define('LOCALES_ROOT', PROJECT_SOURCES . 'locales/');

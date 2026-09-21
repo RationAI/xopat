@@ -27,6 +27,8 @@ type DataSpecification = DataID | DataOverride;
  * @property tileSource DEPRECATED: a pre-built tileSource object. Kept for one deprecation cycle; plugins should
  *    register a factory protocol with `SLIDE_PROTOCOLS.register({ id, createTileSource })` and reference it via
  *    `protocol` instead. The pre-built TileSource is not serializable and breaks URL/POST roundtripping.
+ * @property pixelScale how many reference-image pixels one pixel of this image covers — what makes a
+ *    lower-resolution overlay land on its background instead of being squeezed to its width.
  */
 interface DataOverride {
     dataID: DataID;
@@ -34,13 +36,121 @@ interface DataOverride {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     protocol?: string;
     tileSource?: OpenSeadragon.TileSource;
     /**
      * By default enabled, allows turning off data sampling interpolation.
      */
     imageSmoothingEnabled?: boolean;
+    /**
+     * How many pixels of the stack's REFERENCE image (its background) ONE pixel
+     * of this image covers. `2` means half-resolution; `512` means each pixel is
+     * one 512-px prediction square.
+     *
+     * Why it is needed: OpenSeadragon normalizes every image in the world to
+     * viewport width 1, so an overlay lands on its background only when their
+     * aspect ratios match. An overlay that covers a whole number of blocks of a
+     * slide whose width is NOT a whole number of blocks can never match — the
+     * edge block hangs past the slide, and OSD squeezes the overlay to fit,
+     * shrinking every cell slightly and accumulating the error across the image.
+     * Declaring the scale is what lets such an overlay overhang instead.
+     *
+     * A scalar, or `{x, y}` when the axes differ. Only `x` affects placement:
+     * OSD derives height from the image's own aspect ratio, which is already
+     * right when the two axes share a scale.
+     *
+     * Meaningless on a background (it IS the reference) and ignored there.
+     * Composes with — does not replace — the virtual-region placement of a
+     * cropped stack: the widths multiply, `x`/`y`/`degrees` stay the stack's.
+     *
+     * Absent, non-finite, zero or negative means "no opinion": the image is
+     * placed exactly as it was before this field existed. Session-supplied and
+     * therefore untrusted, so it is range-checked before use.
+     */
+    pixelScale?: number | { x: number; y: number };
+    /**
+     * Present when this spec resolves a *virtual* (cropped) source via the
+     * `virtual-region` protocol. Carries the crop + alignment so the
+     * `virtual-region` factory can wrap the parent (resolved from `dataID`).
+     * Threaded onto BOTH a virtual child's background image spec and — at
+     * resolution time — every visualization data layer of that child, so the
+     * whole co-registered stack crops together. See the virtual-viewports plan.
+     */
+    croppingContext?: VirtualCroppingContext;
 }
+
+/**
+ * A rectangular sub-region of a slide, expressed as RELATIVE fractions (0..1)
+ * of the source's own full-resolution dimensions — NOT absolute pixels. Using
+ * fractions lets co-registered sources of different resolution but the same
+ * aspect ratio (e.g. a low-res overlay vs the H&E background) crop to the same
+ * proportional region and overlap. Each `CroppedTileSource` converts these
+ * fractions to pixels against its own parent.
+ */
+interface VirtualRegionRect {
+    /** Left edge as a fraction of width (0..1). */
+    x: number;
+    /** Top edge as a fraction of height (0..1). */
+    y: number;
+    /** Width as a fraction of full width (0..1). */
+    w: number;
+    /** Height as a fraction of full height (0..1). */
+    h: number;
+}
+
+/**
+ * Affine that maps a region into the shared *registration frame* so multiple
+ * virtual sources of the same physical slide can be aligned (rendered atop one
+ * another, or carry overlays across render modes).
+ */
+interface VirtualRegionTransform {
+    /** Translation in registration-frame pixels (applied after rotation/flip). */
+    dx: number;
+    dy: number;
+    /** Clockwise rotation in degrees about the region origin. */
+    rotation: number;
+    /** Horizontal flip of the region about its own vertical axis. */
+    flip: boolean;
+}
+
+/**
+ * The spatial descriptor a virtual (cropped) source carries: `region` crops the
+ * parent; `transform` aligns the crop into the registration frame shared by all
+ * siblings.
+ */
+interface VirtualCroppingContext {
+    region: VirtualRegionRect;
+    transform: VirtualRegionTransform;
+}
+
+/** One region produced by a virtualization probe. */
+interface VirtualRegion extends VirtualCroppingContext {
+    /** Stable per-region id; suffix used to build the child background id. */
+    id: string;
+}
+
+/**
+ * Result of `TileSource.probeVirtualization()` — a slide-wide spatial partition
+ * the background owns; every co-registered source above the background inherits
+ * it. A `null` return (not this type) means "no virtualization for this source".
+ */
+interface VirtualDecomposition {
+    /** Detector that produced this decomposition (provenance / re-probe routing). */
+    detectorId: string;
+    /**
+     * The parent the regions crop from, referenced the standard way: an index
+     * into `config.data` (preferred — enables cross-referencing) or the `DataID`
+     * value. When omitted, it defaults to the `dataReference` of the background
+     * that owns this decomposition.
+     */
+    dataReference?: number | DataID;
+    regions: VirtualRegion[];
+}
+
+/** Render policy for a virtualized parent background. */
+type VirtualizationMode = "none" | "sidebyside" | "overlaid";
 
 /**
  * Ggeneric value map, where some values are already pre-defined:
@@ -66,6 +176,18 @@ interface TileSourceMetadata {
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /**
+     * Native optical magnification of the image (e.g. `40` for a 40x objective).
+     *
+     * - omitted / `undefined` — unknown. The core guesses it from the pixel size
+     *   against a whole-slide optics table and warns when the pixel size is too
+     *   coarse to be a slide.
+     * - `null` — **not applicable**: the modality has no objective at all
+     *   (CT/MR/PT/CR/DX/NM). No guess, no warning, no magnification ladder — the
+     *   scalebar still reports physical length from `micronsX/Y`.
+     * - a number — used verbatim.
+     */
+    magnification?: number | null;
 }
 
 /**
@@ -93,6 +215,28 @@ interface TileSourceDisplaySection {
  * TileSource instances. See `src/tile-source.ts` for the default and contract.
  */
 type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
+/**
+ * Where the original slide file can be fetched from — the return value of the
+ * optional `TileSource.getSlideFileDownload()`. Consumed by
+ * `UTILITIES.downloadSlideFile` (`src/classes/app/slide-file-download.ts`).
+ * See `src/tile-source.ts` for the capability contract.
+ */
+interface SlideFileDownload {
+    /** Absolute or app-relative URL, already resolved through proxy / baseURL. */
+    url: string;
+    /** Preferred file name. A `Content-Disposition` on the response still wins. */
+    fileName?: string;
+    /** Size in bytes when known without issuing the request. */
+    sizeBytes?: number;
+    mimeType?: string;
+    /**
+     * HttpClient the fetch must be routed through when the endpoint needs auth
+     * headers. Unset for cookie-authenticated endpoints, which lets the driver
+     * delegate to the browser's own download manager instead of buffering.
+     */
+    client?: any /* HttpClient */;
+}
 /**
  * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
  * @property shaders array of optional rendering specification
@@ -109,16 +253,48 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 interface BackgroundItem {
     dataReference: number | DataSpecification;
     shaders?: VisualizationShaderGroupOrLayer[];
-    lossless?: boolean;
     protocol?: string;
     microns?: number;
     micronsX?: number;
     micronsY?: number;
+    /** @see TileSourceMetadata.magnification — `null` means "no objective". */
+    magnification?: number | null;
     name?: string;
     sessionName?: string;
     visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
+    /**
+     * Canvas clear color for a viewer showing this background — hex
+     * `#RGB` / `#RGBA` / `#RRGGBB` / `#RRGGBBAA`. Per-background override of
+     * `setup.backgroundColor`; unset falls back to it (transparent by default).
+     * Resolved through `BackgroundConfig.resolveFillColor`; a malformed value is
+     * ignored with a console warning.
+     */
+    fill?: string;
+    /**
+     * Present on a *parent* background that owns a stored decomposition
+     * (probe-then-persist). Drives `expandVirtualBackgrounds` to materialize
+     * first-class child backgrounds, one per region.
+     */
+    virtualization?: VirtualDecomposition;
+    /**
+     * Render policy for a virtualized parent. Runtime-switchable via
+     * `setVirtualizationMode`; defaults to `"none"`.
+     */
+    virtualizationMode?: VirtualizationMode;
+    /**
+     * Present on an *expanded child*: the id of the parent background it was
+     * derived from. Used to detect already-expanded children (idempotency) and
+     * to group siblings.
+     */
+    virtualOf?: string;
+    /**
+     * Present on an expanded child: the crop + alignment this child renders.
+     * Read by the open pipeline to crop the child's visualization data layers
+     * to the same region as its background image.
+     */
+    croppingContext?: VirtualCroppingContext;
     [key: string]: any;
 }
 
@@ -137,14 +313,14 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property protocol deprecated on visualization object.  Name of a protocol registered in `window.SLIDE_PROTOCOLS`. In non-secure mode the value may
  *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index when this item is selected
+ *
+ * Note: which visualization a slot renders is NOT stored here — it is the per-background
+ * `BackgroundItem.visualizationIndex` binding.
  */
 interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
-    lossless?: boolean;
     protocol?: string;
     name?: string;
-    goalIndex?: number;
     [key: string]: any;
 }
 
@@ -216,6 +392,36 @@ interface HistoryEntryMeta {
     [key: string]: any;
 }
 
+/**
+ * Handle to one committed history entry, returned by `pushExecuted`.
+ *
+ * It answers "is the change I recorded still applied?" without assuming the
+ * entry sits on top of the stack. The IO pipeline uses it to revert exactly the
+ * mutation a server refused: calling the global `undo()` would pop whatever is
+ * currently on top and can be intercepted by a `HistoryProvider`.
+ *
+ * The handle stays meaningful after the circular buffer evicts the slot —
+ * eviction removes the ability to *undo* the change, not the fact that it is
+ * applied.
+ */
+interface HistoryEntryHandle {
+    /** True while the recorded change is applied (not undone, not invalidated). */
+    isActive(): boolean;
+    /**
+     * Drop the entry from the timeline: its forward/backward become no-ops and
+     * `isActive()` turns false. Use after reverting the change by other means,
+     * so a later undo does not revert it twice. Idempotent.
+     */
+    invalidate(): void;
+}
+
+interface HistoryBufferEntry {
+    forward: () => any;
+    backward: () => any;
+    meta?: HistoryEntryMeta;
+    state: "applied" | "undone" | "invalid";
+}
+
 interface HistoryProviderConstructor {
     new(): HistoryProvider;
 }
@@ -235,7 +441,7 @@ interface XOpatHistoryConstructor {
 
 interface XOpatHistory extends OpenSeadragon.EventSource {
     BUFFER_LENGTH: number;
-    _buffer: Array<{ forward: () => any; backward: () => any; meta?: HistoryEntryMeta } | null>;
+    _buffer: Array<HistoryBufferEntry | null>;
     _buffidx: number;
     _lastValidIndex: number;
     _providers: HistoryProvider[];
@@ -270,11 +476,16 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
         meta?: HistoryEntryMeta
     ): Promise<any>;
 
+    /**
+     * Record an already-applied change. Resolves with a handle to the committed
+     * entry (see {@link HistoryEntryHandle}), or `undefined` when recording is
+     * disabled and nothing was committed.
+     */
     pushExecuted(
         forward: () => any,
         backward: () => any,
         meta?: HistoryEntryMeta
-    ): Promise<void>;
+    ): Promise<HistoryEntryHandle | undefined>;
 
     readonly isRecordingEnabled: boolean;
     withoutRecording<T>(operation: () => Promise<T> | T): Promise<T>;
@@ -315,12 +526,36 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
+    /** Core network connectivity source of truth (`classes/network-status.ts`). */
+    networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
+    /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
+    shortcuts: ShortcutManagerLike;
+    /** Renders `region-capture` events on the viewer (`classes/app/capture-indicator.ts`). */
+    captureIndicator: CaptureIndicatorLike;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -388,12 +623,57 @@ interface ApplicationContext {
     Scripting: any;
     httpClient: any;
     history: XOpatHistory;
+    /**
+     * Take a channel logger: `APPLICATION_CONTEXT.log("module.my-thing").warn(...)`.
+     * The client counterpart of `XOPAT_SERVER.log`. See src/LOGGING.md.
+     */
+    log: (channel: string) => ClientLoggerLike;
+    /** The logging broker behind {@link log} (`classes/app/logging.ts`). */
+    logging: ClientLoggingLike;
+    /** Core network connectivity source of truth (`classes/network-status.ts`). */
+    networkStatus: NetworkStatusLike;
+    /** Interactive tutorial overlay driving `USER_INTERFACE.Tutorials` (`classes/app/tutorial/`). See src/TUTORIALS.md. */
+    tutorials: TourEngineLike;
+    /** Per-origin admission gate for background HTTP (`classes/app/request-scheduler.ts`). */
+    requestScheduler: RequestSchedulerLike;
+    /** Core auth broker — "require login" registry over XOpatUser (`classes/auth/xopat-auth.ts`). See src/AUTH.md. */
+    auth: XOpatAuthLike;
+    /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
+    shortcuts: ShortcutManagerLike;
+    /**
+     * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
+     * until the Render Debug window is opened, gated on `debugMode`.
+     */
+    renderDebug: RenderDebugLike;
+    /**
+     * Canonical scene snapshot/restore (`classes/app/canonical-scene.ts`) — THE
+     * stable interface for capturing and re-applying the full viewer session.
+     * Full-state snapshot/restore must go through this, never hand-rolled
+     * config clones; `openViewerWith` remains the apply primitive for targeted
+     * switches.
+     */
+    scene: XOpatSceneApi;
+    /**
+     * The visualization sanitizer + renderer-schema validator the open pipeline
+     * runs (`classes/app/viewer-visualization-runtime.ts`). Exposed so a config
+     * can be checked *without* opening it — authoring tools and tests must not
+     * re-implement the check, or they pin a second opinion that drifts from the
+     * one that actually decides.
+     */
+    visualizationRuntime: ViewerVisualizationRuntimeLike;
     readonly sessionName: string;
-    readonly secure: boolean;
+    readonly secureMode: boolean;
     readonly env: any;
     readonly url: string;
     readonly settingsMenuId: string;
     readonly pluginsMenuId: string;
+    /**
+     * Read a viewer setup value. Precedence: `config.params` (session payload) →
+     * `AppCache` (user preference) → `config.defaultParams` (deployment `ENV.setup`)
+     * → `defaultValue`. The caller fallback ranks below the deployment default and
+     * only covers keys the setup schema does not declare, so do not pass a literal
+     * that repeats the `src/config.json` value — it would be dead code.
+     */
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
     /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
@@ -443,6 +723,266 @@ interface ApplicationContext {
     __cache: { dirty: boolean };
 }
 
+/**
+ * One JSON shape fully describing a viewer session — data, per-slot
+ * backgrounds (with per-bg visualization binding + live shader state merged
+ * in), visualizations, active slot selection, and optional per-viewer
+ * viewports. Mirrors `CanonicalScene` in `classes/app/canonical-scene.ts`.
+ */
+interface CanonicalSceneLike {
+    version: 1;
+    data: any[];
+    background: any[];
+    visualizations: any[];
+    activeBackgroundIndex?: Array<number | undefined>;
+    viewers?: Array<{ uniqueId: string; viewport?: ViewportSetup }>;
+}
+
+/** Public surface of `APPLICATION_CONTEXT.scene` (see `classes/app/canonical-scene.ts`). */
+interface XOpatSceneApi {
+    /** Snapshot the current session; `includeViewport` adds per-viewer pan/zoom/rotation. */
+    serialize(opts?: { includeViewport?: boolean }): CanonicalSceneLike;
+    /** Single-viewer slice (playground Apply). */
+    serializeFromViewer(
+        viewer: OpenSeadragon.Viewer,
+        init?: { background?: any[]; visualization?: any },
+        live?: any,
+    ): { background: any[]; visualization: any };
+    /** Re-apply a snapshot via the open pipeline; restores viewports when present. */
+    deserialize(
+        scene: CanonicalSceneLike,
+        opts?: {
+            historyMode?: "auto" | "skip" | "content-switch" | "visualization-step" | "reset-history";
+            historyLabel?: string;
+        },
+    ): Promise<void>;
+    /** The blessed per-viewer viewport getter (`{ zoomLevel, point, rotation }`). */
+    snapshotViewport(viewer: OpenSeadragon.Viewer): ViewportSetup | undefined;
+    /** The blessed per-viewer viewport setter; returns false on invalid input. */
+    applyViewport(viewer: OpenSeadragon.Viewer, viewport: ViewportSetup | null | undefined, animate?: boolean): boolean;
+}
+
+/**
+ * Central keyboard-shortcut registry + dispatcher surface — runtime class is
+ * `ShortcutManager` (`src/classes/app/shortcut-manager.ts`), an
+ * OpenSeadragon.EventSource raising `shortcut-registered`,
+ * `shortcut-unregistered`, `binding-changed` and `bindings-reset`.
+ * See src/SHORTCUTS.md.
+ */
+/**
+ * Dev-only render capture surface — runtime class is `RenderDebugController`
+ * (`src/classes/app/render-debug-controller.ts`). Installs its drawer/renderer
+ * instance hooks only while the Render Debug window is open, so a normal
+ * session pays nothing.
+ */
+/**
+ * `APPLICATION_CONTEXT.visualizationRuntime` — the same object the open pipeline
+ * validates through (`viewer-open-pipeline.ts` → `validateVisualizationCollection`).
+ *
+ * `issues` are structural and xOpat-owned: they drop layers and fail a strict
+ * open. `advisories` are the renderer's own JSON-schema findings: they never
+ * mutate the config and never drop anything, so a config carrying them still
+ * renders — which is exactly why they need somewhere to be *read*.
+ */
+interface ViewerVisualizationRuntimeLike {
+    validateVisualizationCollection(
+        visualizations?: any[],
+        data?: any[],
+    ): { visualizations: any[]; issues: string[]; advisories: string[] };
+    [key: string]: any;
+}
+
+interface RenderDebugLike {
+    readonly available: boolean;
+    readonly active: boolean;
+    paused: boolean;
+    readonly frames: any[];
+    readonly sources: any[];
+    options: {
+        thumbnails: boolean;
+        tiles: boolean;
+        minIntervalMs: number;
+        includeNavigator: boolean;
+        capacity: number;
+    };
+    /** Announce an off-screen (standalone) drawer so the panel can capture it. */
+    registerDrawer(drawer: any, opts?: { label: string; viewer?: any; kind?: "viewport" | "navigator" | "offscreen" }): void;
+    unregisterDrawer(drawer: any): void;
+    attachViewerManager(viewerManager: any): void;
+    activate(): void;
+    deactivate(): void;
+    captureNext(): void;
+    clear(): void;
+    exportJson(): void;
+    grabFirstPassLayers(frame: any, kind?: "texture" | "stencil"): Promise<any[]>;
+    registerToolsMenu(): void;
+    openWindow(): void;
+    addHandler(name: string, handler: (e?: any) => void): () => void;
+}
+
+interface ShortcutManagerLike {
+    register(spec: {
+        id: string;
+        titleKey: string;
+        descriptionKey?: string;
+        categoryPath: string[];
+        defaultCombos: string[];
+        owner?: string;
+        type: "press" | "hold";
+        trigger?: "down" | "up";
+        scope?: { requiresCanvasFocus?: boolean; allowInInputs?: boolean };
+        preventDefault?: boolean;
+        handler?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+        onPress?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+        onRelease?: (ctx: { event: KeyboardEvent | null; viewer: any; shortcutId: string }) => void;
+    }): { unregister(): void };
+    unregister(id: string): void;
+    unregisterAll(owner: string): void;
+    getBinding(id: string): { combos: string[]; isDefault: boolean; suppressed: string[] } | null;
+    list(): any[];
+    findConflicts(combo: string, excludeId?: string): string[];
+    setUserBinding(id: string, combos: string[] | null): void;
+    resetToDefault(id: string): void;
+    resetAllToDefaults(): void;
+    /** Binding-aware event matching for registrants that keep their own key loop. */
+    eventMatches(id: string, e: KeyboardEvent): boolean;
+    eventMatchesToken(id: string, e: KeyboardEvent): boolean;
+    /** Canonical combo of a live key event (null for pure-modifier presses). */
+    comboFromEvent(e: KeyboardEvent): string | null;
+    /** Human-readable chip labels of a canonical combo. */
+    comboDisplayParts(combo: string): string[];
+    isValidCombo(combo: string): boolean;
+    attach(viewerManager: any): void;
+    addHandler(eventName: string, handler: (e: any) => void, userData?: any, priority?: number): void;
+    removeHandler(eventName: string, handler: (e: any) => void): void;
+}
+
+/**
+ * Core auth broker surface (`classes/auth/xopat-auth.ts`). A feature declares a
+ * login context with {@link configureContext}, then gates on {@link isAuthenticated}
+ * / triggers {@link login}. Auth methods (OIDC now, SAML later) register via
+ * {@link registerBroker}. See src/AUTH.md.
+ */
+interface XOpatAuthLike {
+    registerBroker(method: string, broker: any): void;
+    hasBroker(method: string): boolean;
+    /** Every registered broker method — for diagnostics that must not hardcode a list. */
+    listBrokerMethods(): string[];
+    hasContext(contextId: string | null | undefined): boolean;
+    getContextConfig(contextId: string | null | undefined): any;
+    /**
+     * Declare a context. Resolving means **declared**, not **authenticated** — the
+     * broker's `init()` is started but not awaited, so declaring several contexts
+     * is never serialized behind the first one's login. Await
+     * {@link whenContextSettled} for the outcome.
+     */
+    configureContext(cfg: { contextId: string; method: string; config?: any; serviceName?: string; tokenForServer?: string; [k: string]: any }): Promise<void>;
+    initContext(contextId: string | null | undefined): Promise<void>;
+    isAuthenticated(contextId: string | null | undefined): boolean;
+    getToken(contextId: string | null | undefined): any;
+    /**
+     * Log a context in. `gesture` defaults to true (every UI caller is a click
+     * handler); pass `{gesture: false}` for an automatic login — core then tries the
+     * broker's silent route and, when the interactive flow needs a click the caller
+     * does not have, reports to the interaction gate instead of opening a popup the
+     * browser will block. See src/AUTH.md.
+     */
+    /**
+     * `initTimeoutMs` bounds MACHINE work only (consuming a returning callback). There
+     * is deliberately no knob for how long the user may take: an interactive login is
+     * over when the window closes. A caller that wants to stop *waiting* races this
+     * call — it does not get to end the attempt, which completes in the background and
+     * recovers the UI on its own.
+     */
+    login(contextId: string | null | undefined,
+          options?: { gesture?: boolean; initTimeoutMs?: number; mayNavigate?: boolean }): Promise<boolean>;
+    /**
+     * May we unload the document right now without destroying the user's work?
+     * Refuses when framed, or when boot has finished and the user has produced
+     * something undoable. Policy, not capability — providers must not re-derive it.
+     */
+    canNavigateAway(): { ok: boolean; reason?: string };
+    /**
+     * Non-interactive login attempt; false when the broker has no silent route.
+     * Concurrent callers share one attempt and a recent negative answer is reused
+     * briefly — pass `force` when the answer is known to have just changed.
+     */
+    loginSilent(contextId: string | null | undefined, opts?: { force?: boolean }): Promise<boolean>;
+    logout(contextId: string | null | undefined): Promise<void>;
+    onChange(cb: (contextId: string) => void): () => void;
+    /** Every configured context, as snapshots — for UI that renders per-context rows. */
+    listContexts(): Array<{ contextId: string; method: string; serviceName?: string; isMain?: boolean; [k: string]: any }>;
+
+    /** Declare "I need login for this context", method-agnostic. */
+    requireContext(req: { contextId: string; serviceName?: string; requiresLogin?: boolean; fallback?: any }): void;
+    /** Bounded wait for an auth module to CLAIM a context (not to log it in). */
+    ensureContextReady(contextId: string | null | undefined, graceMs?: number): Promise<boolean>;
+    /** Secret types HttpClient should attach for a context — never hardcode `["jwt"]`. */
+    getSecretTypes(contextId: string | null | undefined): string[];
+
+    /**
+     * Resolve once the context finished *trying* to authenticate (broker claimed
+     * it, its boot login attempt completed, any async secret write landed).
+     * Resolves to whether it ended up authenticated; never starts an interactive
+     * login. See src/AUTH.md.
+     */
+    whenContextSettled(contextId: string | null | undefined,
+                       opts?: { timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                                awaitInteractive?: boolean }): Promise<boolean>;
+    /** Same, for several contexts at once. Defaults to {@link listAutoLoginContexts}. */
+    whenAllSettled(opts?: { contexts?: string[]; timeoutMs?: number; claimGraceMs?: number; force?: boolean;
+                            awaitInteractive?: boolean }): Promise<Record<string, boolean>>;
+    /** Contexts configured to log in without user interaction at boot. */
+    listAutoLoginContexts(): string[];
+    /**
+     * Drive the automatic (click-less) login for every `autoLogin` context: silent
+     * routes first in parallel, then at most ONE navigating interactive login,
+     * arbitrated across all brokers. Anything needing a click goes to the
+     * interaction gate. Called by the boot barrier; never throws, never blocks on a
+     * user. See src/AUTH.md.
+     */
+    runAutoLogin(opts?: { timeoutMs?: number }): Promise<{
+        verdicts: Record<string, boolean>; demoted: string[]; deferred: string[];
+    }>;
+    /**
+     * Announce that a broker is still ENUMERATING its contexts (typically from a
+     * server RPC). Without it those contexts are declared after the boot barrier
+     * has already looked, so the first slide races the login it should have waited
+     * for. The promise is normalized to never reject.
+     */
+    registerContextDiscovery(discovery: Promise<unknown> | null | undefined): void;
+    /** Wait (bounded, never throws) for every announced context discovery. */
+    whenContextsDiscovered(opts?: { timeoutMs?: number }): Promise<void>;
+    getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
+    onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
+
+    /**
+     * Report that a context's credential expired and only an interactive login
+     * can replace it — a silent renew answered `interaction_required`, or a
+     * server-side session is gone. Drops the dead secret, so callers waiting on
+     * `whenContextSettled({awaitInteractive:true})` hold instead of sending it.
+     * Brokers call this; the UI reacts to `auth-interaction-required`.
+     */
+    markNeedsInteraction(contextId: string | null | undefined,
+                         info?: { reason?: string; force?: boolean; epoch?: number }): void;
+    /**
+     * Current credential generation. A caller reporting a failure asynchronously
+     * (e.g. a 401 handled after waiting for the context to settle) reads this when
+     * the failure occurs and passes it back as `info.epoch`, so a report about a
+     * credential that has since been replaced is ignored instead of dropping the
+     * new one.
+     */
+    getCredentialEpoch(contextId: string | null | undefined): number;
+    /** Clear the flag; raised automatically when a credential lands again. */
+    clearNeedsInteraction(contextId: string | null | undefined): void;
+    isInteractionRequired(contextId: string | null | undefined): boolean;
+    /** Reported, but deferred because the credential still works. Never blocks. */
+    isInteractionPending(contextId: string | null | undefined): boolean;
+    getInteractionInfo(contextId: string | null | undefined):
+        { reason: string; since: number; pending?: boolean } | undefined;
+    listContextsNeedingInteraction(): string[];
+}
+
 // ── UTILITIES ─────────────────────────────────────────────────────────────────
 interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
@@ -451,32 +991,91 @@ interface XOpatUtilities {
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;
-    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): void;
+    /**
+     * Load a plugin at runtime. Resolves when the load settles; `onload` is still supported.
+     * `force` re-injects the plugin's own files even if already present (recovery path) —
+     * module dependencies are always deduplicated.
+     */
+    loadPlugin(id: string, onload?: ((...args: any[]) => any) | undefined, force?: boolean): Promise<void>;
     isLoaded(id: string, isPlugin?: boolean): boolean | IXOpatPlugin | undefined;
 
     serializeApp(
         includedPluginsList?: string[],
         withCookies?: boolean,
         staticPreview?: boolean
-    ): Promise<{ app: string; data: Record<string, any> }>;
+    ): Promise<{ app: string; data: Record<string, any>; io: IOResult[] }>;
 
     serializeAppConfig(withCookies?: boolean, staticPreview?: boolean): string;
 
     getForm(
         customAttributes?: string,
         includedPluginsList?: string[],
-        withCookies?: boolean
+        withCookies?: boolean,
+        /** Receives the IO flush outcomes so the caller can report omissions. */
+        outcome?: IOResult[]
     ): Promise<string>;
 
     export(): Promise<void>;
+
+    /**
+     * Surface, once, which owners' data an export/save could not include.
+     * Reads the `ownerId` stamped onto refusals; silent when none carry one.
+     */
+    reportExportOmissions(results: IOResult[] | undefined): void;
 
     generateID(input: any, size?: number): string;
     sanitizeID(input: any): string;
     uuid4(): string;
 
+    /**
+     * Recursively strip a per-viewer shader-id prefix from a renderer config map.
+     * Exposed on UTILITIES for plugins/modules, which cannot import the TS module.
+     *
+     * Returns a new map but **mutates the configs inside it** — clone before
+     * passing anything read out of a live renderer.
+     */
+    stripShaderIdNamespace(map: Record<string, any>, namespace: string): Record<string, any>;
+
     copyToClipboard(content: string, alert?: boolean): void;
     copyUrlToClipboard(): void;
-    makeScreenshot(): void;
+    makeScreenshot(viewer?: any): void;
+
+    /**
+     * Download content as a file via a temporary link element. Strings become
+     * `text/plain`; binary payloads keep their own type.
+     */
+    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): void;
+
+    /**
+     * Download the original slide file behind a tile source that implements the
+     * optional download capability (`canDownloadSlideFile` / `getSlideFileDownload`,
+     * see `src/tile-source.ts`). No-ops with a user-facing notice when the source
+     * does not support it. Implementation: `src/classes/app/slide-file-download.ts`.
+     */
+    downloadSlideFile(
+        source: any,
+        options?: { viewer?: any; fallbackName?: string }
+    ): Promise<void>;
+
+    /**
+     * Open a file picker and read the selected file. Note `onUploaded` also
+     * receives read failures — it is called with the Error, not the contents,
+     * so callers must check what they got before using it.
+     * @param onUploaded callback invoked with the file contents.
+     * @param accept accept attribute of the file input, e.g. "image/png".
+     * @param mode read the file as text or as an ArrayBuffer.
+     */
+    uploadFile(
+        onUploaded: (content: string | ArrayBuffer) => void,
+        accept?: string,
+        mode?: "text" | "bytes"
+    ): Promise<void>;
+
+    /**
+     * Handle an input[type=file] change event and read the selected file.
+     * @param mode read as text or as an ArrayBuffer.
+     */
+    readFileUploadEvent(e: Event, mode?: "text" | "bytes"): Promise<string | ArrayBuffer>;
 
     makeThrottled<T extends (...args: any[]) => any>(
         fn: T,
@@ -487,6 +1086,13 @@ interface XOpatUtilities {
     updateTheme(theme: string | null): void;
 
     syncSessionToUrl(withCookies?: boolean): boolean;
+
+    /**
+     * Whether the address bar can carry the session — false on an opaque origin
+     * (sandboxed iframe) or when the app URL is not on the document origin.
+     * Ask before offering "copy session link"-style UI.
+     */
+    canSyncSessionToUrl(): boolean;
 
     applyStoredVisualizationSnapshot(renderOutput: Record<string, any>): void;
 
@@ -500,12 +1106,30 @@ interface XOpatUtilities {
         microns: number | undefined,
         micronsX: number | undefined,
         micronsY: number | undefined,
-        name: string | undefined
+        name: string | undefined,
+        /**
+         * Native optical magnification as declared by the tile source:
+         * `undefined` = unknown (guessed from pixel size), `null` = the modality
+         * has no objective (radiology), a number = the real objective power.
+         */
+        magnification?: number | null
     ): void;
 
     parseBackgroundSelection(
         bgSpec?: number | Array<number | undefined> | null
     ): boolean;
+
+    /**
+     * Number of leading shader-layer-order entries belonging to the viewer's
+     * active background(s) — i.e. the background/visualization boundary, since
+     * `assembleRenderOutput` emits backgrounds first. Use
+     * `renderer.getShaderLayerOrder().slice(splitIndex)` to get the overlays.
+     *
+     * This is the supported way to tell the two apart: renderer ids are
+     * namespaced per viewer (`v<viewer.id>_`) and sanitized, so matching them
+     * against config background ids silently matches nothing.
+     */
+    getBackgroundShaderSplitIndex(viewer: OpenSeadragon.Viewer): number;
 
     toggleVisualizationInspector(enabled?: boolean): boolean;
 
@@ -516,6 +1140,12 @@ interface XOpatUtilities {
     adjustVisualizationInspectorRadius(deltaPx: number): number;
 
     setVisualizationInspectorMode(mode: string): string;
+
+    /**
+     * FlexDrawer pointer forwarding policy: "auto" (enable per viewer while a visible
+     * shader layer reads `fr_interaction_*` state), "always", or "never".
+     */
+    setInteractionForwarding(mode: string): string;
 
     storePageState(includedPluginsList?: Record<string, any>): boolean;
 

@@ -1,0 +1,54 @@
+{
+    "name": "Tutorial App 07 v3",
+    "name_short": "TA07v3",
+    "namespace": "org.empaia.vendor_name.tutorial_app_07.v3.0",
+    "io": {
+        "my_wsi": {
+            "type": "wsi"
+        },
+        "my_rectangle": {
+            "type": "rectangle",
+            "reference": "io.my_wsi"
+        },
+        "tumor_cell_count": {
+            "type": "integer"
+        }
+    },
+    "modes": {
+        "standalone": {
+            "inputs": [
+                "my_wsi",
+                "my_rectangle"
+            ],
+            "outputs": [
+                "tumor_cell_count"
+            ]
+        }
+    },
+    "configuration": {
+        "global": {
+            "private_api_username": {
+                "type": "string",
+                "optional": false
+            },
+            "private_api_password": {
+                "type": "string",
+                "optional": false
+            },
+            "optional_parameter": {
+                "type": "integer",
+                "optional": true
+            }
+        },
+        "customer": {
+            "customer_username": {
+                "type": "string",
+                "optional": false
+            },
+            "customer_password": {
+                "type": "string",
+                "optional": false
+            }
+        }
+    }
+}

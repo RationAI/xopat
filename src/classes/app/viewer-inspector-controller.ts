@@ -7,6 +7,9 @@ export class ViewerInspectorController {
     private static readonly VALUE_INSPECTOR_PANEL_ID_PREFIX = "xopat-value-inspector";
     private static readonly VALUE_INSPECTOR_PLUGIN_ID = "__xopat_value_inspector__";
     private static readonly VALUE_INSPECTOR_THROTTLE_MS = 60;
+    private static readonly TOOLS_SECTION = "inspect";
+    private static readonly VALUE_INSPECTOR_ITEM = "value-inspector";
+    private static readonly VISUALIZATION_INSPECTOR_ITEM = "visualization-inspector";
 
     constructor(
         private readonly appContext: ApplicationContext,
@@ -21,19 +24,25 @@ export class ViewerInspectorController {
             }
         });
         viewerManager.addHandler("after-open", () => {
-            if (this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+            if (this.appContext.getOption("visualizationInspectorEnabled")) {
                 this.refreshVisualizationInspector();
             }
-            if (this.appContext.getOption("valueInspectorEnabled", false, true)) {
+            if (this.appContext.getOption("valueInspectorEnabled")) {
                 this.refreshValueInspector();
             }
         });
     }
 
     registerUtilities() {
+        // Not inspector-specific: any consumer rendering "overlays only" needs
+        // the same background/visualization boundary (e.g. the annotation
+        // viewport-segmentation offscreen pass).
+        window.UTILITIES.getBackgroundShaderSplitIndex = (viewer: OpenSeadragon.Viewer) =>
+            this.getBackgroundShaderSplitIndex(viewer);
+
         window.UTILITIES.toggleVisualizationInspector = (enabled?: boolean) => {
             const next = enabled === undefined
-                ? !this.appContext.getOption("visualizationInspectorEnabled", false, true)
+                ? !this.appContext.getOption("visualizationInspectorEnabled")
                 : !!enabled;
 
             this.appContext.setOption("visualizationInspectorEnabled", next);
@@ -74,7 +83,7 @@ export class ViewerInspectorController {
 
         window.UTILITIES.toggleValueInspector = (enabled?: boolean) => {
             const next = enabled === undefined
-                ? !this.appContext.getOption("valueInspectorEnabled", false, true)
+                ? !this.appContext.getOption("valueInspectorEnabled")
                 : !!enabled;
 
             this.appContext.setOption("valueInspectorEnabled", next);
@@ -85,11 +94,174 @@ export class ViewerInspectorController {
         };
     }
 
+    /**
+     * Mount the inspector controls in the app-bar "Tools" category. The Tools
+     * tab is a generic multi-owner registry (profilers, inspectors, dev tools);
+     * the inspectors own their entries here rather than living in the Edit menu.
+     */
+    registerInspectorMenu() {
+        const Tools = USER_INTERFACE.AppBar?.Tools;
+        if (!Tools?.register) {
+            return;
+        }
+
+        Tools.register(ViewerInspectorController.VALUE_INSPECTOR_ITEM, {
+            section: ViewerInspectorController.TOOLS_SECTION,
+            sectionTitle: $.t("inspector.section"),
+            icon: "ph-crosshair",
+            label: $.t("inspector.valueInspector"),
+            hint: $.t("inspector.valueInspectorHint"),
+            onClick: () => {
+                UTILITIES.toggleValueInspector();
+            },
+        });
+
+        Tools.register(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM, {
+            section: ViewerInspectorController.TOOLS_SECTION,
+            sectionTitle: $.t("inspector.section"),
+            icon: "ph-eye",
+            label: $.t("inspector.visualizationInspector"),
+            children: [
+                {
+                    id: "visualization-inspector-toggle",
+                    icon: "ph-power",
+                    label: $.t("inspector.toggle"),
+                    onClick: () => {
+                        UTILITIES.toggleVisualizationInspector();
+                    }
+                },
+                {
+                    id: "visualization-inspector-mode",
+                    icon: "ph-circle-half",
+                    label: $.t("inspector.revealMode"),
+                    childSelectionStyle: "check",
+                    children: [
+                        {
+                            id: "visualization-inspector-mode-inclusive",
+                            icon: "ph-circle",
+                            label: $.t("inspector.inclusiveReveal"),
+                            onClick: () => {
+                                UTILITIES.setVisualizationInspectorMode("reveal-inside");
+                            }
+                        },
+                        {
+                            id: "visualization-inspector-mode-exclusive",
+                            icon: "ph-circle-notch",
+                            label: $.t("inspector.exclusiveReveal"),
+                            onClick: () => {
+                                UTILITIES.setVisualizationInspectorMode("reveal-outside");
+                            }
+                        }
+                    ]
+                },
+                {
+                    id: "visualization-inspector-radius-down",
+                    icon: "ph-minus",
+                    label: $.t("inspector.smallerRadius"),
+                    onClick: () => {
+                        UTILITIES.adjustVisualizationInspectorRadius(-24);
+                    }
+                },
+                {
+                    id: "visualization-inspector-radius-up",
+                    icon: "ph-plus",
+                    label: $.t("inspector.largerRadius"),
+                    onClick: () => {
+                        UTILITIES.adjustVisualizationInspectorRadius(24);
+                    }
+                }
+            ],
+        });
+
+        this.refreshInspectorMenu();
+    }
+
+    /**
+     * Sync the Tools-menu inspector entries with the current option state.
+     * Top-level labels go through the Tools API (keeps its entry cache in sync);
+     * nested children (toggle/mode/radius) are mutated on the Dropdown tab
+     * directly, since the Tools API only relabels top-level entries.
+     */
+    refreshInspectorMenu() {
+        const Tools = USER_INTERFACE.AppBar?.Tools;
+        const tab = Tools?.getTab?.();
+        if (!Tools || !tab) {
+            return;
+        }
+
+        const inspectorEnabled = !!this.appContext.getOption("visualizationInspectorEnabled");
+        const inspectorMode = this.appContext.getOption("visualizationInspectorMode");
+        const inspectorRadius = Number(this.appContext.getOption("visualizationInspectorRadiusPx")) || 96;
+        const valueInspectorEnabled = !!this.appContext.getOption("valueInspectorEnabled");
+
+        Tools.setLabel(
+            ViewerInspectorController.VALUE_INSPECTOR_ITEM,
+            valueInspectorEnabled ? $.t("inspector.valueInspectorOn") : $.t("inspector.valueInspectorOff")
+        );
+
+        const inspectorItem = tab.getItem?.(ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM);
+        if (inspectorItem && Array.isArray(inspectorItem.children)) {
+            for (const child of inspectorItem.children) {
+                child.selected = false;
+            }
+
+            const modeParent = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-mode");
+            if (modeParent && Array.isArray(modeParent.children)) {
+                for (const child of modeParent.children) {
+                    child.selected = false;
+                }
+
+                tab.setItemSelected("visualization-inspector-mode-inclusive", false);
+                tab.setItemSelected("visualization-inspector-mode-exclusive", false);
+
+                const inclusiveChild = modeParent.children.find((child: any) => child.id === "visualization-inspector-mode-inclusive");
+                const exclusiveChild = modeParent.children.find((child: any) => child.id === "visualization-inspector-mode-exclusive");
+                if (inspectorMode === "reveal-outside") {
+                    if (exclusiveChild) exclusiveChild.selected = true;
+                    tab.setItemSelected("visualization-inspector-mode-exclusive", true);
+                } else {
+                    if (inclusiveChild) inclusiveChild.selected = true;
+                    tab.setItemSelected("visualization-inspector-mode-inclusive", true);
+                }
+
+                modeParent.label = inspectorMode === "reveal-outside"
+                    ? $.t("inspector.revealModeExclusive")
+                    : $.t("inspector.revealModeInclusive");
+            }
+
+            const toggleChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-toggle");
+            if (toggleChild) {
+                toggleChild.label = inspectorEnabled ? $.t("inspector.turnOff") : $.t("inspector.turnOn");
+            }
+
+            const radiusDownChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-down");
+            if (radiusDownChild) {
+                radiusDownChild.label = $.t("inspector.smallerRadiusPx", { px: inspectorRadius });
+                radiusDownChild.disabled = inspectorRadius <= 24;
+            }
+
+            const radiusUpChild = inspectorItem.children.find((child: any) => child.id === "visualization-inspector-radius-up");
+            if (radiusUpChild) {
+                radiusUpChild.label = $.t("inspector.largerRadiusPx", { px: inspectorRadius });
+                radiusUpChild.disabled = inspectorRadius >= 320;
+            }
+        }
+
+        Tools.setLabel(
+            ViewerInspectorController.VISUALIZATION_INSPECTOR_ITEM,
+            inspectorEnabled
+                ? (inspectorMode === "reveal-outside"
+                    ? $.t("inspector.visualizationInspectorExclusive")
+                    : $.t("inspector.visualizationInspectorInclusive"))
+                : $.t("inspector.visualizationInspectorOff")
+        );
+    }
+
     refreshVisualizationInspector() {
         for (const viewer of window.VIEWER_MANAGER?.viewers || []) {
             this.applyViewerVisualizationInspector(viewer);
         }
-        USER_INTERFACE.AppBar?.Edit?.refresh?.();
+        this.refreshInspectorMenu();
     }
 
     refreshValueInspector() {
@@ -100,7 +272,7 @@ export class ViewerInspectorController {
                 this.hideViewerValueInspector(viewer);
             }
         }
-        USER_INTERFACE.AppBar?.Edit?.refresh?.();
+        this.refreshInspectorMenu();
     }
 
     private countNestedShaderLayers(shaderConfig: any): number {
@@ -136,6 +308,23 @@ export class ViewerInspectorController {
         return Number.isInteger(selected) ? [selected as number] : [];
     }
 
+    /**
+     * Number of leading entries in the viewer's shader-layer order that belong
+     * to the active background(s). `assembleRenderOutput` emits backgrounds
+     * before visualizations, so this index IS the background/visualization
+     * boundary: `getShaderLayerOrder().slice(splitIndex)` is exactly the
+     * visualization stack.
+     *
+     * Public because it is the only supported way to tell the two apart.
+     * Renderer ids are namespaced per viewer (`v<viewer.id>_`) and sanitized,
+     * so matching config background ids against the live order silently
+     * matches nothing — position is the reliable signal, not the id.
+     * Exposed as `UTILITIES.getBackgroundShaderSplitIndex`.
+     */
+    getBackgroundShaderSplitIndex(viewer: OpenSeadragon.Viewer): number {
+        return this.getViewerInspectorShaderSplitIndex(viewer);
+    }
+
     private getViewerInspectorShaderSplitIndex(viewer: OpenSeadragon.Viewer): number {
         let count = 0;
         const config = this.getConfig();
@@ -158,12 +347,12 @@ export class ViewerInspectorController {
     }
 
     private getVisualizationInspectorMode() {
-        const mode = this.appContext.getOption("visualizationInspectorMode", "reveal-inside");
+        const mode = this.appContext.getOption("visualizationInspectorMode");
         return typeof mode === "string" && ViewerInspectorController.INSPECTOR_ALLOWED_MODES.has(mode) ? mode : "reveal-inside";
     }
 
     private getVisualizationInspectorRadius() {
-        const radius = Number(this.appContext.getOption("visualizationInspectorRadiusPx", 96));
+        const radius = Number(this.appContext.getOption("visualizationInspectorRadiusPx"));
         return Math.max(
             ViewerInspectorController.INSPECTOR_RADIUS_MIN,
             Math.min(ViewerInspectorController.INSPECTOR_RADIUS_MAX, Number.isFinite(radius) ? radius : 96)
@@ -171,7 +360,7 @@ export class ViewerInspectorController {
     }
 
     private getVisualizationInspectorLensZoom() {
-        const lensZoom = Number(this.appContext.getOption("visualizationInspectorLensZoom", 2));
+        const lensZoom = Number(this.appContext.getOption("visualizationInspectorLensZoom"));
         return Math.max(1, Number.isFinite(lensZoom) ? lensZoom : 2);
     }
 
@@ -210,7 +399,7 @@ export class ViewerInspectorController {
         viewer: OpenSeadragon.Viewer,
         clientPoint: { x: number; y: number }
     ) {
-        if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+        if (!this.appContext.getOption("visualizationInspectorEnabled")) {
             return undefined;
         }
 
@@ -259,7 +448,7 @@ export class ViewerInspectorController {
             return false;
         }
 
-        if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+        if (!this.appContext.getOption("visualizationInspectorEnabled")) {
             return this.clearViewerVisualizationInspector(viewer);
         }
 
@@ -292,7 +481,7 @@ export class ViewerInspectorController {
                 // Hot path — fires per mouse move. Skip all work when the
                 // inspector is disabled so we don't keep nudging the drawer's
                 // redrawCallback (which would re-render the whole viewer).
-                if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+                if (!this.appContext.getOption("visualizationInspectorEnabled")) {
                     return;
                 }
 
@@ -321,7 +510,7 @@ export class ViewerInspectorController {
     }
 
     private getValueInspectorEnabled() {
-        return !!this.appContext.getOption("valueInspectorEnabled", false, true);
+        return !!this.appContext.getOption("valueInspectorEnabled");
     }
 
     private getViewerValueInspectorPanelId(viewer: OpenSeadragon.Viewer) {
@@ -347,7 +536,7 @@ export class ViewerInspectorController {
 
     private formatPixelValue(pixel?: ArrayLike<number> | null) {
         if (!pixel || pixel.length < 4) {
-            return "n/a";
+            return $.t("inspector.panel.na");
         }
         return `R${pixel[0]} G${pixel[1]} B${pixel[2]} A${pixel[3]}`;
     }
@@ -578,26 +767,27 @@ export class ViewerInspectorController {
         const activeViewerIndex = this.appContext.activeViewerIndex?.() ?? -1;
         const isActiveViewer = activeViewerIndex === window.VIEWER_MANAGER?.getViewerSlotIndex?.(viewer);
 
+        const na = $.t("inspector.panel.na");
         const lines = [
-            `<div style="font-weight:600;margin-bottom:4px;">Value inspector</div>`,
-            `<div><strong>Image</strong>: ${imagePoint ? `${Math.round(imagePoint.x)}, ${Math.round(imagePoint.y)} px` : "n/a"}</div>`,
-            `<div><strong>Viewport</strong>: ${viewportPoint ? `${viewportPoint.x.toFixed(4)}, ${viewportPoint.y.toFixed(4)}` : "n/a"}</div>`,
-            `<div><strong>Zoom</strong>: ${viewer.viewport.getZoom(true).toFixed(3)}</div>`,
-            `<div><strong>Background</strong>: ${this.formatPixelValue(backgroundPixel)}</div>`,
-            `<div><strong>Rendered</strong>: ${this.formatPixelValue(renderedPixel)}</div>`
+            `<div style="font-weight:600;margin-bottom:4px;">${this.escapeHtml($.t("inspector.panel.title"))}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.image"))}</strong>: ${imagePoint ? `${Math.round(imagePoint.x)}, ${Math.round(imagePoint.y)} px` : na}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.viewport"))}</strong>: ${viewportPoint ? `${viewportPoint.x.toFixed(4)}, ${viewportPoint.y.toFixed(4)}` : na}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.zoom"))}</strong>: ${viewer.viewport.getZoom(true).toFixed(3)}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.background"))}</strong>: ${this.formatPixelValue(backgroundPixel)}</div>`,
+            `<div><strong>${this.escapeHtml($.t("inspector.panel.rendered"))}</strong>: ${this.formatPixelValue(renderedPixel)}</div>`
         ];
 
         if (visualization?.name) {
-            lines.push(`<div><strong>Visualization</strong>: ${this.escapeHtml(visualization.name)}</div>`);
+            lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.visualization"))}</strong>: ${this.escapeHtml(visualization.name)}</div>`);
         }
 
         if (shaders.length > 0) {
             const visibleShaders = shaders.slice(0, 5);
-            const more = shaders.length > visibleShaders.length ? ` +${shaders.length - visibleShaders.length} more` : "";
-            lines.push(`<div><strong>Shaders</strong>: ${visibleShaders.map(v => this.escapeHtml(v)).join(", ")}${more}</div>`);
+            const more = shaders.length > visibleShaders.length ? $.t("inspector.panel.more", { count: shaders.length - visibleShaders.length }) : "";
+            lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.shaders"))}</strong>: ${visibleShaders.map(v => this.escapeHtml(v)).join(", ")}${more}</div>`);
         }
 
-        lines.push(`<div><strong>Viewer</strong>: ${isActiveViewer ? "active" : "secondary"}</div>`);
+        lines.push(`<div><strong>${this.escapeHtml($.t("inspector.panel.viewer"))}</strong>: ${isActiveViewer ? this.escapeHtml($.t("inspector.panel.viewerActive")) : this.escapeHtml($.t("inspector.panel.viewerSecondary"))}</div>`);
 
         panel.innerHTML = lines.join("");
         panel.style.display = "block";

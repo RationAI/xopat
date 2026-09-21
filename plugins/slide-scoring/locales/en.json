@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "name": "Slide Scoring",
+    "description": "Score or label the slide open in a viewer. Scores are dispatched through the IO pipeline, so a deployment can route them to MLflow, GitHub, a REST backend or anywhere else without changing this plugin."
+  },
+  "toolbar": {
+    "title": "Scoring",
+    "scoreLabel": "Score the current slide as \"{{label}}\"",
+    "noSlide": "No slide is open in this viewer"
+  },
+  "label": {
+    "negative": "Negative",
+    "uncertain": "Uncertain",
+    "positive": "Positive"
+  },
+  "message": {
+    "scored": "Scored \"{{label}}\".",
+    "cleared": "Score cleared."
+  },
+  "error": {
+    "noViewer": "Open a slide before scoring.",
+    "noSlideId": "This viewer's slide has no stable identity, so its score could not be recorded.",
+    "notPermitted": "You do not have permission to score slides.",
+    "failed": "The score could not be saved: {{reason}}",
+    "badSchema": "The scoring vocabulary is misconfigured: every label must map to a number.",
+    "importFailed": "Saved slide scores could not be read and were ignored."
+  }
+}

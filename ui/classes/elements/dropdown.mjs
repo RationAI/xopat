@@ -1,8 +1,8 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
-import {FAIcon} from "./fa-icon.mjs";
 import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
+import {findClippingAncestor, placeFixedAnchored, trackAnchor} from "./popupPlacement.mjs";
 
 const { div, ul, li, a, span, i } = van.tags;
 
@@ -14,6 +14,8 @@ class Dropdown extends BaseSelectableComponent {
         this.parentId = options["parentId"] || "";
         this.onClick = options["onClick"] || (() => {});
         this._fmToken = null;
+        /** @private detach fn for the scroll/resize re-placement, only when body-portaled */
+        this._untrackAnchor = null;
         this.classMap["base"] = "dropdown join-item";
 
         // NEW: Selection Style ('highlight' | 'check')
@@ -45,6 +47,7 @@ class Dropdown extends BaseSelectableComponent {
 
         this._headerIconComp = null;
         this._headerLabelSpan = null;
+        this._compactHeader = false;
 
         this.headerButton = this.createButton(options);
         this._contentEl = null;
@@ -69,7 +72,7 @@ class Dropdown extends BaseSelectableComponent {
             buttonClasses = {flex: "flex flex-col items-center", padding: ""};
         if (this._useActiveSelection) {
             dropdownIcon = i(
-                { "data-dropdown-arrow": "1", class: "ml-0 pr-3 pl-1" },
+                { "data-dropdown-arrow": "1", class: "ml-0 pr-3" },
                 new PhIcon({ name: "ph-caret-down" }).create()
             );
             buttonClasses['padding'] = 'pr-0';
@@ -78,17 +81,61 @@ class Dropdown extends BaseSelectableComponent {
         return new Button({
             id: this.parentId + "-b-" + this.id,
             size: Button.SIZE.SMALL,
-            extraProperties: {title: this.title, style: ""},
+            extraProperties: {title: this.title, style: "gap: 3px !important;"},
             extraClasses: buttonClasses,
         }, inIcon, this._headerLabelSpan, dropdownIcon);
+    }
+
+    /**
+     * Update the header label (and its tooltip) in place.
+     *
+     * `MenuTab` has had this forever, and callers reach tabs generically —
+     * `AppBar.rightMenu.getTab('user').setTitle(name)` keeps the signed-in user's
+     * name and roles on the app bar. A Dropdown-based tab without it silently
+     * dropped those updates.
+     *
+     * Uses `textContent`, never innerHTML: the value is a user/identity-provided
+     * name.
+     */
+    setTitle(title) {
+        this.title = title ?? "";
+        if (this._headerLabelSpan) this._headerLabelSpan.textContent = this.title;
+        this.headerButton?.setExtraProperty?.("title", this.title);
     }
 
     iconOnly() {
         this.headerButton.iconOnly();
         if (this._useActiveSelection) {
-            this.headerButton.setExtraProperty("style", "min-width:58px;")
+            this.headerButton.setExtraProperty("style", this._compactHeader ? "" : "min-width:58px;")
         }
         this._iconOnly = true;
+    }
+
+    /**
+     * Collapse an `activeSelection` header down to a split square button.
+     *
+     * The default header lays the selection icon and the caret out side by side
+     * and reserves 58px for the pair. That is right in a roomy horizontal bar
+     * and far too wide for a narrow vertical column, where it drags every
+     * neighbouring button out to the same width. Compact mode stacks the two
+     * instead: icon on the top half, caret on the bottom half, same glyph size,
+     * so both stay real click targets while the button is only as wide as one
+     * icon. Layout lives in `.dropdown-header-compact` (custom.css) — it has to
+     * beat `.btn`'s own padding and `align-items`.
+     *
+     * The padding/min-width numbers are this element's own layout details, which
+     * is why the switch lives here rather than being poked at from the outside.
+     *
+     * @param {boolean} compact
+     */
+    setCompactHeader(compact) {
+        compact = !!compact;
+        if (this._compactHeader === compact) return;
+        this._compactHeader = compact;
+        if (!this._useActiveSelection) return;
+
+        this.headerButton.setExtraProperty("style", compact ? "" : "min-width:58px;");
+        this.headerButton.toggleClass("compact", "dropdown-header-compact", compact);
     }
     titleIcon()  { this.headerButton.titleIcon();  }
     titleOnly()  { this.headerButton.titleOnly();  }
@@ -98,6 +145,10 @@ class Dropdown extends BaseSelectableComponent {
         this._closeSubmenu();
         if (!this._isOpen) return;
         this._isOpen = false;
+        if (this._untrackAnchor) {
+            this._untrackAnchor();
+            this._untrackAnchor = null;
+        }
         if (this._rootEl) this._rootEl.classList.remove("dropdown-open");
         if (this._contentEl) {
             this._contentEl.style.visibility = "hidden";
@@ -223,6 +274,9 @@ class Dropdown extends BaseSelectableComponent {
             this._fmToken = UI.Services.FloatingManager.register({
                 el: this._contentEl,
                 owner: this,
+                // Portaled to <body>: keep it above the trigger's own stacking
+                // context (a dropdown inside a modal was painted under the modal).
+                anchor: trigger || this.root,
                 onEscape: "close",
                 // Custom outside-click handler: a mousedown on this
                 // dropdown's own trigger must not auto-close, otherwise
@@ -252,14 +306,10 @@ class Dropdown extends BaseSelectableComponent {
             btnEl.title = headerTitle;
         }
         if (typeof item.icon === "string") {
-            const wantsPh = item.icon.trim().startsWith('ph-');
-            const isPh = this._headerIconComp instanceof PhIcon;
-            const isFa = this._headerIconComp instanceof FAIcon;
-            // Same family: in-place glyph swap. Different family or unknown:
-            // rebuild the header icon component so the wrapper class flips
-            // between fa-auto and ph-light (otherwise the codepoint renders
-            // through the wrong font and produces tofu / unrelated glyphs).
-            if ((wantsPh && isPh) || (!wantsPh && isFa)) {
+            // In-place glyph swap when the header already holds an icon
+            // component; otherwise rebuild it (an ImageIcon header cannot take
+            // a font glyph).
+            if (this._headerIconComp instanceof PhIcon) {
                 this._headerIconComp.changeIcon(item.icon);
             } else {
                 const oldEl = document.getElementById(this._headerIconComp.id);
@@ -662,6 +712,7 @@ class Dropdown extends BaseSelectableComponent {
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,
             owner: this,
+            anchor: anchorEl,
             onEscape: () => this._closeSubmenusFrom(level)
         });
 
@@ -741,7 +792,31 @@ class Dropdown extends BaseSelectableComponent {
             const menu = this._contentEl;
             if (!menu) return;
 
-            let container = host.closest("[data-toolbar-root]");
+            const toolbarRootEl = host.closest("[data-toolbar-root]");
+            const verticalToolbarEl = !!toolbarRootEl && toolbarRootEl.classList.contains("flex-col");
+            const preferRightPlacement = this.placement === "right" ? true
+                : this.placement === "below" ? false
+                : verticalToolbarEl;
+
+            // A clipping ancestor (e.g. the capped, horizontally scrollable mobile
+            // bottom-bar toolbar host) would trap an absolutely positioned menu in
+            // its scroll port — the container-relative math below cannot escape it,
+            // and a flipped-up negative `top` is simply unreachable there. Keep the
+            // menu on <body> (where _open put it) and place it in viewport
+            // coordinates instead. Un-clipped hosts keep the original code path.
+            if (findClippingAncestor(host)) {
+                if (menu.parentNode !== document.body) document.body.appendChild(menu);
+                menu.style.visibility = "hidden";
+                menu.style.display = "block";
+                placeFixedAnchored(host, menu, {
+                    placement: preferRightPlacement ? "right" : "bottom"
+                });
+                menu.style.visibility = "visible";
+                if (!this._untrackAnchor) this._untrackAnchor = trackAnchor(place);
+                return;
+            }
+
+            let container = toolbarRootEl;
             if (!container) container = host.offsetParent || host.parentElement || document.body;
 
             const cs = getComputedStyle(container);
@@ -753,9 +828,12 @@ class Dropdown extends BaseSelectableComponent {
                 container.appendChild(menu);
             }
 
-            // Make visible for measurements but keep hidden from user until placed
+            // Make visible for measurements but keep hidden from user until placed.
+            // `position` is restored explicitly: the same menu may have been placed
+            // as a body-portaled fixed popup on a previous open (docked toolbar).
             menu.style.visibility = "hidden";
             menu.style.display = "block";
+            menu.style.position = "absolute";
             menu.style.top = "0px";
             menu.style.left = "0px";
 
@@ -765,15 +843,8 @@ class Dropdown extends BaseSelectableComponent {
             const mh = menu.offsetHeight;
             const margin = 6;
 
-            const toolbarRoot = host.closest("[data-toolbar-root]");
-            const verticalToolbar = !!toolbarRoot && toolbarRoot.classList.contains("flex-col");
-            const placement = this.placement;
-
             // prefer opening below and to the right (or depending on toolbar)
-            let preferRight;
-            if (placement === "right") preferRight = true;
-            else if (placement === "below") preferRight = false;
-            else preferRight = verticalToolbar;
+            const preferRight = preferRightPlacement;
 
             // initial coordinates relative to container
             let left, top;

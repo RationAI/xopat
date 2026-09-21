@@ -1,4 +1,66 @@
 /**
+ * Make an object permanently non-interactive: not a hit-test target, not
+ * selectable, not transformable, no controls to render.
+ *
+ * This is the single description of what "helper annotation" means for the
+ * user's mouse. It is applied centrally by
+ * {@link OSDAnnotations.AnnotationCanvas#addHelperAnnotation} rather than by
+ * each factory, because a factory's own flags do not survive the object's
+ * construction: `create()` ends with `renderAllControls()` (which force-sets
+ * `hasControls`), and `initCreate()` merges the preset options - which carry
+ * `PresetManager.commonAnnotationVisuals`, i.e. `selectable: true` - over the
+ * helper properties.
+ *
+ * `controls` is emptied rather than only `hasControls` being cleared: that way
+ * even a stray `hasControls = true` written later has nothing to draw, so the
+ * scale corners and the rotation handle cannot appear over a drawing in
+ * progress.
+ *
+ * Every property written here is restored on promotion, and nothing else is
+ * written: `renderAllControls` puts the controls back,
+ * `_applyAnnotationVisibilityState` the flags and locks, and
+ * `_promoteHelperAnnotation` the caching. That is the bound on what may join
+ * this list - `hoverCursor`, for one, stays out, since a non-evented object is
+ * never a hover target anyway.
+ *
+ * Factories therefore pass no interactivity properties at all: they own
+ * geometry and preset visuals, the canvas owns this.
+ *
+ * @param {fabric.Object} object
+ * @return {fabric.Object} the same object, for chaining
+ */
+OSDAnnotations.freezeHelperInteractivity = function (object) {
+    if (!object) return object;
+
+    object.selectable = false;
+    object.evented = false;
+    object.hasControls = false;
+    object.hasBorders = false;
+    object.controls = {};
+    // Not interactivity, but it belongs to the same contract: a helper is
+    // mutated outside fabric setters (a polygon under construction has points
+    // pushed onto it), so fabric never marks the cache dirty and a cached
+    // helper renders stale. `_promoteHelperAnnotation` puts it back.
+    object.objectCaching = false;
+
+    object.lockMovementX = true;
+    object.lockMovementY = true;
+    object.lockRotation = true;
+    object.lockScalingFlip = true;
+    object.lockScalingX = true;
+    object.lockScalingY = true;
+    object.lockSkewingX = true;
+    object.lockSkewingY = true;
+    object.lockUniScaling = true;
+
+    // Group helpers (ruler / angle / arrow) must not leak an interactive child.
+    if (Array.isArray(object._objects)) {
+        for (const child of object._objects) OSDAnnotations.freezeHelperInteractivity(child);
+    }
+    return object;
+};
+
+/**
  * It is more an interface rather than actual class.
  * Any annotation object should extend this class and implement
  * necessary methods for its creation.
@@ -51,6 +113,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "borderScaleFactor",
         "hasControls",
         "hasBorders",
+        // Selection grab margin (see configure()/hitTolerancePx). copy() paths
+        // — edit-recalculate, translate, cut/paste — build the replacement
+        // straight from these props without re-running configure(), so without
+        // it here every edited annotation would silently lose its tolerance.
+        "padding",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -63,6 +130,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "private",
         "comments",
         "label",
+        "readOnly",
     ];
 
     /**
@@ -81,7 +149,31 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "id",
+        "private",
+        "comments",
+        "label",
+        // A lock is intrinsic state of the annotation, not a rendering detail:
+        // if it did not survive the import trim it would silently evaporate on
+        // reload and the object would become editable again.
+        "readOnly",
     ];
+
+    /**
+     * Preset meta key naming WHICH of an annotation's own meta values fills its
+     * label — the class-level half of the label value slot.
+     *
+     * A preset carrying `labelSource: {value: "Tumor ratio"}` makes every object
+     * of that preset render its `meta["Tumor ratio"]` in the label area, so an
+     * integration can describe a whole class of annotations once instead of
+     * stamping every instance. The instance override `object.displayValue` wins
+     * over it; see {@link getLabelValue}.
+     *
+     * Note `displayValue` is deliberately absent from both property lists above:
+     * it is derived state, re-attached by whoever owns it, and an exported bundle
+     * must not carry a value whose source no longer exists.
+     * @type {string}
+     */
+    static LABEL_SOURCE_META_KEY = "labelSource";
 
     /**
      * Geometry properties.
@@ -150,7 +242,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      *
      * If the mode is creating (not yet finished), it returns a helper annotation (or their list) instead.
      * Such a helper annotation must be added with addHelperAnnotation(). In this case, a list can be returned
-     * too - for example, the ruler is created using a line and a text, two separate objects. When finished, a
+     * too - for example, the angle is created using a polyline, a text and a path, three separate objects. When finished, a
      * group is created to attach to the canvas. When aborted, two helper items in an array are returned by this method.
      * @returns {(fabric.Object|[fabric.Object])}
      */
@@ -190,11 +282,45 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return object from the input parameters (builder-like behaviour)
      */
     configure(object, options) {
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             type: this.type,
             factoryID: this.factoryID,
+            // Selection grab margin. fabric applies `padding` inside
+            // calcLineCoords() AFTER the viewport transform, so it is a
+            // zoom-invariant screen-px margin on `lineCoords` — exactly what
+            // Canvas._checkTarget tests. aCoords are untouched, so the rbush
+            // bboxes in spatial-index.js keep their exact geometry. Without
+            // this an axis-aligned polyline has a bbox only strokeWidth wide
+            // and is impossible to hit. The overlay's precise narrow phase
+            // reads the same value back as its distance tolerance.
+            padding: this.hitTolerancePx(),
         });
         return object;
+    }
+
+    /**
+     * Selection grab margin in screen pixels, applied to every object this
+     * factory configures. Deployment-tuned via the module's `hitTolerancePx`.
+     * @return {number}
+     */
+    hitTolerancePx() {
+        const value = this._context?.hitTolerancePx;
+        return Number.isFinite(value) ? value : 5;
+    }
+
+    /**
+     * The canvas an object belongs to, for zoom/stroke math that must not be
+     * read off whichever viewer happens to be focused (AGENTS.md §6).
+     *
+     * `this._context.fabric` resolves through the *active* viewer, so a factory
+     * configuring an object being imported into a background viewport of a grid
+     * would size it from a foreign zoom. An object already on a canvas knows its
+     * own; the module default is the fallback for the pre-insertion case.
+     * @param {fabric.Object} [object]
+     * @return {fabric.Canvas|undefined}
+     */
+    canvasOf(object) {
+        return object?.canvas || this._context?.fabric?.canvas;
     }
 
     /**
@@ -248,6 +374,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return Array.isArray(pts[0]) ? pts.flat() : pts;
     }
 
+    /**
+     * @deprecated Legacy no-op kept for API compatibility — it unwraps `{objects:[…]}`
+     *   and trims nothing. The real trim lives on the canvas wrapper
+     *   ({@link OSDAnnotations.FabricWrapper#trimExportJSON}), which is the only one
+     *   that knows the module's forced-property registry. Nothing in the repo calls this.
+     */
     trimExportJSON(objectList) {
         let array = objectList;
         if (typeof array === "object") {
@@ -273,7 +405,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 return transformer(x, isRoot, false, factory);
             }
             let result = transformer(x, isRoot, true, factory);
-            result.objects = x.objects?.map(y => it(y, false, factory));
+            // A LIVE fabric.Group keeps its children on `_objects`; `objects`
+            // exists only on already-serialized (toObject) payloads. Reading
+            // `objects` alone silently exported every group with no children -
+            // the arrow then re-imported as a childless group (invisible, and
+            // any child dereference threw).
+            const children = x._objects || x.objects;
+            result.objects = children?.map(y => it(y, false, factory));
             return result;
         };
         return it(o, true, this);
@@ -416,7 +554,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 const iconCenterX = x + padding + iconSize / 2;
 
-                ctx.font = `900 ${iconSize}px "Font Awesome 6 Free"`;
+                ctx.font = `400 ${iconSize}px "Phosphor-Light"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -484,25 +622,76 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     _resolveControlGlyph(icon) {
+        // Canvas text has no cascade, so the CSS icon classes cannot reach
+        // here: the glyph must be the raw Phosphor-Light codepoint, painted
+        // with the matching font family (see the `ctx.font` assignments).
         const map = {
-            'fa-eye': '\uf06e',
-            'fa-eye-slash': '\uf070',
-            'fa-lock': '\uf023',
-            'fa-lock-open': '\uf3c1',
-            'fa-comments': '\uf086',
-            'fa-comment-medical': '\uf7f5',
-            'fa-ellipsis-h': '\uf141',
+            'ph-eye': '\ue220',
+            'ph-eye-slash': '\ue224',
+            'ph-lock': '\ue2fa',
+            'ph-lock-open': '\ue306',
+            'ph-chats': '\ue17c',
+            'ph-chat-teardrop-dots': '\ue176',
+            'ph-dots-three': '\ue1fe',
         };
         return map[icon] || icon || '?';
+    }
+
+    /**
+     * Pastel wash of an annotation's preset colour, for label chrome that should
+     * read as belonging to its shape. The colour is mixed towards white rather
+     * than painted with alpha: labels sit over arbitrary slide tissue, and a
+     * translucent fill would let the tissue through and wreck text contrast.
+     * @param {fabric.Object} target
+     * @param {number} [fillMix=0.16] 0 = white, 1 = the raw preset colour
+     * @param {number} [strokeMix=0.7] same, for the outline
+     * @return {{fill: string, stroke: string}} always valid CSS colours
+     */
+    getLabelTint(target, fillMix = 0.16, strokeMix = 0.7) {
+        const rgb = OSDAnnotations.AnnotationObjectFactory.parseColor(
+            target?.color || this._presets?.get?.(target?.presetID)?.color
+        );
+        if (!rgb) return { fill: 'white', stroke: 'black' };
+        const mix = (t) => {
+            const c = (v) => Math.round(255 + (v - 255) * t);
+            return `rgb(${c(rgb.r)}, ${c(rgb.g)}, ${c(rgb.b)})`;
+        };
+        return { fill: mix(fillMix), stroke: mix(strokeMix) };
+    }
+
+    /**
+     * Parse the colour formats presets can carry (#rgb, #rrggbb, rgb()/rgba()).
+     * @param {string} color
+     * @return {{r: number, g: number, b: number}|undefined} undefined if unparseable
+     */
+    static parseColor(color) {
+        if (typeof color !== 'string') return undefined;
+        const value = color.trim();
+        const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+        if (hex) {
+            let h = hex[1];
+            if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+            return {
+                r: parseInt(h.slice(0, 2), 16),
+                g: parseInt(h.slice(2, 4), 16),
+                b: parseInt(h.slice(4, 6), 16),
+            };
+        }
+        const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(value);
+        if (rgb) {
+            return { r: +rgb[1], g: +rgb[2], b: +rgb[3] };
+        }
+        return undefined;
     }
 
     renderAllControls(ofObject) {
         ofObject.controls = {
             toolbar: this._renderToolbarControl(),
         };
-        ofObject.hasControls = false;
+        ofObject.hasControls = true;
         ofObject.hasBorders = false;
     }
+
 
     /**
      * Single combined toolbar pill: comment-with-plus + lock + ellipsis.
@@ -511,18 +700,30 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     _renderToolbarControl() {
         const self = this;
-        const ICON_SIZE = 18;
-        const PAD_X = 10;
-        const SLOT_GAP = 12;
-        const TEXT_GAP = 6;
-        const HEIGHT = 26;
+        const ICON_SIZE = 13;
+        const PAD_X = 5;
+        const SLOT_GAP = 5;
+        const TEXT_GAP = 3;
+        const HEIGHT = 19;
+        const METRIC_FONT = 10;
         const RADIUS = HEIGHT / 2;
+        // Screen-space gap between the annotation's top edge and the pill.
+        const ANCHOR_OFFSET = 16;
         // Pill alpha = min(1, annotation.opacity * factor). Annotation at 0
         // hides the pill entirely (and disables clicks).
         const LABEL_OPACITY_FACTOR = 2;
 
         const slotsFor = (target) => {
             const slots = [];
+
+            // Read-only metric segment: area when the shape has one, else
+            // length (lines). Shared with the always-on measurement
+            // overlay via getMeasurementLabel (single source of truth).
+            const metricText = self.getMeasurementLabel(target);
+            if (metricText) {
+                slots.push({ id: 'metric', textOnly: true, text: metricText, onClick: null });
+            }
+
             const commentsOn = !!self._context.getCommentsEnabled?.();
             if (commentsOn) {
                 const n = target?.comments
@@ -530,14 +731,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     : 0;
                 slots.push({
                     id: 'comments',
-                    icon: 'fa-comment-medical',
+                    icon: 'ph-chat-teardrop-dots',
                     countText: n > 0 ? String(n) : '',
                     onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
                 });
             }
-            slots.push({
+            // A read-only annotation shows a padlock that is exactly that — a
+            // statement, not a toggle. Reusing the `private` toggle here would let
+            // the lock icon flip while the annotation stays locked, which reads as
+            // a broken control.
+            slots.push(target?.readOnly ? {
                 id: 'lock',
-                icon: target?.private ? 'fa-lock' : 'fa-lock-open',
+                icon: 'ph-lock',
+                countText: '',
+                onClick: null,
+            } : {
+                id: 'lock',
+                icon: target?.private ? 'ph-lock' : 'ph-lock-open',
                 countText: '',
                 onClick: () => {
                     const wrapper = self._context.fabric;
@@ -546,7 +756,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             });
             slots.push({
                 id: 'more',
-                icon: 'fa-ellipsis-h',
+                icon: 'ph-dots-three',
                 countText: '',
                 onClick: (eventData) => {
                     self._context.raiseEvent('annotation-more-clicked', {
@@ -568,7 +778,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             x: 0,
             y: -0.5,
             offsetX: 0,
-            offsetY: -22,
+            offsetY: -ANCHOR_OFFSET,
             cursorStyle: 'pointer',
             sizeX: 120,
             sizeY: HEIGHT,
@@ -590,7 +800,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 const dx = midTopX - cx;
                 const dy = midTopY - cy;
                 const len = Math.hypot(dx, dy) || 1;
-                return new fabric.Point(midTopX + (dx / len) * 22, midTopY + (dy / len) * 22);
+                return new fabric.Point(midTopX + (dx / len) * ANCHOR_OFFSET, midTopY + (dy / len) * ANCHOR_OFFSET);
             },
             render: (ctx, left, top, _styleOverride, fabricObject) => {
                 const slots = slotsFor(fabricObject);
@@ -613,10 +823,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 // Measure each slot's intrinsic width.
                 let totalContentW = 0;
                 for (const s of slots) {
-                    let w = ICON_SIZE;
-                    if (s.countText) {
-                        ctx.font = `600 11px Arial`;
-                        w += TEXT_GAP + ctx.measureText(s.countText).width;
+                    let w;
+                    if (s.textOnly) {
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
+                        w = ctx.measureText(s.text).width;
+                    } else {
+                        w = ICON_SIZE;
+                        if (s.countText) {
+                            ctx.font = `600 ${METRIC_FONT}px Arial`;
+                            w += TEXT_GAP + ctx.measureText(s.countText).width;
+                        }
                     }
                     s._width = w;
                     totalContentW += w;
@@ -648,9 +864,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.lineTo(x, y + RADIUS);
                 ctx.arcTo(x, y, x + RADIUS, y, RADIUS);
                 ctx.closePath();
-                ctx.fillStyle = 'white';
+                // Faint wash of the preset colour so the pill reads as part of
+                // its annotation rather than floating app chrome.
+                const tint = self.getLabelTint(fabricObject);
+                ctx.fillStyle = tint.fill;
                 ctx.fill();
-                ctx.strokeStyle = 'black';
+                ctx.strokeStyle = tint.stroke;
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
@@ -666,21 +885,32 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     const zoneLeftPad  = i === 0 ? PAD_X : SLOT_GAP / 2;
                     const zoneRightPad = i === slots.length - 1 ? PAD_X : SLOT_GAP / 2;
 
-                    // Draw icon
-                    const iconCenterX = slotStart + ICON_SIZE / 2;
-                    ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
-                    ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
-                    cursor += ICON_SIZE;
-
-                    if (s.countText) {
-                        ctx.font = `600 11px Arial`;
+                    if (s.textOnly) {
+                        // Read-only metric label — no glyph, muted colour.
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
                         ctx.textAlign = 'left';
                         ctx.textBaseline = 'middle';
-                        ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
-                        cursor += TEXT_GAP + (s._width - ICON_SIZE);
+                        ctx.fillStyle = '#444';
+                        ctx.fillText(s.text, slotStart, 1);
+                        cursor += s._width;
+                    } else {
+                        // Draw icon
+                        const iconCenterX = slotStart + ICON_SIZE / 2;
+                        ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillStyle = 'black';
+                        ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
+                        cursor += ICON_SIZE;
+
+                        if (s.countText) {
+                            ctx.font = `600 ${METRIC_FONT}px Arial`;
+                            ctx.textAlign = 'left';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillStyle = 'black';
+                            ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
+                            cursor += TEXT_GAP + (s._width - ICON_SIZE);
+                        }
                     }
 
                     zones.push({
@@ -779,6 +1009,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
         }
         if (additionalProps?.length > 0) {
             for (let prop of additionalProps) {
+                // Unlike defaultProps (a fixed shape contract), additional props are
+                // opt-in: an object that simply does not carry one must not gain an
+                // explicit `undefined` key that then travels through every clone.
+                if (ofObject[prop] === undefined) continue;
                 toObject[prop] = this.__cloneValue(ofObject[prop]);
             }
         }
@@ -948,7 +1182,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      *    object's internal geometry — e.g. polygon `.points` — in line so
      *    exports and hit-tests stay consistent)
      *
-     * Subclasses with point-based geometry (polygon, polyline, ruler) must
+     * Subclasses with point-based geometry (polygon, polyline, angle) must
      * override `_applyMoveToGeometry` to translate their internal points.
      *
      * @param {fabric.Object} theObject
@@ -1008,6 +1242,116 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Whether a measurement label should be offered for this object type at all.
+     * Types whose extent carries no meaning for the user (a pointer arrow), or
+     * which render their own measurement on canvas (angle), return false and are
+     * then skipped by BOTH label paths — the selected-object toolbar pill and
+     * the always-on overlay.
+     *
+     * This is distinct from simply having no getArea/getLength: those types
+     * (point, text, group) are unmeasurable by nature, whereas these have a
+     * perfectly computable number that we deliberately do not show.
+     * @return {boolean}
+     */
+    supportsMeasurements() {
+        return true;
+    }
+
+    /**
+     * What the label area shows for one object, and which rule answered.
+     *
+     * The label pill is a *value slot*, not a measurement readout. Resolution
+     * order, first non-empty wins:
+     *
+     *  1. `target.displayValue` — an instance override. Whatever attached it owns
+     *     the formatting, units and precision; this renders the string verbatim.
+     *  2. the annotation meta value named by its preset's
+     *     {@link LABEL_SOURCE_META_KEY} — a class-level rule, so every object of
+     *     that preset shows the same field of its own metadata.
+     *  3. the geometry measurement: area when the shape has one, else length.
+     *     Unchanged, and what everything not touched by an integration still gets.
+     *
+     * Geometry is formatted through the object's OWN viewer scalebar
+     * (multi-viewport safe), falling back to raw px on an uncalibrated slide.
+     *
+     * Why the attached value is resolved BEFORE `supportsMeasurements()`: that
+     * opt-out means "this shape's extent carries no meaning" (a pointer arrow), a
+     * statement about geometry. It must not suppress a value someone deliberately
+     * attached to the same shape.
+     *
+     * @param {fabric.Object} target
+     * @return {{text: string, source: ('value'|'area'|'length'|'')}}
+     */
+    getLabelValue(target) {
+        const attached = this.getAttachedLabelValue(target);
+        if (attached) return { text: attached, source: 'value' };
+
+        if (!this.supportsMeasurements()) return { text: '', source: '' };
+        const scalebar = target?.canvas?.__spatialIndex?.wrapper?.viewer?.scalebar;
+        try {
+            const area = this.getArea?.(target);
+            if (typeof area === 'number' && isFinite(area) && area > 0) {
+                return {
+                    text: scalebar?.imageAreaToGivenUnits
+                        ? scalebar.imageAreaToGivenUnits(area)
+                        : `${Math.round(area)} px²`,
+                    source: 'area',
+                };
+            }
+            const len = this.getLength?.(target);
+            if (typeof len === 'number' && isFinite(len) && len > 0) {
+                return {
+                    text: scalebar?.imageLengthToGivenUnits
+                        ? scalebar.imageLengthToGivenUnits(len)
+                        : `${Math.round(len)} px`,
+                    source: 'length',
+                };
+            }
+        } catch (e) { /* transient geometry during edit — skip metric */ }
+        return { text: '', source: '' };
+    }
+
+    /**
+     * The value an integration put in this object's label slot, if any.
+     *
+     * Deliberately NOT wrapped in a try/catch: the geometry branch catches because
+     * a shape mid-edit is legitimately invalid for a frame, whereas a throw here
+     * is a bug in whatever attached the value and must surface.
+     *
+     * The preset rule follows the same precedence
+     * `getAnnotationDescription` already uses — the object's own meta is the
+     * value, the preset only names which key to read — so there is one rule for
+     * "where does an annotation's metadata come from", not two.
+     *
+     * @param {fabric.Object} target
+     * @return {string} empty when nothing is attached
+     */
+    getAttachedLabelValue(target) {
+        const direct = target?.displayValue;
+        if (direct !== undefined && direct !== null && direct !== '') return String(direct);
+
+        const preset = this._presets?.get?.(target?.presetID);
+        const key = preset?.getMetaValue?.(
+            OSDAnnotations.AnnotationObjectFactory.LABEL_SOURCE_META_KEY);
+        if (!key) return '';
+        const value = target?.meta?.[key];
+        // `0` and `false` are values a prediction can legitimately take, so test
+        // for absence rather than truthiness. Empty string stays empty.
+        if (value === undefined || value === null || value === '') return '';
+        return String(value);
+    }
+
+    /**
+     * Formatted label text for a single object. Thin wrapper over
+     * {@link getLabelValue} kept as the name every existing caller uses.
+     * @param {fabric.Object} target
+     * @return {string}
+     */
+    getMeasurementLabel(target) {
+        return this.getLabelValue(target).text;
+    }
+
+    /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
      * @param {fabric.Object} ofObject
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
@@ -1016,9 +1360,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
+        // Capture the visual center before the strokeWidth mutation: fabric folds
+        // strokeWidth into transformed dimensions, so a left/top-origin shape would
+        // otherwise walk toward bottom-right as strokeWidth is rescaled per zoom.
+        const anchorCenter = ofObject.getCenterPoint();
         ofObject.set({
             strokeWidth: ofObject.originalStrokeWidth/graphicZoom
         });
+        this._reanchorAfterStrokeChange(ofObject, anchorCenter);
         // // Update object properties to reflect zoom
         // var updater = function(x) {
         //     //todo unify this somehow using a function callback with the limitation, e.g. call only resize when the difference is significant
@@ -1033,6 +1382,34 @@ OSDAnnotations.AnnotationObjectFactory = class {
         //         });
         //     }
         // }
+    }
+
+    /**
+     * Re-anchor an object after its strokeWidth was mutated, so the DRAWN shape
+     * does not drift. Fabric folds strokeWidth into transformed dimensions
+     * (regardless of strokeUniform) and grows left/top-origin shapes toward
+     * bottom-right — the same offset the highlight clone (~L1229) and
+     * _configureLine (objectAdvancedFactories.js) already work around.
+     * @param {fabric.Object} ofObject object whose strokeWidth just changed
+     * @param {fabric.Point} [anchorCenter] visual center captured BEFORE the change
+     */
+    _reanchorAfterStrokeChange(ofObject, anchorCenter) {
+        // points-based (Polyline/Polygon/Multipolygon-as-Path): geometry is the
+        // absolute points/path; left/top/pathOffset are DERIVED. Re-derive so the
+        // render re-pins to the points at the new strokeWidth. Never translate points.
+        if (Array.isArray(ofObject.points) && typeof ofObject._setPositionDimensions === 'function') {
+            ofObject._setPositionDimensions({});
+            ofObject.setCoords();
+            return;
+        }
+        // left/top-based (Rect/Ellipse): restore the pre-change visual center so the
+        // shape grows symmetrically about its middle (like `point`) instead of from
+        // the top-left corner. No-op for center-origin shapes (point, line) because
+        // their center already equals left/top.
+        if (anchorCenter) {
+            ofObject.setPositionByOrigin(anchorCenter, 'center', 'center');
+            ofObject.setCoords();
+        }
     }
 
     _copyVal(val) {
@@ -1080,6 +1457,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     createHighlight(theObject) {
         try {
+            // borderColor is the control-UI colour and is deliberately faint
+            // (default alpha 0.35) so fabric's own borders stay unobtrusive.
+            // The halo needs to read against tissue, so re-alpha it here rather
+            // than raising the shared preset value.
+            const HIGHLIGHT_STROKE_ALPHA = 0.9;
+
+            const highlightStroke = theObject.borderColor
+                ? new fabric.Color(theObject.borderColor).setAlpha(HIGHLIGHT_STROKE_ALPHA).toRgba()
+                : theObject.borderColor;
+
             const clonedObj = this._cloneFabricObject(theObject, [
                 "originalStrokeWidth",
                 "cornerColor",
@@ -1087,15 +1474,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 //"factoryID"
             ]);
 
-            let newStroke = theObject.strokeWidth * 5;
-            let newStrokeDashArray = [newStroke * 3, newStroke * 2];
+            let newStroke = theObject.strokeWidth * 2.5;
+            let newStrokeDashArray = [newStroke * 2, newStroke * 3];
 
             const center = theObject.getCenterPoint();
 
             clonedObj.set({
                 fill: '',
                 // border color === control UI color, stroke == class
-                stroke: theObject.borderColor,
+                stroke: highlightStroke,
                 strokeWidth: newStroke,
                 strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
@@ -1207,8 +1594,20 @@ OSDAnnotations.AnnotationObjectFactory = class {
             props.fill = color;
         }
 
-        if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
-            const canvas = targetCanvas || this._context.fabric.canvas;
+        // Capture the visual center BEFORE strokeWidth changes, so we can re-pin
+        // it afterward and stop the shape from drifting bottom-right (see
+        // _reanchorAfterStrokeChange). Only meaningful when strokeWidth actually
+        // changes — pure color/opacity updates must never move the object.
+        const willChangeStroke = !!visualProperties.originalStrokeWidth;
+        let anchorCenter;
+        if (willChangeStroke) {
+            anchorCenter = ofObject.getCenterPoint();
+            // Persist the base stroke width onto the object itself. onZoom recomputes
+            // strokeWidth = ofObject.originalStrokeWidth / graphicZoom on every
+            // navigation; without writing the new base here, the first pan/zoom
+            // reverts the UI-chosen thickness to the stale per-object value.
+            ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
+            const canvas = targetCanvas || this.canvasOf(ofObject);
             props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
         }
 
@@ -1219,6 +1618,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
         }
 
         ofObject.set(props);
+
+        if (willChangeStroke) {
+            this._reanchorAfterStrokeChange(ofObject, anchorCenter);
+        }
     }
 
     /**
@@ -1299,6 +1702,32 @@ OSDAnnotations.AnnotationObjectFactory = class {
     static fromArrayPoint(point) {
         return {x: point[0], y: point[1]};
     }
+
+    /**
+     * Hand an already-absolute ring to the caller in the shape it asked for.
+     *
+     * Every `toPointArray` override needs the same converter/rounding tail; keeping
+     * it here means an override only has to answer the interesting question — where
+     * this shape's outline actually is.
+     *
+     * Always returns a NEW array. The points-based override used to return the
+     * object's live `points` by reference, which made every caller a potential
+     * mutator of the annotation it was only trying to read.
+     *
+     * @param {Array<{x: number, y: number}>} points absolute image coordinates
+     * @param {function} converter `withObjectPoint` / `withArrayPoint` / custom
+     * @param {number} [digits] rounding, when the caller wants it
+     */
+    _emitPoints(points, converter, digits = undefined) {
+        const asObject = converter === OSDAnnotations.AnnotationObjectFactory.withObjectPoint;
+        const round = digits === undefined
+            ? (v) => v
+            : (v) => parseFloat(Number(v).toFixed(digits));
+        return (points || []).map(p => {
+            const x = round(p.x), y = round(p.y);
+            return asObject ? {x, y} : converter(x, y);
+        });
+    }
 };
 
 /**
@@ -1306,6 +1735,81 @@ OSDAnnotations.AnnotationObjectFactory = class {
  * todo move here stuff from magic wand code
  */
 OSDAnnotations.PolygonUtilities = {
+
+    /**
+     * The object's local→image transform, or `null` when it has none.
+     *
+     * A bare literal `{points: […]}` is a legitimate argument throughout this file
+     * (`Multipolygon.getArea` passes one per ring, and tests pass them everywhere),
+     * so "no matrix" means identity rather than an error.
+     *
+     * @param {fabric.Object|object} object
+     * @return {number[]|null} a fabric 6-element matrix, or null for identity
+     */
+    transformMatrixOf: function (object) {
+        if (!object || typeof object.calcTransformMatrix !== 'function') return null;
+        const m = object.calcTransformMatrix();
+        return Array.isArray(m) && m.length >= 6 ? m : null;
+    },
+
+    /**
+     * A local point in image coordinates, through the object's own transform.
+     *
+     * Fabric's matrix is the authority, and it must be used whole. It is tempting to
+     * apply only the linear part about the shape's geometric centre — that keeps
+     * `left`/`top` meaning what they look like they mean — but fabric rotates about
+     * the object's **origin**, which for these annotations is the top-left, not the
+     * centre. Anchoring anywhere else puts the outline in a different place from
+     * `getBoundingRect`, and the mask then measures pixels the annotation does not
+     * cover.
+     *
+     * The apparent half-stroke offset is not an error either: `left` is the outer
+     * edge of the stroke, and the painted path starts `strokeWidth / 2` inside it.
+     * The matrix agrees with `getBoundingRect` about that; a hand-rolled anchor does
+     * not.
+     *
+     * @param {fabric.Object|object} object
+     * @param {{x: number, y: number}} point in the object's local space
+     * @param {number[]} [matrix] hoisted out of a loop by the caller
+     */
+    absolutePoint: function (object, point, matrix) {
+        const m = matrix !== undefined ? matrix : this.transformMatrixOf(object);
+        if (!m) return {x: point.x, y: point.y};
+        return fabric.util.transformPoint({x: point.x, y: point.y}, m);
+    },
+
+    /**
+     * A points-based ring in image coordinates; always a new array.
+     *
+     * `points` are stored absolute (see `_syncPointGeometry`) and `pathOffset` is
+     * derived from them, so `M · (p − pathOffset)` reproduces `p` while the object
+     * is untransformed — today's behaviour is the identity case of this one.
+     */
+    absolutePoints: function (object, points) {
+        if (!Array.isArray(points)) return [];
+        const m = this.transformMatrixOf(object);
+        if (!m) return points.map(p => ({x: p.x, y: p.y}));
+        const offset = object.pathOffset || {x: 0, y: 0};
+        return points.map(p => this.absolutePoint(
+            object, {x: p.x - (offset.x || 0), y: p.y - (offset.y || 0)}, m));
+    },
+
+    /**
+     * How much the transform multiplies AREA: the absolute determinant of the
+     * matrix's linear part.
+     *
+     * Rotation cancels out of a determinant, which is exactly why area needs no
+     * angle term — and why `|scaleX · scaleY|` would have been enough if skew were
+     * impossible. Taking it from the matrix covers skew and flip for free.
+     *
+     * @return {number} 1 when the object carries no transform
+     */
+    transformScale: function (object) {
+        const m = this.transformMatrixOf(object);
+        if (!m) return 1;
+        const det = Math.abs(m[0] * m[3] - m[1] * m[2]);
+        return Number.isFinite(det) && det > 0 ? det : 1;
+    },
 
     intersectAABB: function (a, b) {
         const dx = a.x - b.x;
@@ -1356,6 +1860,78 @@ OSDAnnotations.PolygonUtilities = {
         const bbox = this.getBoundingBox(points);
 
         return { diffX: bbox.width, diffY: bbox.height };
+    },
+
+    /**
+     * True (absolute) area of a closed point ring, shoelace formula.
+     * @param {Array<{x: number, y: number}>} points ring, implicitly closed
+     * @return {number} area in squared units of the input coordinate space
+     */
+    polygonArea: function (points) {
+        if (!points || points.length < 3) return 0;
+
+        let total = 0;
+        for (let i = 0, len = points.length; i < len; i++) {
+            const current = points[i];
+            const next = points[i === len - 1 ? 0 : i + 1];
+            total += (current.x * next.y) - (next.x * current.y);
+        }
+        return Math.abs(total) * 0.5;
+    },
+
+    /**
+     * Share of the snapshot a contour has to fill before it counts as a
+     * misdetection on its own. Mirrors the >90% mask rejection already applied
+     * by modules/pathology-foundation (see _maskToPolygonResult).
+     */
+    MAX_VIEWPORT_COVERAGE: 0.9,
+    /** Bbox share of each snapshot dimension considered "spans the viewport". */
+    VIEWPORT_SPAN: 0.95,
+    /** Area/bbox-area ratio above which a contour counts as a rectangle. */
+    VIEWPORT_RECTANGULARITY: 0.9,
+
+    /**
+     * Detect an automated-selection contour that effectively selects the whole
+     * visible viewport. Such a result is never something a user would draw: it
+     * hides the image behind an opaque near-rectangle and carries no
+     * information. Automated tools (magic wand, viewport segmentation) drop it
+     * instead of rendering it.
+     *
+     * Works in the snapshot's own pixel space, since "covers the viewport" is
+     * only meaningful before the contour is mapped to image coordinates.
+     *
+     * @param {Array<{x: number, y: number}>} points contour in snapshot pixels
+     * @param {number} width snapshot width in pixels
+     * @param {number} height snapshot height in pixels
+     * @param {{x: number, y: number}} [origin] snapshot origin, when the
+     *   contour coordinates carry the snapshot offset (defaults to 0,0)
+     * @return {boolean} true when the contour should be discarded
+     */
+    coversViewport: function (points, width, height, origin) {
+        if (!points || points.length < 3) return false;
+        if (!(width > 0) || !(height > 0)) return false;
+
+        const area = this.polygonArea(points);
+        if (area <= 0) return false;
+
+        if (area / (width * height) >= this.MAX_VIEWPORT_COVERAGE) return true;
+
+        // An almost-rectangular blob that spans both dimensions is the classic
+        // flood-fill runaway: it can fall below the coverage limit thanks to
+        // holes/ragged borders while still occluding the entire view.
+        const bbox = this.getBoundingBox(points);
+        const originX = origin ? (origin.x || 0) : 0;
+        const originY = origin ? (origin.y || 0) : 0;
+        if (bbox.width < width * this.VIEWPORT_SPAN || bbox.height < height * this.VIEWPORT_SPAN) {
+            return false;
+        }
+        if (bbox.x > originX + width * (1 - this.VIEWPORT_SPAN)
+            || bbox.y > originY + height * (1 - this.VIEWPORT_SPAN)) {
+            return false;
+        }
+
+        const bboxArea = bbox.width * bbox.height;
+        return bboxArea > 0 && area / bboxArea >= this.VIEWPORT_RECTANGULARITY;
     },
 
     getBoundingBox: function (points) {
@@ -1588,3 +2164,19 @@ OSDAnnotations.PolygonUtilities = {
         return simplified;
     }
 };
+
+/**
+ * Control glyphs are painted straight onto the fabric canvas with
+ * `ctx.fillText`, which neither triggers a webfont load nor waits for one. On a
+ * cold start the Phosphor face may still be pending when the first annotation
+ * renders, and the bubbles would show tofu until something else forced a
+ * repaint. Warm the face once and repaint whatever is already on screen.
+ */
+(function warmAnnotationGlyphFont() {
+    if (typeof document === "undefined" || !document.fonts?.load) return;
+    document.fonts.load('16px "Phosphor-Light"').then(() => {
+        for (const instance of OSDAnnotations.FabricWrapper?.instances?.() || []) {
+            instance.canvas?.requestRenderAll?.();
+        }
+    }).catch(() => { /* font missing: glyphs degrade, nothing else to do */ });
+})();

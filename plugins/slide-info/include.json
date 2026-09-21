@@ -1,13 +1,39 @@
 {
   "id": "slide-info",
-  "name": "",
-  "author": "",
+  "name": "%meta.name%",
+  "author": "RationAI",
   "version": "1.0.0",
-  "description": "",
+  "description": "%meta.description%",
+  "icon": "ph-info",
+  "categories": ["Navigation"],
+  "keywords": ["slide", "switcher", "metadata", "browser"],
   "includes": [
     "slide-info.mjs"
   ],
   "modules": ["menu-pages"],
+  // UI gating only — whether the "Download slide" action is offered at all.
+  // The backend still authorizes the fetch itself.
+  "capabilities": [
+    {
+      "id": "slide-info.download-slide",
+      "default": "allow",
+      "label": "%capabilities.downloadSlide%"
+    }
+  ],
   "slideSwitching": true,
-  "slideBrowser": true
+  "slideBrowser": true,
+  "io": {
+    "defaultBindings": {
+      "kv:visited": ["local-storage"]
+    }
+  },
+  // Which deployments this plugin's tests apply to. It is `permaLoad` only in
+  // the default deployment, so running them against `secure`/`production`
+  // (which enable no plugins) would assert on something that was never loaded.
+  // See test/harness/discover.mjs.
+  "tests": {
+    "dir": "test",
+    "envs": ["default"],
+    "requires": { "browser": true, "server": true }
+  }
 }

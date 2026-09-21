@@ -44,10 +44,12 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, {
+        OpenSeadragon.extend(object, {
             type: this.type,
             factoryID: this.factoryID,
-        }, options);
+        }, options, {
+            padding: this.hitTolerancePx(),
+        });
         return object;
     }
 
@@ -72,7 +74,11 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getArea(theObject) {
-        return theObject.width * theObject.height;
+        // `width`/`height` are the UNtransformed dimensions; a rect being resized by
+        // a corner handle carries the change in `scaleX`/`scaleY` until `recalculate`
+        // folds it back in, and an imported rect can carry one permanently.
+        return theObject.width * theObject.height
+            * OSDAnnotations.PolygonUtilities.transformScale(theObject);
     }
 
     exportsGeometry() {
@@ -189,21 +195,23 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        let w = obj.width, h = obj.height;
-        if (digits !== undefined) {
-            return [
-                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
-                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top).toFixed(digits))),
-                converter(parseFloat(Number(obj.left + w).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits))),
-                converter(parseFloat(Number(obj.left).toFixed(digits)), parseFloat(Number(obj.top + h).toFixed(digits)))
+        const w = obj.width, h = obj.height;
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        // Fabric's local space is centred on the object's origin, so the corners are
+        // ±w/2, ±h/2 and the matrix places them — carrying scale, rotation, flip and
+        // the origin convention with it. Without a matrix `left/top` already are the
+        // top-left corner and this is exactly what it always was.
+        const corners = m
+            ? [{x: -w / 2, y: -h / 2}, {x: w / 2, y: -h / 2}, {x: w / 2, y: h / 2}, {x: -w / 2, y: h / 2}]
+                .map(p => U.absolutePoint(obj, p, m))
+            : [
+                {x: obj.left, y: obj.top},
+                {x: obj.left + w, y: obj.top},
+                {x: obj.left + w, y: obj.top + h},
+                {x: obj.left, y: obj.top + h},
             ];
-        }
-        return [
-            converter(obj.left, obj.top),
-            converter(obj.left + w, obj.top),
-            converter(obj.left + w, obj.top + h),
-            converter(obj.left, obj.top + h)
-        ];
+        return this._emitPoints(corners, converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -299,12 +307,14 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, {
+        OpenSeadragon.extend(object, {
             angle: options.angle ?? 0,
             centeredRotation: true,
             type: this.type,
             factoryID: this.factoryID
-        }, options);
+        }, options, {
+            padding: this.hitTolerancePx(),
+        });
         return object;
     }
 
@@ -334,7 +344,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getArea(theObject) {
-        return Math.PI * theObject.rx * theObject.ry;
+        // Analytic and exact; the transform only rescales it. Rotation leaves an
+        // ellipse's area alone, which the determinant expresses for free.
+        return Math.PI * theObject.rx * theObject.ry
+            * OSDAnnotations.PolygonUtilities.transformScale(theObject);
     }
 
     edit(theObject) {
@@ -510,37 +523,45 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
                 + (29 * pow6e / 6144) * Math.sin(6 * t),
                 x,y;
             if (reversed) {
-                x = ry * Math.sin(param) + obj.left + ry;
-                y = rx * Math.cos(param) + obj.top + rx;
+                x = ry * Math.sin(param);
+                y = rx * Math.cos(param);
             } else {
-                x = rx * Math.cos(param) + obj.left + rx;
-                y = ry * Math.sin(param) + obj.top + ry;
+                x = rx * Math.cos(param);
+                y = ry * Math.sin(param);
             }
-
-            const angle = (obj.angle || 0) * Math.PI / 180;
-            if (angle !== 0) {
-                const cx = obj.left + obj.rx;
-                const cy = obj.top + obj.ry;
-                const dx = x - cx;
-                const dy = y - cy;
-                const cos = Math.cos(angle);
-                const sin = Math.sin(angle);
-                const rxp = cx + dx * cos - dy * sin;
-                const ryp = cy + dx * sin + dy * cos;
-                x = rxp;
-                y = ryp;
-            }
-
-            points.push(
-                digits === undefined
-                    ? converter(x, y)
-                    : converter(
-                        parseFloat(Number(x).toFixed(digits)),
-                        parseFloat(Number(y).toFixed(digits))
-                    )
-            );
+            // Centre-relative; placed below. The hand-rolled rotate-about-centre that
+            // used to live here is gone: the object matrix already carries the angle,
+            // and it carries scale and flip too, which this never did.
+            points.push({x, y});
         }
-        return points;
+
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        if (m) {
+            // Samples are already centre-relative, i.e. fabric's local space — the
+            // matrix places them, carrying angle, scale and flip. The hand-rolled
+            // rotate-about-centre that used to live here only ever did the angle.
+            return this._emitPoints(
+                points.map(p => U.absolutePoint(obj, p, m)), converter, digits);
+        }
+
+        // No matrix (a plain literal): place and rotate the way this always did,
+        // keeping the previous centre exactly, `reversed` axis swap included.
+        const placed = points.map(p => ({
+            x: p.x + obj.left + (reversed ? ry : rx),
+            y: p.y + obj.top + (reversed ? rx : ry),
+        }));
+        if ((obj.angle || 0) !== 0) {
+            const angle = (obj.angle || 0) * Math.PI / 180;
+            const cx = obj.left + obj.rx, cy = obj.top + obj.ry;
+            const cos = Math.cos(angle), sin = Math.sin(angle);
+            for (const p of placed) {
+                const dx = p.x - cx, dy = p.y - cy;
+                p.x = cx + dx * cos - dy * sin;
+                p.y = cy + dx * sin + dy * cos;
+            }
+        }
+        return this._emitPoints(placed, converter, digits);
     }
 
     /**
@@ -618,7 +639,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     create(parameters, options) {
         options.editable = false;
         const instance = new fabric.IText(parameters.text);
-        const conf = this.configure(instance, $.extend(options, parameters));
+        const conf = this.configure(instance, OpenSeadragon.extend(options, parameters));
         this.renderAllControls(conf);
         return conf;
     }
@@ -632,11 +653,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     configure(object, options) {
         object.hasBorders = true;
+        object.padding = this.hitTolerancePx();
         options.autoScale = object.autoScale || options.autoScale || false;
         const angle = this._getViewportCounterRotation();
 
         if (options.autoScale) {
-            $.extend(object, options, {
+            OpenSeadragon.extend(object, options, {
                 fontSize: options.fontSize || 16,
                 type: this.type,
                 factoryID: this.factoryID,
@@ -655,7 +677,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 centeredRotation: false
             });
         } else {
-            $.extend(object, options, {
+            OpenSeadragon.extend(object, options, {
                 fontSize: (options.fontSize || 16) / options.zoomAtCreation,
                 type: this.type,
                 factoryID: this.factoryID,
@@ -755,7 +777,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         parameters = parameters || { text: ofObject.text, left: ofObject.left, top: ofObject.top };
         let props = this.copyProperties(ofObject,
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
-        $.extend(props, parameters);
+        OpenSeadragon.extend(props, parameters);
         props.paintFirst = 'stroke';
         props.angle = ofObject.angle ?? this._getViewportCounterRotation();
         props.centeredRotation = false;
@@ -971,9 +993,9 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      * todo try (also with other props https://fabricjs.com/demos/stroke-uniform-property/) uniform stroke
      */
     configure(object, options) {
-        const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
+        const graphicZoom = this.canvasOf(object)?.computeGraphicZoom() || 1;
         const zoom = 7 / graphicZoom;
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             angle: 0,
             rx: zoom,
             ry: zoom,
@@ -987,6 +1009,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             type: this.type,
             factoryID: this.factoryID,
             uniformStroke: true,
+            padding: this.hitTolerancePx(),
         });
         //todo not directly draggable some error there -> update force bounds
         return object;
@@ -1009,6 +1032,10 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         // delete visualProperties.strokeWidth;
         // delete visualProperties.stroke;
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
+    }
+
+    getArea(theObject) {
+        return undefined;
     }
 
     edit(theObject) {
@@ -1116,8 +1143,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             if (this._followPoint) {
                 const currentPoint = polygon.points[polygon.points.length - 1];
                 this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
+                this._followPoint.setCoords();
             }
-            polygon.setCoords();
+            this._syncPointGeometry(polygon);
             this._context.fabric.rerender();
         }
     }
@@ -1175,16 +1203,11 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     getArea(theObject) {
-        let total = 0;
-        const points = theObject.points;
-        for (let i = 0; i < points.length; i++) {
-            const addX = points[i].x;
-            const addY = points[i === points.length - 1 ? 0 : i + 1].y;
-            const subX = points[i === points.length - 1 ? 0 : i + 1].x;
-            const subY = points[i].y;
-            total += (addX * addY * 0.5) - (subX * subY * 0.5);
-        }
-        return Math.abs(total);
+        // Shoelace over the TRANSFORMED ring rather than the raw one. Equivalent to
+        // multiplying by the determinant, but stated once and in the same terms as
+        // `toPointArray`, so the area and the outline cannot drift apart.
+        return OSDAnnotations.PolygonUtilities.polygonArea(
+            OSDAnnotations.PolygonUtilities.absolutePoints(theObject, theObject.points));
     }
 
     edit(theObject) {
@@ -1336,28 +1359,28 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
     }
 
-    getCreationRequiredMouseDragDurationMS() {
-        return -1; //always allow
+    // Keep width/height/pathOffset/aCoords consistent with the live point list.
+    // setCoords() alone recomputes coords from STALE dimensions, leaving the bbox
+    // pinned to the first vertex — culling then drops the shape once that vertex
+    // scrolls off-screen. Points are absolute, so this doesn't move the drawing.
+    _syncPointGeometry(polygon) {
+        if (typeof polygon._setPositionDimensions === 'function') {
+            polygon._setPositionDimensions({});
+        }
+        polygon.setCoords();
     }
 
-    _getCommonHelperProps() {
-        return  {
-            selectable: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-            hasBorders: false,
-            lockMovementX: true,
-            lockMovementY: true
-        };
+    getCreationRequiredMouseDragDurationMS() {
+        return -1; //always allow
     }
 
     initCreate(x, y, isLeftClick = true) {
         if (!this._polygonBeingCreated) {
             this._initialize();
         }
-
-        const properties = this._getCommonHelperProps();
+        // A fresh mouse-down starts a new gesture: until the pointer travels
+        // far enough for updateCreate() to append, it is a plain click.
+        if (!this._appendingFromDrag) this._dragAppended = false;
 
         //create circle representation of the point
         let polygon = this._current,
@@ -1365,7 +1388,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         if (this.withHelperPoints) {
             if (index < 1) {
-                this._initPoint = this._createControlPoint(x, y, properties);
+                this._initPoint = this._createControlPoint(x, y);
                 this._initPoint.set({fill: '#d93442', radius: this._initPoint.radius*2});
                 this._context.fabric.addHelperAnnotation(this._initPoint);
             } else {
@@ -1378,22 +1401,23 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         if (!polygon) {
-            polygon = this.create([{ x: x, y: y }],
-                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
-            );
+            polygon = this.create([{ x: x, y: y }], this._presets.getAnnotationOptions(isLeftClick));
             this._context.fabric.addHelperAnnotation(polygon);
             this._current = polygon;
         } else {
             if (this.withHelperPoints) {
                 if (!this._followPoint) {
-                    this._followPoint = this._createControlPoint(x, y, properties);
+                    this._followPoint = this._createControlPoint(x, y);
                     this._context.fabric.addHelperAnnotation(this._followPoint);
                 } else {
+                    // setCoords() so the moved point's spatial-index bbox tracks its
+                    // new position — without it the marker is culled by its stale one.
                     this._followPoint.set({left: x, top: y});
+                    this._followPoint.setCoords();
                 }
             }
             polygon.points.push({x: x, y: y});
-            polygon.setCoords();
+            this._syncPointGeometry(polygon);
         }
         this._context.fabric.rerender();
     }
@@ -1410,7 +1434,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         //startPoint is twice the radius of distance with relativeDiff 10, if smaller
         //the drag could end inside finish zone
         if ((lastIdx === 0 && dx * dx + dy * dy > powRad * 4) || (lastIdx > 0 && dx * dx + dy * dy > powRad * 2)) {
+            // This distance gate already IS the drag-vs-click discriminator:
+            // reaching it means the pointer travelled while held. Flag before
+            // the call — initCreate may finish the shape (start-point
+            // proximity), and _initialize() then clears both flags for us.
+            this._appendingFromDrag = true;
+            this._dragAppended = true;
             this.initCreate(x, y);
+            this._appendingFromDrag = false;
         }
     }
 
@@ -1418,8 +1449,25 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return false;
     }
 
+    // Minimum vertex count required for finishIndirect() to commit the shape.
+    // Closed polygons need 3; open polylines can commit with 2.
+    _getMinimumCreatePoints() {
+        return 3;
+    }
+
+    // A press-drag-release is a complete freehand stroke, so mouse-up commits
+    // it. A plain click (nothing appended past updateCreate's distance gate)
+    // keeps the click-per-vertex path, still closed by start-point proximity,
+    // double-click or mode exit.
+    //
+    // Committing here is also what lets one-shot gestures unwind: quick-draw's
+    // auto-return (plugins/annotations/methods/quickDraw.mjs) waits for
+    // `annotation-create`, which only fires on final promotion — a dragged
+    // shape that never finished left the user stranded in manual mode.
     finishDirect() {
-        return false;
+        if (!this._dragAppended) return false;
+        this.finishIndirect();
+        return true;
     }
 
     finishIndirect() {
@@ -1429,7 +1477,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         this._context.fabric.deleteHelperAnnotation(this._initPoint);
         if (this._followPoint) this._context.fabric.deleteHelperAnnotation(this._followPoint);
         this._context.fabric.deleteHelperAnnotation(this._current);
-        if (points.length < 3) {
+        if (points.length < this._getMinimumCreatePoints()) {
             this._initialize(false);
             return;
         }
@@ -1451,19 +1499,10 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     toPointArray(obj, converter, digits=undefined, quality=1) {
         let points = obj.points;
         if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, this._context.viewer.scalebar.imagePixelSizeOnScreen(), quality);
-
-        //we already have object points, convert only if necessary
-        if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
-            if (digits !== undefined) {
-                return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
-                    parseFloat(Number(p.y).toFixed(digits))));
-            }
-            return points.map(p => converter(p.x, p.y));
-        } else if (digits !== undefined) {
-            return points.map(p => converter(parseFloat(Number(p.x).toFixed(digits)),
-                parseFloat(Number(p.y).toFixed(digits))));
-        }
-        return points;
+        // Points are stored absolute, so this is the identity while the object is
+        // unscaled and unrotated — and the only correct answer once it is not.
+        return this._emitPoints(
+            OSDAnnotations.PolygonUtilities.absolutePoints(obj, points), converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -1479,11 +1518,23 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         this._initPoint = null;
         this._current = null;
         this._followPoint = null;
+        // Drag bookkeeping, see updateCreate()/finishDirect(): _dragAppended
+        // records that at least one vertex was appended by pointer motion
+        // while the button was held; _appendingFromDrag marks the re-entrant
+        // initCreate() call that does it, so the fresh-press reset skips it.
+        this._dragAppended = false;
+        this._appendingFromDrag = false;
     }
 
     //todo replace with the control API (as with edit)
-    _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle($.extend(commonProperties, {
+    //
+    // No shared props bag: this used to extend the caller's object in place, so
+    // the dot's own geometry (radius, centred origins, the first click's
+    // left/top, factory "__private") rode along into the polygon created from
+    // the same bag on the next line. Interactivity is not set here either -
+    // addHelperAnnotation owns that.
+    _createControlPoint(x, y) {
+        return new fabric.Circle({
             radius: 5 / this._context.viewer.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
@@ -1491,7 +1542,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             originX: 'center',
             originY: 'center',
             factory: "__private",
-        }));
+        });
     }
 
     //todo add to factory as some general functions
@@ -1540,11 +1591,12 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
-        $.extend(object, options, {
+        OpenSeadragon.extend(object, options, {
             fill: "",
             stroke: options.color,
             type: this.type,
             factoryID: this.factoryID,
+            padding: this.hitTolerancePx(),
         });
         return object;
     }
@@ -1554,7 +1606,14 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getLength(theObject) {
-        return Math.hypot(theObject.x1 - theObject.x2, theObject.y1 - theObject.y2);
+        // Endpoints first, THEN the distance. A length cannot be scaled by a single
+        // factor the way an area can: under an anisotropic transform a diagonal
+        // grows by neither scaleX nor scaleY.
+        const [a, b] = OSDAnnotations.PolygonUtilities.absolutePoints(theObject, [
+            {x: theObject.x1, y: theObject.y1},
+            {x: theObject.x2, y: theObject.y2},
+        ]);
+        return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
@@ -1679,20 +1738,8 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             this._initialize();
         }
 
-        let properties = {
-            selectable: false,
-            hasControls: false,
-            evented: false,
-            objectCaching: false,
-            hasBorders: false,
-            lockMovementX: true,
-            lockMovementY: true
-        };
-
         if (!this._current) {
-            this._current = this.create([x, y, x, y],
-                $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
-            );
+            this._current = this.create([x, y, x, y], this._presets.getAnnotationOptions(isLeftClick));
             this._context.fabric.addHelperAnnotation(this._current);
         } else {
             this._current.set({x2: x, y2: y});
@@ -1751,16 +1798,14 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        if (digits !== undefined) {
-            return [
-                converter(parseFloat(Number(obj.x1).toFixed(digits)), parseFloat(Number(obj.y1).toFixed(digits))),
-                converter(parseFloat(Number(obj.x2).toFixed(digits)), parseFloat(Number(obj.y2).toFixed(digits))),
-            ];
-        }
-        return [
-            converter(obj.x1, obj.y1),
-            converter(obj.x2, obj.y2),
-        ];
+        const U = OSDAnnotations.PolygonUtilities;
+        const m = U.transformMatrixOf(obj);
+        // A fabric Line keeps x1..y2 centre-relative in its local space, exactly like
+        // a polygon's points relative to pathOffset — so the same mapping applies.
+        const ends = m
+            ? U.absolutePoints(obj, [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}])
+            : [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}];
+        return this._emitPoints(ends, converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
@@ -1789,18 +1834,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         this._followPoint = null;
         this._isDragging = false;
     }
-
-    _createControlPoint(x, y, commonProperties) {
-        return new fabric.Circle($.extend(commonProperties, {
-            radius: 10 / VIEWER.scalebar.imagePixelSizeOnScreen(),
-            fill: '#fbb802',
-            left: x,
-            top: y,
-            originX: 'center',
-            originY: 'center',
-            factory: "__private",
-        }));
-    }
 };
 
 OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory {
@@ -1827,7 +1860,11 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
 
 OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFactory {
     constructor(context, presetManager) {
-        super(context, presetManager, "polyline", "polyline", fabric.Polyline, false);
+        // withHelperPoints=true: manual creation mirrors Polygon — helper dots
+        // per click, more points on each subsequent click, finishing on
+        // start-point proximity / double-click / mode exit. A press-drag-release
+        // instead commits the freehand stroke straight away (finishDirect).
+        super(context, presetManager, "polyline", "polyline", fabric.Polyline, true);
     }
 
     getIcon() {
@@ -1865,10 +1902,13 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return undefined;
     }
 
-    // Sum of segment lengths between consecutive points.
+    // Sum of segment lengths between consecutive points, measured after the
+    // transform: each segment stretches by its own amount under an anisotropic
+    // scale, so summing raw lengths and scaling the total is wrong.
     getLength(theObject) {
-        const points = theObject?.points;
-        if (!Array.isArray(points) || points.length < 2) return undefined;
+        const raw = theObject?.points;
+        if (!Array.isArray(raw) || raw.length < 2) return undefined;
+        const points = OSDAnnotations.PolygonUtilities.absolutePoints(theObject, raw);
         let total = 0;
         for (let i = 1; i < points.length; i++) {
             const dx = points[i].x - points[i - 1].x;
@@ -1878,9 +1918,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return total;
     }
 
-    finishDirect() {
-        this.finishIndirect();
-        return true;
+    // Open path: two vertices already make a valid polyline.
+    _getMinimumCreatePoints() {
+        return 2;
     }
 }
 
@@ -1997,7 +2037,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     // }
 
     getCreationRequiredMouseDragDurationMS() {
-        return Infinity; //never allow
+        // Never allow: this factory has no pointer creation gesture at all (initCreate is a
+        // no-op below). Creation modes therefore always take their discard branch for it and
+        // report the release as not consumed, so the click falls through to selection.
+        return Infinity;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -2027,6 +2070,9 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
+        // onZoom drives child strokeWidth from the GROUP's own originalStrokeWidth,
+        // so persist the UI-chosen base here too — otherwise navigation reverts it.
+        if (visualProperties.originalStrokeWidth) ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
         ofObject.forEachObject(o => {
             const factory = o._factory();
             factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties, targetCanvas);
@@ -2203,10 +2249,15 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getArea(theObject) {
-        let area = this._polygonFactory.getArea({points: theObject.points[0]});
+        // Each ring is transformed by the MULTIPOLYGON's matrix — the per-ring
+        // `{points: …}` literals handed to the polygon factory carry none of their
+        // own, so the transform has to be applied here or it is lost entirely.
+        const U = OSDAnnotations.PolygonUtilities;
+        const ring = (i) => U.absolutePoints(theObject, theObject.points[i]);
 
+        let area = U.polygonArea(ring(0));
         for (let i = 1; i < theObject.points.length; i++) {
-            area -= this._polygonFactory.getArea({points: theObject.points[i]});
+            area -= U.polygonArea(ring(i));
         }
         return area;
     }
@@ -2216,7 +2267,10 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         let result = [];
 
         for (let i = 0; i < obj.points.length; i++) {
-            polygon = {"points": obj.points[i]};
+            // Transform HERE: the per-ring `{points: …}` literal handed to the polygon
+            // factory carries no matrix of its own, so the multipolygon's transform
+            // would otherwise be dropped for every ring.
+            polygon = {"points": OSDAnnotations.PolygonUtilities.absolutePoints(obj, obj.points[i])};
             let newPoints = this._polygonFactory.toPointArray(polygon, converter, digits, quality);
             result.push(newPoints);
         }

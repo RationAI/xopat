@@ -2,13 +2,37 @@ type XOpatClientConfig = {
     domain: string | null;
     path: string | null;
     /**
+     * Identity of this deployment for browser-local boot state — the session
+     * cache (`xoSessionCache`, `__xopat_session__`) and the plugin-autoload
+     * cookie. Browsers scope those by ORIGIN, and one origin routinely serves
+     * several deployments (every env file on localhost), so without a key a
+     * session captured under one env replays under another.
+     *
+     * Pin it in production: the key then never changes and users keep their
+     * state across unrelated config edits. Leave it unset in development and
+     * each env file gets its own automatically derived key (fingerprint of the
+     * configuration that decides whether data references still resolve — see
+     * `src/classes/app/deployment-key.ts`).
+     *
+     * Does NOT scope `kv:*` storage (AppCache/AppCookies/plugin caches); those
+     * remain keyed by `<ownerUid>::<key>` only.
+     */
+    cacheKey?: string | null;
+    /** @deprecated Use `cacheKey`. Kept as a backwards-compatible alias. */
+    sessionCacheKey?: string | null;
+    /**
      * Named slide-protocol registry. Each entry is either a backtick-template
      * URL string with `data` (scalar DataID) in scope — the server URL embedded
-     * in the template — or an object `{ url, proxy?, baseURL?, auth?, … }` whose
-     * extra fields are forwarded verbatim to `new HttpClient({…})`. The object
-     * form makes every request issued by this protocol's TileSource (metadata
-     * + tiles) flow through the configured HttpClient — gaining proxy routing,
-     * CSRF injection, and JWT/auth headers uniformly. Referenced by name from
+     * in the template — or an object
+     * `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`
+     * whose *remaining* fields are forwarded verbatim to `new HttpClient({…})`.
+     * The object form makes every request issued by this protocol's TileSource
+     * (metadata + tiles) flow through the configured HttpClient — gaining proxy
+     * routing, CSRF injection, and JWT/auth headers uniformly; and
+     * `tileSourceClass` names the TileSource class to construct directly,
+     * skipping OSD autodetection so per-slide `options` can shape the metadata
+     * request (operator-only — see `SlideProtocolUrlTemplateEntry`).
+     * Referenced by name from
      * `BackgroundItem.protocol` / `DataOverride.protocol`. Plugins may add
      * entries at runtime via `window.SLIDE_PROTOCOLS.register(...)`. Safe in
      * secure mode (no eval of user-controlled strings).
@@ -89,10 +113,56 @@ type XOpatUiSetup = {
      * that explicitly focus a tab) can still reopen it.
      */
     globalMenu?: boolean | null;
+    /**
+     * Interaction mode of the global right-side dock.
+     * `"overlay"` (default): the dock hides to a thin edge rail and floats over
+     * the viewer on hover/focus (no viewer reflow).
+     * `"docked"`: the dock is a flex sibling that pushes the viewer and stays
+     * open when open (the classic behavior).
+     * Unlike the boolean flags above this is NOT read via `getUiOption` (which
+     * is boolean-only) — `MainLayout` reads it directly at construction. The
+     * user's runtime pin choice (AppCache `<layoutId>-dock-mode`) overrides
+     * this session/deployment default.
+     */
+    globalMenuMode?: "docked" | "overlay" | null;
+    /**
+     * Compact mode of the per-viewer right-side menu tab strips: icon-only
+     * strips whose sideways title reveals on hover, occupying much less space.
+     * Unlike the boolean visibility flags above this defaults to `false` and
+     * is therefore NOT read via `getUiOption` (which defaults unset keys to
+     * `true`) — see `resolveSideMenuCompact` in
+     * `ui/classes/components/sideMenuPreferences.mjs`. The user's Settings
+     * toggle persists to AppCache and this session param overrides it.
+     */
+    sideMenuCompact?: boolean | null;
+    /**
+     * Initial open/closed state of the per-viewer right-side menu panels.
+     * Either a boolean applying to every tab, or a map of tab id → boolean
+     * where `"*"` is the fallback for tabs the map does not name, e.g.
+     * `{"*": false, "navigator": true}` boots with only the navigator open.
+     * Unset (`null`) means every panel opens.
+     *
+     * Not read via `getUiOption` (boolean-only). Resolution lives in
+     * `resolveSideMenuTabOpen` (`ui/classes/mixins/utils.mjs`)
+     * and applies to panels appended later by plugins too — the side menu
+     * hands it to `Menu` as `options.initialOpenResolver`.
+     *
+     * Precedence (mirrors `sideMenuCompact`): session param > the user's
+     * cached `<tabId>-open` toggle > deployment default > open. Note the
+     * navigator's `ui.navigator === false` still wins over this, because it
+     * hides the OSD navigator element rather than only collapsing a panel.
+     */
+    sideMenuTabs?: boolean | Record<string, boolean> | null;
 };
 
 type XOpatSetup = {
     sessionName?: string | null;
+    /**
+     * @deprecated Use `core.client.<active>.cacheKey`. Read only as a legacy
+     * fallback: `setup` doubles as the session-`params` allowlist, and
+     * deployment identity must not be settable from a session (AGENTS.md §7).
+     */
+    sessionCacheKey?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
@@ -114,6 +184,11 @@ type XOpatSetup = {
      */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
+    /**
+     * Viewer canvas background color (hex `#rrggbb` / `#rrggbbaa`). Session-wide
+     * default; a single slide overrides it with `background[i].fill`.
+     */
+    backgroundColor?: string | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
     /**
@@ -122,6 +197,45 @@ type XOpatSetup = {
      * where unintentional viewer zoom hijacks page scroll.
      */
     scrollRequiresCtrl?: boolean | null;
+    /**
+     * If true, the scroll-to-zoom direction is inverted: scrolling down zooms in
+     * and scrolling up zooms out. Intended for users who expect map-style or
+     * trackpad-style wheel behaviour.
+     */
+    reverseScroll?: boolean | null;
+    /**
+     * If true (default), scroll-to-zoom snaps between standard objective
+     * magnification stops (5x/10x/20x/40x…) — but only when the current slide has
+     * a resolved native magnification (a calibrated MPP). Uncalibrated / pixel-unit
+     * slides fall back to continuous zoom. Composes with `reverseScroll`.
+     */
+    snapZoomToMagnification?: boolean | null;
+    /**
+     * Multiplier on the normalized wheel delta (default `1`). Values above 1
+     * cover more zoom range per wheel turn, below 1 tame an over-sensitive
+     * device. Applies to continuous zoom, magnification snapping and Alt+wheel
+     * z-stack scrubbing alike.
+     */
+    scrollSpeed?: number | null;
+    /**
+     * Wheel pixels that constitute one full zoom step (default `120`, the
+     * conventional mouse notch). Trackpads emit much smaller deltas and are
+     * therefore applied fractionally, which is what keeps them smooth without
+     * any event throttling. Lower this to make trackpads more aggressive.
+     */
+    scrollPixelsPerNotch?: number | null;
+    /**
+     * If true (default), releasing a fast drag lets the slide coast to a stop
+     * (momentum). The drag itself remains strictly 1:1 with the cursor.
+     */
+    kineticPan?: boolean | null;
+    /**
+     * Velocity retained per 1/60 s of coasting, in `(0, 1)`. Default `0.92`;
+     * lower values stop the slide sooner.
+     */
+    kineticPanFriction?: number | null;
+    /** Drag-release speed in px/s below which no coast is started. Default `300`. */
+    kineticPanMinSpeed?: number | null;
     permaLoadPlugins?: boolean | null;
     bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;
@@ -135,11 +249,134 @@ type XOpatSetup = {
      * changes via `Dialogs.setPosition(...)` persist on this same key.
      */
     notificationsPosition?: "top" | "bottom" | null;
+    /**
+     * Per-viewer OSD tile-cache budget (number of tile records). `null` (default)
+     * = adaptive: scaled from the display's device-pixel area against a 1080p→1200
+     * baseline, softly split across open viewports and clamped per device class
+     * (desktop [1000,4000], mobile [600,1500]). A number pins a fixed per-viewer
+     * budget and overrides the adaptive value. See `src/classes/app/osd-performance.ts`.
+     */
     maxImageCacheCount?: number | null;
+    /**
+     * Keep visited/prefetched focal planes of a z-stack as extra per-tile OSD
+     * cache records so plane revisits are served without a network round-trip.
+     * Default `true`. `false` restores fetch-per-scrub behavior.
+     */
+    zPlaneCacheEnabled?: boolean | null;
+    /**
+     * Budget for the z-plane cache records (they also count toward
+     * `maxImageCacheCount`). Oldest records are dropped first. Default 400.
+     */
+    zPlaneCacheMaxItems?: number | null;
+    /**
+     * After a plane change settles, prefetch the `z±1..radius` variants of the
+     * tiles currently in the viewport. `0` disables prefetching. Default 1.
+     */
+    zPrefetchRadius?: number | null;
+    /**
+     * @deprecated No-op. Prefetch concurrency is now bounded globally by
+     * `APPLICATION_CONTEXT.requestScheduler` (background lane, per tile origin,
+     * shared across viewers). Use `requestSchedulerBgIdle`/`requestSchedulerBgBusy`.
+     */
+    zPrefetchConcurrency?: number | null;
+    /**
+     * Max concurrent `priority:"background"` HTTP requests per origin (inference,
+     * transcription, z-plane prefetch) while NO viewer is loading tiles. Default 2.
+     * See `src/classes/app/request-scheduler.ts`.
+     */
+    requestSchedulerBgIdle?: number | null;
+    /**
+     * Same cap while any viewer IS loading tiles — background hard-yields so tiles
+     * take the whole connection pool. Default 0. (Starvation escape below keeps
+     * background from freezing.)
+     */
+    requestSchedulerBgBusy?: number | null;
+    /**
+     * A queued background request waiting at least this long is admitted even while
+     * tiles load (one at a time), so dictation/drafting never freezes under sustained
+     * navigation. Default 1500 (ms).
+     */
+    requestSchedulerMaxStarveMs?: number | null;
+    /**
+     * What happens to loaded tiles OUTSIDE the viewport on a plane change:
+     * `"cached-only"` (default) swaps only planes already in the cache and
+     * unloads the rest (they reload at the live plane when panned back to);
+     * `"fetch"` refetches every loaded tile over the network (full fidelity).
+     */
+    zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
-    preferredFormat?: string | null;
+    /**
+     * How many viewer cells may hold their own WebGL context instead of sharing
+     * one. A private context removes the per-frame `readPixels` + `putImageData`
+     * transfer a shared context needs; cells past the budget fall back to the
+     * shared context so a host spawning many viewers stays under the browser's
+     * ~16-context cap. Counted in cells (a cell costs two contexts: viewer +
+     * navigator). `0` disables private contexts.
+     */
+    webGlPrivateContextBudget?: number | null;
     fetchAsync?: boolean | null;
+    /**
+     * Hide the plugin catalogue — the listing that browses available plugins and
+     * loads new ones. Loaded plugins are unaffected: their menu rows, fullscreen
+     * settings tabs and view panels render as usual.
+     */
     disablePluginsUi?: boolean | null;
+    /**
+     * Operator-trusted custom branding (ENV `core.setup.branding` only — read
+     * via `APPLICATION_CONTEXT.defaultParams`, never `getOption`, so an imported
+     * session / URL param cannot override it; see AGENTS.md §7). `title` and the
+     * favicon paths are consumed server-side when rendering the page head;
+     * `logo` renders a company image at the left of the top app bar. Any key
+     * omitted falls back to the stock xOpat asset.
+     */
+    branding?: {
+        title?: string | null;
+        appleTouchIcon?: string | null;
+        icon32?: string | null;
+        icon16?: string | null;
+        maskIcon?: string | null;
+        maskIconColor?: string | null;
+        logo?: string | null;
+    } | null;
+    /**
+     * Fast-access icon-only actions pinned into the top app bar, referenced by
+     * `AppBar.Actions` catalogue key — `"tools:core.sync.auto"`,
+     * `"view:sideViewerMenu.navigator"`, `"shortcut:<id>"`, `"custom:<id>"`.
+     *
+     * Two trust tiers. ENV (`core.setup`, read via `defaultParams`) is
+     * operator-trusted: entries may be objects overriding `icon`/`label`. The
+     * per-user list resolved through `getOption` is session-controllable (URL
+     * params, an imported peer session — AGENTS.md §7) and therefore accepts
+     * **id strings only**; object entries there are reduced to their `id`, so a
+     * hostile bundle cannot relabel one action to impersonate another (or point
+     * `icon` at a remote URL). Unresolvable ids are dropped.
+     */
+    quickActions?: Array<string | { id: string; icon?: string | null; label?: string | null }> | null;
+    /**
+     * Visual marker drawn on a viewer whenever something reads pixels out of it
+     * (off-screen region render, viewport grab — see the `region-capture` event).
+     * `"trail"` (default) accumulates markers for the duration of a run so the analyzed
+     * parts of a slide stay visible while it works; `"flash"` shows only the capture
+     * in flight; `"off"` renders nothing. A user preference, not a security control.
+     */
+    captureIndicator?: "off" | "flash" | "trail" | null;
+    /**
+     * Milliseconds after the last capture finishes before the drawn markers are removed
+     * (default 6000). Only affects what is displayed — `captureIndicator.getLog()` keeps
+     * the history regardless.
+     */
+    captureIndicatorIdleMs?: number | null;
+    /**
+     * How many pins render as buttons before the remainder spills into the
+     * trailing overflow menu. Default 5 — the app bar is 35px tall and shares
+     * its width with the toolbar embed slot.
+     */
+    quickActionsMaxVisible?: number | null;
+    /**
+     * Operator lock. `false` freezes the bar at the ENV list and hides the
+     * Settings card. Read from `defaultParams` ONLY, never `getOption`.
+     */
+    quickActionsUserEditable?: boolean | null;
     /**
      * If true, skip the cookie-driven plugin restore (`_plugins`) for this
      * session. Plugins flagged `permaLoad: true` in their `include.json` and
@@ -154,6 +391,12 @@ type XOpatSetup = {
     visualizationInspectorMode?: string | null;
     visualizationInspectorRadiusPx?: number | null;
     visualizationInspectorLensZoom?: number | null;
+    /**
+     * FlexDrawer pointer forwarding, required by shaders reading `fr_interaction_*`
+     * state (e.g. `fisheye-lens`). `"auto"` enables it per viewer only while such a
+     * visible layer exists; `"always"` / `"never"` pin it.
+     */
+    flexInteractionForwarding?: "auto" | "always" | "never" | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
@@ -176,7 +419,13 @@ type XOpatServerProxyAuthJwt = {
 
 type XOpatServerProxyAuth = {
     enabled?: boolean;
-    verifiers?: string[];
+    /**
+     * Which verifiers must pass. Either a map of `name -> config` (preferred —
+     * it is the only form that can carry per-verifier settings) or a bare array
+     * of names, which is shorthand for an empty config each. Both are accepted
+     * by every backend; see `getVerifierEntries` in `server/node/auth.js`.
+     */
+    verifiers?: string[] | Record<string, Record<string, unknown>>;
     mode?: "all" | "any";
     jwt?: XOpatServerProxyAuthJwt;
 };
@@ -252,14 +501,65 @@ type XOpatCoreConfig = {
  */
 type XOpatElementItem = {
     id: string;
-    /** Human readable name */
+    /**
+     * Human readable name. `"%key%"` references a key in the element's own locale
+     * bundle (`locales/<lang>.json`, i18next namespace = the element id) and is
+     * resolved by `pluginMeta` / `moduleMeta`; any other string is literal.
+     */
     name?: string;
+    /** Short user-facing summary. Localizable the same way as `name`. */
+    description?: string;
+    /** Longer user-facing text shown where there is room for it. Localizable the same way as `name`. */
+    longDescription?: string;
+    /** Free-form grouping labels, e.g. ["Annotations", "AI"]. Used to group and filter the plugin list and the docs catalogue. */
+    categories?: string[];
+    /** Search terms; never displayed. */
+    keywords?: string[];
+    /** Project homepage, http(s) only. */
+    homepage?: string;
+    /** Source repository, http(s) only. */
+    repository?: string;
+    /** Issue tracker, http(s) only. */
+    bugs?: string;
+    /** User documentation, http(s) only. */
+    docsUrl?: string;
+    /** SPDX license identifier. Documentation only. */
+    license?: string;
+    /**
+     * Compatibility ranges. Only `xopat` is understood: the element is refused at
+     * load time when the app version is outside the range. Prerelease tags of the
+     * app version are ignored, so `>=3.0.0` matches a `3.0.0-beta.1` build.
+     */
+    engines?: { xopat?: string } & Record<string, string | undefined>;
     /** Subdirectory where element is located */
     directory: string;
     /** Files to include (JS/MJS) */
     includes: Array<string | Record<string, any>>;
+    /**
+     * Production-only overlay computed server-side (see buildProdIncludes):
+     * foldable includes collapsed into a single minified bundle, non-foldable
+     * entries kept in place. The loader iterates this when present, else
+     * `includes`. Absent in dev or when no min artifact exists.
+     */
+    prodIncludes?: Array<string | Record<string, any>>;
     /** If true, the element is always loaded on boot */
     permaLoad: boolean;
+    /**
+     * Maturity marker, absent means "stable". Presentation only: it drives the
+     * docs catalogue badge and the plugin-list badge, and never gates loading.
+     * A deployment can override it via ENV `plugins[id]` / `modules[id]`.
+     */
+    stability?: "stable" | "experimental" | "deprecated";
+    /**
+     * Development harness marker. Unlike `stability`, this DOES gate loading: the
+     * element is refused unless the server reports dev mode (`--dev` /
+     * `XOPAT_DEV_MODE`). Declare it on anything that exists to give a developer —
+     * or a model driving one — access the application would not otherwise grant.
+     * Nothing session-supplied reaches this: the record is the deployment-merged
+     * `include.json`, so only an operator can clear the marker, and only dev mode
+     * lets the element through with it.
+     */
+    devOnly?: boolean;
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */

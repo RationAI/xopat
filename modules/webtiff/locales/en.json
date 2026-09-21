@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "name": "TIFF / WSI support (web-tiff)",
+    "description": "Opens TIFF, BigTIFF, OME-TIFF, QPTIFF and TIFF-based whole-slide formats with a libtiff WebAssembly decoder, including high-bit-depth and floating-point samples, and picks the shader that fits the slide's channel layout."
+  },
+  "title": "TIFF slide",
+  "dimensions": "Dimensions",
+  "tileSize": "Tile size",
+  "levels": "Pyramid levels",
+  "channels": "Channels",
+  "bitDepth": "Bit depth",
+  "interpretation": "Interpretation",
+  "layout": "Pyramid layout"
+}

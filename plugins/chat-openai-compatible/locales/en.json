@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "OpenAI-compatible Chat",
+    "description": "Generic OpenAI-compatible chat provider. Works with any GPT-like API (vLLM, Ollama, LM Studio, OpenAI, Together, Groq, CERIT-AI, etc.). Configure baseUrl / apiKey / models via server.json — they are server-only."
+  }
+}

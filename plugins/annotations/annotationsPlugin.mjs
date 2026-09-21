@@ -5,8 +5,7 @@ import { navigationMethods } from './methods/navigation.mjs';
 import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
-import { PathologyMetricsWindow } from './components/pathologyMetricsWindow.mjs';
-import { MeasurementsPopover } from './components/measurementsPopover.mjs';
+import { quickDrawMethods } from './methods/quickDraw.mjs';
 
 /**
  * GUI/controller layer for the annotations module.
@@ -65,9 +64,16 @@ class AnnotationsGUI extends XOpatPlugin {
         this._commentsDefaultOpened = this.getOption('commentsDefaultOpened', this.getStaticMeta('commentsDefaultOpened', true));
         this._commentsOpened = false;
 
+        // Seed the always-on measurement label overlay from the saved user pref.
+        // Deployment can disable the feature outright with measurementLabelMaxCount=0.
+        this.context._measurementLabelsEnabled =
+            this.context.measurementLabelMaxCount > 0 && !!this.getOption('showMeasurementLabels', false);
+
         await this.setupFromParams();
 
+        this.setupQuickDrawShortcuts();
         this.setupActiveTissue();
+        this.setupRightsGating();
         this.initHandlers();
         this.initHTML();
         this.setupTutorials();
@@ -86,13 +92,13 @@ class AnnotationsGUI extends XOpatPlugin {
         this._refreshCommentsInterval = null;
     }
 
-    // `_pickAnnotationForContext` and `showMeasurementsPopover` remain
-    // public on the plugin so the unified canvas right-click menu (built
-    // in `methods/viewerMenu.mjs::_buildAnnotationContextActions`) can
-    // call them via `this`. The standalone `annotation-measurements`
-    // provider that used to live here was folded into that unified menu —
-    // a separate top-level entry would have been a third "Annotation"
-    // section alongside z-order and Change-preset/Copy/Cut/etc.
+    // `_pickAnnotationForContext` remains public on the plugin so the unified
+    // canvas right-click menu (built in
+    // `methods/viewerMenu.mjs::_buildAnnotationContextActions`) can call it via
+    // `this`. Measurements are no longer part of that menu: the
+    // `annotation-measurements` module owns its own UI end to end and registers
+    // its own provider, so measuring works in deployments that do not ship this
+    // plugin at all.
 
     _pickAnnotationForContext(fabric, ctx) {
         // Prefer single-selection scenarios so we don't have to do hit-testing.
@@ -119,18 +125,6 @@ class AnnotationsGUI extends XOpatPlugin {
         return null;
     }
 
-    showMeasurementsPopover(annotation) {
-        if (!this._measurementsPopover) {
-            this._measurementsPopover = new MeasurementsPopover({
-                plugin: this,
-                annotations: this.context,
-                userInterface: USER_INTERFACE,
-                pluginId: this.id,
-            });
-        }
-        this._measurementsPopover.showFor(annotation);
-    }
-
     async setupFromParams() {
         this._allowedFactories = this.getOption('factories', false) || this.getStaticMeta('factories') || ['polygon'];
         this._focusWithZoom = this.getOption('focusWithZoom', true);
@@ -138,31 +132,53 @@ class AnnotationsGUI extends XOpatPlugin {
             fabric.focusWithScreen = this._focusWithZoom;
         }
 
+        // Session-level overrides of the module's convertor arguments. Every
+        // supported key is forwarded generically; setIOOption() itself owns the
+        // allowlist and validates the values it accepts.
         const convertOpts = this.getOption('convertors');
-        // todo we should support setting all convertor opts here, and document this
-        const coords = convertOpts?.imageCoordinatesOffset;
-        if (coords) {
-            if (Array.isArray(convertOpts?.imageCoordinatesOffset)) {
-                this.context.setIOOption('imageCoordinatesOffset', { x: coords[0] || 0, y: coords[1] || 0 });
-            } else if (coords.x && coords.y) {
-                this.context.setIOOption('imageCoordinatesOffset', coords);
-            } else {
-                $.console.error('Invalid value for imageCoordinatesOffset on the plugin session.');
+        if (convertOpts && typeof convertOpts === 'object') {
+            for (const [key, value] of Object.entries(convertOpts)) {
+                if (value === undefined || value === null) continue;
+                if (key === 'imageCoordinatesOffset') {
+                    // Documented contract shape is {x, y}; include.json ships [x, y].
+                    if (Array.isArray(value)) {
+                        this.context.setIOOption(key, { x: value[0] || 0, y: value[1] || 0 });
+                    } else if (Number.isFinite(value.x) && Number.isFinite(value.y)) {
+                        this.context.setIOOption(key, value);
+                    } else {
+                        $.console.error('Invalid value for imageCoordinatesOffset on the plugin session.');
+                    }
+                    continue;
+                }
+                this.context.setIOOption(key, value);
             }
         }
 
+        const formats = OSDAnnotations.Convertor.formats;
+        // Precedence: plugin cache (an explicit user pick) -> session config ->
+        // ENV.plugins.gui_annotations.ioFormat -> the module's deployment default
+        // (ENV.modules.annotations.convertors.format) -> 'native'.
+        // Passing `undefined` as the default keeps loader.ts's static-meta
+        // fallback alive; the module default is chained after it.
+        // NOTE the cache key is deliberately NOT the legacy 'defaultIOFormat':
+        // that one used to be written on every plugin init, so existing entries
+        // cannot be told apart from a deliberate user pick. Leaving them inert
+        // is what makes a changed deployment config take effect.
+        this._defaultFormat = this.context.defaultFormat;
+        const configuredFormat = this.getOption('ioFormat', undefined) ?? this._defaultFormat;
+
         this.exportOptions = {
-            availableFormats: OSDAnnotations.Convertor.formats,
-            format: this.getOption('defaultIOFormat', this._defaultFormat),
+            availableFormats: formats,
+            format: configuredFormat,
             scope: 'all'
         };
-        const formats = OSDAnnotations.Convertor.formats;
         // 'auto' is a UI-only sentinel (import-time auto-detect), not a registered convertor.
-        if (this.exportOptions.format !== 'auto' && !formats.includes(this.exportOptions.format)) {
+        if (configuredFormat !== 'auto' && !formats.includes(configuredFormat)) {
+            $.console.warn(
+                `[annotations] Unknown export format '${configuredFormat}' — falling back to 'native'. ` +
+                `Valid formats: ${formats.join(', ')}`
+            );
             this.exportOptions.format = 'native';
-        }
-        if (this._defaultFormat !== 'auto' && !formats.includes(this._defaultFormat)) {
-            this._defaultFormat = 'native';
         }
 
         const staticPresetList = this.getOption('staticPresets', undefined, false);
@@ -177,27 +193,43 @@ class AnnotationsGUI extends XOpatPlugin {
         this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
     }
 
+    /**
+     * Put annotations in read-only mode when the deployment denies creating them.
+     *
+     * Without this a denied role can still pick a drawing tool and press the
+     * canvas; every press then travels down a path that can only end in a
+     * refusal — and, before the preset fix, in a TypeError. `enableInteraction`
+     * is the module's existing kill-switch: it resets to `Modes.AUTO` and is
+     * checked by every click and key handler, so one call covers the whole
+     * surface rather than disabling buttons one by one (`ToolbarItem` has no
+     * enabled/disabled primitive to drive anyway).
+     *
+     * Reactive: rights can change mid-session without a reload.
+     */
+    setupRightsGating() {
+        const dispose = this.onCapabilityChange("annotations.crud:annotation.create", (enabled) => {
+            // Never re-enable what a deployment switched off for its own reasons
+            // (`enableInteraction(false)` is also used by other features) — only
+            // mirror OUR verdict when it is a denial.
+            if (!enabled) this.context.enableInteraction(false);
+            else if (this.context.disabledInteraction) this.context.enableInteraction(true);
+        });
+        if (typeof dispose === "function") {
+            (this._rightsDisposers = this._rightsDisposers || []).push(dispose);
+        }
+    }
+
     setupActiveTissue(bgImageConfigObject) {
         this.activeTissue = APPLICATION_CONTEXT.referencedName();
         if (!this.activeTissue) {
-            $('#annotations-shared-head').html(this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue')));
+            const sharedHead = document.getElementById('annotations-shared-head');
+            // Head menu markup is built by the plugin itself, not user input.
+            if (sharedHead) sharedHead.innerHTML = this.getAnnotationsHeadMenu(this.t('errors.noTargetTissue'));
             return false;
         }
         return true;
     }
 
-    showMeasurementsWindow() {
-        if (!this.measurementsWindow) {
-            this.measurementsWindow = new AnnotationsGUI.PathologyMetricsWindow({
-                plugin: this,
-                annotations: this.context,
-                userInterface: USER_INTERFACE,
-                pluginId: this.id
-            });
-        } else {
-            this.measurementsWindow.reset();
-        }
-    }
 }
 
 AnnotationsGUI.annotationMenuIconOrder = ['private', 'locked', 'comments'];
@@ -206,7 +238,6 @@ AnnotationsGUI._isAnnotationMenuSorted = function(array) {
     return array.length === order.length && array.every((value, index) => value.includes(order[index]));
 };
 
-AnnotationsGUI.PathologyMetricsWindow = PathologyMetricsWindow;
 Object.assign(
     AnnotationsGUI.prototype,
     globalPluginWindowMethods,
@@ -215,7 +246,8 @@ Object.assign(
     navigationMethods,
     handlerMethods,
     ioMethods,
-    presetMethods
+    presetMethods,
+    quickDrawMethods
 );
 
 globalThis.AnnotationsGUI = AnnotationsGUI;

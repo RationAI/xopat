@@ -1,0 +1,18 @@
+{
+  "id": "pathology-medgemma",
+  "name": "%meta.name%",
+  "author": "RationAI",
+  "version": "1.0.0",
+  "description": "%meta.description%",
+  "categories": ["Pathology"],
+  "keywords": ["medgemma", "vision", "ai", "analysis"],
+  "icon": "ph-brain",
+  "modules": ["vercel-ai-chat-sdk", "pathology-foundation"],
+  // Login is OPT-IN and method-agnostic, same contract as the chat provider
+  // plugins: "none" (default) works out of the box; anything else requires login
+  // for `authContext`. Null/"core" = the viewer's main auth context, and whichever
+  // auth module owns it (oidc-client-ts, saml-auth, …) supplies the mechanism —
+  // this plugin never names one. See src/AUTH.md.
+  "authMode": "none",
+  "authContext": null
+}

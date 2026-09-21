@@ -1,0 +1,138 @@
+/*
+ * Rendered markdown. Two knobs drive the whole scale: the block rhythm and the
+ * monospace/table size. The host supplies the base font size, so the same markup
+ * sits correctly in a chat bubble, a questionnaire description or an overlay —
+ * a consumer that wants a tighter scale overrides the variables on its own root
+ * (see #pathology-chat-panel in the chat module).
+ */
+.xo-md {
+    --xo-md-gap: 2px;
+    --xo-md-block-gap: 4px;
+    --xo-md-mono-fs: 11px;
+    /* Theme-derived so borders stay visible on dark daisyUI themes. */
+    --xo-md-border: oklch(var(--bc) / .18);
+}
+
+@supports not (color: oklch(0 0 0)) {
+    .xo-md { --xo-md-border: rgba(128, 128, 128, .25); }
+}
+
+/*
+ * The markdown host. Explicitly NOT `pre-wrap`: marked emits pretty-printed HTML,
+ * so preserved newlines would render as blank lines between every block, on top of
+ * the margins below. Plain-text renders keep `whitespace-pre-wrap` on their own node.
+ */
+.xo-md-body {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* Host padding already spaces the edges — do not let the first/last block double it. */
+.xo-md-body > :first-child { margin-top: 0; }
+.xo-md-body > :last-child { margin-bottom: 0; }
+
+/*
+ * Plain-text render (nothing to parse, or the sanitizer is not loaded). Markdown
+ * collapses newlines, so the parsed host does too — unparsed source must keep its
+ * line breaks instead of running together.
+ */
+.xo-md-plain { white-space: pre-wrap; }
+
+/* Inline rendering sits inside someone else's line box; it must not add block flow. */
+.xo-md-inline { display: inline; }
+.xo-md-inline > p { display: inline; margin: 0; }
+
+.xo-md :is(h1,h2,h3,h4,h5,h6){
+    font-size: 12px !important;
+    margin: 6px 0 var(--xo-md-gap);
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.xo-md p{
+    margin: var(--xo-md-gap) 0;
+}
+
+.xo-md strong{
+    /* 700 at 12px turns muddy; 600 still reads as emphasis. */
+    font-weight: 600;
+}
+
+.xo-md a{
+    overflow-wrap: anywhere;
+}
+
+.xo-md ul,
+.xo-md ol{
+    margin: var(--xo-md-gap) 0;
+    padding-left: 1.15em;
+    list-style-position: outside;
+}
+
+.xo-md :is(ul,ol) :is(ul,ol){
+    margin: 0;
+}
+
+.xo-md li{
+    margin: 0;
+}
+
+/* Loose lists wrap item content in <p>; that margin would double the row height. */
+.xo-md li > p{
+    margin: 0;
+}
+
+.xo-md blockquote{
+    margin: var(--xo-md-block-gap) 0;
+    padding-left: 8px;
+    border-left: 2px solid var(--xo-md-border);
+    opacity: .85;
+}
+
+.xo-md hr{
+    margin: 6px 0;
+    border: 0;
+    border-top: 1px solid var(--xo-md-border);
+}
+
+/* Inline code only — `pre code` is reset below. */
+.xo-md :not(pre) > code{
+    font-size: var(--xo-md-mono-fs);
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--xo-md-border);
+}
+
+.xo-md pre{
+    margin: var(--xo-md-block-gap) 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    overflow: auto;
+    font-size: var(--xo-md-mono-fs);
+    border: 1px solid var(--xo-md-border);
+}
+
+.xo-md pre code{
+    /* Code blocks own their whitespace regardless of where the host is mounted. */
+    white-space: pre;
+    padding: 0;
+    background: none;
+}
+
+.xo-md table{
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--xo-md-block-gap) 0;
+    font-size: var(--xo-md-mono-fs);
+}
+
+.xo-md th,
+.xo-md td{
+    border: 1px solid var(--xo-md-border);
+    padding: 5px 6px;
+    vertical-align: top;
+}
+
+.xo-md img{
+    max-width: 100%;
+}

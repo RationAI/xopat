@@ -1,0 +1,9 @@
+{
+  "name": "slide-scoring",
+  "version": "1.0.0",
+  "description": "Sink-agnostic per-slide scoring for xOpat.",
+  "keywords": ["xopat", "scoring", "labeling", "io-pipeline"],
+  "buildEntry": "index.ts",
+  "author": "Jirka Horák",
+  "license": "ISC"
+}

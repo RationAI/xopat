@@ -26,6 +26,14 @@ export type AnnotationRecord = Record<string, unknown> & {
     author?: string | { id?: string; name?: string } | null;
     created?: string | number | Date | null;
     private?: boolean;
+    /**
+     * The annotation may be read but not changed or removed — an analysis job's
+     * output, a record owned elsewhere, or anything a rights resolver locked.
+     * Enforced by the annotations module's IO guard on every mutation path, so a
+     * write attempt is refused rather than silently diverging. Unrelated to
+     * `private`, which controls export.
+     */
+    readOnly?: boolean;
     comments?: AnnotationCommentRecord[];
     meta?: AnnotationMeta;
     title?: string;
@@ -118,7 +126,7 @@ export type AnnotationCommentInput = {
 
 export type AnnotationCreateInput = {
     /**
-     * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "ruler", ...
+     * Factory to create, such as "rect", "polygon", "point", "line", "polyline", "arrow", ...
      * If omitted, the factory from the explicitly passed preset or from the preset selected in this script context is used.
      */
     factoryID?: string;
@@ -131,6 +139,8 @@ export type AnnotationCreateInput = {
     /**
      * Preset to bind to the newly created annotation.
      * If omitted, the preset selected in the current script context is used, falling back to the first existing preset.
+     * This fallback only works when at least one preset already exists — if there is NO preset at all, creation throws.
+     * On a fresh context always ensure a preset first (createPreset / selectPreset) or pass presetID explicitly.
      */
     presetID?: string;
 
@@ -139,13 +149,16 @@ export type AnnotationCreateInput = {
      * Examples:
      *  - rect: { left, top, width, height }
      *  - point: { x, y }
-     *  - line / ruler: [x1, y1, x2, y2]
+     *  - line / arrow: [x1, y1, x2, y2]
      *  - polygon / polyline: [{x, y}, ...]
+     *  - angle: [{x, y}, {x, y}, {x, y}] as [first, vertex, second] — the middle
+     *    point is the vertex. Pass `{ points: [...], angleMode }` to choose
+     *    between "smaller" (default, 0-180°) and "clockwise" (0-360°).
      *
      * Important:
      *  - pass the geometry payload itself, not a wrapper object unless the factory explicitly requires one
      *  - for polygon / polyline use `parameters: [{ x, y }, ...]`, not `parameters: { points: [...] }`
-     *  - for line / ruler use the raw coordinate array, not `{ points: [...] }`
+     *  - for line / arrow use the raw coordinate array, not `{ points: [...] }`
      */
     parameters: unknown;
 
@@ -205,6 +218,9 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
      * Creates one annotation using the given factory-specific parameters.
      *
+     * Requires an active preset or an explicit `presetID`; if none exists this throws.
+     * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or pass `presetID` here.
+     *
      * Example:
      * `await annotationsWrite.createAnnotation({
      *   factoryID: "polygon",
@@ -218,6 +234,9 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
      * Creates multiple annotations, subject to the interactive guard.
      * Each item follows the same factory-specific `parameters` shape as `createAnnotation()`.
      * Uses batched creation safe for large amounts of annotations.
+     *
+     * Requires an active preset or an explicit `presetID` on the inputs; if none exists this throws.
+     * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or set `presetID` on every input.
      */
     createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
 

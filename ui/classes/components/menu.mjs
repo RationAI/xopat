@@ -30,6 +30,9 @@ class Menu extends BaseComponent {
      * @param {keyof typeof Menu.SCROLL} [options.bodyScroll] - The body scroll behavior
      * @param {keyof typeof Menu.DESIGN} [options.design] - The design of the menu
      * @param {keyof typeof Menu.ROUNDED} [options.rounded] - The rounded corners of the menu
+     * @param {(tabId: string) => boolean} [options.initialOpenResolver] - Decides whether a tab boots
+     *   open. Defaults to the user's cached `<tabId>-open` toggle; owners whose panels follow
+     *   deployment/session config pass their own (see `resolveSideMenuTabOpen`).
      * @param {boolean} [options.namespacedTabs] - Whether to namespace tabs
      * @param {string} [options.defaultNamespace] - The default namespace for tabs
      * @param {Array<object>} [options.namespaces] - An array of namespaces to be registered
@@ -46,9 +49,29 @@ class Menu extends BaseComponent {
         this._orientation = "TOP";
         this._buttonSide = "LEFT";
         this._design = "TITLEICON";
+        this._collapsedToTop = undefined; // last _syncLayout collapse verdict (shared with subclasses)
 
         // actual width breakpoint for side -> top compact fallback
         this._sideHeaderCollapseWidth = Number(options?.sideHeaderCollapseWidth) || 700;
+
+        // Header/config overflow menu ("…"): opt-in trailing control that lists
+        // hidden/closed panels (so they stay reachable) plus owner-registered
+        // behavior sections. Placement is owner-defined (see TabsMenu /
+        // MultiPanelMenu create()), this base only owns the dropdown contents.
+        this._configMenuEnabled = options?.configMenu === true;
+        this._configMenuIcon = options?.configMenuIcon || "ph-dots-three-vertical";
+        // Dropdown placement: "right" right-aligns the menu to the "…" host so it
+        // extends leftward (used by the right-edge side menu); "auto" otherwise.
+        this._configMenuPlacement = options?.configMenuPlacement || "auto";
+        this._configSections = [];
+        this._configMenu = undefined;
+
+        // Initial open/closed state of a tab. Default is the user's cached
+        // toggle; an owner that sources it from deployment/session config (the
+        // per-viewer side menu) injects a resolver so EVERY entry point —
+        // the owner's own boot loop, append(), appendExtended() — agrees.
+        this._initialOpenResolver = typeof options?.initialOpenResolver === "function"
+            ? options.initialOpenResolver : null;
 
         this._namespacedTabs = options?.namespacedTabs === true || Array.isArray(options?.namespaces);
         this.defaultNamespace = options?.defaultNamespace || Menu.NAMESPACE.SYSTEM;
@@ -56,7 +79,9 @@ class Menu extends BaseComponent {
         this.namespaceOrder = [];
 
         for (const namespace of (Array.isArray(options?.namespaces) && options.namespaces.length ? options.namespaces : Menu.DEFAULT_NAMESPACES)) {
-            this.registerNamespace(namespace);
+            // Resolve titleKey at registration (runtime) so translations are read
+            // after i18n init, not when the static DEFAULT_NAMESPACES is evaluated.
+            this.registerNamespace(namespace?.titleKey ? { ...namespace, title: namespace.title ?? $.t(namespace.titleKey) } : namespace);
         }
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL});
@@ -222,6 +247,31 @@ class Menu extends BaseComponent {
     }
 
     /**
+     * Validate & complete a menu item before a tab is built from it.
+     *
+     * An icon is an affordance, not a requirement: a tab is identifiable as long
+     * as it has an id and something to show (icon or title). Only icon-only
+     * designs have no text to fall back on, so a neutral glyph is substituted
+     * there — otherwise the header button would render blank and unclickable.
+     *
+     * @param {UINamedItem} item
+     * @param {string} [design] the owner's `_design` key ("ICONONLY" | "TITLEONLY" | "TITLEICON")
+     * @return {UINamedItem} item, or a completed copy of it
+     */
+    static normalizeItem(item, design = undefined) {
+        if (!item?.id || !(item.icon || item.title)) {
+            throw new Error("Item for menu needs an id and at least an icon or a title.");
+        }
+        // `_design` is the string key on Menu, but TabsMenu stores the
+        // Menu.DESIGN function itself — its inferred `name` is the same key.
+        const designKey = typeof design === "function" ? design.name : design;
+        if (!item.icon && designKey === "ICONONLY") {
+            return { ...item, icon: Menu.FALLBACK_ICON };
+        }
+        return item;
+    }
+
+    /**
      * @param {Dropdown|object} item. If object, DropDown contructor params are accepted, which among other include support for:
      *   sections: [
      *     { id: "actions" },
@@ -282,9 +332,7 @@ class Menu extends BaseComponent {
             return this.addDropdown(item, componentId);
         }
 
-        if (!(item.id && item.icon && item.title)) {
-            throw new Error("Item for menu needs every property set.");
-        }
+        item = Menu.normalizeItem(item, this._design);
         let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
         this._applyNamespaceToTab(tab, item);
 
@@ -386,6 +434,130 @@ class Menu extends BaseComponent {
         } else {
             this.header.setClass("hidden", "");
         }
+    }
+
+    /* -------------------- header / config overflow menu -------------------- */
+
+    /** @returns {boolean} whether the "…" config overflow menu is enabled */
+    get configMenuEnabled() {
+        return this._configMenuEnabled === true;
+    }
+
+    /**
+     * Register a behavior section rendered inside the "…" config menu. Owners
+     * (RightSideViewerMenu, MainLayout) use this to contribute controls like a
+     * compact toggle, tab-order reset, or dock-mode switch without the base menu
+     * hardcoding any feature-specific knob.
+     * @param {object} section
+     * @param {string} section.id unique section id (also the dropdown section)
+     * @param {string} [section.title] section header label (already translated)
+     * @param {number} [section.order] sort order (lower first)
+     * @param {() => Array<object>} section.build called on each open; returns
+     *   Dropdown item specs (id, label, icon, selected, onClick, ...)
+     */
+    addConfigSection(section) {
+        if (!section || !section.id || typeof section.build !== "function") return;
+        const idx = this._configSections.findIndex(s => s.id === section.id);
+        const normalized = { order: 0, ...section };
+        if (idx >= 0) this._configSections[idx] = normalized;
+        else this._configSections.push(normalized);
+        this._configSections.sort((a, b) => (a.order || 0) - (b.order || 0));
+    }
+
+    /**
+     * Lazily create the "…" overflow Dropdown. Its contents are rebuilt from
+     * live state every time it opens (via onClick, which runs before _open).
+     * @returns {Dropdown}
+     */
+    getConfigMenu() {
+        if (this._configMenu) return this._configMenu;
+        const dd = new ui.Dropdown({
+            id: this.id + "-config",
+            parentId: this.id,
+            icon: this._configMenuIcon,
+            title: $.t('main.menu.configMenu'),
+            widthClass: "w-60",
+            selectionStyle: "check",
+            closeOnItemClick: true,
+            placement: this._configMenuPlacement,
+            onClick: () => this._rebuildConfigMenu(dd),
+        });
+        dd.iconOnly();
+        this._configMenu = dd;
+        return dd;
+    }
+
+    /** @private repopulate the config dropdown from current tab + section state */
+    _rebuildConfigMenu(dd) {
+        dd.clear();
+        dd.items = {};
+        dd.sections = [];
+
+        // owner behavior sections first (compact, order reset, dock mode, …)
+        for (const section of this._configSections) {
+            let specs = [];
+            try {
+                specs = section.build() || [];
+            } catch (e) {
+                console.warn("Menu config section build failed:", section.id, e);
+            }
+            for (const spec of specs) {
+                dd.addItem({ ...spec, section: section.id }, section.title || "");
+            }
+        }
+
+        const tabs = Object.values(this.tabs || {});
+        const closed = tabs.filter(t => !this._isTabHidden(t) && this._isTabClosed(t));
+        const hidden = tabs.filter(t => this._isTabHidden(t));
+
+        for (const tab of closed) {
+            dd.addItem({
+                id: "open::" + tab.id,
+                section: "config-closed",
+                icon: tab.iconName || tab.icon || "ph-eye",
+                label: tab.title || tab.id,
+                onClick: () => this._openTab(tab),
+            }, $.t('main.menu.closedPanels'));
+        }
+
+        for (const tab of hidden) {
+            dd.addItem({
+                id: "reveal::" + tab.id,
+                section: "config-hidden",
+                icon: tab.iconName || tab.icon || "ph-eye-slash",
+                label: tab.title || tab.id,
+                onClick: () => this._revealTab(tab),
+            }, $.t('main.menu.hiddenPanels'));
+        }
+
+        if (!Object.keys(dd.items).length) {
+            dd.addItem({ id: "config-none", disabled: true, label: $.t('main.menu.noConfigOptions') });
+        }
+    }
+
+    /**
+     * Tab-state contract used by the config menu. Base implementation keys off a
+     * tab's VisibilityManager (or a plain `hidden` flag); subclasses/owners
+     * override to route through their own visibility bookkeeping.
+     */
+    _isTabHidden(tab) {
+        if (!tab) return false;
+        if (typeof tab.visibilityManager?.is === "function") return !tab.visibilityManager.is();
+        return !!tab.hidden;
+    }
+
+    _revealTab(tab) {
+        if (typeof tab?.visibilityManager?.set === "function") tab.visibilityManager.set(true);
+        else if (tab) tab.hidden = false;
+    }
+
+    /** Base menus have no "collapsed but visible" state; subclasses override. */
+    _isTabClosed(/* tab */) {
+        return false;
+    }
+
+    _openTab(tab) {
+        if (tab?.id) this.focus(tab.id);
     }
 
     _isSideOrientation() {
@@ -509,6 +681,11 @@ class Menu extends BaseComponent {
         if (!root) return;
 
         const collapsedToTop = this._shouldCollapseSideHeader();
+        // Cache the verdict for this pass so subclasses (e.g. the fullscreen
+        // menu's namespace-group orientation) key off the same value instead of
+        // re-measuring a DOM this method just mutated — a re-measure can flip and
+        // produce a hybrid layout (side-by-side container + horizontal buttons).
+        this._collapsedToTop = collapsedToTop;
 
         if (collapsedToTop) {
             this.setClass("flex", "flex-col");
@@ -542,7 +719,19 @@ class Menu extends BaseComponent {
         this._syncLayout();
     }
 
-    append(title, titleItem, item, id, pluginId, bg=undefined) {
+    /**
+     * Initial open state of a tab. Defaults to the user's persisted toggle;
+     * owners that pass `options.initialOpenResolver` decide it themselves
+     * (see `resolveSideMenuTabOpen` in mixins/utils.mjs).
+     * @param {string} id tab id
+     * @return {boolean}
+     */
+    _initialTabOpen(id) {
+        if (this._initialOpenResolver) return !!this._initialOpenResolver(id);
+        return APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true);
+    }
+
+    append(title, titleItem, item, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
                 div(
@@ -554,17 +743,17 @@ class Menu extends BaseComponent {
                 )
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo implement focus manager, similar to visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else {
             this.tabs[id]._removeFocus();
         }
     }
 
-    appendExtended(title, titleItem, item, hiddenItem, id, pluginId, bg=undefined) {
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
@@ -584,10 +773,10 @@ class Menu extends BaseComponent {
                 ),
             );
 
-        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content]});
 
         // todo move to focus manager like visibility manager
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+        if (this._initialTabOpen(id)){
             this.tabs[id]._setFocus();
         } else{
             this.tabs[id]._removeFocus();
@@ -644,8 +833,8 @@ Menu.NAMESPACE = {
 };
 
 Menu.DEFAULT_NAMESPACES = [
-    { id: Menu.NAMESPACE.SYSTEM, title: "System", order: 10 },
-    { id: Menu.NAMESPACE.PLUGINS, title: "Plugins", order: 20 },
+    { id: Menu.NAMESPACE.SYSTEM, titleKey: "main.namespaces.system", order: 10 },
+    { id: Menu.NAMESPACE.PLUGINS, titleKey: "main.namespaces.plugins", order: 20 },
 ];
 
 Menu.ORIENTATION = {
@@ -695,6 +884,9 @@ Menu.DESIGN = {
         this._syncLayout();
     }
 };
+
+// Stand-in glyph for icon-less items mounted into an icon-only menu.
+Menu.FALLBACK_ICON = "ph-dot-outline";
 
 Menu.ROUNDED = {
     ENABLE: function () { ui.Join.ROUNDED.ENABLE.call(this.header); },
