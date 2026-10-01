@@ -1264,6 +1264,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             VIEWER.bridge.loadShaders(
                 activeVisIndex,
                 function () {
+                    if (myToken !== _openToken) return;
+
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
                     //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
                     let data = VIEWER.bridge.dataImageSources();
