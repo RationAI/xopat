@@ -1081,6 +1081,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     };
 
     let _allowRecursionReload = true;
+    let _openToken = 0;
     /**
      * Open desired configuration on the current viewer
      * @param data
@@ -1092,10 +1093,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         background,
         visualizations = [],
     ) {
+        const myToken = ++_openToken;
+
         USER_INTERFACE.Loading.show(true);
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
+        if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
         loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
@@ -1111,6 +1115,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-canvas-reload', {
             data, background, visualizations
         });
+
+        if (myToken !== _openToken) return;
 
         config.data = data;
         config.background = background;
@@ -1142,18 +1148,23 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         let openedSources = 0;
         const handleFinishOpenImageEvent = (item, url, index) => {
             openedSources--;
+            const isStale = myToken !== _openToken;
             if (item) {
-                /**
-                 * Fired before visualization is initialized and loaded.
-                 * @event tiled-image-created
-                 * @memberOf VIEWER
-                 * @property {OpenSeadragon.TiledImage} item
-                 * @property {string} url used to create the item
-                 * @property {number} index TiledImage index
-                 */
-                VIEWER.raiseEvent('tiled-image-created', { item, url, index });
+                if (isStale) {
+                    VIEWER.world.removeItem(item);
+                } else {
+                    /**
+                     * Fired before visualization is initialized and loaded.
+                     * @event tiled-image-created
+                     * @memberOf VIEWER
+                     * @property {OpenSeadragon.TiledImage} item
+                     * @property {string} url used to create the item
+                     * @property {number} index TiledImage index
+                     */
+                    VIEWER.raiseEvent('tiled-image-created', { item, url, index });
+                }
             }
-            if (openedSources <= 0) handleSyntheticOpenEvent();
+            if (openedSources <= 0 && !isStale) handleSyntheticOpenEvent();
         };
         let imageOpenerCreator = (success, userArg = undefined) => {
             return (toOpenLastBgIndex, source, toOpenIndex) => {
