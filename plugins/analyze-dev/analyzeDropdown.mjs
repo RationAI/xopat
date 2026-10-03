@@ -1,4 +1,5 @@
 const { Dropdown } = globalThis.UI;
+const { div, span, p, label, input, select, option, textarea, button } = globalThis.van.tags;
 
 const STRING_SELECT_OPTIONS = {
     script: ['stardist'],
@@ -226,7 +227,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 }
                 const ConvertorClass = OSDAnnotations.Convertor.CONVERTERS['empaia'];
                 this._empaiaConvertor = new ConvertorClass(annotationsModule, {});
-                console.log('[analyze] empaia convertor ready');
             } catch (e) {
                 console.warn('[analyze] empaia convertor not available', e);
                 return;
@@ -245,10 +245,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 .map(([key]) => key);
 
             if (!annotationKeys.length) {
-                console.log('[analyze] no annotation output keys in EAD for job', finalJob.id);
                 return;
             }
-            console.log('[analyze] annotation output keys:', annotationKeys);
 
             const scope = finalJob._scope;
             if (!scope) { console.warn('[analyze] no scope on finalJob'); return; }
@@ -258,22 +256,18 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 console.warn('[analyze] job has no outputs field', job);
                 return;
             }
-            console.log('[analyze] job outputs:', job.outputs);
 
             const allShapes = [];
             for (const key of annotationKeys) {
                 const collectionId = job.outputs[key];
                 if (!collectionId) {
-                    console.log('[analyze] no collection ID for output key', key);
                     continue;
                 }
                 try {
                     const result = await scope.collections.queryItems(collectionId, {});
                     if (!result?.items?.length) {
-                        console.log('[analyze] empty collection for key', key);
                         continue;
                     }
-                    console.log('[analyze] fetched', result.items.length, 'annotations for key', key);
                     const decoded = await this._empaiaConvertor.decode({ items: result.items, presets: [] });
                     if (decoded?.objects) allShapes.push(...decoded.objects.filter(Boolean));
                 } catch (e) {
@@ -282,11 +276,9 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             }
 
             if (!allShapes.length) {
-                console.log('[analyze] no shapes decoded from job', finalJob.id);
                 return;
             }
 
-            console.log('[analyze] rendering', allShapes.length, 'annotations from job', finalJob.id);
             await this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
 
         } catch (e) {
@@ -298,7 +290,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         try {
             const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(appId) || null;
             if (!ead?.io) {
-                console.log('[analyze] _fetchOutputValues: no EAD io, skipping');
                 return [];
             }
 
@@ -307,10 +298,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 .map(([key]) => key);
 
             if (!valueKeys.length) {
-                console.log('[analyze] no value output keys in EAD for job', finalJob.id);
                 return [];
             }
-            console.log('[analyze] value output keys:', valueKeys);
 
             const scope = finalJob._scope;
             if (!scope) { console.warn('[analyze] _fetchOutputValues: no scope on finalJob'); return []; }
@@ -325,16 +314,13 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             for (const key of valueKeys) {
                 const collectionId = job.outputs[key];
                 if (!collectionId) {
-                    console.log('[analyze] no collection ID for value key', key);
                     continue;
                 }
                 try {
                     const result = await scope.collections.queryItems(collectionId, {});
                     if (!result?.items?.length) {
-                        console.log('[analyze] empty collection for value key', key);
                         continue;
                     }
-                    console.log('[analyze] fetched', result.items.length, 'values for key', key);
                     results.push({ key, items: result.items });
                 } catch (e) {
                     console.warn('[analyze] failed to fetch values for key', key, e);
@@ -358,28 +344,9 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         const fw = new FloatingWindow({ id, title: 'Job Results', width, height, startLeft, startTop });
         fw.attachTo(document.body);
 
-        const body = document.createElement('div');
-        body.className = 'p-3 space-y-4 overflow-auto';
-        body.style.height = '100%';
-
-        for (const { key, items } of valueOutputs) {
-            const section = document.createElement('div');
-            section.className = 'mb-3';
-
-            const heading = document.createElement('div');
-            heading.className = 'text-sm font-medium mb-1';
-            heading.textContent = key;
-            section.appendChild(heading);
-
-            const pre = document.createElement('pre');
-            pre.className = 'text-xs font-mono opacity-80 whitespace-pre-wrap';
-            pre.textContent = items.map((item, i) => `${i}: ${Number(item.value).toFixed(4)}`).join('\n');
-            section.appendChild(pre);
-
-            body.appendChild(section);
-        }
-
-        fw.setBody(body);
+        fw.setBody(div({ class: 'p-3 space-y-4 overflow-auto h-full' },
+            valueOutputs.map(output => window.renderJobOutputValues(output)),
+        ));
         fw.focus();
     }
 
@@ -486,9 +453,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 width: Math.round(annotObj.width),
                 height: Math.round(annotObj.height),
             };
-            console.log('[analyze] posting annotation to MDS:', encoded);
             const created = await scope.annotations.create(encoded);
-            console.log('[analyze] annotation created in MDS, serverId=', created.id);
             return { id: created.id, bounds: { left: annotObj.left, top: annotObj.top, width: annotObj.width, height: annotObj.height } };
         } catch (e) {
             console.error('[analyze] _captureAnnotation failed:', e);
@@ -520,22 +485,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         });
         fw.attachTo(document.body);
 
-        const container = document.createElement('div');
-        container.className = 'p-2 space-y-3';
-
-        for (const [idx, app] of items.entries()) {
-            const card = this._createAppCard(app, idx, tOr, fw);
-            container.appendChild(card);
-        }
-
-        if (!items.length) {
-            const empty = document.createElement('div');
-            empty.className = 'p-2 text-sm opacity-70';
-            empty.textContent = tOr('analyze.noApps', 'No apps available.');
-            container.appendChild(empty);
-        }
-
-        fw.setBody(container);
+        fw.setBody(div({ class: 'p-2 space-y-3' },
+            items.length
+                ? items.map((app, idx) => this._createAppCard(app, idx, tOr, fw))
+                : div({ class: 'p-2 text-sm opacity-70' }, tOr('analyze.noApps', 'No apps available.')),
+        ));
         fw.focus();
     }
 
@@ -561,77 +515,31 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
     _createAppCard(app, idx, tOr, fw) {
         const appId = app?.id || app?.app_id;
-        const wrap = document.createElement('div');
-        wrap.className = 'p-3 rounded-box bg-base-200 border border-base-300';
+        const nameInput = input({
+            type: 'text',
+            class: 'input input-bordered input-sm w-full mb-2',
+            placeholder: 'Job name (optional)',
+        });
 
-        // Header with title and configure button
-        const header = document.createElement('div');
-        header.className = 'flex items-center justify-between';
-
-        const title = document.createElement('span');
-        title.className = 'font-medium';
-        title.textContent = app?.name_short || app?.name || `App ${idx + 1}`;
-        header.appendChild(title);
-
-        const configBtn = document.createElement('button');
-        configBtn.type = 'button';
-        configBtn.className = 'btn btn-xs btn-ghost';
-        configBtn.textContent = tOr('analyze.advancedSettings', 'Advanced settings');
-        header.appendChild(configBtn);
-        wrap.appendChild(header);
-
-        // Description
-        if (app?.store_description) {
-            const desc = document.createElement('div');
-            desc.className = 'text-xs opacity-70 mt-1';
-            desc.textContent = app.store_description;
-            wrap.appendChild(desc);
-        }
-
-        // Job name input (optional)
-        const nameInput = document.createElement('input');
-        nameInput.type = 'text';
-        nameInput.className = 'input input-bordered input-sm w-full mb-2';
-        nameInput.placeholder = 'Job name (optional)';
-        wrap.appendChild(nameInput);
-
-        // Inputs section (hidden by default)
-        const inputsSection = document.createElement('div');
-        inputsSection.className = 'mt-2 hidden';
-        inputsSection.innerHTML = '<div class="text-xs opacity-50">Loading inputs...</div>';
-        wrap.appendChild(inputsSection);
-
+        // Inputs section (hidden by default), loaded on first open
+        const settingsOpen = van.state(false);
+        const inputsContent = van.state(div({ class: 'text-xs opacity-50' }, 'Loading inputs...'));
         let inputsForm = null;
         let inputsLoaded = false;
 
-        configBtn.addEventListener('click', async () => {
-            inputsSection.classList.toggle('hidden');
-            if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
-                try {
-                    inputsForm = await this._openInputsForm(appId, fw);
-                    inputsSection.innerHTML = '';
-                    inputsSection.appendChild(inputsForm.container);
-                    inputsLoaded = true;
-                } catch (e) {
-                    inputsSection.innerHTML = `<div class="text-xs text-error">Failed to load inputs: ${e?.message || String(e)}</div>`;
-                }
+        const toggleSettings = async () => {
+            settingsOpen.val = !settingsOpen.val;
+            if (inputsLoaded || !settingsOpen.val) return;
+            try {
+                inputsForm = await this._openInputsForm(appId, fw);
+                inputsContent.val = inputsForm.container;
+                inputsLoaded = true;
+            } catch (e) {
+                inputsContent.val = div({ class: 'text-xs text-error' }, `Failed to load inputs: ${e?.message || String(e)}`);
             }
-        });
+        };
 
-        // Actions row
-        const actions = document.createElement('div');
-        actions.className = 'flex items-center gap-2 mt-2';
-
-        const runBtn = document.createElement('button');
-        runBtn.type = 'button';
-        runBtn.className = 'btn btn-sm btn-primary';
-        runBtn.textContent = tOr('analyze.run', 'Run');
-
-        const status = document.createElement('span');
-        status.className = 'text-xs flex-1';
-        status.textContent = tOr('analyze.jobReady', 'Ready');
-
-        runBtn.addEventListener('click', async () => {
+        const runJob = async () => {
             const viewerId = String(VIEWER.uniqueId);
             const bannerId = 'banner';
             const appLabel = app?.name_short || app?.name || 'Job';
@@ -672,7 +580,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 const inputs = inputsForm?.getInputs?.() || {};
                 const ead = inputsForm?.ead || null;
                 annotBounds = inputsForm?.getAnnotBounds?.() || null;
-                console.log('[analyze] Running job with inputs:', inputs);
 
                 const caseId = await this._resolveCaseId();
                 if (!caseId) throw new Error('No active case found');
@@ -685,7 +592,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 const isSuccess = res?.status === 'COMPLETED';
-                console.log('[analyze] Job final:', res);
                 if (isSuccess) {
                     setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
                     await this._fetchAndRenderResults(res, appId, viewerId);
@@ -714,13 +620,22 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 console.error('[analyze] Failed to run app job', err);
                 setJobBanner(`${appLabel}: Failed`, 'ERROR', annotBounds);
             }
-        });
+        };
 
-        actions.appendChild(runBtn);
-        actions.appendChild(status);
-        wrap.appendChild(actions);
-
-        return wrap;
+        return div({ class: 'p-3 rounded-box bg-base-200 border border-base-300' },
+            div({ class: 'flex items-center justify-between' },
+                span({ class: 'font-medium' }, app?.name_short || app?.name || `App ${idx + 1}`),
+                button({ type: 'button', class: 'btn btn-xs btn-ghost', onclick: toggleSettings },
+                    tOr('analyze.advancedSettings', 'Advanced settings')),
+            ),
+            app?.store_description ? div({ class: 'text-xs opacity-70 mt-1' }, app.store_description) : null,
+            nameInput,
+            div({ class: () => settingsOpen.val ? 'mt-2' : 'mt-2 hidden' }, () => inputsContent.val),
+            div({ class: 'flex items-center gap-2 mt-2' },
+                button({ type: 'button', class: 'btn btn-sm btn-primary', onclick: runJob }, tOr('analyze.run', 'Run')),
+                span({ class: 'text-xs flex-1' }, tOr('analyze.jobReady', 'Ready')),
+            ),
+        );
     }
 
     _showDrawROIModal() {
@@ -745,35 +660,23 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             });
             modal.attachTo(document.body);
 
-            const body = document.createElement('div');
-            body.className = 'p-4 flex flex-col gap-3';
-
-            const msg = document.createElement('p');
-            msg.className = 'text-sm';
-            msg.textContent = 'Draw a rectangular region on the slide to define the area of interest for analysis.';
-            body.appendChild(msg);
-
-            const checkRow = document.createElement('label');
-            checkRow.className = 'flex items-center gap-2 text-xs cursor-pointer';
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.className = 'checkbox checkbox-xs';
-            const checkLabel = document.createElement('span');
-            checkLabel.textContent = "Don't show again";
-            checkRow.appendChild(checkbox);
-            checkRow.appendChild(checkLabel);
-            body.appendChild(checkRow);
-
-            const drawBtn = document.createElement('button');
-            drawBtn.type = 'button';
-            drawBtn.className = 'btn btn-sm btn-primary w-full';
-            drawBtn.textContent = 'Draw ROI';
-            drawBtn.addEventListener('click', () => {
-                if (checkbox.checked) this.setOption('skipDrawROIModal', true);
-                finish(true);
-                modal.close();
-            });
-            body.appendChild(drawBtn);
+            const dontShowAgain = input({ type: 'checkbox', class: 'checkbox checkbox-xs' });
+            const body = div({ class: 'p-4 flex flex-col gap-3' },
+                p({ class: 'text-sm' }, 'Draw a rectangular region on the slide to define the area of interest for analysis.'),
+                label({ class: 'flex items-center gap-2 text-xs cursor-pointer' },
+                    dontShowAgain,
+                    span("Don't show again"),
+                ),
+                button({
+                    type: 'button',
+                    class: 'btn btn-sm btn-primary w-full',
+                    onclick: () => {
+                        if (dontShowAgain.checked) this.setOption('skipDrawROIModal', true);
+                        finish(true);
+                        modal.close();
+                    },
+                }, 'Draw ROI'),
+            );
 
             modal.setBody(body);
             modal.focus();
@@ -802,35 +705,17 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             });
             modal.attachTo(document.body);
 
-            const body = document.createElement('div');
-            body.className = 'p-3 flex flex-col gap-3 overflow-auto';
-            body.style.height = '100%';
-            body.appendChild(container);
-
-            const actions = document.createElement('div');
-            actions.className = 'flex gap-2';
-
-            const runBtn = document.createElement('button');
-            runBtn.type = 'button';
-            runBtn.className = 'btn btn-sm btn-primary flex-1';
-            runBtn.textContent = 'Rerun';
-            runBtn.addEventListener('click', () => {
-                finish(true);
+            const choose = (result) => {
+                finish(result);
                 modal.close();
-            });
-
-            const cancelBtn = document.createElement('button');
-            cancelBtn.type = 'button';
-            cancelBtn.className = 'btn btn-sm btn-ghost flex-1';
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.addEventListener('click', () => {
-                finish(false);
-                modal.close();
-            });
-
-            actions.appendChild(runBtn);
-            actions.appendChild(cancelBtn);
-            body.appendChild(actions);
+            };
+            const body = div({ class: 'p-3 flex flex-col gap-3 overflow-auto h-full' },
+                container,
+                div({ class: 'flex gap-2' },
+                    button({ type: 'button', class: 'btn btn-sm btn-primary flex-1', onclick: () => choose(true) }, 'Rerun'),
+                    button({ type: 'button', class: 'btn btn-sm btn-ghost flex-1', onclick: () => choose(false) }, 'Cancel'),
+                ),
+            );
 
             modal.setBody(body);
             modal.focus();
@@ -838,30 +723,24 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
     }
 
     async _buildInputsForm(appId, scope, onCapture, mode = 'STANDALONE', initialValues = {}) {
-        const container = document.createElement('div');
-        container.className = 'space-y-2 mt-2';
+        const formContainer = (...children) => div({ class: 'space-y-2 mt-2' }, ...children);
+        const note = (text) => formContainer(div({ class: 'text-xs opacity-50' }, text));
 
         try {
             const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(appId, scope);
             if (!ead) {
-                container.innerHTML = '<div class="text-xs opacity-50">No EAD available</div>';
-                return { container, getInputs: () => ({}) };
+                return { container: note('No EAD available'), getInputs: () => ({}) };
             }
 
             const requiredInputs = window.EmpaiaStandaloneJobs?.getRequiredInputs?.(ead, mode) || [];
-            console.log('[analyze] requiredInputs:', requiredInputs);
             if (requiredInputs.length === 0) {
-                container.innerHTML = '<div class="text-xs opacity-50">No inputs required</div>';
-                return { container, getInputs: () => ({}), ead };
+                return { container: note('No inputs required'), getInputs: () => ({}), ead };
             }
 
             const currentSlideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId() || '';
             const inputFields = {};
-
-            for (const input of requiredInputs) {
-                const row = this._createInputRow(input, currentSlideId, inputFields, onCapture, initialValues);
-                if (row) container.appendChild(row);
-            }
+            const container = formContainer(requiredInputs.map(spec =>
+                this._createInputRow(spec, currentSlideId, inputFields, initialValues)));
 
             const getInputs = () => {
                 const result = {};
@@ -893,81 +772,65 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             return { container, getInputs, getAnnotBounds, captureAnnotation, ead };
         } catch (e) {
             console.error('[analyze] Failed to build inputs form', e);
-            container.innerHTML = `<div class="text-xs text-error">Error: ${e.message}</div>`;
-            return { container, getInputs: () => ({}) };
+            return {
+                container: formContainer(div({ class: 'text-xs text-error' }, `Error: ${e.message}`)),
+                getInputs: () => ({}),
+            };
         }
     }
 
-    _createInputRow(input, currentSlideId, inputFields, onCapture, initialValues = {}) {
-        console.log("input.type:", input.type)
-        if (input.type === 'wsi') {
-            // Auto-fill with current slide — no UI row needed
-            inputFields[input.key] = { value: currentSlideId };
+    /**
+     * Build the field for one EAD input and register it in inputFields.
+     * Inputs filled automatically (wsi, rectangle) get a value holder and no row.
+     */
+    _createInputRow(spec, currentSlideId, inputFields, initialValues = {}) {
+        if (spec.type === 'wsi') {
+            inputFields[spec.key] = { value: currentSlideId };
+            return null;
+        }
+        if (spec.type === 'rectangle') {
+            inputFields[spec.key] = { value: '' };
             return null;
         }
 
-        const row = document.createElement('div');
-        row.className = 'flex items-center gap-2';
-
-        const label = document.createElement('label');
-        label.className = 'text-xs font-medium min-w-20';
-        label.textContent = `${input.key} (${input.type})`;
-        row.appendChild(label);
-
-        if (input.type === 'rectangle') {
-            inputFields[input.key] = { value: '' };
-            return null;
-        }
-
+        const def = initialValues[spec.key];
+        const initial = def !== undefined ? { value: def } : {};
         let fieldEl;
 
-        if (input.type === 'bool') {
-            fieldEl = document.createElement('input');
-            fieldEl.type = 'checkbox';
-            fieldEl.className = 'checkbox checkbox-xs';
-            const def = initialValues[input.key];
-            if (def !== undefined) fieldEl.checked = def === true || def === 'true';
-        } else if (input.type === 'integer' || input.type === 'float') {
-            fieldEl = document.createElement('input');
-            fieldEl.type = 'number';
-            fieldEl.className = 'input input-xs input-bordered flex-1';
-            if (input.type === 'float') fieldEl.step = 'any';
-            const def = initialValues[input.key];
-            if (def !== undefined) fieldEl.value = def;
-        } else if (input.type === 'string') {
-            const selectOpts = STRING_SELECT_OPTIONS[input.key];
-            const def = initialValues[input.key];
+        if (spec.type === 'bool') {
+            fieldEl = input({ type: 'checkbox', class: 'checkbox checkbox-xs', checked: def === true || def === 'true' });
+        } else if (spec.type === 'integer' || spec.type === 'float') {
+            fieldEl = input({
+                type: 'number',
+                class: 'input input-xs input-bordered flex-1',
+                ...(spec.type === 'float' ? { step: 'any' } : {}),
+                ...initial,
+            });
+        } else if (spec.type === 'string') {
+            const selectOpts = STRING_SELECT_OPTIONS[spec.key];
             if (selectOpts) {
-                fieldEl = document.createElement('select');
-                fieldEl.className = 'select select-xs select-bordered flex-1';
-                const opts = (def !== undefined && !selectOpts.includes(def))
-                    ? [...selectOpts, def]
-                    : selectOpts;
-                for (const opt of opts) {
-                    const option = document.createElement('option');
-                    option.value = opt;
-                    option.textContent = opt;
-                    fieldEl.appendChild(option);
-                }
+                const opts = (def !== undefined && !selectOpts.includes(def)) ? [...selectOpts, def] : selectOpts;
+                fieldEl = select({ class: 'select select-xs select-bordered flex-1' },
+                    opts.map(opt => option({ value: opt }, opt)));
+                // options must exist before the value can select one
                 if (def !== undefined) fieldEl.value = def;
             } else {
-                fieldEl = document.createElement('textarea');
-                fieldEl.className = 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs';
-                fieldEl.rows = 4;
-                fieldEl.placeholder = 'Enter text value\u2026';
-                if (def !== undefined) fieldEl.value = def;
+                fieldEl = textarea({
+                    class: 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs',
+                    rows: 4,
+                    placeholder: 'Enter text value…',
+                    ...initial,
+                });
             }
         } else {
-            fieldEl = document.createElement('input');
-            fieldEl.type = 'text';
-            fieldEl.className = 'input input-xs input-bordered flex-1';
-            fieldEl.placeholder = `${input.type} ID`;
+            fieldEl = input({ type: 'text', class: 'input input-xs input-bordered flex-1', placeholder: `${spec.type} ID` });
         }
 
-        inputFields[input.key] = fieldEl;
-        row.appendChild(fieldEl);
-
-        return row;
+        inputFields[spec.key] = fieldEl;
+        return div({ class: 'flex items-center gap-2' },
+            label({ class: 'text-xs font-medium min-w-20' }, `${spec.key} (${spec.type})`),
+            fieldEl,
+        );
     }
 
 });

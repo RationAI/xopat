@@ -8,7 +8,6 @@ class JobResultsOverlay {
 
     async addJobResults(jobId, shapes, viewerId) {
         if (!shapes || !shapes.length) {
-            console.log('[job-overlay] no shapes to render for job', jobId);
             return;
         }
 
@@ -66,7 +65,6 @@ class JobResultsOverlay {
 
             this._jobStore.set(jobId, { layerId, viewerId: String(viewerId) });
             this._colorIndex++;
-            console.log('[job-overlay] added', valid.length, 'annotations for job', jobId);
 
         } catch (e) {
             console.error('[job-overlay] failed to add job results for job', jobId, e);

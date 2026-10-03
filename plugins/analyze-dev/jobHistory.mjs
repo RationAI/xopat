@@ -1,7 +1,15 @@
+const { div, span, button, input, select, option, pre, i } = globalThis.van.tags;
+
 function _fmtTs(ts) {
     const d = new Date(ts);
     return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} ${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
 }
+
+function _appLabel(entry) {
+    return entry.appName || entry.appId?.slice(0, 8) || '?';
+}
+
+const spinner = () => span({ class: 'loading loading-spinner loading-xs' });
 
 class JobHistory {
     constructor({ plugin, overlay, onShow, onRerun, onFetchResults }) {
@@ -11,12 +19,13 @@ class JobHistory {
         this._onRerun = onRerun;
         this._onFetchResults = onFetchResults;
         this._modal = null;
-        this._modalBody = null;
-        this._searchQuery = '';
-        this._appFilter = '';
-        this._listEl = null;
-        this._countEl = null;
         this._resultsCache = new Map();
+        // Bumped on every history or overlay visibility change; the panel re-renders from it.
+        this.revision = van.state(0);
+        this.searchQuery = van.state('');
+        this.appFilter = van.state('');
+        // jobId -> message, kept outside the cards so it survives a re-render
+        this.entryErrors = van.state({});
     }
 
     getHistory() {
@@ -34,8 +43,7 @@ class JobHistory {
         const history = this.getHistory();
         history.unshift(entry);
         if (history.length > 50) history.splice(50);
-        this._plugin.setOption('jobHistory', JSON.stringify(history));
-        this._refreshModal();
+        this._saveHistory(history);
     }
 
     updateJob(jobId, patch) {
@@ -43,9 +51,63 @@ class JobHistory {
         const idx = history.findIndex(e => e.jobId === jobId);
         if (idx !== -1) {
             history[idx] = { ...history[idx], ...patch };
-            this._plugin.setOption('jobHistory', JSON.stringify(history));
-            this._refreshModal();
+            this._saveHistory(history);
         }
+    }
+
+    deleteJob(jobId) {
+        this._saveHistory(this.getHistory().filter(e => e.jobId !== jobId));
+    }
+
+    clearHistory() {
+        this._saveHistory([]);
+    }
+
+    _saveHistory(history) {
+        this._plugin.setOption('jobHistory', JSON.stringify(history));
+        this.refresh();
+    }
+
+    refresh() {
+        this.revision.val++;
+    }
+
+    getAppOptions(history) {
+        const names = new Set(history.map(_appLabel));
+        return [...names].sort((a, b) => a.localeCompare(b));
+    }
+
+    getFilteredHistory(history) {
+        const query = this.searchQuery.val.trim().toLowerCase();
+        const appFilter = this.appFilter.val;
+        return history.filter(entry => {
+            if (query && !entry.name?.toLowerCase().includes(query)) return false;
+            if (appFilter && _appLabel(entry) !== appFilter) return false;
+            return true;
+        });
+    }
+
+    isJobVisible(jobId) {
+        const storeEntry = this._overlay._jobStore?.get(jobId);
+        return storeEntry ? storeEntry.visible !== false : false;
+    }
+
+    isJobLoaded(jobId) {
+        return !!this._overlay._jobStore?.get(jobId);
+    }
+
+    setJobVisible(jobId, visible) {
+        this._overlay.setJobVisible(jobId, visible);
+        this.refresh();
+    }
+
+    showEntryError(jobId, message) {
+        this.entryErrors.val = { ...this.entryErrors.val, [jobId]: message };
+        setTimeout(() => {
+            if (this.entryErrors.val[jobId] !== message) return;
+            const { [jobId]: _, ...rest } = this.entryErrors.val;
+            this.entryErrors.val = rest;
+        }, 4000);
     }
 
     showModal() {
@@ -54,8 +116,8 @@ class JobHistory {
             this._modal.focus();
             return;
         }
-        this._searchQuery = '';
-        this._appFilter = '';
+        this.searchQuery.val = '';
+        this.appFilter.val = '';
         this._resultsCache = new Map();
         const width = 480, height = 500;
         this._modal = new FloatingWindow({
@@ -65,335 +127,242 @@ class JobHistory {
             height,
             startLeft: Math.round((window.innerWidth - width) / 2),
             startTop: Math.round((window.innerHeight - height) / 2),
-            onClose: () => { this._modal = null; this._modalBody = null; },
+            onClose: () => { this._modal = null; },
         });
         this._modal.attachTo(document.body);
-        this._modalBody = document.createElement('div');
-        this._modalBody.className = 'flex flex-col h-full overflow-hidden';
-        this._renderList(this._modalBody);
-        this._modal.setBody(this._modalBody);
+        this._modal.setBody(new JobHistoryPanel({ history: this }));
         this._modal.focus();
-    }
-
-    _refreshModal() {
-        if (this._modal && this._modalBody) {
-            this._renderList(this._modalBody);
-        }
-    }
-
-    _renderList(container) {
-        container.innerHTML = '';
-        this._listEl = null;
-        this._countEl = null;
-        const history = this.getHistory();
-
-        const header = document.createElement('div');
-        header.className = 'flex items-center justify-between px-3 py-2 border-b border-base-300 flex-shrink-0';
-        const count = document.createElement('span');
-        count.className = 'text-xs opacity-60';
-        header.appendChild(count);
-        this._countEl = count;
-        if (history.length) {
-            const clearBtn = document.createElement('button');
-            clearBtn.type = 'button';
-            clearBtn.className = 'btn btn-xs btn-ghost';
-            clearBtn.textContent = 'Clear all';
-            clearBtn.addEventListener('click', () => {
-                this._plugin.setOption('jobHistory', '[]');
-                this._renderList(container);
-            });
-            header.appendChild(clearBtn);
-        }
-        container.appendChild(header);
-
-        if (!history.length) {
-            count.textContent = 'No jobs run yet.';
-            const empty = document.createElement('div');
-            empty.className = 'flex-1 flex items-center justify-center text-sm opacity-50';
-            empty.textContent = 'No jobs run yet.';
-            container.appendChild(empty);
-            return;
-        }
-
-        const filterBar = document.createElement('div');
-        filterBar.className = 'flex items-center gap-2 px-3 py-2 border-b border-base-300 flex-shrink-0';
-
-        const searchInput = document.createElement('input');
-        searchInput.type = 'text';
-        searchInput.placeholder = 'Search by job name...';
-        searchInput.className = 'input input-xs w-32';
-        searchInput.value = this._searchQuery;
-        searchInput.addEventListener('input', (e) => {
-            this._searchQuery = e.target.value;
-            this._updateListBody();
-        });
-        filterBar.appendChild(searchInput);
-
-        const appSelect = document.createElement('select');
-        appSelect.className = 'select select-xs w-24';
-        const allOption = document.createElement('option');
-        allOption.value = '';
-        allOption.textContent = 'All apps';
-        appSelect.appendChild(allOption);
-        const appOptions = this._getAppOptions(history);
-        if (this._appFilter && !appOptions.includes(this._appFilter)) {
-            this._appFilter = '';
-        }
-        for (const appName of appOptions) {
-            const opt = document.createElement('option');
-            opt.value = appName;
-            opt.textContent = appName;
-            appSelect.appendChild(opt);
-        }
-        appSelect.value = this._appFilter;
-        appSelect.addEventListener('change', (e) => {
-            this._appFilter = e.target.value;
-            this._updateListBody();
-        });
-        filterBar.appendChild(appSelect);
-
-        container.appendChild(filterBar);
-
-        const list = document.createElement('div');
-        list.className = 'flex-1 overflow-auto p-2';
-        container.appendChild(list);
-        this._listEl = list;
-
-        this._updateListBody();
-    }
-
-    _getAppOptions(history) {
-        const names = new Set();
-        for (const entry of history) {
-            names.add(entry.appName || entry.appId?.slice(0, 8) || '?');
-        }
-        return [...names].sort((a, b) => a.localeCompare(b));
-    }
-
-    _getFilteredHistory() {
-        const history = this.getHistory();
-        const query = this._searchQuery.trim().toLowerCase();
-        return history.filter(entry => {
-            if (query && !entry.name?.toLowerCase().includes(query)) return false;
-            if (this._appFilter) {
-                const appLabel = entry.appName || entry.appId?.slice(0, 8) || '?';
-                if (appLabel !== this._appFilter) return false;
-            }
-            return true;
-        });
-    }
-
-    _updateListBody() {
-        if (!this._listEl || !this._countEl) return;
-        const total = this.getHistory().length;
-        const filtered = this._getFilteredHistory();
-
-        this._countEl.textContent = (this._searchQuery || this._appFilter)
-            ? `${filtered.length} of ${total} job${total === 1 ? '' : 's'}`
-            : `${total} job${total === 1 ? '' : 's'} run`;
-
-        this._listEl.innerHTML = '';
-        if (!filtered.length) {
-            const empty = document.createElement('div');
-            empty.className = 'flex items-center justify-center text-sm opacity-50 py-4';
-            empty.textContent = 'No jobs match your search/filter.';
-            this._listEl.appendChild(empty);
-            return;
-        }
-        for (const entry of filtered) {
-            this._listEl.appendChild(this._renderEntry(entry));
-        }
-    }
-
-    _renderEntry(entry) {
-        const storeEntry = this._overlay._jobStore?.get(entry.jobId);
-        const isVisible = storeEntry ? (storeEntry.visible !== false) : false;
-
-        const card = document.createElement('div');
-        card.className = 'p-2 rounded-box bg-base-200 mb-1' + (isVisible ? ' ring ring-primary ring-offset-1' : '');
-
-        const meta = document.createElement('div');
-        meta.className = 'flex items-center gap-1 text-xs flex-wrap';
-
-        const dot = document.createElement('span');
-        dot.className = 'w-2 h-2 rounded-full flex-shrink-0 ' +
-            (entry.status === 'COMPLETED' ? 'bg-success' : 'bg-error');
-        meta.appendChild(dot);
-
-        const name = document.createElement('span');
-        name.className = 'font-medium';
-        name.textContent = entry.name;
-        meta.appendChild(name);
-
-        const appSpan = document.createElement('span');
-        appSpan.className = 'opacity-50';
-        appSpan.textContent = `· ${entry.appName || entry.appId?.slice(0, 8) || '?'}`;
-        meta.appendChild(appSpan);
-
-        const tsSpan = document.createElement('span');
-        tsSpan.className = 'opacity-50';
-        tsSpan.textContent = `· ${_fmtTs(entry.timestamp)}`;
-        meta.appendChild(tsSpan);
-
-        card.appendChild(meta);
-
-        const actions = document.createElement('div');
-        actions.className = 'flex gap-1 mt-1 items-center';
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'btn btn-xs btn-square ' + (isVisible ? 'btn-primary' : 'btn-ghost');
-        toggleBtn.title = isVisible ? 'Hide annotations' : 'Show annotations';
-        toggleBtn.innerHTML = `<i class="fa-solid ${isVisible ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
-        toggleBtn.addEventListener('click', async () => {
-            if (isVisible) {
-                this._overlay.setJobVisible(entry.jobId, false);
-                this._refreshModal();
-            } else if (storeEntry) {
-                this._overlay.setJobVisible(entry.jobId, true);
-                this._refreshModal();
-            } else {
-                toggleBtn.disabled = true;
-                toggleBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
-                let errorShown = false;
-                try {
-                    await this._onShow(entry);
-                } catch (e) {
-                    console.error('[job-history] show failed', e);
-                    this._showEntryError(card, e?.message || 'Failed to load annotations');
-                    errorShown = true;
-                } finally {
-                    toggleBtn.disabled = false;
-                    if (!errorShown) this._refreshModal();
-                }
-            }
-        });
-        actions.appendChild(toggleBtn);
-
-        const moreSection = document.createElement('div');
-        moreSection.className = 'hidden';
-
-        const moreActions = document.createElement('div');
-        moreActions.className = 'flex gap-1 mt-1';
-        moreSection.appendChild(moreActions);
-
-        const resultsPanel = document.createElement('div');
-        resultsPanel.className = 'mt-1 hidden';
-        moreSection.appendChild(resultsPanel);
-
-        const moreBtn = document.createElement('button');
-        moreBtn.type = 'button';
-        moreBtn.className = 'btn btn-xs btn-square btn-ghost';
-        moreBtn.title = 'More actions';
-        moreBtn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
-        moreBtn.addEventListener('click', () => {
-            moreSection.classList.toggle('hidden');
-        });
-        actions.appendChild(moreBtn);
-
-        const rerunBtn = document.createElement('button');
-        rerunBtn.type = 'button';
-        rerunBtn.className = 'btn btn-xs btn-ghost';
-        rerunBtn.textContent = 'Rerun';
-        rerunBtn.addEventListener('click', async () => {
-            rerunBtn.disabled = true;
-            rerunBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
-            let errorShown = false;
-            try {
-                await this._onRerun(entry);
-            } catch (e) {
-                if (e?.message !== 'cancelled') {
-                    console.error('[job-history] rerun failed', e);
-                    this._showEntryError(card, e?.message || 'Rerun failed');
-                    errorShown = true;
-                }
-            } finally {
-                rerunBtn.disabled = false;
-                rerunBtn.textContent = 'Rerun';
-                if (!errorShown) this._refreshModal();
-            }
-        });
-        moreActions.appendChild(rerunBtn);
-
-        if (entry.status === 'COMPLETED') {
-            const resultsBtn = document.createElement('button');
-            resultsBtn.type = 'button';
-            resultsBtn.className = 'btn btn-xs btn-ghost';
-            resultsBtn.textContent = 'Results';
-            resultsBtn.addEventListener('click', async () => {
-                if (this._resultsCache.has(entry.jobId)) {
-                    resultsPanel.classList.toggle('hidden');
-                    return;
-                }
-                resultsBtn.disabled = true;
-                resultsBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
-                try {
-                    const valueOutputs = await this._onFetchResults(entry);
-                    this._resultsCache.set(entry.jobId, valueOutputs);
-                    this._renderResultsPanel(resultsPanel, valueOutputs);
-                    resultsPanel.classList.remove('hidden');
-                } catch (e) {
-                    console.error('[job-history] fetch results failed', e);
-                    this._showEntryError(card, e?.message || 'Failed to fetch results');
-                } finally {
-                    resultsBtn.disabled = false;
-                    resultsBtn.textContent = 'Results';
-                }
-            });
-            moreActions.appendChild(resultsBtn);
-        }
-
-        const deleteBtn = document.createElement('button');
-        deleteBtn.type = 'button';
-        deleteBtn.className = 'btn btn-xs btn-ghost text-error';
-        deleteBtn.textContent = '×';
-        deleteBtn.addEventListener('click', () => {
-            this._plugin.setOption('jobHistory', JSON.stringify(this.getHistory().filter(e => e.jobId !== entry.jobId)));
-            this._refreshModal();
-        });
-        moreActions.appendChild(deleteBtn);
-
-        card.appendChild(actions);
-        card.appendChild(moreSection);
-        return card;
-    }
-
-    _showEntryError(card, message) {
-        const existing = card.querySelector('.entry-error');
-        if (existing) existing.remove();
-        const err = document.createElement('div');
-        err.className = 'entry-error text-xs text-error mt-1';
-        err.textContent = message;
-        card.appendChild(err);
-        setTimeout(() => { err.remove(); this._refreshModal(); }, 4000);
-    }
-
-    _renderResultsPanel(container, valueOutputs) {
-        container.innerHTML = '';
-        if (!valueOutputs.length) {
-            const empty = document.createElement('div');
-            empty.className = 'text-xs opacity-50 py-1';
-            empty.textContent = 'No output values for this job.';
-            container.appendChild(empty);
-            return;
-        }
-        for (const { key, items } of valueOutputs) {
-            const section = document.createElement('div');
-            section.className = 'mb-2';
-
-            const heading = document.createElement('div');
-            heading.className = 'text-xs font-medium mb-1';
-            heading.textContent = key;
-            section.appendChild(heading);
-
-            const pre = document.createElement('pre');
-            pre.className = 'text-xs font-mono opacity-80 whitespace-pre-wrap';
-            pre.textContent = items.map((item, i) => `${i}: ${Number(item.value).toFixed(4)}`).join('\n');
-            section.appendChild(pre);
-
-            container.appendChild(section);
-        }
     }
 }
 
+/**
+ * Body of the job history window: header with count, search/app filter, and the card list.
+ * The search input is rendered once so typing does not lose focus; only the count, the app
+ * options and the list are reactive.
+ */
+class JobHistoryPanel extends UI.BaseComponent {
+    constructor(options = undefined, ...children) {
+        options = super(options, ...children).options;
+        this.history = options.history;
+        this.classMap.base = 'flex flex-col h-full overflow-hidden';
+        this.refreshClassState();
+    }
+
+    create() {
+        const history = this.history;
+        const entries = () => {
+            history.revision.val;
+            return history.getHistory();
+        };
+
+        return div({ ...this.commonProperties },
+            div({ class: 'flex items-center justify-between px-3 py-2 border-b border-base-300 flex-shrink-0' },
+                () => span({ class: 'text-xs opacity-60' }, this._countLabel(entries())),
+                () => entries().length
+                    ? button({ type: 'button', class: 'btn btn-xs btn-ghost', onclick: () => history.clearHistory() }, 'Clear all')
+                    : span(),
+            ),
+            () => entries().length ? this._renderFilterBar() : span({ class: 'hidden' }),
+            () => this._renderList(entries()),
+        );
+    }
+
+    _countLabel(all) {
+        const history = this.history;
+        const total = all.length;
+        if (!total) return 'No jobs run yet.';
+        if (history.searchQuery.val || history.appFilter.val) {
+            return `${history.getFilteredHistory(all).length} of ${total} job${total === 1 ? '' : 's'}`;
+        }
+        return `${total} job${total === 1 ? '' : 's'} run`;
+    }
+
+    _renderFilterBar() {
+        const history = this.history;
+        const appOptions = history.getAppOptions(history.getHistory());
+        if (history.appFilter.rawVal && !appOptions.includes(history.appFilter.rawVal)) {
+            history.appFilter.val = '';
+        }
+        const appSelect = select({
+                class: 'select select-xs w-24',
+                onchange: e => { history.appFilter.val = e.target.value; },
+            },
+            option({ value: '' }, 'All apps'),
+            ...appOptions.map(name => option({ value: name }, name)),
+        );
+        appSelect.value = history.appFilter.rawVal;
+
+        return div({ class: 'flex items-center gap-2 px-3 py-2 border-b border-base-300 flex-shrink-0' },
+            input({
+                type: 'text',
+                class: 'input input-xs w-32',
+                placeholder: 'Search by job name...',
+                value: history.searchQuery.rawVal,
+                oninput: e => { history.searchQuery.val = e.target.value; },
+            }),
+            appSelect,
+        );
+    }
+
+    _renderList(all) {
+        if (!all.length) {
+            return div({ class: 'flex-1 flex items-center justify-center text-sm opacity-50' }, 'No jobs run yet.');
+        }
+        const filtered = this.history.getFilteredHistory(all);
+        return div({ class: 'flex-1 overflow-auto p-2' },
+            filtered.length
+                ? filtered.map(entry => new JobHistoryCard({ history: this.history, entry }).create())
+                : div({ class: 'flex items-center justify-center text-sm opacity-50 py-4' }, 'No jobs match your search/filter.'),
+        );
+    }
+}
+
+/** One history entry: status, name, show/hide toggle and the collapsible action row. */
+class JobHistoryCard extends UI.BaseComponent {
+    constructor(options = undefined, ...children) {
+        options = super(options, ...children).options;
+        this.history = options.history;
+        this.entry = options.entry;
+        this.moreOpen = van.state(false);
+        this.resultsOpen = van.state(false);
+        this.busy = van.state('');
+        const visible = this.history.isJobVisible(this.entry.jobId);
+        this.classMap.base = 'p-2 rounded-box bg-base-200 mb-1';
+        this.classMap.ring = visible ? 'ring ring-primary ring-offset-1' : '';
+        this.refreshClassState();
+    }
+
+    create() {
+        const { entry, history } = this;
+        return div({ ...this.commonProperties },
+            div({ class: 'flex items-center gap-1 text-xs flex-wrap' },
+                span({ class: 'w-2 h-2 rounded-full flex-shrink-0 ' + (entry.status === 'COMPLETED' ? 'bg-success' : 'bg-error') }),
+                span({ class: 'font-medium' }, entry.name),
+                span({ class: 'opacity-50' }, `· ${_appLabel(entry)}`),
+                span({ class: 'opacity-50' }, `· ${_fmtTs(entry.timestamp)}`),
+            ),
+            div({ class: 'flex gap-1 mt-1 items-center' },
+                this._renderToggleButton(),
+                button({
+                    type: 'button',
+                    class: 'btn btn-xs btn-square btn-ghost',
+                    title: 'More actions',
+                    onclick: () => { this.moreOpen.val = !this.moreOpen.val; },
+                }, i({ class: 'ph-light ph-dots-three' })),
+            ),
+            div({ class: () => this.moreOpen.val ? '' : 'hidden' },
+                div({ class: 'flex gap-1 mt-1' },
+                    this._renderActionButton('rerun', 'Rerun', () => this._rerun()),
+                    entry.status === 'COMPLETED'
+                        ? this._renderActionButton('results', 'Results', () => this._toggleResults())
+                        : null,
+                    button({
+                        type: 'button',
+                        class: 'btn btn-xs btn-ghost text-error',
+                        onclick: () => history.deleteJob(entry.jobId),
+                    }, '×'),
+                ),
+                () => this.resultsOpen.val
+                    ? this._renderResults(history._resultsCache.get(entry.jobId) || [])
+                    : span({ class: 'hidden' }),
+            ),
+            () => {
+                const message = history.entryErrors.val[entry.jobId];
+                return message ? div({ class: 'text-xs text-error mt-1' }, message) : span({ class: 'hidden' });
+            },
+        );
+    }
+
+    _renderToggleButton() {
+        const visible = this.history.isJobVisible(this.entry.jobId);
+        return button({
+            type: 'button',
+            class: 'btn btn-xs btn-square ' + (visible ? 'btn-primary' : 'btn-ghost'),
+            title: visible ? 'Hide annotations' : 'Show annotations',
+            disabled: () => this.busy.val === 'toggle',
+            onclick: () => this._toggleVisibility(visible),
+        }, () => this.busy.val === 'toggle'
+            ? spinner()
+            : i({ class: `ph-light ${visible ? 'ph-eye' : 'ph-eye-slash'}` }));
+    }
+
+    _renderActionButton(key, label, onclick) {
+        return button({
+            type: 'button',
+            class: 'btn btn-xs btn-ghost',
+            disabled: () => this.busy.val === key,
+            onclick,
+        }, () => this.busy.val === key ? spinner() : span(label));
+    }
+
+    async _toggleVisibility(visible) {
+        const { entry, history } = this;
+        if (visible || history.isJobLoaded(entry.jobId)) {
+            history.setJobVisible(entry.jobId, !visible);
+            return;
+        }
+        this.busy.val = 'toggle';
+        try {
+            await history._onShow(entry);
+            history.refresh();
+        } catch (e) {
+            console.error('[job-history] show failed', e);
+            history.showEntryError(entry.jobId, e?.message || 'Failed to load annotations');
+        } finally {
+            this.busy.val = '';
+        }
+    }
+
+    async _rerun() {
+        const { entry, history } = this;
+        this.busy.val = 'rerun';
+        try {
+            await history._onRerun(entry);
+            history.refresh();
+        } catch (e) {
+            if (e?.message !== 'cancelled') {
+                console.error('[job-history] rerun failed', e);
+                history.showEntryError(entry.jobId, e?.message || 'Rerun failed');
+            }
+        } finally {
+            this.busy.val = '';
+        }
+    }
+
+    async _toggleResults() {
+        const { entry, history } = this;
+        if (history._resultsCache.has(entry.jobId)) {
+            this.resultsOpen.val = !this.resultsOpen.val;
+            return;
+        }
+        this.busy.val = 'results';
+        try {
+            history._resultsCache.set(entry.jobId, await history._onFetchResults(entry));
+            this.resultsOpen.val = true;
+        } catch (e) {
+            console.error('[job-history] fetch results failed', e);
+            history.showEntryError(entry.jobId, e?.message || 'Failed to fetch results');
+        } finally {
+            this.busy.val = '';
+        }
+    }
+
+    _renderResults(valueOutputs) {
+        if (!valueOutputs.length) {
+            return div({ class: 'mt-1 text-xs opacity-50 py-1' }, 'No output values for this job.');
+        }
+        return div({ class: 'mt-1' }, valueOutputs.map(output => renderOutputValues(output, 'text-xs')));
+    }
+}
+
+/** One output collection as a heading and an index: value list. */
+function renderOutputValues({ key, items }, headingSize = 'text-sm') {
+    return div({ class: 'mb-2' },
+        div({ class: `${headingSize} font-medium mb-1` }, key),
+        pre({ class: 'text-xs font-mono opacity-80 whitespace-pre-wrap' },
+            items.map((item, idx) => `${idx}: ${Number(item.value).toFixed(4)}`).join('\n')),
+    );
+}
+
 window.JobHistory = JobHistory;
+window.renderJobOutputValues = renderOutputValues;
