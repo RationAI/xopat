@@ -8,5 +8,6 @@
     "categories": ["Development"],
     "keywords": ["jobs", "analyze", "dev"],
     "icon": "ph-flask",
-    "includes" : ["newAppForm.mjs", "analyzeDropdown.mjs"]
+    "includes": ["newAppForm.mjs", "jobResultsOverlay.mjs", "jobHistory.mjs", "analyzeDropdown.mjs"],
+    "permaLoad": true
 }
