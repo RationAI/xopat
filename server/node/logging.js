@@ -743,6 +743,12 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                 maxRecordsPerBatch: Math.max(1, Number(raw.client?.maxRecordsPerBatch) || 200),
                 maxRecordBytes: Math.max(256, Number(raw.client?.maxRecordBytes) || 32_768),
                 maxRecordsPerMinute: Math.max(10, Number(raw.client?.maxRecordsPerMinute) || 2_000),
+                // Bytes the browser sends along with a record — a dictation
+                // window, a screenshot. A SECOND opt-in beyond `ingest`: accepting
+                // lines is accepting text the caps already bound, accepting files
+                // is accepting whatever a caller decides to upload.
+                attachments: raw.client?.attachments === true,
+                maxAttachmentBytes: Math.max(1024, Number(raw.client?.maxAttachmentBytes) || 4 * 1024 * 1024),
             },
             // Serialization caps. Raising these is how you get a full conversation
             // dump out of a `sensitive` record instead of a truncated one.
@@ -1167,14 +1173,20 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
          * sink treat it exactly like a server record — which is the point of
          * accepting it at all.
          */
-        ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}) {
+        ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}, payload) {
             const cfg = resolveConfig();
             if (!cfg.client.ingest) return null;
             if (sensitive && !cfg.allowSensitive) return null;
             const name = `client:${normalizeChannel(channel || "app")}`;
             const args = fields && typeof fields === "object" ? [fields, String(message ?? "")] : [String(message ?? "")];
             return emit(name, normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info)),
-                sensitive === true, args, { ...bound, source: "client" });
+                sensitive === true, args, { ...bound, source: "client" },
+                // Bytes the browser sent with this record. They take the SAME path
+                // a server-side `logger.attachment` takes — a destination that can
+                // hold them writes the file, one that cannot says so on the line —
+                // so there is no second, browser-only storage policy to keep in
+                // sync. The caller has already checked the size and the opt-in.
+                payload && payload.bytes ? { bytes: payload.bytes, file: payload.file } : undefined);
         },
     };
     return api;

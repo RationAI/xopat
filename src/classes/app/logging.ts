@@ -42,6 +42,39 @@ const DEFAULT_FORWARD_INTERVAL_MS = 5_000;
 const DEFAULT_FORWARD_QUEUE = 1_000;
 /** Strings longer than this are cut before a record is kept or sent. */
 const DEFAULT_MAX_STRING = 8_000;
+/**
+ * One attachment's ceiling. A ~90 s dictation window is a few hundred kB of
+ * Opus; four megabytes leaves room for a long one without letting a single
+ * record become the reason the RPC body limit is raised again.
+ */
+const DEFAULT_MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+/**
+ * Ceiling on one forwarded BATCH, in bytes of JSON.
+ *
+ * `batchSize` alone counts records, and a record is not a fixed size: a deployment
+ * that raises `maxStringLength` to read whole HTTP bodies back makes one record
+ * hundreds of kB, and fifty of them a multi-megabyte POST. `ingestClientLogs`
+ * answers that with a 413 and the batch is dropped — the forwarder does not retry —
+ * so a count-only budget loses exactly the sessions that were worth recording.
+ *
+ * Comfortably under the RPC's own 256 kB default so the envelope and the growth
+ * between measuring and sending cannot push a batch over.
+ */
+const DEFAULT_MAX_BATCH_BYTES = 180 * 1024;
+/**
+ * Ceiling on ONE forwarded record, mirroring the server's `client.maxRecordBytes`
+ * default. Above it the server counts the record `oversized` and drops it whole, so
+ * shipping it spends uplink on something dead on arrival — it is trimmed here
+ * instead, which at least preserves the record's shape and its first lines.
+ */
+const DEFAULT_MAX_RECORD_BYTES = 32 * 1024;
+/**
+ * Ceiling on the bytes waiting to be shipped. Attachments are queued separately
+ * from records precisely because they are large; without a byte bound a server
+ * that is refusing them turns into a browser that is holding the whole session's
+ * audio in RAM. Oldest first out, and counted.
+ */
+const DEFAULT_ATTACHMENT_QUEUE_BYTES = 32 * 1024 * 1024;
 
 /** One emitted record. Shape mirrors the server's so both ends read alike. */
 export interface ClientLogRecord {
@@ -52,6 +85,28 @@ export interface ClientLogRecord {
     message: string;
     fields?: Record<string, any>;
     sensitive?: boolean;
+    /**
+     * Base64 of an attachment's bytes. Present ONLY on the copy handed to the
+     * transport — never on the record in the ring, which keeps the descriptor
+     * (`fields.attachment`) and nothing else. A ring that held the bytes would
+     * pin every recorded window's audio for the life of the page.
+     */
+    attachmentBytes?: string;
+    /**
+     * Present when the record was cut down to fit the server's per-record cap on its
+     * way out. The record still arrives; this says it is not the whole of what the
+     * browser saw, which a silently-shortened body could never admit.
+     */
+    truncatedForForward?: { originalBytes: number; maxBytes: number };
+}
+
+/** Bytes that belong with a record, carried out-of-band. */
+export interface ClientLogAttachment {
+    /** Path the destination writes the file at, relative to its attachment dir. */
+    file: string;
+    bytes?: ArrayBuffer | ArrayBufferView | null;
+    /** Anything else worth putting on the line: mediaType, duration, indices. */
+    [key: string]: any;
 }
 
 export interface ClientLogger {
@@ -63,6 +118,13 @@ export interface ClientLogger {
     error(...args: any[]): ClientLogRecord | null;
     /** Payload-bearing record. Operator opt-in + channel at trace, or nothing. */
     sensitive(...args: any[]): ClientLogRecord | null;
+    /**
+     * A record whose payload is BYTES — a recording, a screenshot, a file the
+     * user added. The line describes it (`file`, size, whatever else is passed);
+     * the bytes ride beside the record to the server, which writes them as a real
+     * file next to the transcript. Sensitive by definition.
+     */
+    attachment(descriptor: ClientLogAttachment, message?: string): ClientLogRecord | null;
     /** Timing helper: returns a stop function that emits `durationMs`. */
     time(label: string, level?: LogLevelName): (fields?: Record<string, any>) => ClientLogRecord | null;
     child(sub: string): ClientLogger;
@@ -128,6 +190,37 @@ function formatMessage(args: any[], maxString: number): string {
     }).join(" ");
 }
 
+/** Anything byte-shaped a call site may hand `attachment()` → a `Uint8Array`, or null. */
+function toBytes(value: ArrayBuffer | ArrayBufferView | null | undefined): Uint8Array | null {
+    if (!value) return null;
+    if (value instanceof Uint8Array) return value.byteLength ? value : null;
+    if (ArrayBuffer.isView(value)) {
+        const view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        return view.byteLength ? view : null;
+    }
+    if (value instanceof ArrayBuffer) {
+        const view = new Uint8Array(value);
+        return view.byteLength ? view : null;
+    }
+    return null;
+}
+
+/**
+ * Bytes → base64, in chunks.
+ *
+ * `String.fromCharCode(...bytes)` on a megabyte blows the argument limit and
+ * throws — which, on the logging path, would take down the caller rather than
+ * lose a diagnostic. Chunked, it is linear and safe at any size the cap allows.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+    const CHUNK = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.prototype.slice.call(bytes.subarray(i, i + CHUNK)) as any);
+    }
+    return btoa(binary);
+}
+
 /** Bounded FIFO of records. What the crash export reads, and what forwarding drains. */
 class ClientLogRing {
     entries: ClientLogRecord[] = [];
@@ -169,6 +262,11 @@ interface ResolvedClientLogConfig {
         batchSize: number;
         intervalMs: number;
         queueLimit: number;
+        attachments: boolean;
+        maxAttachmentBytes: number;
+        attachmentQueueBytes: number;
+        maxBatchBytes: number;
+        maxRecordBytes: number;
     };
 }
 
@@ -178,6 +276,9 @@ interface ResolvedClientLogConfig {
  * (`APPLICATION_CONTEXT.log("module.x").warn(...)`).
  */
 export class ClientLogging {
+    /** UTF-8 ruler shared by every size decision. Absent only in exotic hosts; see `_recordBytes`. */
+    private static _encoder: TextEncoder | null =
+        typeof TextEncoder === "function" ? new TextEncoder() : null;
     private _ring: ClientLogRing;
     private _config: ResolvedClientLogConfig;
     private _levelCache = new Map<string, number>();
@@ -187,7 +288,25 @@ export class ClientLogging {
     private _flushing = false;
     private _originalConsole: Record<string, (...args: any[]) => void> = {};
     private _consoleAdopted = false;
-    private _stats = { emitted: 0, suppressed: 0, sensitiveSuppressed: 0, forwarded: 0, forwardDropped: 0, forwardFailures: 0 };
+    private _stats = {
+        emitted: 0, suppressed: 0, sensitiveSuppressed: 0, forwarded: 0, forwardDropped: 0, forwardFailures: 0,
+        attachmentsQueued: 0, attachmentsForwarded: 0, attachmentsDropped: 0, attachmentsOversized: 0,
+        // Distinct from `forwardFailures`: a refused batch is a budget we got wrong,
+        // a transport failure is the network. Conflating them hid the first behind
+        // the second for a whole deployment.
+        forwardRefused: 0, forwardTrimmed: 0,
+    };
+    /**
+     * Attachments waiting to be shipped, with their bytes. Deliberately NOT the
+     * record queue: one window of dictation outweighs a thousand log lines, so a
+     * shared queue would either evict every record or be bounded by the wrong unit.
+     * Bounded by total bytes, drained one file per request.
+     */
+    private _attachmentQueue: ClientLogRecord[] = [];
+    private _attachmentBytes = 0;
+    /** The drain in progress, so a concurrent `flushAttachments()` awaits it rather
+     *  than returning while files are still in flight. */
+    private _attachmentFlush: Promise<void> | null = null;
     /** Injectable so the forwarder can be tested without a server or a browser. */
     private _transport: ((records: ClientLogRecord[], sessionId?: string) => Promise<any>) | null = null;
 
@@ -265,6 +384,19 @@ export class ClientLogging {
                 batchSize: Math.max(1, Number(forward.batchSize) || DEFAULT_FORWARD_BATCH),
                 intervalMs: Math.max(500, Number(forward.intervalMs) || DEFAULT_FORWARD_INTERVAL_MS),
                 queueLimit: Math.max(10, Number(forward.queueLimit) || DEFAULT_FORWARD_QUEUE),
+                // A THIRD opt-in, on top of `enabled` and `includeSensitive`.
+                // Recording bytes in the browser, sending records to the server and
+                // sending the bytes themselves are three different decisions, and the
+                // last one is the one that fills a disk. The server must also allow
+                // them (`core.server.logging.client.attachments`).
+                attachments: forward.attachments === true,
+                maxAttachmentBytes: Math.max(1024, Number(forward.maxAttachmentBytes) || DEFAULT_MAX_ATTACHMENT_BYTES),
+                attachmentQueueBytes: Math.max(
+                    Math.max(1024, Number(forward.maxAttachmentBytes) || DEFAULT_MAX_ATTACHMENT_BYTES),
+                    Number(forward.attachmentQueueBytes) || DEFAULT_ATTACHMENT_QUEUE_BYTES),
+                // Both are also learned from the server's own answer — see `_adoptServerLimits`.
+                maxBatchBytes: Math.max(4096, Number(forward.maxBatchBytes) || DEFAULT_MAX_BATCH_BYTES),
+                maxRecordBytes: Math.max(512, Number(forward.maxRecordBytes) || DEFAULT_MAX_RECORD_BYTES),
             },
         };
     }
@@ -304,6 +436,14 @@ export class ClientLogging {
             warn: (...args: any[]) => emit("warn", false, args),
             error: (...args: any[]) => emit("error", false, args),
             sensitive: (...args: any[]) => emit("trace", true, args),
+            attachment: (descriptor: ClientLogAttachment, message = "ATTACHMENT") => {
+                const { bytes, file, ...meta } = descriptor || ({} as ClientLogAttachment);
+                const view = toBytes(bytes);
+                const size = view ? view.byteLength : 0;
+                return this._emit(name, "trace", true,
+                    [{ attachment: { file, size, ...meta } }, message], true,
+                    view ? { bytes: view, file: String(file ?? "") } : undefined);
+            },
             time: (label: string, level: LogLevelName = "debug") => {
                 const started = performance.now();
                 return (fields?: Record<string, any>) => emit(level, false, [
@@ -318,7 +458,8 @@ export class ClientLogging {
         return logger;
     }
 
-    private _emit(channel: string, level: LogLevelName, sensitive: boolean, args: any[], mirror = true): ClientLogRecord | null {
+    private _emit(channel: string, level: LogLevelName, sensitive: boolean, args: any[], mirror = true,
+                  payload?: { bytes: Uint8Array; file: string }): ClientLogRecord | null {
         const threshold = this.levelFor(channel);
         if (LOG_LEVELS[level] < threshold || threshold >= LOG_LEVELS.silent) {
             this._stats.suppressed++;
@@ -353,7 +494,7 @@ export class ClientLogging {
         this._stats.emitted++;
         this._ring.push(record);
         if (mirror) this._writeConsole(record);
-        this._enqueueForward(record);
+        this._enqueueForward(record, payload);
         return record;
     }
 
@@ -370,13 +511,29 @@ export class ClientLogging {
 
     // ---- forwarding -------------------------------------------------------
 
-    private _enqueueForward(record: ClientLogRecord): void {
+    private _enqueueForward(record: ClientLogRecord, payload?: { bytes: Uint8Array; file: string }): void {
         const forward = this._config.forward;
         if (!forward.enabled) return;
-        if ((levelNumber(record.level, 0) as number) < forward.minLevel) return;
+        // `minLevel` is a gate on ordinary log LINES. Payload records — `sensitive()`
+        // and attachments — are not lines: they always emit at `trace`, and each
+        // already carries its own dedicated opt-in below (`includeSensitive`,
+        // `attachments`) on top of the two the record needed to exist at all.
+        //
+        // Applying the level gate to them makes those opt-ins UNREACHABLE at every
+        // `minLevel` above trace — including the default `warn` — so a deployment
+        // that set `includeSensitive: true` forwarded no payloads whatsoever and had
+        // nothing to say why. That is how a remote deployment recorded dictation
+        // locally and stored none of it: the transcript is a `sensitive` record, and
+        // its `minLevel: "info"` dropped every one before the queue.
+        const payloadRecord = !!payload || record.sensitive === true;
+        if (!payloadRecord && (levelNumber(record.level, 0) as number) < forward.minLevel) return;
+        // The gate that actually decides for a payload: a deployment saying its
+        // content must not leave the browser. Dictation is the most sensitive of it.
         if (record.sensitive && !forward.includeSensitive) return;
 
-        this._queue.push(record);
+        if (payload) { this._enqueueAttachment(record, payload); return; }
+
+        this._queue.push(this._fitRecord(record, forward.maxRecordBytes));
         const overflow = this._queue.length - forward.queueLimit;
         if (overflow > 0) {
             // Drop the OLDEST: when the queue is backing up, the newest records
@@ -391,6 +548,187 @@ export class ClientLogging {
     }
 
     /**
+     * Bytes one record costs on the wire. Never throws; a value it cannot measure is assumed large.
+     *
+     * Measured in UTF-8, because that is what the server measures
+     * (`Buffer.byteLength`) and what the body limit counts. `String.length` is
+     * UTF-16 code units, so it under-reports every non-ASCII character by 2-3x —
+     * which is exactly the traffic this carries (multilingual dictation
+     * transcripts). A record "trimmed to fit" `maxRecordBytes` by that ruler
+     * arrives at double the cap and is dropped whole, and a batch built to
+     * `maxBatchBytes` clears the RPC body limit and comes back 413 — and this
+     * forwarder does not retry, so both are silent data loss.
+     */
+    private _recordBytes(record: ClientLogRecord): number {
+        try {
+            const json = JSON.stringify(record);
+            if (ClientLogging._encoder) return ClientLogging._encoder.encode(json).length;
+            return json.length;
+        } catch { return Number.MAX_SAFE_INTEGER; }
+    }
+
+    /**
+     * Cut a record down to what the server will actually accept.
+     *
+     * The server drops an over-cap record WHOLE (`maxRecordBytes`), so sending one
+     * costs uplink and yields nothing. Trimming here keeps the record's identity —
+     * channel, level, message, the start of its fields — and says how much went, which
+     * is strictly better than a record that silently never arrives.
+     */
+    private _fitRecord(record: ClientLogRecord, maxBytes: number): ClientLogRecord {
+        const size = this._recordBytes(record);
+        if (size <= maxBytes) return record;
+        this._stats.forwardTrimmed++;
+        // Re-shrink the fields against a budget derived from the overshoot rather than
+        // dropping them: the first lines of a body are usually the diagnostic.
+        const ratio = Math.max(0.05, maxBytes / size);
+        const cap = Math.max(200, Math.floor(this._config.maxString * ratio));
+        const trimmed: ClientLogRecord = {
+            ...record,
+            message: shrink(record.message, cap),
+            ...(record.fields ? { fields: shrink(record.fields, cap) } : {}),
+            truncatedForForward: { originalBytes: size, maxBytes },
+        } as ClientLogRecord;
+        // Still too big (a record with thousands of small fields): keep the head only.
+        if (this._recordBytes(trimmed) > maxBytes) {
+            delete (trimmed as any).fields;
+            trimmed.message = shrink(record.message, Math.max(200, Math.floor(maxBytes / 2)));
+        }
+        return trimmed;
+    }
+
+    /**
+     * Adopt the caps the server reports, so the client stops guessing them.
+     *
+     * The two ends had independent numbers, and the client's were the optimistic
+     * ones — which is how a batch the server could never accept was sent every five
+     * seconds. Only ever tightens within this session: a server that answers with a
+     * larger cap is not a reason to start sending bigger batches mid-flight.
+     */
+    private _adoptServerLimits(result: any): void {
+        const forward = this._config.forward;
+        const perBatch = Number(result?.maxRecordsPerBatch);
+        if (Number.isFinite(perBatch) && perBatch > 0 && perBatch < forward.batchSize) {
+            forward.batchSize = Math.max(1, Math.floor(perBatch));
+        }
+        const perRecord = Number(result?.maxRecordBytes);
+        if (Number.isFinite(perRecord) && perRecord > 0 && perRecord < forward.maxRecordBytes) {
+            forward.maxRecordBytes = Math.max(512, Math.floor(perRecord));
+        }
+        // The attachment verdict, one level down, and the one that costs the most
+        // to ignore: a deployment with `forward.attachments` on and the server's
+        // `client.attachments` off base64-encodes and uploads every dictation
+        // window for the whole session, and the server refuses the bytes of each.
+        // That is raw patient audio crossing the network repeatedly for nothing,
+        // invisible in both ends' stats. Same one-way rule as the caps above: this
+        // can only turn forwarding OFF, never back on mid-session.
+        const attachments = result?.attachments;
+        if (attachments && typeof attachments === "object") {
+            if (attachments.accepted === false) forward.attachments = false;
+            const maxAttachment = Number(attachments.maxBytes);
+            if (Number.isFinite(maxAttachment) && maxAttachment > 0
+                && maxAttachment < forward.maxAttachmentBytes) {
+                forward.maxAttachmentBytes = Math.max(1024, Math.floor(maxAttachment));
+            }
+        }
+    }
+
+    /**
+     * Queue one attachment, or say on its own line why it will never be shipped.
+     *
+     * The descriptor is already in the ring either way — a record pointing at a
+     * file nobody kept is still the answer to "why is there no audio for this
+     * window", and that answer is the thing a silent drop destroys. `stored` on
+     * the descriptor is what tells the two apart when the file is read later.
+     */
+    private _enqueueAttachment(record: ClientLogRecord, payload: { bytes: Uint8Array; file: string }): void {
+        const forward = this._config.forward;
+        const note = (reason: string) => {
+            const described = record.fields?.attachment;
+            if (described && typeof described === "object") {
+                described.stored = false;
+                described.reason = reason;
+            }
+        };
+        if (!forward.attachments) { this._stats.attachmentsDropped++; note("not-forwarded"); return; }
+        if (payload.bytes.byteLength > forward.maxAttachmentBytes) {
+            this._stats.attachmentsOversized++;
+            note("too-large");
+            return;
+        }
+
+        let encoded: string;
+        try { encoded = bytesToBase64(payload.bytes); }
+        catch { this._stats.attachmentsDropped++; note("encode-failed"); return; }
+
+        // The queued copy carries the bytes; the ring's record never does.
+        this._attachmentQueue.push({ ...record, attachmentBytes: encoded });
+        this._attachmentBytes += encoded.length;
+        this._stats.attachmentsQueued++;
+        // Oldest out first: a queue that is backing up is one the server is not
+        // draining, and the newest recording is the one still being discussed.
+        while (this._attachmentBytes > forward.attachmentQueueBytes && this._attachmentQueue.length > 1) {
+            const evicted = this._attachmentQueue.shift();
+            this._attachmentBytes -= (evicted?.attachmentBytes?.length || 0);
+            this._stats.attachmentsDropped++;
+        }
+        void this.flushAttachments();
+    }
+
+    /**
+     * Ship queued attachments, one file per request.
+     *
+     * One per request on purpose: an attachment is orders of magnitude bigger
+     * than a log line, so batching them only makes the body limit a moving
+     * target and turns one rejected file into a rejected batch. Failures are
+     * dropped and counted, exactly like a record batch — a retry loop holding
+     * megabytes of patient dictation is the failure mode this must not have.
+     */
+    flushAttachments(): Promise<void> {
+        // Returning the RUNNING drain, not undefined: a caller awaiting this on
+        // page-hide would otherwise be told "done" while the files are still in
+        // flight, which is precisely when the last window of a session is queued.
+        if (this._attachmentFlush) return this._attachmentFlush;
+        if (!this._attachmentQueue.length) return Promise.resolve();
+        this._attachmentFlush = this._drainAttachments()
+            .finally(() => { this._attachmentFlush = null; });
+        return this._attachmentFlush;
+    }
+
+    /** @private */
+    private async _drainAttachments(): Promise<void> {
+        try {
+            while (this._attachmentQueue.length) {
+                const record = this._attachmentQueue.shift()!;
+                this._attachmentBytes -= (record.attachmentBytes?.length || 0);
+                try {
+                    const transport = this._transport || ClientLogging._defaultTransport;
+                    const result = await transport([record], this.sessionId);
+                    this._stats.attachmentsForwarded++;
+                    this._stats.forwarded++;
+                    // The reply is the ONLY place a client learns the deployment
+                    // refuses attachments — the upload itself succeeds, the bytes
+                    // are simply thrown away. Discarding it here is what let a
+                    // whole session of dictation audio ship into a void.
+                    this._adoptServerLimits((result as any)?.result ?? result);
+                } catch {
+                    this._stats.forwardFailures++;
+                    this._stats.attachmentsDropped++;
+                }
+                // Refused by this deployment: stop paying for the rest of the queue
+                // now rather than one pointless upload at a time.
+                if (!this._config.forward.attachments) {
+                    this._stats.attachmentsDropped += this._attachmentQueue.length;
+                    this._attachmentQueue.length = 0;
+                    break;
+                }
+            }
+        } finally {
+            this._attachmentBytes = this._attachmentQueue.reduce((n, r) => n + (r.attachmentBytes?.length || 0), 0);
+        }
+    }
+
+    /**
      * Send what is queued.
      *
      * Serialized, and failure-tolerant in one direction only: a batch that could
@@ -401,22 +739,56 @@ export class ClientLogging {
     async flush(): Promise<void> {
         if (this._flushing || !this._queue.length) return;
         if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-        const batch = this._queue;
-        this._queue = [];
+        const forward = this._config.forward;
+        // Fill by BYTES as well as by count. Records are not a fixed size, and the
+        // receiving RPC has a body limit — a count-only batch of large records is
+        // refused with a 413 and, since this forwarder never retries, lost.
+        const batch: ClientLogRecord[] = [];
+        let bytes = 0;
+        while (this._queue.length && batch.length < forward.batchSize) {
+            const next = this._queue[0]!;
+            const cost = this._recordBytes(next) + 1;   // +1 for the separating comma
+            // Always take at least one: a single record over the batch budget has
+            // already been trimmed to `maxRecordBytes`, so this cannot spin.
+            if (batch.length && bytes + cost > forward.maxBatchBytes) break;
+            this._queue.shift();
+            batch.push(next);
+            bytes += cost;
+        }
+        if (!batch.length) return;
         this._flushing = true;
         try {
             const transport = this._transport || ClientLogging._defaultTransport;
             // Sent once per batch, not stamped on every record: it is constant for
             // the page-load, and the server re-attaches it to each record anyway.
-            await transport(batch, this.sessionId);
+            const result = await transport(batch, this.sessionId);
             this._stats.forwarded += batch.length;
+            this._adoptServerLimits((result as any)?.result ?? result);
         } catch (e) {
-            this._stats.forwardFailures++;
+            // A refused batch is a budget we got wrong; tighten so the next one fits
+            // rather than repeating the same rejection every interval.
+            if (ClientLogging._isTooLarge(e)) {
+                this._stats.forwardRefused++;
+                forward.maxBatchBytes = Math.max(8192, Math.floor(bytes / 2));
+            } else {
+                this._stats.forwardFailures++;
+            }
             this._stats.forwardDropped += batch.length;
         } finally {
             this._flushing = false;
-            if (this._queue.length >= this._config.forward.batchSize) void this.flush();
+            if (this._queue.length >= forward.batchSize) void this.flush();
+            else if (this._queue.length && !this._timer) {
+                this._timer = setTimeout(() => { this._timer = null; void this.flush(); }, forward.intervalMs);
+            }
         }
+    }
+
+    /** Did the server refuse this batch for its size? (413, or the RPC's own code.) */
+    private static _isTooLarge(error: any): boolean {
+        const status = Number(error?.status ?? error?.statusCode);
+        if (status === 413) return true;
+        const text = String(error?.code ?? error?.message ?? "");
+        return text.includes("RPC_BODY_TOO_LARGE") || text.includes("413");
     }
 
     /**
@@ -498,9 +870,11 @@ export class ClientLogging {
     installLifecycleFlush(target: any = globalThis): void {
         if (typeof target?.addEventListener !== "function") return;
         target.addEventListener("visibilitychange", () => {
-            if ((globalThis as any).document?.visibilityState === "hidden") void this.flush();
+            if ((globalThis as any).document?.visibilityState !== "hidden") return;
+            void this.flush();
+            void this.flushAttachments();
         });
-        target.addEventListener("pagehide", () => { void this.flush(); });
+        target.addEventListener("pagehide", () => { void this.flush(); void this.flushAttachments(); });
     }
 
     // ---- reads ------------------------------------------------------------
@@ -525,7 +899,14 @@ export class ClientLogging {
             rootLevel: levelNameOf(this._config.level),
             allowSensitive: this._config.allowSensitive,
             ring: { maxEntries: this._ring.maxEntries, buffered: this._ring.entries.length, dropped: this._ring.dropped },
-            forward: { ...this._config.forward, minLevel: levelNameOf(this._config.forward.minLevel), queued: this._queue.length },
+            forward: {
+                ...this._config.forward,
+                minLevel: levelNameOf(this._config.forward.minLevel),
+                queued: this._queue.length,
+                attachmentsQueued: this._attachmentQueue.length,
+                attachmentQueueBytesUsed: this._attachmentBytes,
+                queuedBytes: this._queue.reduce((n, r) => n + this._recordBytes(r), 0),
+            },
             counters: { ...this._stats },
         };
     }

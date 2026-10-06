@@ -1413,9 +1413,35 @@ class XopatServerRuntime {
             fn: builtinTarget.fn,
             methodPolicy: {
                 auth: { requireSession: true },
-                runtime: { timeoutMs: 2_000 }
+                runtime: { timeoutMs: 2_000 },
+                // Log batches are text and fit the 256 kB default. Client
+                // ATTACHMENTS do not — a dictation window is hundreds of kB
+                // before base64 — so this one method's body limit follows the
+                // operator's own attachment cap, and stays at the default when
+                // attachments are off. Anything larger is refused as a 413 by the
+                // reader, which is the correct answer rather than a 502.
+                ...(methodName === "ingestClientLogs"
+                    ? { maxBodyBytes: XopatServerRuntime.#clientLogBodyLimit(this.logging) }
+                    : {}),
             },
         };
+    }
+
+    /**
+     * Body ceiling for `ingestClientLogs`: enough for one capped attachment plus
+     * its base64 inflation and the record around it, or the plain default when
+     * the deployment accepts no attachments.
+     */
+    static #clientLogBodyLimit(logging) {
+        try {
+            const policy = logging?.clientIngestPolicy?.();
+            if (!policy?.attachments) return DEFAULT_MAX_BODY_BYTES;
+            const cap = Number(policy.maxAttachmentBytes) || 0;
+            if (!cap) return DEFAULT_MAX_BODY_BYTES;
+            return Math.max(DEFAULT_MAX_BODY_BYTES, Math.ceil(cap * 4 / 3) + 64 * 1024);
+        } catch {
+            return DEFAULT_MAX_BODY_BYTES;
+        }
     }
 
     #resolveBuiltinDevTarget(scopeId, methodName) {
@@ -1580,19 +1606,53 @@ class XopatServerRuntime {
         const admitted = Math.min(records.length, policy.maxRecordsPerBatch, budget.remaining);
         let accepted = 0;
         let oversized = 0;
+        let attachmentsStored = 0;
+        let attachmentsRefused = 0;
         for (const record of records.slice(0, admitted)) {
             if (!record || typeof record !== "object") continue;
+            // Attachment bytes are separated BEFORE the record is measured: they
+            // are the one field deliberately allowed past `maxRecordBytes` (which
+            // bounds a log line, not a file), and they have their own cap and
+            // their own opt-in. Leaving them in would make every attachment
+            // oversized and the feature unreachable.
+            const { attachmentBytes, ...line } = record;
+            let payload;
+            if (attachmentBytes !== undefined && attachmentBytes !== null) {
+                const refuse = (reason) => {
+                    attachmentsRefused++;
+                    // The line still goes through, with the refusal ON it: a
+                    // descriptor pointing at a file nobody kept is the answer to
+                    // "why is there no audio here", and dropping the record too
+                    // would delete the question as well as the answer.
+                    if (line.fields && typeof line.fields.attachment === "object" && line.fields.attachment) {
+                        line.fields.attachment = { ...line.fields.attachment, stored: false, reason };
+                    }
+                };
+                if (!policy.attachments) refuse("not-accepted");
+                else if (typeof attachmentBytes !== "string") refuse("bad-encoding");
+                else {
+                    let decoded = null;
+                    try { decoded = Buffer.from(attachmentBytes, "base64"); } catch { decoded = null; }
+                    if (!decoded || !decoded.length) refuse("bad-encoding");
+                    else if (decoded.length > policy.maxAttachmentBytes) refuse("too-large");
+                    else {
+                        const file = line.fields?.attachment?.file;
+                        payload = { bytes: decoded, file: typeof file === "string" ? file : undefined };
+                        attachmentsStored++;
+                    }
+                }
+            }
             // Size is measured on the way in. A record over the cap is dropped
             // whole rather than truncated: half a payload record is a misleading
             // artifact, and the cap exists to stop one caller filling the disk.
             let bytes = 0;
-            try { bytes = Buffer.byteLength(JSON.stringify(record)); } catch { continue; }
+            try { bytes = Buffer.byteLength(JSON.stringify(line)); } catch { continue; }
             if (bytes > policy.maxRecordBytes) { oversized++; continue; }
-            const emitted = this.logging.ingestClientRecord(record, {
+            const emitted = this.logging.ingestClientRecord(line, {
                 requestId: ctx?.requestId,
                 principal,
                 clientSession,
-            });
+            }, payload);
             if (emitted) accepted++;
         }
         budget.spend(admitted);
@@ -1605,7 +1665,16 @@ class XopatServerRuntime {
             dropped: records.length - accepted,
             oversized,
             throttled: Math.max(0, records.length - admitted),
+            // Both caps are reported so the client can size its batches to what this
+            // deployment will actually accept instead of guessing. A client guessing
+            // high sends batches that are refused whole (413) or counted `oversized`,
+            // and this forwarder does not retry — so the guess costs real records.
             maxRecordsPerBatch: policy.maxRecordsPerBatch,
+            maxRecordBytes: policy.maxRecordBytes,
+            // Same reasoning one level down: a client that believes it is shipping
+            // audio while the deployment refuses attachments must be able to see it.
+            attachments: { stored: attachmentsStored, refused: attachmentsRefused,
+                accepted: policy.attachments === true, maxBytes: policy.maxAttachmentBytes },
         };
     }
 
