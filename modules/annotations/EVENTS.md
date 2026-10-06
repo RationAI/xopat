@@ -150,10 +150,22 @@ Cancelable event raised before changing an annotation preset.
 
 ##### `annotation-set-private` | `{ object: fabric.Object }`
 
+##### `annotation-lock-change` | `{ object: fabric.Object, locked: boolean, state: AnnotationLockState }`
+The **user's** lock was placed or released from the padlock in the annotation's toolbar (or from
+the board row's menu). By default a locked annotation stops responding to the canvas entirely —
+not hit-tested, not selectable, so the user can draw over it — and every `pre-update` /
+`pre-delete` is refused by the module's IO guard (`W_ANNOTATION_LOCKED`), except the lock toggle
+itself. `state` is the resolved descriptor from `getAnnotationLockState`, so it already reflects
+any `registerLockPolicy` override; read it rather than the raw flag. Set it with
+`fabric.setAnnotationLocked(object, value)`, which dispatches through the IO pipeline (synced,
+undoable). See also `annotation-readonly-change` for the lock the user cannot lift.
+
 ##### `annotation-readonly-change` | `{ object: fabric.Object, readOnly: boolean }`
 An annotation was marked read-only, or released. A read-only annotation may be selected,
 inspected and commented on, but every `pre-update` / `pre-delete` for it is refused by the
-module's own IO guard (`W_ANNOTATION_READONLY`) and it renders locked. Distinct from `private`, which controls export.
+module's own IO guard (`W_ANNOTATION_READONLY`) and it renders locked. Unlike `locked` it is
+imposed rather than placed by this user, and the padlock offers no toggle for it. Distinct from
+`private`, which is about who else may see the annotation.
 Set it with `fabric.setAnnotationReadOnly(object, value)`, or carry it in from a convertor
 (`empaia-workbench` marks job-produced annotations this way).
 

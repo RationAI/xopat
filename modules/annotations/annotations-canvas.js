@@ -2238,10 +2238,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             && passesFilter && passesGates;
 
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
-        // A read-only annotation is never editable, whatever its factory says —
-        // the IO read-only guard would refuse the commit anyway, and letting the
-        // user drag a shape that then snaps back is worse than not moving it.
-        const isEditable = !!factory?.isEditable() && !object.readOnly;
+        // What "locked" means right now, including any integration's lock policy.
+        const lock = this.module.getAnnotationLockState(object);
+        // A locked annotation is never editable, whatever its factory says — the lock
+        // guard would refuse the commit anyway, and letting the user drag a shape that
+        // then snaps back is worse than not moving it.
+        const isEditable = !!factory?.isEditable() && lock.mutable;
         const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
 
         object.visible = !!shouldShow;
@@ -2255,7 +2257,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (object.isHelperAnnotation) return;
 
         object.evented = !!shouldShow;
-        object.selectable = !!shouldShow;
+        object.selectable = !!shouldShow && lock.interactive;
+        // A non-interactive lock must stay rendered AND stay `evented`, yet drop out of
+        // hit-testing, so the user can draw straight over it. `evented = false` cannot
+        // express that: fabric's `_shouldClearSelection` discards the active object
+        // whenever the thing under the pointer is non-evented — and since `findTarget`
+        // consults `_findTargetCorner` first, the thing under the pointer when the user
+        // clicks the padlock IS this object, so the selection (and with it the toolbar
+        // carrying the padlock) would die on the very click meant to release the lock.
+        // The overlay's `_checkTarget` wrapper honours the flag below instead;
+        // `selectable` is what keeps a locked object out of rubber-band selections,
+        // which look at `selectable` and ignore `evented`.
+        object.__hitTestBlocked = !lock.interactive;
 
         if (!shouldShow) {
             object.lockMovementX = true;
@@ -2303,7 +2316,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // all, and they stopped trying. What is refused is a MUTATION, and the
         // IO read-only guard already says so, with a reason, at the moment one
         // is attempted.
-        if (object.readOnly) object.hoverCursor = 'pointer';
+        if (lock.locked) object.hoverCursor = 'pointer';
         else if (object.hoverCursor === 'pointer' || object.hoverCursor === 'not-allowed') {
             delete object.hoverCursor;
         }
@@ -2647,7 +2660,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * output, a record owned by another scope, anything a rights resolver locked.
      * The module's own IO guard refuses `pre-update`/`pre-delete` for such objects,
      * so the flag is enforced on every mutation path, not only the ones that
-     * bothered to check. Distinct from `private`, which controls *export*.
+     * bothered to check. Distinct from `private`, which controls *export*, and from
+     * `locked` ({@link setAnnotationLocked}), which the user places and may lift.
+     * {@link OSDAnnotations#getAnnotationLockState} resolves both into one answer.
+     *
+     * Unlike `locked` this is a direct write, not an IO dispatch: it is a projection
+     * of an owner's upstream policy applied while hydrating, so dispatching it would
+     * echo that owner's own state straight back at its sink.
      *
      * @param {fabric.Object} annotation Any annotation
      * @param {boolean} value New value
@@ -2661,6 +2680,51 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this._applyAnnotationVisibilityState(annotation);
         this.canvas.requestRenderAll();
         if (_raise) this.raiseEvent('annotation-readonly-change', {object: annotation, readOnly: value});
+    }
+
+    /**
+     * Lock an annotation, or release it.
+     *
+     * This is the **user's** lock, behind the padlock in the annotation's toolbar. By
+     * default it means "stop responding to the canvas": the annotation is no longer
+     * hit-tested or selectable — so the user can draw straight over it — and every
+     * mutation is refused by the module's lock guard. What it means is overridable per
+     * deployment, see {@link OSDAnnotations#registerLockPolicy}.
+     *
+     * Routed through `annotationResource.update` rather than written directly, because
+     * `locked` is in the export whitelist: a bound `crud:annotation` sink is the source
+     * of truth in those deployments, so a bare property write would show the lock now and
+     * lose it on the next hydration. Undo/redo and outbox persistence come with it. The
+     * guard lets `kind: 'lock-change'` through only while the resolved state is
+     * `releasable`, which is what keeps an imposed `readOnly` un-liftable by the user.
+     *
+     * @param {fabric.Object} annotation Any annotation
+     * @param {boolean} value New value
+     * @return {boolean} whether the change was accepted
+     * @event annotation-lock-change
+     */
+    setAnnotationLocked(annotation, value) {
+        value = !!value;
+        if (!annotation || !!annotation.locked === value) return false;
+
+        const commit = (locked) => {
+            annotation.locked = locked;
+            this._applyAnnotationVisibilityState(annotation);
+            this.canvas.requestRenderAll();
+            this.raiseEvent('annotation-lock-change', {
+                object: annotation, locked,
+                state: this.module.getAnnotationLockState(annotation),
+            });
+        };
+
+        const result = this.module.annotationResource.update(annotation.incrementId, { locked: value }, {
+            apply: () => commit(value),
+            inverseApply: () => commit(!value),
+            inversePayload: { locked: !value },
+            meta: { kind: 'lock-change', object: annotation, viewerId: this.viewer?.uniqueId },
+        });
+        this._settleAnnotationSync(annotation, result);
+        return !!result.ok;
     }
 
     /**

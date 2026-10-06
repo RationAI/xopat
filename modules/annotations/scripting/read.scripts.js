@@ -121,7 +121,7 @@ ScriptingManager.registerExternalApi(
             const factory = module.getAnnotationObjectFactory?.(object.factoryID || object.type);
 
             const base = factory?.copyNecessaryProperties
-                ? factory.copyNecessaryProperties(object, ["incrementId", "internalID", "private", "comments", "label"], true)
+                ? factory.copyNecessaryProperties(object, ["incrementId", "internalID", "private", "locked", "comments", "label"], true)
                 : this._clone(object);
 
             const result = this._clone(base) || {};
