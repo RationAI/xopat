@@ -414,6 +414,7 @@ export class AnnotationBoardPanel {
             'annotation-replace',
             'annotation-loaded',
             'annotation-filter-change',
+            'annotation-lock-change',
             'layer-removed',
             'layer-objects-changed',
             'annotation-selection-changed',
@@ -1166,7 +1167,14 @@ export class AnnotationBoardPanel {
         filteredBadge.className = 'badge badge-ghost badge-xs hidden';
         filteredBadge.textContent = 'filtered';
 
-        subText.append(time, sep, area, filteredBadge);
+        // A locked annotation does not answer the canvas, so this row is where the
+        // user finds it again — and the badge is what tells them why the shape
+        // ignored their click.
+        const lockBadge = document.createElement('span');
+        lockBadge.dataset.tplRole = 'lockBadge';
+        lockBadge.className = 'badge badge-ghost badge-xs hidden';
+
+        subText.append(time, sep, area, lockBadge, filteredBadge);
         content.append(title, subText);
 
         const actions = document.createElement('div');
@@ -1208,6 +1216,7 @@ export class AnnotationBoardPanel {
         const timeEl = row.querySelector('[data-tpl-role="time"]');
         const areaEl = row.querySelector('[data-tpl-role="area"]');
         const filteredBadgeEl = row.querySelector('[data-tpl-role="filteredBadge"]');
+        const lockBadgeEl = row.querySelector('[data-tpl-role="lockBadge"]');
         const actionsEl = row.querySelector('[data-tpl-role="actions"]');
 
         const objectIcon = factoryIcon(factory?.getIcon?.() || 'ph-tag');
@@ -1260,6 +1269,18 @@ export class AnnotationBoardPanel {
             areaEl.textContent = '—';
         }
         if (isFiltered) filteredBadgeEl.classList.remove('hidden');
+
+        // Deliberately NOT disabling the row or its menu the way `isFiltered` does:
+        // this row is the unlock path.
+        const lock = this.context.getAnnotationLockState(object);
+        if (lock.locked) {
+            lockBadgeEl.replaceChildren(phIcon('ph-lock', 'text-[9px]'));
+            lockBadgeEl.title = this.plugin.t('annotations.lock.badge');
+            lockBadgeEl.classList.remove('hidden');
+        } else {
+            lockBadgeEl.replaceChildren();
+            lockBadgeEl.classList.add('hidden');
+        }
 
         actionsEl.className = `flex gap-0.5 ${isFiltered ? 'opacity-30' : 'opacity-0 group-hover/ann:opacity-100'}`.trim();
 
