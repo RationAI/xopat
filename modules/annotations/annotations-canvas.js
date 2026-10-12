@@ -2705,7 +2705,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     setAnnotationLocked(annotation, value) {
         value = !!value;
-        if (!annotation || !!annotation.locked === value) return false;
+        if (!annotation) return false;
+        // Measured against the RESOLVED state, not the raw `locked` flag, because
+        // that is what every caller computes its argument from (`objects.js`,
+        // the viewer menu: `setAnnotationLocked(target, !lock.locked)`). A
+        // `registerLockPolicy` that moves `locked` away from the flag — the whole
+        // reason the hook exists — made the padlock and the menu entry a silent
+        // no-op against the flag: `false` returned, no event, nothing on screen.
+        // Acceptance is still the guard's call (`kind: 'lock-change'` passes only
+        // while the state is `releasable`), so an imposed `readOnly` stays
+        // un-liftable; this is only the "nothing to do" shortcut.
+        if (this.module.getAnnotationLockState(annotation).locked === value) return false;
 
         const commit = (locked) => {
             annotation.locked = locked;

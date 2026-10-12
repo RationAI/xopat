@@ -208,3 +208,40 @@ test("a lock policy redefines the lock for the whole canvas", { tag: ["@syntheti
     expect(result.refusedRelease, "and the user can no longer release it").toBe(false);
     expect(result.restored.hitTestBlocked, "disposing restores the default meaning").toBe(true);
 });
+
+test("the toggle is measured against the resolved lock, not the raw flag", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    // `setAnnotationLocked` short-circuited on `!!annotation.locked === value`
+    // while every caller computes `value` from the RESOLVED state
+    // (`setAnnotationLocked(target, !lock.locked)`). So a policy that locks an
+    // annotation whose own flag is clear — the whole point of the hook — made the
+    // padlock and the menu entry dead: `false` returned, no event, no change.
+    await withLockHelpers(xopat);
+
+    const result = await xopat.page.evaluate(() => {
+        const { module, fabricWrapper, object } = window.__lockSetup();
+        const events = [];
+        const onChange = (e) => events.push(!!e.locked);
+        fabricWrapper.addHandler("annotation-lock-change", onChange);
+
+        // "every annotation here is locked by the integration, and the user may lift it"
+        const dispose = module.registerLockPolicy("resolved-state-test",
+            () => ({ locked: true, mutable: false, releasable: true }));
+        const resolved = module.getAnnotationLockState(object);
+        const rawFlag = !!object.locked;
+
+        // What the padlock does: !lock.locked → false.
+        const release = fabricWrapper.setAnnotationLocked(object, false);
+        // And asking for what the resolved state already says is still a no-op.
+        const redundant = fabricWrapper.setAnnotationLocked(object, true);
+
+        dispose();
+        fabricWrapper.removeHandler("annotation-lock-change", onChange);
+        return { resolved: { locked: resolved.locked, releasable: resolved.releasable }, rawFlag, release, redundant, events };
+    });
+
+    expect(result.rawFlag, "the annotation's own flag was never set").toBe(false);
+    expect(result.resolved.locked, "but the policy says it is locked").toBe(true);
+    expect(result.release, "so releasing it is real work, not a no-op").toBe(true);
+    expect(result.events, "and it announced itself exactly once").toEqual([false]);
+    expect(result.redundant, "while locking what is already locked still short-circuits").toBe(false);
+});
