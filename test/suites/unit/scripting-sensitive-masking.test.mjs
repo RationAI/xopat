@@ -14,7 +14,7 @@
  *    `metadata` straight off the tile source. `plugins/dicom/tile-source.mjs` puts
  *    `studyUID`/`seriesUID`/`frameOfReferenceUID` in `getMetadata()` — its own comment
  *    calls them "opaque PHI identifiers".
- *  - (see `plugins/questionaire-new/test/unit/viewer-slot-identity.test.mjs` for the
+ *  - (see `plugins/questionaire/test/unit/viewer-slot-identity.test.mjs` for the
  *    third one: raw `viewer.uniqueId` out of `listPageViewerSlots`.)
  *
  * `application.getGlobalInfo()` is the surface that got this right, and the two guard

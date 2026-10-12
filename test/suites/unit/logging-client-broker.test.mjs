@@ -588,3 +588,121 @@ test("includeSensitive false still refuses payloads at any level @unit", async (
     const shipped = sink.flat();
     expect(shipped.map(r => r.message)).toEqual(["an ordinary line"]);
 });
+
+// ---- the attachment budget -----------------------------------------------------
+
+/** A forwarding broker whose transport is under the test's control. */
+function attachmentBroker(over = {}, transport) {
+    const sent = [];
+    const { forward, ...rest } = over;
+    const broker = new ClientLogging({
+        level: "trace",
+        allowSensitive: true,
+        console: false,
+        ...rest,
+        forward: {
+            enabled: true, minLevel: "trace", includeSensitive: true, attachments: true,
+            ...(forward || {}),
+        },
+    }, { transport: transport || (async (records) => { sent.push(records); }) });
+    return { broker, sent };
+}
+
+test("a 413 on an attachment tightens the cap instead of re-uploading forever @unit", async () => {
+    // The hole this closes: `_adoptServerLimits` only runs on SUCCESS, and a body
+    // the reader refuses never reaches the handler that answers
+    // `attachments.accepted`. A deployment whose body limit sits under the client's
+    // attachment cap therefore re-encoded and re-uploaded every sealed dictation
+    // window for the whole session — raw patient audio on the wire, repeatedly, for
+    // guaranteed nothing.
+    let attempts = 0;
+    const { broker } = attachmentBroker({ forward: { maxAttachmentBytes: 1 << 20 } }, async () => {
+        attempts++;
+        const error = new Error("body over the 262144 byte limit");
+        error.status = 413;
+        throw error;
+    });
+    const first = broker.log("test").attachment({ file: "window-0001.webm", bytes: new Uint8Array(4096) });
+    const second = broker.log("test").attachment({ file: "window-0002.webm", bytes: new Uint8Array(4096) });
+    await broker.flushAttachments();
+
+    expect(attempts, "the sibling is refused locally, not uploaded to be refused").toBe(1);
+    expect(broker.stats().forward.maxAttachmentBytes).toBeLessThan(1 << 20);
+    expect(broker.stats().counters.forwardRefused, "a refusal, not flaky connectivity").toBe(1);
+    expect(broker.stats().counters.forwardFailures).toBe(0);
+    expect(first.fields.attachment.reason).toBe("too-large");
+    expect(second.fields.attachment.reason, "and the queue says so on its own line").toBe("too-large");
+    expect(broker.stats().forward.attachmentsQueued).toBe(0);
+
+    // The next window is now refused before it is even encoded.
+    const third = broker.log("test").attachment({ file: "window-0003.webm", bytes: new Uint8Array(4096) });
+    await broker.flushAttachments();
+    expect(attempts).toBe(1);
+    expect(third.fields.attachment.reason).toBe("too-large");
+});
+
+test("delivered is not kept: the per-record verdict decides, not the transport @unit", async () => {
+    // The request succeeds while the file is thrown away — attachments off, or the
+    // line dropped over `maxRecordBytes`. Counting `attachmentsForwarded` on the
+    // transport alone is what made a lost recording invisible at both ends.
+    const refused = attachmentBroker({}, async () => ({
+        accepted: 1, attachments: { stored: 0, refused: 1, accepted: false },
+    }));
+    const a = refused.broker.log("test").attachment({ file: "w1.webm", bytes: BYTES() });
+    await refused.broker.flushAttachments();
+    expect(refused.broker.stats().counters.attachmentsForwarded).toBe(0);
+    expect(refused.broker.stats().counters.attachmentsDropped).toBe(1);
+    expect(a.fields.attachment.reason).toBe("refused");
+
+    const oversized = attachmentBroker({}, async () => ({
+        accepted: 0, oversized: 1, attachments: { stored: 0, refused: 1, accepted: true },
+    }));
+    const b = oversized.broker.log("test").attachment({ file: "w2.webm", bytes: BYTES() });
+    await oversized.broker.flushAttachments();
+    expect(b.fields.attachment.reason, "and which of the two it was").toBe("record-oversized");
+
+    const kept = attachmentBroker({}, async () => ({
+        accepted: 1, attachments: { stored: 1, refused: 0, accepted: true },
+    }));
+    kept.broker.log("test").attachment({ file: "w3.webm", bytes: BYTES() });
+    await kept.broker.flushAttachments();
+    expect(kept.broker.stats().counters.attachmentsForwarded).toBe(1);
+    expect(kept.broker.stats().counters.attachmentsDropped).toBe(0);
+});
+
+test("an attachment's own LINE obeys maxRecordBytes, and keeps its pointer @unit", async () => {
+    // The bytes are exempt from the line cap; the descriptor around them is not.
+    // This path used to skip `_fitRecord` entirely, so a window record carrying
+    // per-segment metadata shipped over the cap and the server dropped it WHOLE
+    // after accepting the payload — the file went nowhere and the line that pointed
+    // at it was gone too.
+    const { broker, sent } = attachmentBroker({ forward: { maxRecordBytes: 2_000 } });
+    broker.log("test").attachment({
+        file: "mixture/sess-1/audio/window-0001.webm",
+        bytes: BYTES(),
+        mediaType: "audio/webm",
+        segments: "s".repeat(50_000),
+    });
+    await broker.flushAttachments();
+
+    expect(sent.length).toBe(1);
+    const line = { ...sent[0][0] };
+    delete line.attachmentBytes;              // the file is not bound by the line cap
+    expect(JSON.stringify(line).length).toBeLessThanOrEqual(2_000);
+    expect(line.fields.attachment.file, "the pointer survives the trim verbatim")
+        .toBe("mixture/sess-1/audio/window-0001.webm");
+    expect(line.fields.attachment.size).toBe(8);
+    expect(line.fields.attachment.mediaType).toBe("audio/webm");
+    expect(
+        JSON.stringify(line).includes("s".repeat(5_000)),
+        "the metadata around the pointer is trimmed, or dropped, to make room",
+    ).toBe(false);
+    expect(
+        JSON.stringify(sent[0][0]).includes("_ringAttachment"),
+        "the ring back-reference is non-enumerable, so it never goes on the wire",
+    ).toBe(false);
+    expect(
+        sent[0][0]._ringAttachment?.segments?.length,
+        "...and the ring still holds the untrimmed descriptor the crash export reads",
+    ).toBeGreaterThan(2_000);
+});

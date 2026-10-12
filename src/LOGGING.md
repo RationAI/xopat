@@ -154,6 +154,24 @@ descriptor line still lands, carrying `stored: false` and a reason — a record
 pointing at a file nobody kept is the answer to "why is there no recording for
 this window", and a silent drop deletes the question along with the answer.
 
+A **delivered** file is not a kept one, so the reason comes from the server's
+per-record verdict, not from the request succeeding: `attachments.stored: 0`
+marks the descriptor `refused` (the deployment does not accept bytes) or
+`record-oversized` (the descriptor line itself exceeded `maxRecordBytes`, which
+drops the record whole and the payload with it). An attachment's own line is
+trimmed to that cap before it ships — the bytes are exempt, the metadata around
+them is not — and the `file`/`size`/`mediaType` pointer survives the trim
+verbatim, because a truncated path makes the stored bytes unfindable.
+
+A **413** is the one verdict the reply cannot carry: the body reader refuses the
+request before the handler that answers `attachments.accepted` ever runs. The
+client therefore learns the cap from the rejection itself, tightens
+`maxAttachmentBytes` and refuses the rest of the queue locally. Without that, a
+deployment whose body limit sits under the client's cap (`client.attachments`
+off leaves the 256 kB default against a 4 MB cap) re-encodes and re-uploads every
+sealed window for the whole session — patient audio on the wire, repeatedly, for
+guaranteed nothing.
+
 `env/parts/logging/mixture-report-trace.json` is a worked example: a reporting
 session's whole trace plus its dictation recordings, in one NDJSON file with the
 audio beside it.

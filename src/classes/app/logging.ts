@@ -634,6 +634,96 @@ export class ClientLogging {
     }
 
     /**
+     * Mark the descriptor in the ring: this file was not kept, and why.
+     *
+     * Reaches the ring's record because the queued copy is a shallow spread —
+     * `fields` is the SAME object — which is deliberate: the answer to "why is
+     * there no audio for this window" has to live on the record that remains.
+     */
+    private _noteAttachment(record: ClientLogRecord, reason: string): void {
+        // `_ringAttachment` is set when the queued line was trimmed and therefore
+        // carries a REBUILT descriptor; marking that copy would leave the ring —
+        // the crash export, the thing that outlives the queue — saying nothing.
+        const described = (record as any)._ringAttachment ?? record.fields?.attachment;
+        if (described && typeof described === "object") {
+            (described as any).stored = false;
+            (described as any).reason = reason;
+        }
+    }
+
+    /**
+     * Trim an attachment record's own LINE to `maxRecordBytes`.
+     *
+     * The bytes are exempt from that cap (they are a file, not a line) but the
+     * descriptor around them is not, and this path used to skip `_fitRecord`
+     * entirely: a window record carrying a transcript or per-segment metadata was
+     * shipped over the cap, and the server — which measures the line with the
+     * bytes already split off — dropped it whole AFTER accepting the payload. The
+     * file went nowhere and both ends' counters said it arrived.
+     *
+     * What survives the trim verbatim is the descriptor's POINTER — `file`, `size`,
+     * `mediaType` — because a truncated path makes the stored bytes unfindable,
+     * which is worse than the oversize it would have fixed. The rest of the
+     * descriptor is ordinary diagnostic metadata (`attachment()` folds every extra
+     * key into it) and is trimmed like any other field; restoring the whole object
+     * would re-inflate the record and defeat the trim in the exact case that
+     * needs it.
+     */
+    private _fitAttachmentLine(record: ClientLogRecord): ClientLogRecord {
+        const max = this._config.forward.maxRecordBytes;
+        if (this._recordBytes(record) <= max) return record;
+        const descriptor: any = record.fields?.attachment;
+        const line = this._fitRecord(record, max);
+        if (descriptor && typeof descriptor === "object") {
+            if (!line.fields) (line as any).fields = {};
+            const pointer: Record<string, any> = {};
+            for (const key of ["file", "size", "mediaType", "stored", "reason"]) {
+                if (descriptor[key] !== undefined) pointer[key] = descriptor[key];
+            }
+            const kept = (line.fields as any).attachment;
+            (line.fields as any).attachment =
+                kept && typeof kept === "object" ? { ...kept, ...pointer } : pointer;
+        }
+        return line;
+    }
+
+    /**
+     * Learn the attachment cap from a 413 — the one verdict the server's own
+     * answer cannot deliver.
+     *
+     * `_adoptServerLimits` only runs on SUCCESS, and a body the reader refuses
+     * never reaches the handler that reports `attachments.accepted` / `maxBytes`.
+     * So a deployment whose body limit sits below the client's attachment cap
+     * (`client.attachments` off leaves the 256 kB default against a 4 MB cap) used
+     * to re-encode and re-upload every sealed dictation window for the whole
+     * session: raw patient audio crossing the network repeatedly for guaranteed
+     * nothing. Tighten from the size that was refused, and refuse the rest of the
+     * queue locally rather than one pointless upload at a time.
+     */
+    private _tightenAttachmentCap(refused: ClientLogRecord): void {
+        const forward = this._config.forward;
+        // base64 is 4 chars per 3 bytes; halve on top so the next window is not
+        // another near-miss against the same reader.
+        const raw = Math.floor(((refused.attachmentBytes?.length || 0) * 3) / 4);
+        const next = Math.max(1024, Math.floor(raw / 2));
+        if (next < forward.maxAttachmentBytes) forward.maxAttachmentBytes = next;
+        const kept: ClientLogRecord[] = [];
+        for (const queued of this._attachmentQueue) {
+            const bytes = Math.floor(((queued.attachmentBytes?.length || 0) * 3) / 4);
+            if (bytes > forward.maxAttachmentBytes) {
+                this._stats.attachmentsOversized++;
+                this._noteAttachment(queued, "too-large");
+                continue;
+            }
+            kept.push(queued);
+        }
+        this._attachmentQueue = kept;
+        // The running total is only re-derived when the drain finishes; a concurrent
+        // enqueue would otherwise evict against bytes that are no longer queued.
+        this._attachmentBytes = kept.reduce((n, r) => n + (r.attachmentBytes?.length || 0), 0);
+    }
+
+    /**
      * Queue one attachment, or say on its own line why it will never be shipped.
      *
      * The descriptor is already in the ring either way — a record pointing at a
@@ -643,13 +733,7 @@ export class ClientLogging {
      */
     private _enqueueAttachment(record: ClientLogRecord, payload: { bytes: Uint8Array; file: string }): void {
         const forward = this._config.forward;
-        const note = (reason: string) => {
-            const described = record.fields?.attachment;
-            if (described && typeof described === "object") {
-                described.stored = false;
-                described.reason = reason;
-            }
-        };
+        const note = (reason: string) => this._noteAttachment(record, reason);
         if (!forward.attachments) { this._stats.attachmentsDropped++; note("not-forwarded"); return; }
         if (payload.bytes.byteLength > forward.maxAttachmentBytes) {
             this._stats.attachmentsOversized++;
@@ -662,7 +746,17 @@ export class ClientLogging {
         catch { this._stats.attachmentsDropped++; note("encode-failed"); return; }
 
         // The queued copy carries the bytes; the ring's record never does.
-        this._attachmentQueue.push({ ...record, attachmentBytes: encoded });
+        const line = this._fitAttachmentLine(record);
+        const queued: ClientLogRecord = { ...line, attachmentBytes: encoded };
+        const ringDescriptor = record.fields?.attachment;
+        if (line !== record && ringDescriptor && typeof ringDescriptor === "object") {
+            // Non-enumerable: a back-reference for `_noteAttachment`, never a field
+            // on the wire.
+            Object.defineProperty(queued, "_ringAttachment", {
+                value: ringDescriptor, enumerable: false, configurable: true,
+            });
+        }
+        this._attachmentQueue.push(queued);
         this._attachmentBytes += encoded.length;
         this._stats.attachmentsQueued++;
         // Oldest out first: a queue that is backing up is one the server is not
@@ -704,16 +798,39 @@ export class ClientLogging {
                 try {
                     const transport = this._transport || ClientLogging._defaultTransport;
                     const result = await transport([record], this.sessionId);
-                    this._stats.attachmentsForwarded++;
                     this._stats.forwarded++;
+                    const body = (result as any)?.result ?? result;
                     // The reply is the ONLY place a client learns the deployment
                     // refuses attachments — the upload itself succeeds, the bytes
                     // are simply thrown away. Discarding it here is what let a
                     // whole session of dictation audio ship into a void.
-                    this._adoptServerLimits((result as any)?.result ?? result);
-                } catch {
-                    this._stats.forwardFailures++;
-                    this._stats.attachmentsDropped++;
+                    this._adoptServerLimits(body);
+                    // Delivered is not kept: the request succeeded while this
+                    // particular file was refused (attachments off) or its line was
+                    // dropped over `maxRecordBytes`. Counting it `forwarded` on the
+                    // transport's verdict alone is what made a lost file invisible.
+                    const stored = Number(body?.attachments?.stored);
+                    if (Number.isFinite(stored) && stored < 1) {
+                        this._stats.attachmentsDropped++;
+                        this._noteAttachment(record,
+                            Number(body?.oversized) > 0 ? "record-oversized" : "refused");
+                    } else {
+                        this._stats.attachmentsForwarded++;
+                    }
+                } catch (e) {
+                    // A 413 is the body reader, not the network: the handler never
+                    // ran, so no verdict is coming back and only this branch can
+                    // stop the session from re-uploading the same megabytes.
+                    if (ClientLogging._isTooLarge(e)) {
+                        this._stats.forwardRefused++;
+                        this._stats.attachmentsOversized++;
+                        this._noteAttachment(record, "too-large");
+                        this._tightenAttachmentCap(record);
+                    } else {
+                        this._stats.forwardFailures++;
+                        this._stats.attachmentsDropped++;
+                        this._noteAttachment(record, "transport-failed");
+                    }
                 }
                 // Refused by this deployment: stop paying for the rest of the queue
                 // now rather than one pointless upload at a time.

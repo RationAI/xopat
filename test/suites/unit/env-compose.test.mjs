@@ -254,6 +254,11 @@ test("the mlflow presets shape each capability per binding, not per sink @unit",
         // tracking server directly.
         expect(sink.artifacts.proxy ?? sink.proxy, preset).toBe("mlflow");
         expect(io.sinkOverrides.mlflow.experimentAllow, preset).toEqual(["xopat-*"]);
+        // The dev deployment lets a session run without pushing upstream
+        // (`params.ioSinks: {"mlflow": false}`). A production deployment pins it
+        // by dropping `sessionControllable` — so the key must be explicit here,
+        // not inherited from a default nobody can see.
+        expect(io.sinks.mlflow, preset).toEqual({ enabled: true, sessionControllable: true });
     }
 
     // Only the annotations preset adds the second owner.

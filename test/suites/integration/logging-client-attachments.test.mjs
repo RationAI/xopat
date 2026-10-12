@@ -116,6 +116,18 @@ async function lines(file) {
     return text.split("\n").filter(Boolean).map(line => JSON.parse(line));
 }
 
+/** Every file under `dir`, as posix-style paths relative to it. */
+async function filesUnder(dir, prefix = "", acc = []) {
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return acc; }
+    for (const entry of entries) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) await filesUnder(path.join(dir, entry.name), rel, acc);
+        else acc.push(rel);
+    }
+    return acc;
+}
+
 /** The first line carrying an attachment descriptor. */
 async function attachmentLine(file) {
     const found = await eventually(async () => {
@@ -164,14 +176,40 @@ test("an accepted attachment becomes a real file beside the transcript", {
         expect(res.body.result.attachments.stored).toBe(1);
         expect(res.body.result.attachments.refused).toBe(0);
 
-        // `…/client.ndjson` → `…/client.files/<the path the client named>`.
-        const sidecar = path.join(file.replace(/\.ndjson$/, ".files"), ...AUDIO.split("/"));
-        const written = await eventually(() => fsp.readFile(sidecar));
-        expect(Buffer.isBuffer(written), `expected ${sidecar} to exist`).toBe(true);
+        // `…/client.ndjson` → `…/client.files/<principal>/<session>/<name>`.
+        //
+        // THE SERVER OWNS THE PATH, and that is the assertion — not a convenience.
+        // The sidecar directory is shared by every caller and the transport writes
+        // with `wx`, treating EEXIST as success, so a client-chosen path is a
+        // cross-caller write primitive: post `mixture/sess-1/audio/window-0001.webm`
+        // first and the real owner's window is silently never written while its line
+        // still reads `stored: true`. Names like that are predictable, so it needs
+        // no guessing. Hence the prefix, and hence the client's name surviving as
+        // the leaf only.
+        const sidecarDir = file.replace(/\.ndjson$/, ".files");
+        const stored = await eventually(async () => {
+            const found = await filesUnder(sidecarDir);
+            return found.length ? found : undefined;
+        });
+        expect(stored, `expected a file under ${sidecarDir}`).toHaveLength(1);
+
+        const [relative] = stored;
+        const segments = relative.split("/");
+        expect(segments, "principal / session / name").toHaveLength(3);
+        expect(segments[0], "the hashed principal, never the raw identity")
+            .toMatch(/^(p_[0-9a-f]{12}|anonymous)$/);
+        expect(segments[1], "the session token the batch declared").toBe("cs_testsession01");
+        expect(segments[2], "the client's name, flattened to one segment")
+            .toBe(AUDIO.replaceAll("/", "_"));
+        expect(relative, "the client does not choose where its bytes land").not.toBe(AUDIO);
+
+        const written = await eventually(() => fsp.readFile(path.join(sidecarDir, ...segments)));
+        expect(Buffer.isBuffer(written), `expected ${relative} to exist`).toBe(true);
         expect(written.equals(BYTES), "the bytes survive base64 and the sidecar write").toBe(true);
 
         const line = await attachmentLine(file);
-        expect(line.fields.attachment.file, "the line points at the file").toBe(AUDIO);
+        expect(line.fields.attachment.file, "the line still names what the client called it")
+            .toBe(AUDIO);
         expect(line.fields.attachment.stored, "and is not marked as refused").not.toBe(false);
         expect(line.sensitive, "an attachment is user content").toBe(true);
         expect(line.channel).toBe(`client:${CHANNEL}`);
@@ -237,6 +275,34 @@ test("the attachment cap is not a line cap — an oversized record is still drop
 
         expect(res.body.result.oversized).toBe(1);
         expect(res.body.result.accepted).toBe(0);
+    });
+});
+
+test("an oversized line takes its payload with it — and reports a refusal, not a store", {
+    tag: ["@integration", "@security"],
+}, async ({ xopatServer }) => {
+    // The accounting order used to lie: `attachmentsStored` was incremented where
+    // the payload was accepted, and the line was measured and dropped AFTER. So a
+    // window record carrying per-segment metadata answered `attachments.stored: 1`
+    // alongside `oversized: 1`, the client's `attachmentsForwarded` counter ticked,
+    // and the file was never written anywhere.
+    await withLogging(xopatServer, {
+        client: { attachments: true, maxRecordBytes: 2048 },
+        stream: { attachments: true },
+    }, async () => {
+        const res = await xopatServer.rpc("server", "core", "ingestClientLogs", {
+            records: [audioRecord({
+                fields: {
+                    attachment: { file: AUDIO, size: BYTES.length, mediaType: "audio/webm" },
+                    segments: "x".repeat(8192),
+                },
+            })],
+        });
+
+        expect(res.body.result.oversized).toBe(1);
+        expect(res.body.result.accepted).toBe(0);
+        expect(res.body.result.attachments.stored, "nothing was kept").toBe(0);
+        expect(res.body.result.attachments.refused, "and the client is told so").toBe(1);
     });
 });
 
