@@ -788,6 +788,32 @@ interface IOConfigBlock {
      * deployment-specific values (repo URL, baseURL, token, …).
      */
     sinkOverrides?: Record<string, Record<string, unknown>>;
+    /**
+     * Per-sink availability, keyed by sink id — "is this destination plugged in".
+     *
+     * Operator policy, so it lives here and not in `setup.*`: `setup` is readable
+     * and overridable through a session / POST_DATA / URL, and whether a session may
+     * redirect data at all is not a session's decision to make. Omitting the block
+     * is therefore the hard pin: the sink behaves exactly as it always has and
+     * nothing but ENV can change it.
+     *
+     * A sink that is registered but disabled resolves as if no binding had named
+     * it — resolution falls through to the lower-precedence rules, so a bundle
+     * capability lands on the built-in local sinks instead of stalling. That is
+     * deliberately NOT the same state as a sink which has not registered yet
+     * (that one holds writes and refuses with `W_IO_SINK_NOT_READY`).
+     *
+     * @see IOPipelineLike.setSinkEnabled
+     */
+    sinks?: Record<string, {
+        /** Operator baseline. @default true */
+        enabled?: boolean;
+        /**
+         * May a session (`params.ioSinks`) or runtime caller
+         * (`IO_PIPELINE.setSinkEnabled`) change `enabled`? @default false
+         */
+        sessionControllable?: boolean;
+    }>;
 }
 
 /**
@@ -829,8 +855,27 @@ interface IOPipelineLike {
 
     // ── sink registry ───────────────────────────────────────────────────
     registerSink(s: IOSink): IODisposer;
+    /** Every registered sink, switched on or not — pair with {@link isSinkEnabled}. */
     listSinks(): IOSink[];
     getSink(id: string): IOSink | undefined;
+
+    // ── sink availability ───────────────────────────────────────────────
+    /**
+     * Is this sink plugged in? `ENV.client.io.sinks.<id>.enabled` is the baseline
+     * (default `true`); a session value overrides it only where the operator set
+     * `sessionControllable`.
+     */
+    isSinkEnabled(sinkId: string): boolean;
+    /**
+     * Plug a sink in or unplug it at runtime, on a session's behalf.
+     *
+     * Refused (returns `false`) unless the operator marked the sink
+     * `sessionControllable` — that is what makes a deployment's choice a pin
+     * rather than a default. A disabled sink stays registered but resolves as if
+     * no binding named it, so writes continue to whatever else is bound (or to the
+     * built-in local sinks) instead of stalling behind it.
+     */
+    setSinkEnabled(sinkId: string, enabled: boolean): boolean;
 
     // ── runtime binding claims ──────────────────────────────────────────
     /**

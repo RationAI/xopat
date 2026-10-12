@@ -358,6 +358,18 @@
             "sideMenuTabs": null
         },
         /*
+          Per-sink IO on/off, `{"<sinkId>": true|false}` — e.g.
+          {"mlflow": false} to run without pushing anything to MLflow.
+          Honoured ONLY for sinks the deployment marked
+          `core.client.<active>.io.sinks.<id>.sessionControllable`; with that
+          absent the operator's value stands and a session cannot redirect data.
+          Declared as null on purpose: session params are filtered against this
+          block and the filter recurses only where the DEFAULT is a plain object,
+          so a null default is what lets an arbitrary sink-id map through intact
+          (same reason as `ui.sideMenuTabs` above).
+         */
+        "ioSinks": null,
+        /*
           Fast-access icon-only actions pinned in the top app bar, by
           `AppBar.Actions` catalogue key (e.g. "tools:core.sync.auto").
           ENV entries may be objects overriding icon/label; a per-user list
