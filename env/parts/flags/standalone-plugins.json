@@ -1,0 +1,32 @@
+{
+  "$meta": {
+    "description": "Standalone plugin set — whitelist mode, dev/experimental plugins off"
+  },
+  /* Part of env/env.default.json (asserted in test/suites/unit/env-compose.test.mjs).
+     Keys are plugin ids from include.json, not directory names. */
+  "core": {
+    "client": {
+      "localhost": {
+        "pluginSelectionMode": "<% XOPAT_PLUGIN_SELECTION_MODE:-whitelist %>"
+      }
+    }
+  },
+  "plugins": {
+    "gui_annotations": { "enabled": true, "permaLoad": true },
+    "recorder": { "enabled": true },
+    /* Hidden: used only when a session provides their content. */
+    "custom-pages": { "enabled": true },
+
+    "slide-scoring": { "enabled": false },
+    "analyze-dev": { "enabled": false },
+    "profiler": { "enabled": false },
+    "nav-tracker": { "enabled": false },
+    "sam-segment-tool-experimental": { "enabled": false },
+    "empaia-app-ui": { "enabled": false },
+    "dicom": { "enabled": false },
+    "dicom-browser": { "enabled": false },
+    "youtrack-feedback": { "enabled": false },
+    "questionaire": { "enabled": false },
+    "pathology-medgemma": { "enabled": false }
+  }
+}
