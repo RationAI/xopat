@@ -4,8 +4,80 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
+const constants = require("./constants");
 
 const SERVER_BUILD_DIR = ".server-dist";
+
+/**
+ * What counts as a server file, for discovery and for build output naming.
+ *
+ * All six module spellings, because the bundler decides the module system, not
+ * the author: `bundle: true` inlines `import`, `require`, `import()`, an
+ * ESM-only dependency and a CJS one indifferently, so refusing an extension
+ * would restrict style for no gain. This used to be three regexes that
+ * disagreed — two accepting `(js|mjs|ts)` and one (in `index.js`, guarding
+ * static serving) also matching `.cjs`/`.cts`, i.e. a `.cts` server file was
+ * denied as a static asset while never being discovered as a server file.
+ */
+const SERVER_FILE_RE = /\.server\.[mc]?[jt]s$/i;
+
+/** Matches `register.server.*` at an element root (the boot-time hook). */
+const REGISTER_FILE_RE = /(^|[\\/])register\.server\.[mc]?[jt]s$/i;
+
+/**
+ * The output format of a built server bundle, and nothing else decides it.
+ *
+ * **CJS, measured rather than assumed.** A packaged build runs its snapshot
+ * entry through `vm` with no `importModuleDynamically` callback, so `import()`
+ * of a snapshot file throws `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` — every
+ * element's server code failed to register in a `@yao-pkg/pkg 6.23` binary with
+ * exactly that error, while `require` of the same bundle works. ESM output
+ * therefore cannot be loaded from a release at all.
+ *
+ * One format for dev AND release, not one each: a release artifact no developer
+ * ever executes is what let the previous prebuild rot unnoticed for a year.
+ *
+ * The cost is explicit: **a `*.server.*` entry cannot use top-level await**, and
+ * neither can anything in its dependency graph. esbuild refuses TLA under `cjs`,
+ * so that fails at build time with a named file rather than at runtime.
+ *
+ * `bundle: true` is what keeps this from restricting authoring style: `import`,
+ * `require`, `import()`, an ESM-only dependency (`ai@7`, `@ai-sdk/*`) and a CJS
+ * one are all resolved at build time, where a real resolver exists.
+ */
+const BUILD_FORMAT = "cjs";
+const ARTIFACT_EXT = BUILD_FORMAT === "cjs" ? ".cjs" : ".mjs";
+
+/** Directories never walked when looking for server files. */
+const SKIP_DIRS = new Set(["node_modules", ".git", SERVER_BUILD_DIR]);
+
+/**
+ * Every server file under `rootDir`, recursively.
+ *
+ * The single definition: the runtime scan, the request-time resolver and the
+ * build-time task all have to agree on what will be built, and they used to
+ * hold three copies of this walk (`server-runtime.js`, `server-helpers.js`, and
+ * `build-logic.js`'s byte-for-byte duplicate) — which is how a build could
+ * think an element had no server entries while the runtime found two.
+ */
+function walkForServerFiles(rootDir, found = []) {
+    let entries;
+    try {
+        entries = fs.readdirSync(rootDir, { withFileTypes: true });
+    } catch {
+        return found;
+    }
+    for (const entry of entries) {
+        const full = path.join(rootDir, entry.name);
+        if (entry.isDirectory()) {
+            if (SKIP_DIRS.has(entry.name)) continue;
+            walkForServerFiles(full, found);
+        } else if (SERVER_FILE_RE.test(entry.name)) {
+            found.push(full);
+        }
+    }
+    return found;
+}
 
 /**
  * Bump whenever the esbuild options below change. It is part of the build cache
@@ -18,8 +90,12 @@ const SERVER_BUILD_DIR = ".server-dist";
  *    previous mtime+size component let bundles built against two different majors
  *    of the same dependency coexist; this bump discards every bundle produced
  *    under the old scheme.
+ * 4: bundles are produced at BUILD time by `grunt serverBuild` and recorded in
+ *    the server build manifest; `.mjs`/`.js`/`.cjs` sources are bundled rather
+ *    than copied, and every entry carries a meta stamp. Bundles left by the old
+ *    scheme have no manifest record, so they must not be honoured.
  */
-const BUILD_FORMAT_VERSION = 3;
+const BUILD_FORMAT_VERSION = 4;
 
 /**
  * esbuild's ESM output rewrites a CJS dependency's `require("x")` into a shim
@@ -36,6 +112,58 @@ const BUILD_FORMAT_VERSION = 3;
  */
 const BUILD_BANNER = 'import { createRequire as __xopatCreateRequire } from "node:module";\n'
     + 'const require = __xopatCreateRequire(import.meta.url);';
+
+/**
+ * The CJS counterpart of the banner above, used only if `BUILD_FORMAT` is
+ * flipped. `require` is genuinely in scope there, so the banner's job shrinks to
+ * `import.meta`: esbuild merely WARNS (`empty-import-meta`) and substitutes
+ * `{}`, so a bundled dependency reading `import.meta.url` would silently get
+ * `undefined` rather than fail. Define it, do not hope.
+ */
+const BUILD_BANNER_CJS =
+    'const __xopatImportMetaUrl = require("node:url").pathToFileURL(__filename).href;';
+
+/**
+ * The esbuild options for a server bundle — shared verbatim by the build-time
+ * Grunt task and the dev-time on-demand compile, so the two cannot drift into
+ * producing differently-shaped artifacts (they already had, once: the Grunt path
+ * emitted bundles with no `createRequire` banner and no meta stamp, so the
+ * runtime discarded every one of them and rebuilt it).
+ *
+ * `external` comes from an element's declared `server.external` (see
+ * modules/README.md): a native addon or a dependency that must stay resolvable
+ * at runtime cannot be inlined, and declaring it is the supported way out.
+ */
+function serverBuildOptions({ file, outfile, external = [], logLevel = "silent" }) {
+    const options = {
+        entryPoints: [file],
+        outfile,
+        bundle: true,
+        platform: "node",
+        format: BUILD_FORMAT,
+        sourcemap: true,
+        // Metafile paths are relative to the working directory, and the
+        // freshness stamp stores them: pinning it to the application root keeps
+        // a bundle built by `grunt` (cwd = repo root) and one built by a server
+        // started from somewhere else describing the same inputs.
+        absWorkingDir: constants._ABSPATH_NO_SLASH,
+        // The input list is the freshness signal for the whole graph, not just the
+        // entry — see isArtifactFresh.
+        metafile: true,
+        logLevel,
+    };
+    if (external.length) options.external = [...external];
+    if (BUILD_FORMAT === "cjs") {
+        options.banner = { js: BUILD_BANNER_CJS };
+        options.define = {
+            "import.meta.url": "__xopatImportMetaUrl",
+            "import.meta.dirname": "__dirname",
+        };
+    } else {
+        options.banner = { js: BUILD_BANNER };
+    }
+    return options;
+}
 
 /**
  * Identity of the toolchain + installed dependencies, mixed into the build cache
@@ -119,13 +247,210 @@ function getServerBuildDir(runtime, fileOrItem) {
         return path.join(item.rootDir, dirName);
     }
 
-    return runtime?.cacheDir || path.join(process.cwd(), "server/.cache");
+    return runtime?.cacheDir || constants.DEFAULT_CACHE_DIR;
+}
+
+/**
+ * Where an element's server file is built to — runtime-free, so the build-time
+ * Grunt task names artifacts with the same function the loader looks them up
+ * with instead of re-deriving the convention.
+ */
+function builtServerPath(itemRootDir, file, dirName = SERVER_BUILD_DIR) {
+    const rel = path.relative(itemRootDir, file);
+    return path.join(itemRootDir, dirName, rel).replace(/\.[mc]?[jt]s$/i, ARTIFACT_EXT);
 }
 
 function getBuiltServerFile(runtime, file) {
     const item = findNearestItemRoot(runtime, file);
-    const rel = item?.rootDir ? path.relative(item.rootDir, file) : path.basename(file);
-    return path.join(getServerBuildDir(runtime, file), rel).replace(/\.ts$/i, ".mjs");
+    if (item?.rootDir) {
+        return builtServerPath(item.rootDir, file, runtime?.serverBuildDirName || SERVER_BUILD_DIR);
+    }
+    const rel = path.basename(file);
+    return path.join(getServerBuildDir(runtime, file), rel)
+        .replace(/\.[mc]?[jt]s$/i, ARTIFACT_EXT);
+}
+
+/**
+ * The build manifest: what `grunt serverBuild` produced, in repo-root-relative
+ * POSIX paths so a `/snapshot/` prefix is never baked in.
+ *
+ * `{ formatVersion, buildKey, builtAt, elements: { "<kind>/<id>": { rootDir,
+ *    entries: [ { source, artifact, external?, assets? } ] } } }`
+ *
+ * Why a manifest instead of walking the tree at runtime: in a packaged build the
+ * walk reads a virtual filesystem, and an empty `readdirSync` there is
+ * indistinguishable from "this element ships no server code" — it surfaces as
+ * `RPC_UNKNOWN_METHOD` with nothing logged anywhere. The manifest also means
+ * sources need not be packaged at all, and it gives the packaged loader
+ * something actionable to say when an artifact is missing.
+ */
+const MANIFEST_FILE = path.join(__dirname, "server-build-manifest.json");
+
+function toManifestPath(abs) {
+    return path.relative(constants._ABSPATH_NO_SLASH, abs).split(path.sep).join("/");
+}
+
+function fromManifestPath(rel) {
+    return path.resolve(constants._ABSPATH_NO_SLASH, rel);
+}
+
+function writeServerBuildManifest(manifest) {
+    fs.writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+    cachedManifest = undefined;
+}
+
+let cachedManifest;
+/** The manifest, or `null` when this tree was never built. Memoized. */
+function readServerBuildManifest() {
+    if (cachedManifest !== undefined) return cachedManifest;
+    try {
+        const parsed = JSON.parse(fs.readFileSync(MANIFEST_FILE, "utf8"));
+        cachedManifest = parsed && parsed.formatVersion === BUILD_FORMAT_VERSION ? parsed : null;
+    } catch {
+        cachedManifest = null;
+    }
+    return cachedManifest;
+}
+
+/** `source -> artifact` over every manifest entry, absolute paths. Memoized. */
+let cachedArtifactIndex;
+function artifactIndex() {
+    if (cachedArtifactIndex) return cachedArtifactIndex;
+    const index = new Map();
+    const manifest = readServerBuildManifest();
+    for (const element of Object.values(manifest?.elements || {})) {
+        for (const entry of element.entries || []) {
+            index.set(fromManifestPath(entry.source), fromManifestPath(entry.artifact));
+        }
+    }
+    cachedArtifactIndex = index;
+    return index;
+}
+
+/** Did the build see this source file? The packaged stand-in for `existsSync`. */
+function manifestHasSource(file) {
+    return artifactIndex().has(path.resolve(file));
+}
+
+/** Every source file the build recorded, absolute. */
+function manifestSources() {
+    return [...artifactIndex().keys()];
+}
+
+/**
+ * The elements the build recorded, as `{ kind, id, rootDir }` with an absolute
+ * `rootDir`. A packaged build uses this to recover its own element list: a
+ * `readdirSync` of `plugins/` over the snapshot filesystem is not something to
+ * stake RPC availability on, and an element whose directory listing came back
+ * empty would simply have no server methods, silently.
+ */
+function manifestElements() {
+    const manifest = readServerBuildManifest();
+    return Object.entries(manifest?.elements || {}).map(([key, element]) => {
+        const slash = key.indexOf("/");
+        return {
+            kind: element.kind || (slash > 0 ? key.slice(0, slash) : null),
+            id: element.id || (slash > 0 ? key.slice(slash + 1) : key),
+            rootDir: fromManifestPath(element.rootDir),
+        };
+    });
+}
+
+/**
+ * The built artifact for a source file: what the build recorded, else the
+ * conventional path. The manifest wins so that a packaged build never depends
+ * on `findNearestItemRoot` (hence on a runtime registry) to find its own code.
+ */
+function resolveArtifact(file, runtime) {
+    const fromManifest = artifactIndex().get(path.resolve(file));
+    if (fromManifest) return fromManifest;
+    if (constants.PACKAGED) return null;
+    return getBuiltServerFile(runtime, file);
+}
+
+/**
+ * Load one built artifact. The ONE place that knows the bundle format: `.cjs`
+ * goes through `require`, anything else through `import()`. `version` busts
+ * Node's ESM cache after a rebuild and is omitted in a packaged build, where
+ * nothing under the snapshot can change.
+ */
+function loadArtifact(artifact, version) {
+    if (artifact.endsWith(".cjs")) {
+        delete require.cache[artifact];
+        return require(artifact);
+    }
+    return import(pathToFileURL(artifact).href + (version ? `?v=${version}` : ""));
+}
+
+/**
+ * Freshness of a built bundle, over its WHOLE input graph.
+ *
+ * The entry's own mtime is not enough: a bundle is `bundle: true`, so editing
+ * any file it imports changes the output while leaving the entry untouched.
+ * That is not theoretical — `modules/saml-auth/register.server.ts` imports
+ * `saml-flow.ts`, and an edit to the latter left both the build task and the
+ * dev-time compile reporting "up to date" while serving the previous bundle.
+ *
+ * The inputs come from esbuild's own metafile, so the list is exactly what was
+ * read. `node_modules` inputs are excluded on purpose: a dependency change is
+ * already covered by the lockfile hash in `getBuildKey()`, and stat-ing a few
+ * thousand vendored files per entry per RPC is not affordable on the dev path.
+ */
+function collectBuildInputs(metafile, outFile) {
+    const out = metafile?.outputs?.[Object.keys(metafile.outputs || {}).find(k => !k.endsWith(".map"))];
+    const inputs = Object.keys(out?.inputs || metafile?.inputs || {});
+    return inputs
+        .filter(rel => !rel.split(/[\\/]/).includes("node_modules"))
+        // Relative to `absWorkingDir` (the application root), which is also what
+        // `fromManifestPath` resolves against.
+        .map(rel => toManifestPath(path.resolve(constants._ABSPATH_NO_SLASH, rel)));
+}
+
+function newestInputMs(inputs) {
+    let newest = 0;
+    for (const rel of inputs || []) {
+        try {
+            const { mtimeMs } = fs.statSync(fromManifestPath(rel));
+            if (mtimeMs > newest) newest = mtimeMs;
+        } catch {
+            return Infinity;        // an input we cannot stat means "rebuild"
+        }
+    }
+    return newest;
+}
+
+function artifactMetaFile(outFile) {
+    return `${outFile}.meta.json`;
+}
+
+/** Write the freshness stamp. Always LAST: it must never claim a missing bundle. */
+function writeArtifactMeta(outFile, { entryFile, buildKey, inputs }) {
+    fs.writeFileSync(artifactMetaFile(outFile), JSON.stringify({
+        mtimeMs: fs.statSync(entryFile).mtimeMs,
+        buildKey,
+        inputs,
+        inputsMs: newestInputMs(inputs),
+    }), "utf8");
+}
+
+function isArtifactFresh(entryFile, outFile, buildKey) {
+    if (!fs.existsSync(outFile)) return false;
+    let meta;
+    try {
+        meta = JSON.parse(fs.readFileSync(artifactMetaFile(outFile), "utf8"));
+    } catch {
+        return false;
+    }
+    if (meta.buildKey !== buildKey) return false;
+    try {
+        if (meta.mtimeMs !== fs.statSync(entryFile).mtimeMs) return false;
+    } catch {
+        return false;
+    }
+    // Pre-`inputs` stamps cannot answer the graph question, so they are stale by
+    // definition rather than trusted on the entry alone.
+    if (!Array.isArray(meta.inputs)) return false;
+    return newestInputMs(meta.inputs) <= meta.inputsMs;
 }
 
 // Concurrent RPC calls during startup can each trigger a build of the same
@@ -277,25 +602,21 @@ function sweepStaleTempBuildDirs(outDir) {
 }
 
 async function doCompileServerTs(file, outFile, opts = {}) {
+    // A packaged build has no compiler and a read-only filesystem. The single
+    // gate is in `loadServerModuleFromFile`; this assertion exists so a future
+    // caller cannot quietly reintroduce a build-on-request path.
+    if (constants.PACKAGED) {
+        throw new Error(`refusing to compile ${file} in a packaged build — server bundles must be prebuilt`);
+    }
     const stat = fs.statSync(file);
     const outDir = path.dirname(outFile);
-    const metaFile = `${outFile}.meta.json`;
 
     fs.mkdirSync(outDir, { recursive: true });
 
     const buildKey = getBuildKey();
-    const isFresh = () => {
-        if (opts.force) return false;
-        if (!fs.existsSync(outFile) || !fs.existsSync(metaFile)) return false;
-        try {
-            const meta = JSON.parse(fs.readFileSync(metaFile, "utf8"));
-            // Both must match: the source can be untouched while the dependency
-            // tree or the build options underneath it changed.
-            return meta.mtimeMs === stat.mtimeMs && meta.buildKey === buildKey;
-        } catch {
-            return false;
-        }
-    };
+    // Freshness covers the whole input graph, not just this entry — see
+    // isArtifactFresh. The build task applies the identical rule.
+    const isFresh = () => !opts.force && isArtifactFresh(file, outFile, buildKey);
 
     if (isFresh()) return { file: outFile, mtimeMs: stat.mtimeMs };
 
@@ -323,21 +644,21 @@ async function doCompileServerTs(file, outFile, opts = {}) {
         const tmpOut = path.join(tmpDir, base);
         try {
             fs.mkdirSync(tmpDir, { recursive: true });
-            await esbuild.build({
-                entryPoints: [file],
+            const result = await esbuild.build(serverBuildOptions({
+                file,
                 outfile: tmpOut,
-                bundle: true,
-                platform: "node",
-                format: "esm",
-                sourcemap: true,
-                banner: { js: BUILD_BANNER },
+                external: opts.external,
                 logLevel: opts.logLevel || "silent",
-            });
+            }));
             fs.renameSync(tmpOut, outFile);
             try { fs.renameSync(`${tmpOut}.map`, `${outFile}.map`); } catch { /* no map emitted */ }
             // Meta LAST: it is the freshness signal, so it must never claim a
             // bundle that is not on disk yet.
-            fs.writeFileSync(metaFile, JSON.stringify({ mtimeMs: stat.mtimeMs, buildKey }), "utf8");
+            writeArtifactMeta(outFile, {
+                entryFile: file,
+                buildKey,
+                inputs: collectBuildInputs(result.metafile, outFile),
+            });
         } finally {
             await removeTempBuildDir(tmpDir);
         }
@@ -346,47 +667,71 @@ async function doCompileServerTs(file, outFile, opts = {}) {
     return { file: outFile, mtimeMs: stat.mtimeMs };
 }
 
+/**
+ * Load a plugin/module server file — the one entry point, for every extension.
+ *
+ * There is no per-extension branch any more: the build bundles `.ts`, `.mts`,
+ * `.cts`, `.js`, `.mjs` and `.cjs` the same way, so what is loaded is always a
+ * built artifact. That is what makes the author's module style irrelevant —
+ * `import`, `require`, `import()`, an ESM-only dependency and a CJS one all
+ * resolve at build time, where a real resolver exists.
+ *
+ * A packaged build never compiles: no toolchain, read-only filesystem. It
+ * resolves through the manifest and says so plainly when an entry is absent,
+ * because the alternative (what used to happen) is an RPC answering
+ * `RPC_UNKNOWN_METHOD` with the real cause buried in one log line.
+ */
 async function loadServerModuleFromFile(file, runtime, opts = {}) {
-    const stat = fs.statSync(file);
-    const ext = path.extname(file).toLowerCase();
-
-    if (ext === ".ts") {
-        const built = await compileServerTs(file, runtime, opts);
-        try {
-            return await import(pathToFileURL(built.file).href + `?v=${built.mtimeMs}`);
-        } catch (error) {
-            // The failure may be a stale cached-failed import (see note on
-            // inflightBuilds). Rebuild and import under a fresh URL so the
-            // ESM cache cannot serve the old failure.
-            const rebuilt = await compileServerTs(file, runtime, { ...opts, force: true });
-            return import(pathToFileURL(rebuilt.file).href + `?v=${rebuilt.mtimeMs}-r${Date.now()}`);
+    if (constants.PACKAGED) {
+        const artifact = resolveArtifact(file, runtime);
+        if (!artifact) {
+            throw new Error(`no prebuilt server bundle for ${file} — this build was packaged `
+                + `without 'grunt serverBuild'; rebuild (npm run build) and repackage`);
         }
+        return loadArtifact(artifact);
     }
 
-    if (ext === ".mjs") {
-        try {
-            return await import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
-        } catch (error) {
-            // Same stale-cached-failure hazard as the .ts path: Node's ESM
-            // loader caches a FAILED import against its URL, and the URL is the
-            // source mtime — so one transient failure (a half-written file, a
-            // dependency not yet built) poisoned this module until someone
-            // touched the source. Retry once under a URL that cannot be cached.
-            if (opts.noRetry) throw error;
-            return await import(pathToFileURL(file).href + `?v=${stat.mtimeMs}-r${Date.now()}`);
-        }
+    const built = await compileServerTs(file, runtime, opts);
+    try {
+        return await loadArtifact(built.file, built.mtimeMs);
+    } catch (error) {
+        // Node's ESM loader caches a FAILED import against its URL, and the URL
+        // carries the source mtime — so one transient failure (a half-written
+        // file, a dependency not yet built) poisoned this module until someone
+        // touched the source. Rebuild and load under a URL that cannot be cached.
+        if (opts.noRetry) throw error;
+        const rebuilt = await compileServerTs(file, runtime, { ...opts, force: true });
+        return loadArtifact(rebuilt.file, `${rebuilt.mtimeMs}-r${Date.now()}`);
     }
-
-    delete require.cache[require.resolve(file)];
-    return require(file);
 }
 
 module.exports = {
     SERVER_BUILD_DIR,
+    SERVER_FILE_RE,
+    REGISTER_FILE_RE,
+    ARTIFACT_EXT,
+    BUILD_FORMAT,
+    BUILD_FORMAT_VERSION,
+    walkForServerFiles,
     getBuildKey,
     findNearestItemRoot,
     getServerBuildDir,
     getBuiltServerFile,
+    builtServerPath,
+    serverBuildOptions,
     compileServerTs,
     loadServerModuleFromFile,
+    loadArtifact,
+    resolveArtifact,
+    manifestHasSource,
+    manifestSources,
+    manifestElements,
+    isArtifactFresh,
+    writeArtifactMeta,
+    collectBuildInputs,
+    readServerBuildManifest,
+    writeServerBuildManifest,
+    toManifestPath,
+    fromManifestPath,
+    MANIFEST_FILE,
 };

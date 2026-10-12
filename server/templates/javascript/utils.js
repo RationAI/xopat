@@ -5,6 +5,16 @@ const glob = require("glob");
 /** Any scheme-qualified URL — such an include is not resolved against the item root. */
 const ABSOLUTE_URL_RE = /^[a-z][a-z0-9.+-]*:\/\//i;
 
+/**
+ * Packaged (pkg/SEA) build?
+ *
+ * Deliberately a local two-liner instead of `server/node/constants.PACKAGED`
+ * (the canonical answer): this file is also loaded by the Gruntfile, and
+ * `constants` runs `parseArgs` over `process.argv` at import time, which throws
+ * on grunt's own flags. A duplicated predicate, not a duplicated policy.
+ */
+const PACKAGED = typeof process.pkg !== "undefined" || !!(process.versions && process.versions.pkg);
+
 module.exports.safeScanDir = function (directory) {
     let resolvedPaths = [];
     try {
@@ -13,6 +23,18 @@ module.exports.safeScanDir = function (directory) {
         resolvedPaths = entries.map((entry) => {
             const fullPath = path.join(directory, entry);
             try {
+                if (PACKAGED) {
+                    // `realpath` is unimplemented on pkg's snapshot filesystem —
+                    // the same constraint `resolveStaticTarget` already handles
+                    // in server/node/index.js, and the same answer: a link that
+                    // cannot be followed cannot be judged, so refuse it.
+                    if (fs.lstatSync(fullPath).isSymbolicLink()) {
+                        console.error(`Symlink refused (packaged build): ${fullPath}`);
+                        return null;
+                    }
+                    fs.statSync(fullPath);
+                    return entry;
+                }
                 const realPath = fs.realpathSync(fullPath);
                 fs.statSync(realPath);
                 return entry;

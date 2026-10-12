@@ -15,14 +15,20 @@ const {
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
 } = require("./auth");
 
-const REGISTER_FILE_RE = /(^|[\\/])register\.server\.(js|mjs|ts)$/i;
-
+const constants = require("./constants");
+// Discovery lives with the builder, not here: the build-time task, this scan and
+// the request-time resolver must agree on what a server file is, and three
+// private copies of the pattern (two of them accepting fewer extensions than the
+// third) is how they stopped agreeing.
 const {
     SERVER_BUILD_DIR,
+    SERVER_FILE_RE,
+    REGISTER_FILE_RE,
+    walkForServerFiles,
+    manifestSources,
+    manifestElements,
     loadServerModuleFromFile,
 } = require("./server-module-loader");
-
-const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 const DEFAULT_TIMEOUT_MS = 10_000;
 /**
  * Body cap for a method whose policy declares none. A default is required, not a
@@ -245,22 +251,23 @@ function listDirs(root) {
         .map(d => d.name);
 }
 
-function walkForServerFiles(rootDir, found = []) {
-    if (!fs.existsSync(rootDir)) return found;
-    for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-        const full = path.join(rootDir, entry.name);
-        if (entry.isDirectory()) {
-            if (
-                entry.name === "node_modules" ||
-                entry.name === ".git" ||
-                entry.name === ".server-dist"
-            ) continue;
-            walkForServerFiles(full, found);
-        } else if (SERVER_FILE_RE.test(entry.name)) {
-            found.push(full);
-        }
-    }
-    return found;
+/**
+ * The server files of one element.
+ *
+ * In a packaged build the tree is a read-only snapshot that need not carry the
+ * sources at all, so the manifest written by `grunt serverBuild` is the
+ * authority. Walking it instead would be worse than useless: an empty
+ * `readdirSync` over the virtual filesystem is indistinguishable from "this
+ * element ships no server code", which surfaces as `RPC_UNKNOWN_METHOD`.
+ *
+ * The values stay SOURCE paths in both modes — `buildEntryMap`, the
+ * `register.server.*` match and the worker `loadPath` all treat them as opaque
+ * keys, and only the loader dereferences them.
+ */
+function serverFilesOf(itemDir) {
+    if (!constants.PACKAGED) return walkForServerFiles(itemDir);
+    const prefix = path.resolve(itemDir) + path.sep;
+    return manifestSources().filter(src => src.startsWith(prefix));
 }
 
 function inferWorkspaceMeta(itemDir) {
@@ -309,7 +316,10 @@ class XopatServerRuntime {
         this.root = options.root || process.cwd();
         this.pluginsDir = options.pluginsDir || path.join(this.root, "plugins");
         this.modulesDir = options.modulesDir || path.join(this.root, "modules");
-        this.cacheDir = options.cacheDir || process.env.XOPAT_CACHE_DIR || path.join(this.root, "server/.cache");
+        // constants.DEFAULT_CACHE_DIR, not a local path.join: in a packaged build the
+        // application root is the read-only snapshot, and mkdirSync below threw
+        // during construction — a bare binary with no environment never booted.
+        this.cacheDir = options.cacheDir || process.env.XOPAT_CACHE_DIR || constants.DEFAULT_CACHE_DIR;
         this.serverBuildDirName = options.serverBuildDirName || SERVER_BUILD_DIR;
         this.logger = options.logger || console;
         this.auth = options.auth || {};
@@ -419,12 +429,28 @@ class XopatServerRuntime {
         return true;
     }
 
+    /**
+     * Element directories to scan. In a packaged build, the manifest's elements
+     * are unioned in: the snapshot filesystem is not something to stake RPC
+     * availability on, and an element missed by `listDirs` would quietly have no
+     * server methods at all.
+     */
+    #itemDirs(kind, rootDir) {
+        const dirs = new Set(listDirs(rootDir).map(d => path.join(rootDir, d)));
+        if (constants.PACKAGED) {
+            for (const element of manifestElements()) {
+                if (element.kind === kind) dirs.add(element.rootDir);
+            }
+        }
+        return [...dirs];
+    }
+
     #scanKind(kind, rootDir) {
         const items = Object.create(null);
-        for (const dirName of listDirs(rootDir)) {
-            const itemDir = path.join(rootDir, dirName);
+        for (const itemDir of this.#itemDirs(kind, rootDir)) {
+            const dirName = path.basename(itemDir);
             const meta = inferWorkspaceMeta(itemDir);
-            const files = walkForServerFiles(itemDir);
+            const files = serverFilesOf(itemDir);
             items[meta.id] = {
                 id: meta.id,
                 kind,
@@ -1601,13 +1627,21 @@ class XopatServerRuntime {
         const principal = this.logging.hashPrincipal(ctx?.principal
             || (ctx?.user?.id && `user:${ctx.user.id}`)
             || (ctx?.session?.id && `sess:${ctx.session.id}`)) || "anonymous";
-        const budget = this.#clientLogBudgetFor(principal, policy.maxRecordsPerMinute);
+        // perProcessBudget, like `maxConcurrency`/`queueLimit`: the cache backing
+        // this budget is in-process, so under `cluster-index.js` an undivided
+        // declared limit becomes N times itself for one principal — requests are
+        // round-robined across workers, so a caller does not even have to try.
+        // A declared number is a deployment-wide budget (see its docblock).
+        const budget = this.#clientLogBudgetFor(principal, perProcessBudget(policy.maxRecordsPerMinute));
 
         const admitted = Math.min(records.length, policy.maxRecordsPerBatch, budget.remaining);
         let accepted = 0;
         let oversized = 0;
         let attachmentsStored = 0;
         let attachmentsRefused = 0;
+        // Names the server mints for an attachment the client did not name, unique
+        // within the request so one batch cannot shadow its own earlier file.
+        let attachmentIndex = 0;
         for (const record of records.slice(0, admitted)) {
             if (!record || typeof record !== "object") continue;
             // Attachment bytes are separated BEFORE the record is measured: they
@@ -1636,9 +1670,30 @@ class XopatServerRuntime {
                     if (!decoded || !decoded.length) refuse("bad-encoding");
                     else if (decoded.length > policy.maxAttachmentBytes) refuse("too-large");
                     else {
-                        const file = line.fields?.attachment?.file;
-                        payload = { bytes: decoded, file: typeof file === "string" ? file : undefined };
-                        attachmentsStored++;
+                        // THE SERVER OWNS THE PATH. The sidecar directory is shared
+                        // by every caller and the transport writes with `wx`,
+                        // treating EEXIST as success — so a client-chosen name is a
+                        // cross-caller write primitive: post `window-003.opus`
+                        // first and the real owner's window is silently not written
+                        // while its line still reads `stored: true`, i.e. a record
+                        // pointing at somebody else's bytes with nothing reporting
+                        // it. Names here are predictable (session id + window
+                        // index), so this needs no guessing.
+                        //
+                        // The client's name survives as the LAST SEGMENT only,
+                        // under the hashed principal and the validated session
+                        // token. Dedup of the same attachment re-referenced by a
+                        // later message still works — the prefix is stable for that
+                        // principal and sitting — while a collision across
+                        // principals is no longer expressible.
+                        const named = line.fields?.attachment?.file;
+                        const leaf = typeof named === "string" && named.trim()
+                            ? named.replace(/[\\/]+/g, "_")
+                            : `${ctx?.requestId || "req"}-${++attachmentIndex}`;
+                        payload = {
+                            bytes: decoded,
+                            file: `${principal}/${clientSession || "nosession"}/${leaf}`,
+                        };
                     }
                 }
             }
@@ -1647,13 +1702,29 @@ class XopatServerRuntime {
             // artifact, and the cap exists to stop one caller filling the disk.
             let bytes = 0;
             try { bytes = Buffer.byteLength(JSON.stringify(line)); } catch { continue; }
-            if (bytes > policy.maxRecordBytes) { oversized++; continue; }
+            if (bytes > policy.maxRecordBytes) {
+                oversized++;
+                // The record is dropped WHOLE, which takes an accepted payload with
+                // it. Counting it `stored` before this check is what let a client's
+                // `attachmentsForwarded` tick for a file nothing kept: it is a
+                // refusal, so it is reported as one.
+                if (payload) attachmentsRefused++;
+                continue;
+            }
             const emitted = this.logging.ingestClientRecord(line, {
                 requestId: ctx?.requestId,
                 principal,
                 clientSession,
             }, payload);
             if (emitted) accepted++;
+            // Counted only once the line it rides on is actually admitted. The
+            // broker also drops a `sensitive` record whole when `allowSensitive`
+            // is off — and the bytes with it — which is the same "reported stored,
+            // kept nothing" the size check above used to produce.
+            if (payload) {
+                if (emitted) attachmentsStored++;
+                else attachmentsRefused++;
+            }
         }
         budget.spend(admitted);
 
