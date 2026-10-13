@@ -504,8 +504,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
         let jobDefaults = {};
         try {
-            const eadInfo = await api.rationai?.ead?.get?.(appId);
-            jobDefaults = eadInfo?.job_defaults || {};
+            const appConfig = await api.rationai?.viewerConfig?.get?.(appId);
+            jobDefaults = appConfig?.job_defaults || {};
         } catch (e) {
             console.warn('[analyze] Failed to fetch job defaults for', appId, e);
         }
