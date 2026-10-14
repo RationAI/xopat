@@ -1,6 +1,21 @@
 const { Dropdown } = globalThis.UI;
 const { div, span, p, label, input, select, option, textarea, button } = globalThis.van.tags;
 
+/**
+ * Put `content` into `fw` at a fixed width, with the height following the
+ * content (capped to the viewport, scrolling beyond that). setBody() drops the
+ * window's own scrolling body wrapper, so without this the content spills out.
+ * Pair with `resizable: false`; the inline size also overrides any cached one.
+ */
+function setFittedBody(fw, content, width) {
+    fw.setBody(div({ class: 'overflow-auto flex-1 min-h-0' }, content));
+    const root = document.getElementById(fw.id);
+    if (!root) return;
+    root.style.width = `${width}px`;
+    root.style.height = 'auto';
+    root.style.maxHeight = 'calc(100vh - 80px)';
+}
+
 const STRING_SELECT_OPTIONS = {
     script: ['stardist'],
 };
@@ -481,15 +496,15 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             id: `${this.id}-apps-window`,
             title: tOr('analyze.apps', 'Apps'),
             width: 520,
-            height: 480
+            resizable: false,
         });
         fw.attachTo(document.body);
 
-        fw.setBody(div({ class: 'p-2 space-y-3' },
+        setFittedBody(fw, div({ class: 'p-2 space-y-3' },
             items.length
                 ? items.map((app, idx) => this._createAppCard(app, idx, tOr, fw))
                 : div({ class: 'p-2 text-sm opacity-70' }, tOr('analyze.noApps', 'No apps available.')),
-        ));
+        ), 520);
         fw.focus();
     }
 
@@ -656,6 +671,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 height,
                 startLeft: Math.round((window.innerWidth - width) / 2),
                 startTop: Math.round((window.innerHeight - height) / 2),
+                resizable: false,
                 onClose: () => finish(false),
             });
             modal.attachTo(document.body);
@@ -678,7 +694,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 }, 'Draw ROI'),
             );
 
-            modal.setBody(body);
+            setFittedBody(modal, body, width);
             modal.focus();
         });
     }
