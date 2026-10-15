@@ -84,15 +84,35 @@ export const globalPluginWindowMethods = {
             osdPosition: { x: 0, y: 0 },
             pixelPosition: { x: 0, y: 0 },
             active: object,
+            // Named so a provider can tailor what it offers here. The annotations
+            // provider drops the privacy toggle for this source: privacy hangs off
+            // the annotation itself in this window. Asking the provider beats
+            // filtering its answer — the flyout path returns ONE nested
+            // "Annotation" parent, so a title filter over the top level matched
+            // nothing, and on the flat path it left the entry's group header
+            // behind as an inert row with nothing under it.
+            source: 'annotation-more',
         };
 
         const registry = window.CanvasContextMenu;
         const items = registry?.collect ? registry.collect(ctx) : [];
-        const filtered = items.filter((item) => {
-            const t = item?.title;
-            return t !== 'Mark as private' && t !== 'Unmark as private' && t !== 'Modify annotation:';
+        // A group header is an inert row (no `action`, no `children`), so any
+        // provider that declines part of a group can still leave one with nothing
+        // below it — a dead label the user can click forever. Pruned generically
+        // rather than by title, so it holds for every group the menu grows.
+        const hasBody = (item) => !!(item?.action || item?.children);
+        const pruned = items.filter((item, index) => {
+            const isHeader = item && !hasBody(item) && !!item.title;
+            if (!isHeader) return true;
+            for (let i = index + 1; i < items.length; i++) {
+                if (hasBody(items[i])) return true;      // the group has content
+                if (items[i]?.title) return false;       // next header, nothing between
+            }
+            return false;                                // nothing follows at all
         });
-        if (!filtered.length) return;
+        // ...and a separator with nothing after it is the same dead row one level down.
+        while (pruned.length && !hasBody(pruned[pruned.length - 1])) pruned.pop();
+        if (!pruned.length) return;
 
         // Prefer the van.js-based `ContextMenu` (cascading flyouts for items
         // with `children`); fall back to the legacy `window.DropDown` until
@@ -106,8 +126,8 @@ export const globalPluginWindowMethods = {
         // microtask, so the deferral is harmless either way.
         setTimeout(() => {
             const ctxMenu = window.ContextMenu;
-            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, filtered);
-            else window.DropDown?.open(syntheticEvent, filtered);
+            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, pruned);
+            else window.DropDown?.open(syntheticEvent, pruned);
         }, 0);
     },
 

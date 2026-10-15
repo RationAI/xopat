@@ -190,65 +190,199 @@ function inspectWorkspaceBundle(itemDirectory, packageData) {
     return { stale: newestAt > builtAt, artifact, newestSource };
 }
 
-function findServerEntryFiles(itemDirectory) {
-    const found = [];
-    function walk(dir) {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            const full = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                if (
-                    entry.name === "node_modules" ||
-                    entry.name === ".git" ||
-                    entry.name === ".server-dist"
-                ) continue;
+/**
+ * Server-side bundling.
+ *
+ * This is the release-critical half of the build: a packaged binary carries no
+ * esbuild and a read-only filesystem, so anything not built here cannot be
+ * compiled later — an element's RPC simply answers `RPC_UNKNOWN_METHOD`.
+ *
+ * It used to live inside `buildWorkspaceItem`, which made it ineffective three
+ * ways: it ran only for items with a `package.json` (skipping every element that
+ * ships only an `include.json`), it wrote no `.meta.json` so the runtime
+ * discarded each artifact and rebuilt it, and it emitted bundles without the
+ * `createRequire` banner. It is now one task over every element, using the
+ * loader's own discovery, naming, options and freshness rule.
+ */
+const serverLoader = require("../../node/server-module-loader");
 
-                walk(full);
-            } else if (/\.server\.(ts|js|mjs)$/i.test(entry.name)) {
-                found.push(full);
-            }
-        }
-    }
-    if (fs.existsSync(itemDirectory)) walk(itemDirectory);
-    return found;
+/**
+ * An element's declared server build options, from `include.json`:
+ *
+ *   "server": { "external": ["sharp"], "assets": ["vendor/**\/*.node"] }
+ *
+ * `external` is for what cannot be inlined — a native addon, or a dependency
+ * that must stay resolvable at runtime. The named package is copied next to the
+ * bundle so the import resolves both in a source tree and inside a snapshot,
+ * where the hoisted root `node_modules` does not exist. Deployment-trusted
+ * config by construction (`include.json`), never a session value.
+ */
+function readServerDeclaration(itemDirectory) {
+    let include = {};
+    try {
+        include = require("comment-json").parse(
+            fs.readFileSync(path.join(itemDirectory, "include.json"), "utf8"));
+    } catch { /* no include.json, or unparseable — the scan reports that already */ }
+    const block = include && typeof include.server === "object" ? include.server : {};
+    const list = (value) => (Array.isArray(value) ? value.filter(v => typeof v === "string") : []);
+    return { external: list(block.external), assets: list(block.assets) };
 }
 
-async function buildServerEntries(itemDirectory, logger, logPrefix) {
-    const serverEntries = findServerEntryFiles(itemDirectory);
-    if (!serverEntries.length) return;
-
-    const outDir = path.join(itemDirectory, ".server-dist");
-    fs.mkdirSync(outDir, { recursive: true });
-
-    for (const serverEntry of serverEntries) {
-        const rel = path.relative(itemDirectory, serverEntry);
-        const ext = path.extname(serverEntry).toLowerCase();
-        const outFile = path.join(outDir, rel).replace(/\.ts$/i, ".mjs");
-
-        fs.mkdirSync(path.dirname(outFile), { recursive: true });
-        logger.log(`${logPrefix} building server entry ${rel}`);
-
-        if (ext === ".ts") {
-            await spawnAsync("npx", [
-                "esbuild",
-                serverEntry,
-                "--bundle",
-                "--platform=node",
-                "--format=esm",
-                `--outfile=${outFile}`,
-                "--sourcemap"
-            ]);
-        } else if (ext === ".mjs") {
-            _smartCopy(serverEntry, outFile, logger, logPrefix);
-        } else {
-            _smartCopy(serverEntry, outFile.replace(/\.mjs$/i, ".js"), logger, logPrefix);
-        }
+/** Copy a declared-external package next to the bundle so it resolves there too. */
+function vendorExternal(name, itemDirectory, outDir, logger, logPrefix) {
+    let pkgRoot;
+    try {
+        pkgRoot = path.dirname(require.resolve(`${name}/package.json`,
+            { paths: [itemDirectory, process.cwd()] }));
+    } catch {
+        throw new Error(`declared server.external "${name}" cannot be resolved`);
     }
+    const target = path.join(outDir, "node_modules", name);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(pkgRoot, target, { recursive: true, dereference: true });
+    logger.log(`${logPrefix} vendored external ${name}`);
+}
+
+/**
+ * Build every server entry of every element and write the manifest.
+ *
+ * A failure is fatal, not degraded: in a source tree an unbuildable entry turns
+ * into a runtime retry, but in a release there is no later attempt — so a build
+ * that cannot produce an artifact must not produce a release either.
+ *
+ * @param {Array<{kind: string, directory: string}>} items element descriptors
+ * @param logger grunt-style logger
+ */
+async function buildAllServerEntries(items, logger) {
+    const esbuild = require("esbuild");
+    const buildKey = serverLoader.getBuildKey();
+    const manifest = {
+        formatVersion: serverLoader.BUILD_FORMAT_VERSION,
+        format: serverLoader.BUILD_FORMAT,
+        buildKey,
+        builtAt: new Date().toISOString(),
+        elements: {},
+    };
+    const failures = [];
+    let built = 0;
+    let fresh = 0;
+
+    for (const item of items) {
+        const itemDirectory = item.directory;
+        const entries = serverLoader.walkForServerFiles(itemDirectory);
+        if (!entries.length) continue;
+
+        const logPrefix = `[server-build] ${item.kind}:${item.id}:`;
+        const declaration = readServerDeclaration(itemDirectory);
+        const outDir = path.join(itemDirectory, serverLoader.SERVER_BUILD_DIR);
+        const records = [];
+
+        for (const name of declaration.external) {
+            try {
+                vendorExternal(name, itemDirectory, outDir, logger, logPrefix);
+            } catch (e) {
+                failures.push(`${item.kind}:${item.id}: ${e.message}`);
+            }
+        }
+
+        for (const sourceFile of entries) {
+            const outFile = serverLoader.builtServerPath(itemDirectory, sourceFile);
+            const rel = path.relative(itemDirectory, sourceFile);
+            records.push({
+                source: serverLoader.toManifestPath(sourceFile),
+                artifact: serverLoader.toManifestPath(outFile),
+                ...(declaration.external.length ? { external: declaration.external } : {}),
+            });
+
+            // The runtime's own freshness rule, imported rather than restated:
+            // it covers the whole input graph, so editing a file the entry
+            // imports rebuilds (an entry-mtime-only check reported "up to date"
+            // and shipped the previous bundle).
+            if (serverLoader.isArtifactFresh(sourceFile, outFile, buildKey)) {
+                fresh++;
+                continue;
+            }
+
+            try {
+                fs.mkdirSync(path.dirname(outFile), { recursive: true });
+                const result = await esbuild.build(serverLoader.serverBuildOptions({
+                    file: sourceFile,
+                    outfile: outFile,
+                    external: declaration.external,
+                    logLevel: "warning",
+                }));
+                // Meta LAST: it is the freshness signal, so it must never claim
+                // an artifact that is not on disk yet.
+                serverLoader.writeArtifactMeta(outFile, {
+                    entryFile: sourceFile,
+                    buildKey,
+                    inputs: serverLoader.collectBuildInputs(result.metafile, outFile),
+                });
+                built++;
+                logger.log(`${logPrefix} built ${rel}`);
+            } catch (e) {
+                failures.push(`${item.kind}:${item.id}/${rel}: ${e.message}`);
+            }
+        }
+
+        manifest.elements[`${item.kind}/${item.id}`] = {
+            kind: item.kind,
+            id: item.id,
+            rootDir: serverLoader.toManifestPath(itemDirectory),
+            entries: records,
+            ...(declaration.assets.length ? { assets: declaration.assets } : {}),
+        };
+    }
+
+    // The shared role resolver: `server/node/roles.js` requires this artifact
+    // rather than transforming the TypeScript at runtime, which is what made
+    // role capabilities unresolvable in every packaged build.
+    const rolesOut = path.join(__dirname, "..", "..", "..", "src", "dist", "user-roles-core.cjs");
+    const rolesSrc = path.join(__dirname, "..", "..", "..", "src", "classes", "user-roles-core.ts");
+    try {
+        if (serverLoader.isArtifactFresh(rolesSrc, rolesOut, buildKey)) {
+            fresh++;
+        } else {
+            fs.mkdirSync(path.dirname(rolesOut), { recursive: true });
+            // `bundle: false` on purpose: the source is deliberately
+            // dependency-free, and bundling would hide a future stray import
+            // instead of surfacing it.
+            const rolesResult = await esbuild.build({
+                entryPoints: [rolesSrc], outfile: rolesOut, bundle: false,
+                platform: "node", format: "cjs", target: "node22",
+                metafile: true, absWorkingDir: path.resolve(__dirname, "..", "..", ".."),
+                logLevel: "warning",
+            });
+            serverLoader.writeArtifactMeta(rolesOut, {
+                entryFile: rolesSrc,
+                buildKey,
+                inputs: serverLoader.collectBuildInputs(rolesResult.metafile, rolesOut),
+            });
+            built++;
+            logger.log(`[server-build] core: built src/dist/user-roles-core.cjs`);
+        }
+    } catch (e) {
+        failures.push(`core/user-roles-core: ${e.message}`);
+    }
+
+    if (failures.length) {
+        throw new Error(`server build failed for ${failures.length} entr${failures.length === 1 ? "y" : "ies"}:\n  `
+            + failures.join("\n  "));
+    }
+
+    serverLoader.writeServerBuildManifest(manifest);
+    logger.log(`[server-build] ${built} built, ${fresh} up to date, `
+        + `${Object.keys(manifest.elements).length} elements with server code`);
+    return manifest;
 }
 
 /**
  * Portable logic to build, copy, or clean workspace items.
  */
 const BuildLogic = {
+    buildAllServerEntries,
+
     /**
      * Executes the build/copy flow for a workspace item.
      */
@@ -312,8 +446,10 @@ const BuildLogic = {
             logger.log(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
 
-        // todo consider rebuilding only server parts that actually changed
-        await buildServerEntries(itemDirectory, logger, logPrefix);
+        // Server entries are NOT built here any more: they are one task over
+        // every element (`grunt serverBuild` → buildAllServerEntries), because
+        // this function only runs for items that have a `package.json` and three
+        // elements shipping server code have only an `include.json`.
 
         // 3. Handle asset copying if defined
         if (packageData.copy) {

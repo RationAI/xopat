@@ -4,9 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
+const constants = require("./constants");
 const {
     findNearestItemRoot,
     getServerBuildDir,
+    SERVER_FILE_RE,
+    manifestHasSource,
     loadServerModuleFromFile: loadServerModuleFile,
 } = require("./server-module-loader");
 
@@ -97,8 +100,6 @@ function escapeHtml(value) {
     return String(value === undefined || value === null ? "" : value)
         .replace(HTML_UNSAFE_CHARS, (ch) => HTML_ESCAPES[ch]);
 }
-
-const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
 function getItemServerBuildDir(runtime, file) {
     return getServerBuildDir(runtime, file);
@@ -306,15 +307,33 @@ function getItemFromRuntime(runtime, kind, id) {
   return runtime.registry[kind][id];
 }
 
+/** Source extensions probed for a cross-element server target, in priority order. */
+const SERVER_TARGET_EXTS = [".server.ts", ".server.mts", ".server.cts", ".server.mjs", ".server.js", ".server.cjs"];
+
+/**
+ * Does this server source exist?
+ *
+ * A packaged build does not ship sources — only the built bundles and the
+ * manifest that records which source produced each — so `existsSync` would
+ * answer "no" for every candidate and break every cross-element server import
+ * (four chat plugin hosts resolve
+ * `module:vercel-ai-chat-sdk/server/providerRegistration.server.ts` this way).
+ * The manifest is the packaged stand-in; the candidate list and its order are
+ * identical in both modes, so dev and release resolve to the same file.
+ */
+function serverSourceExists(file) {
+  return constants.PACKAGED ? manifestHasSource(file) : fs.existsSync(file);
+}
+
 function tryServerFile(basePath) {
   const candidates = [];
   if (SERVER_FILE_RE.test(basePath)) {
     candidates.push(basePath);
   } else {
-    candidates.push(`${basePath}.server.ts`, `${basePath}.server.mjs`, `${basePath}.server.js`);
-    candidates.push(path.join(basePath, "index.server.ts"), path.join(basePath, "index.server.mjs"), path.join(basePath, "index.server.js"));
+    candidates.push(...SERVER_TARGET_EXTS.map(ext => `${basePath}${ext}`));
+    candidates.push(...SERVER_TARGET_EXTS.map(ext => path.join(basePath, `index${ext}`)));
   }
-  return candidates.find(p => fs.existsSync(p)) || null;
+  return candidates.find(serverSourceExists) || null;
 }
 
 function resolveServerFile(runtime, ctx, target) {
@@ -387,7 +406,7 @@ const CACHE_SUBDIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
  * is the escape hatch, not the default.
  */
 function getServerCacheDir(runtime, subdir) {
-  const base = runtime?.cacheDir || path.join(process.cwd(), "server/.cache");
+  const base = runtime?.cacheDir || constants.DEFAULT_CACHE_DIR;
   if (subdir === undefined || subdir === null || subdir === "") {
     fs.mkdirSync(base, { recursive: true });
     return path.resolve(base);

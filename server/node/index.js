@@ -121,8 +121,9 @@ process.on('uncaughtException', error => {
     setTimeout(() => process.exit(1), 1000).unref();
 });
 
-const CACHE_DIR = process.env.XOPAT_CACHE_DIR
-    || path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "server/.cache");
+// constants.DEFAULT_CACHE_DIR rather than a path under the application root:
+// in a packaged build that root is the read-only snapshot.
+const CACHE_DIR = process.env.XOPAT_CACHE_DIR || constants.DEFAULT_CACHE_DIR;
 
 /**
  * Publish `server.secure.storage` (and the public `server.logging` block) before
@@ -2261,7 +2262,7 @@ process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 process.on('SIGINT', () => { shutdown('SIGINT'); });
 function onListening() {
     const ENV = process.env.XOPAT_ENV;
-    const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
+    const existsDefaultLocation = fs.existsSync(`${constants.ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
         logger.info("Using env/env.json..");
     } else if (ENV) {

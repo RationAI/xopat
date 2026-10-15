@@ -38,6 +38,28 @@
         "authors": "Authors"
       }
     },
+    "contextMenu": {
+      "annotation": "Annotation",
+      "changePreset": "Change preset",
+      "selectPresetLeft": "Select preset for left click",
+      "copy": "Copy",
+      "cut": "Cut",
+      "paste": "Paste",
+      "delete": "Delete",
+      "moveToLayer": "Move to layer",
+      "noLayer": "(no layer)",
+      "layerNamed": "Layer {{id}}",
+      "sendToBack": "Send to back",
+      "group": "Group",
+      "newCollapsedLayer": "(new collapsed layer)",
+      "fromSelection": "From selection ({{count}})",
+      "sameShapeType": "Same shape type",
+      "samePreset": "Same preset",
+      "sameAuthor": "Same author",
+      "sameCategoryText": "Same category text",
+      "actions": "Actions",
+      "modifyAnnotation": "Modify annotation"
+    },
     "workspace": {
       "label": "Workspace",
       "outsideWarning": "Annotations can only be drawn inside the active workspace.",
@@ -166,6 +188,15 @@
       "useLeft": "Use for Left Click",
       "useRight": "Use for Right Click",
       "finishEditing": "Finish Editing"
+    },
+    "lock": {
+      "lock": "Lock",
+      "unlock": "Unlock",
+      "badge": "Locked"
+    },
+    "privacy": {
+      "mark": "Mark as private",
+      "unmark": "Unmark as private"
     },
     "board": {
       "title": "Annotation list",

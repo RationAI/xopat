@@ -41,5 +41,8 @@
   "readOnly": {
     "refused": "This annotation is read-only and cannot be changed or removed.",
     "badge": "Read-only"
+  },
+  "lock": {
+    "refused": "This annotation is locked. Unlock it to change or remove it."
   }
 }

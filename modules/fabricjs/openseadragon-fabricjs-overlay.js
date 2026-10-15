@@ -798,6 +798,12 @@
     // already did them — we just refine the boolean it would have returned.
     const _origCheckTarget = fabric.Canvas.prototype._checkTarget;
     fabric.Canvas.prototype._checkTarget = function (pointer, obj) {
+        // Opt-out of targeting while staying rendered and `evented`. `evented = false`
+        // is the only stock way to leave hit-testing, and it does more than that:
+        // fabric discards the active object whenever the pointer sits on a non-evented
+        // target, so the owner of this flag could not keep a selection (and its
+        // controls) alive on an object it wanted the mouse to pass through.
+        if (obj?.__hitTestBlocked) return false;
         const passedBbox = _origCheckTarget.call(this, pointer, obj);
         if (!passedBbox) return passedBbox;
         if (!this.__spatialIndex) return passedBbox;

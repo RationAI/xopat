@@ -46,6 +46,19 @@
               "experimentAllow": ["xopat-*"],
               "auth": null
             }
+          },
+          /* Is the destination plugged in? `enabled` is the operator's baseline;
+             `sessionControllable` lets a session say `params.ioSinks`:
+             {"mlflow": false} (or call IO_PIPELINE.setSinkEnabled) to run without
+             pushing anything upstream.
+
+             DROP `sessionControllable` to pin it: the session value is then not
+             read and the runtime call is refused, so no bundle a third party hands
+             the viewer can redirect where scores go. Switched off, bundle exports
+             fall back to the local sinks and crud:score goes nowhere — the sink is
+             unplugged, not stalled. */
+          "sinks": {
+            "mlflow": { "enabled": true, "sessionControllable": true }
           }
         }
       }

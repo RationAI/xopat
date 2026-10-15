@@ -21,7 +21,6 @@
     "fixtures:derive": "node test/harness/data/derive.mjs",
     "fixtures:urls": "node test/harness/data/session-urls.mjs",
     "fixtures:serve": "node server/utils/node/slide-fileserver.mjs",
-
     "test:cypress": "npx cypress run --e2e",
     "test:cypress-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "test-env": "bash test/run-env.sh",
@@ -93,6 +92,7 @@
     "@playwright/test": "^1.62.1",
     "@types/node": "^25.5.0",
     "@types/openseadragon": "^5.0.2",
+    "@yao-pkg/pkg": "^6.23.0",
     "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
@@ -122,13 +122,34 @@
     "terser": "^5.44.0",
     "typescript": "^5.9.3"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "pkg": {
+    "targets": [
+      "node22-win-x64",
+      "node22-linux-x64"
+    ],
+    "scripts": [
+      "plugins/*/.server-dist/**/*.cjs",
+      "modules/*/.server-dist/**/*.cjs",
+      "plugins/*/.server-dist/node_modules/**/*.{js,cjs,json}",
+      "modules/*/.server-dist/node_modules/**/*.{js,cjs,json}",
+      "src/dist/user-roles-core.cjs"
+    ],
     "assets": [
       "server/templates/**/*",
+      "server/static/**/*",
+      "server/node/server-build-manifest.json",
       "plugins/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
       "modules/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "plugins/**/*.d.ts",
+      "modules/**/*.d.ts",
       "src/**/*",
       "ui/**/*",
+      "docs/assets/**/*",
+      "error.html",
+      "test/fixtures/sessions/*.json",
       "env/env.json"
     ]
   }

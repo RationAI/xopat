@@ -189,6 +189,13 @@ declare global {
          * `trace` — on real data these are PHI.
          */
         sensitive(...args: any[]): any;
+        /**
+         * A record whose payload is BYTES, carried out-of-band: the line
+         * describes the file, the bytes go to the server, which writes them
+         * beside the transcript. Needs `forward.attachments` on both ends.
+         */
+        attachment(descriptor: { file: string; bytes?: ArrayBuffer | ArrayBufferView | null; [key: string]: any },
+                   message?: string): any;
         /** Returns a stop function that emits `durationMs`. */
         time(label: string, level?: "trace" | "debug" | "info" | "warn" | "error"): (fields?: Record<string, any>) => any;
         child(sub: string): ClientLoggerLike;
@@ -211,6 +218,8 @@ declare global {
         getEntries(query?: { afterId?: number; limit?: number; minLevel?: string; channel?: string; search?: string }): any[];
         /** Push queued records to the server now (also runs on page hide). */
         flush(): Promise<void>;
+        /** Push queued attachment bytes now (one file per request). */
+        flushAttachments(): Promise<void>;
         stats(): Record<string, any>;
     }
 

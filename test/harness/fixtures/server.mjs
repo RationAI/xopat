@@ -163,8 +163,11 @@ class XOpatServer {
      * Call a server RPC method the way the client does.
      *
      * The method lives in the **path**, not the body — `/__rpc/<kind>/<id>/<method>`
-     * — and the body *is* the argument payload (see `resolveCallContext` in
-     * `server/node/server-runtime.js`).
+     * — and the body is an ENVELOPE whose `args` array holds the call's positional
+     * arguments: the dispatcher reads `readBodyField(body, "args")` and invokes
+     * `fn(ctx, ...args)`, so a payload sent as the bare body arrives as `{}` and
+     * every method silently runs on its defaults. Callers pass the payload; the
+     * envelope is built here, exactly as the generated client builds it.
      *
      * @param {"server"|"module"|"plugin"} kind
      * @param {string} id    e.g. `"core"`
@@ -182,7 +185,7 @@ class XOpatServer {
         const res = await fetch(url, {
             method: "POST",
             headers,
-            body: JSON.stringify(args),
+            body: JSON.stringify({ args: args === undefined ? [] : [args] }),
             signal: AbortSignal.timeout(60_000),
         });
         const text = await res.text();

@@ -304,6 +304,7 @@ ScriptingManager.registerExternalApi(
 
             if (raw.meta !== undefined) annotation.meta = this._clone(raw.meta);
             if (raw.private !== undefined) annotation.private = !!raw.private;
+            if (raw.locked !== undefined) annotation.locked = !!raw.locked;
             if (raw.label !== undefined) annotation.label = raw.label;
             if (raw.author !== undefined) annotation.author = this._clone(raw.author);
             if (raw.created !== undefined) annotation.created = this._clone(raw.created);
@@ -417,6 +418,13 @@ ScriptingManager.registerExternalApi(
 
             if (raw.private !== undefined) {
                 this._getFabric().setAnnotationPrivate?.(object, !!raw.private);
+                touched = true;
+            }
+
+            // Through the setter, never a raw write: a script must not outrank the
+            // deployment's lock policy, and the IO guard is what enforces it.
+            if (raw.locked !== undefined) {
+                this._getFabric().setAnnotationLocked?.(object, !!raw.locked);
                 touched = true;
             }
 

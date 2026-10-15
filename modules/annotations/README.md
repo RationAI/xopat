@@ -125,23 +125,72 @@ Three things worth knowing:
 `0` and `false` are values, not absences — only `undefined`, `null` and `""` fall
 through to the next rule.
 
-### Read-only annotations
+### Locked annotations
 
-`annotation.readOnly` marks an annotation the user may see but not change — an
-analysis job's output, a record owned by another scope, anything a rights resolver
-locked. It is enforced at the IO checkpoint by a guard the module registers itself,
-so **every** mutation path is covered at once: delete, edit commit, preset change,
-and entering edit mode. Comments are deliberately still allowed; a locked finding is
-still discussable. Visually the object keeps its selection but cannot be dragged and
-shows a padlock instead of the `private` toggle.
+Two flags lock an annotation, and `getAnnotationLockState(object)` is the single
+answer every consumer reads — hit-testing, selectability, editability, the IO guard,
+the padlock icon, the board badge:
 
-Set it with `fabric.setAnnotationReadOnly(object, value)` or carry it in from a
-convertor. It lives in both `copiedProperties` and `necessaryProperties`, so it
-survives export, import and undo — a lock that evaporated on reload would be worse
-than no lock at all.
+| flag | who sets it | default meaning |
+|---|---|---|
+| `locked` | the user, via the padlock in the annotation's toolbar | does not respond to the canvas at all: not hit-tested, not selectable, so the user can **draw straight over it**; every mutation refused; releasable again |
+| `readOnly` | an owner — an analysis job's output, a record another scope owns, a rights resolver | stays selectable, readable and commentable; every mutation refused; **not** releasable by the user |
 
-Do not confuse it with `private`, which despite the padlock icon controls **export**,
-not mutability.
+Both are enforced at the IO checkpoint by a guard the module registers itself, so
+**every** mutation path is covered at once: delete, edit commit, preset change, and
+entering edit mode. Comments are deliberately still allowed; a locked finding is
+still discussable. The one mutation a releasable lock lets through is the lock
+toggle itself (`meta.kind: 'lock-change'`) — otherwise the flag that makes an
+annotation immutable would also make itself unwritable.
+
+Set them with `fabric.setAnnotationLocked(object, value)` (dispatched through the IO
+pipeline, so it syncs to a bound sink and is undoable) and
+`fabric.setAnnotationReadOnly(object, value)` (a direct write: it projects an owner's
+upstream policy during hydration, and dispatching it would echo that owner's own
+state back at its sink). Both live in `copiedProperties` and `necessaryProperties`,
+so they survive export, import and undo — a lock that evaporated on reload would be
+worse than no lock at all.
+
+A locked annotation is off the canvas's hit-test, so the padlock that released it is
+out of reach there: the **board row** is the way back — clicking it selects and
+centres the annotation (which brings its toolbar, and the padlock, back), and the
+row's `…` menu carries Lock/Unlock directly.
+
+#### Redefining what a lock means
+
+Who may lock, who may release, and whether a locked record still answers the mouse
+are questions only the owner of the data can settle. State the rule instead of
+writing `evented`/`selectable` yourself (those are derived, see *visibility gates*
+below for why a direct write does not survive):
+
+```js
+const dispose = annotations.registerLockPolicy(this.id, (object, stateSoFar) =>
+    object.jobId ? { interactive: true, releasable: false } : undefined);
+```
+
+The policy returns a **partial** override of
+`{locked, interactive, mutable, releasable, reason, code}`, or nothing for "no
+opinion". Policies compose in registration order; throwing is treated as no opinion,
+so a broken policy cannot lock the whole canvas. It runs per annotation per
+visibility evaluation — keep it cheap and side-effect free.
+
+#### `private` is a different question
+
+`private` is about **who else may see** the annotation, which only a storage
+integration can enforce — and standalone xOpat has no other users to hide it from.
+So the flag is inert, and therefore not offered, until an owner says it means
+something:
+
+```js
+annotations.registerPrivacyProvider(this.id, { excludeFromExport: true });
+```
+
+That makes the eye toggle appear in the annotation's `…` menu and, with
+`excludeFromExport`, withholds private annotations from exports (the deployment's
+`exportPrivate` static meta forces them back in). With no provider registered,
+nothing is hidden and nothing is dropped from an export — a toggle whose only
+observable effect is that annotations quietly vanish from a file is worse than no
+toggle.
 
 A read-only annotation can still be **evicted**: `fabric.dropAnnotations(objects)`
 removes local copies without dispatching to any sink, running guards, or pushing

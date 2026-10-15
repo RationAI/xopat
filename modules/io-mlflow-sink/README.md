@@ -155,6 +155,43 @@ The `auth` block is forwarded verbatim to `HttpClient` and refers to the
 *viewer's* token for the proxy's verifier chain — not to any MLflow secret.
 Drop it if the proxy has `auth.enabled: false`.
 
+### 2b-bis. Letting a session switch the sink off
+
+Whether MLflow receives anything at all is a routing decision, so it is the
+pipeline's switch, not this module's — the sink needs no configuration of its own
+to participate:
+
+```jsonc
+"io": {
+    "sinks": { "mlflow": { "enabled": true, "sessionControllable": true } }
+}
+```
+
+With `sessionControllable` set, a session may run without pushing:
+
+```jsonc
+"params": { "ioSinks": { "mlflow": false } }
+```
+
+and code can do the same at runtime with
+`IO_PIPELINE.setSinkEnabled("mlflow", false)`. **Omit `sessionControllable` and
+the deployment's `enabled` is a hard pin** — the session value is not read and the
+runtime call is refused, so an embedding app or an imported peer session cannot
+redirect where scores go.
+
+Switched off, the sink stays registered but resolves as if no binding named it:
+bundle capabilities fall through to the built-in local sinks (`session-memory` /
+`post-data`), so export still works, and `crud:score` simply has nowhere to go
+rather than piling up behind a destination that will not answer. See
+[`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md) → *Per-sink on/off*.
+
+Two things this does **not** change: the trusted-only keys (`proxy`, `baseURL`,
+`auth`, `experimentAllow`, `artifactPathPrefix`) remain ENV/include.json-only
+either way — a session can refuse the destination, never choose a different one;
+and the module itself still loads or not by `ENV.modules.io-mlflow-sink.enabled`,
+since sessions have no `modules` block at all. The switch is about the sink, not
+about loading the code.
+
 ### 2c. Option layering
 
 Composed on every dispatch; latest wins. `null` values and `_`-prefixed keys are

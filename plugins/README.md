@@ -265,7 +265,7 @@ constructor with `initIO` + `defineResource`. The legacy
 and the `initPostIO()` helper have been removed; existing plugins that
 used them have migration notes in their own `MIGRATION.md` files (see
 [`plugins/recorder/MIGRATION.md`](recorder/MIGRATION.md),
-[`plugins/questionaire-new/MIGRATION.md`](questionaire-new/MIGRATION.md)).
+[`plugins/questionaire-new/MIGRATION.md`](questionaire/MIGRATION.md)).
 
 ### Declare in `include.json`
 
@@ -574,6 +574,19 @@ Only scanned+enabled elements are baked; disabled or config-gated elements cost
 nothing. Dev mode never bakes — files stay hot-editable, and the client falls
 back to cached fetches. Production bakes are computed once per server process;
 restart the server to pick up changed files.
+
+## Server-side code (`*.server.*`) and the release binary
+
+A plugin's server files are **bundled at build time** by `npm run build`
+(→ `grunt serverBuild`) into `<plugin>/.server-dist/` and recorded in
+`server/node/server-build-manifest.json`. The standalone binary carries no compiler,
+so an entry that was not built cannot be compiled later — it answers
+`RPC_UNKNOWN_METHOD`. Author in any module style (`import`, `require`, `import()`,
+ESM-only or CJS dependencies, mixed) except **top-level await**, and declare anything
+that genuinely cannot be inlined via `include.json` → `"server": { "external": [...],
+"assets": [...] }` instead of marking it external by hand. Details and the reasoning:
+[`../modules/README.md`](../modules/README.md) → *Server-side code* and
+[`../server/node/README.md`](../server/node/README.md).
 
 ## Caveats
 Plugins should persist their state through the **IO pipeline** (`initIO({exportBundle,

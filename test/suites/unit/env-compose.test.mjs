@@ -202,8 +202,8 @@ test("a proxy alias with a relative or cleared baseURL is fine @unit", () => {
 
 /* ---------------------------------------------------- the shipped library */
 
-test("base/core + data/wsi-service reproduces env/env.default.json exactly @unit", () => {
-    const composed = composeEnv(["base/core", "data/wsi-service"], {}).env;
+test("the standalone layers reproduce env/env.default.json exactly @unit", () => {
+    const composed = composeEnv(["base/core", "data/wsi-service", "auth/none", "chat/standalone-optional", "flags/standalone-plugins"], {}).env;
     expect(sorted(composed)).toEqual(sorted(readJsonc("env/env.default.json")));
 });
 
@@ -254,6 +254,11 @@ test("the mlflow presets shape each capability per binding, not per sink @unit",
         // tracking server directly.
         expect(sink.artifacts.proxy ?? sink.proxy, preset).toBe("mlflow");
         expect(io.sinkOverrides.mlflow.experimentAllow, preset).toEqual(["xopat-*"]);
+        // The dev deployment lets a session run without pushing upstream
+        // (`params.ioSinks: {"mlflow": false}`). A production deployment pins it
+        // by dropping `sessionControllable` — so the key must be explicit here,
+        // not inherited from a default nobody can see.
+        expect(io.sinks.mlflow, preset).toEqual({ enabled: true, sessionControllable: true });
     }
 
     // Only the annotations preset adds the second owner.

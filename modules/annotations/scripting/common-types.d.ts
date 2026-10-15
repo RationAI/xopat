@@ -27,11 +27,19 @@ export type AnnotationRecord = Record<string, unknown> & {
     created?: string | number | Date | null;
     private?: boolean;
     /**
+     * The user's own lock. By default the annotation stops responding to the canvas
+     * — it is not hit-tested and not selectable, so one can draw straight over it —
+     * and every mutation is refused. Releasable again, unlike `readOnly`. What a
+     * lock means is deployment-overridable, so do not assume these exact effects.
+     */
+    locked?: boolean;
+    /**
      * The annotation may be read but not changed or removed — an analysis job's
      * output, a record owned elsewhere, or anything a rights resolver locked.
      * Enforced by the annotations module's IO guard on every mutation path, so a
-     * write attempt is refused rather than silently diverging. Unrelated to
-     * `private`, which controls export.
+     * write attempt is refused rather than silently diverging. Unlike `locked` it
+     * is imposed, not placed by this user, and cannot be lifted here. Both are
+     * unrelated to `private`, which is about who else may see the annotation.
      */
     readOnly?: boolean;
     comments?: AnnotationCommentRecord[];
@@ -170,6 +178,7 @@ export type AnnotationCreateInput = {
 
     meta?: AnnotationMeta;
     private?: boolean;
+    locked?: boolean;
     label?: string | number;
     author?: string | { id?: string; name?: string } | null;
     created?: string | number | Date | null;
@@ -180,6 +189,8 @@ export type AnnotationCreateInput = {
 export type AnnotationMutablePatch = {
     presetID?: string;
     private?: boolean;
+    /** Refused when the resolved lock state is not releasable. */
+    locked?: boolean;
     label?: string | number;
     meta?: AnnotationMeta;
     author?: string | { id?: string; name?: string } | null;
