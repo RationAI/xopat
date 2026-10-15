@@ -1,0 +1,40 @@
+{
+  "$meta": {
+    "description": "OpenAI + Anthropic chat loaded at startup, voice dictation via the chat provider — the standalone default",
+    "dimension": "chat",
+    "requires": []
+  },
+  /* Part of env/env.default.json. Production providers only; an unset key
+     means each user enters their own. */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-openai": {
+            "providerDefaults": {
+              "apiKey": "<% OPENAI_API_KEY %>"
+            }
+          },
+          "chat-anthropic": {
+            "providerDefaults": {
+              "apiKey": "<% ANTHROPIC_API_KEY %>"
+            }
+          }
+        }
+      }
+    }
+  },
+  "plugins": {
+    "chat-openai": { "enabled": true, "permaLoad": true },
+    "chat-anthropic": { "enabled": true, "permaLoad": true },
+    "chat-openai-compatible": { "enabled": false }
+  },
+  "modules": {
+    "vercel-ai-chat-sdk": { "enabled": true },
+    /* Speech to text for the chat, uses any provider that can transcribe */
+    "speech-to-text": {
+      "enabled": true,
+      "driver": "vercel"
+    }
+  }
+}
