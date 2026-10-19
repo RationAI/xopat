@@ -109,3 +109,111 @@ test("every required context is declared up-front, not on first slide @unit", ()
     registry.declareAuthContexts();
     expect(declaredContexts.length).toBe(2);
 });
+
+/**
+ * The STRING form of a `slide_protocols` entry declares the upstream in its URL
+ * template and nothing else. It used to bind no client at all, so its metadata and
+ * tile requests left as a bare `fetch` — no credential, no refresh-on-401 — and an
+ * authenticated deployment answered 403 with nothing in the console to say why.
+ * The origin is derivable from the template, so it is derived.
+ */
+test("a string-form entry binds a client to the origin its template resolves to @unit", () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: {
+            wsi: "`https://wsi.example.org/v3/slides/info?slide_id=${data}`",
+        },
+        default_background_protocol: "wsi",
+    });
+
+    const { url, client } = registry.resolveBackground({ spec: "s1", isSecureMode: true });
+    expect(url).toBe("https://wsi.example.org/v3/slides/info?slide_id=s1");
+    expect(client).toBeTruthy();
+    expect(client.baseURL).toBe("https://wsi.example.org");
+    // The main identity, as a hand-written `{"baseURL": …}` block would give
+    // (undefined is how XOpatUser spells the default context).
+    expect(client.authContextId).toBe(undefined);
+    expect(registry.getActiveClientForUrl(url)).toBe(client);
+});
+
+test("an explicit httpClient block still wins over the derived origin @unit", () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: {
+            wsi: {
+                url: "`https://wsi.example.org/v3/slides/info?slide_id=${data}`",
+                baseURL: "https://wsi.example.org",
+                auth: { contextId: "hospital-a" },
+            },
+        },
+        default_background_protocol: "wsi",
+    });
+    const { client } = registry.resolveBackground({ spec: "s1", isSecureMode: true });
+    expect(client.authContextId).toBe("hospital-a");
+});
+
+/**
+ * `${data}` IS the upstream here: every slide may live on a different origin, so
+ * there is no one origin to bind a credential to. Deriving the probe's own origin
+ * would be worse than deriving nothing — it would send the token to whichever host
+ * the first slide happened to name.
+ */
+test("a template whose data carries the whole URL derives no client @unit", () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: { any: "`${data}`" },
+        default_background_protocol: "any",
+    });
+    const { url, client } = registry.resolveBackground({
+        spec: "https://elsewhere.example.net/slide.dzi", isSecureMode: true,
+    });
+    expect(url).toBe("https://elsewhere.example.net/slide.dzi");
+    expect(client).toBe(undefined);
+});
+
+test("a relative template with no proxy derives no client @unit", () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: { rel: "`/v3/slides/info?slide_id=${data}`" },
+        default_background_protocol: "rel",
+    });
+    expect(registry.resolveBackground({ spec: "s1", isSecureMode: true }).client).toBe(undefined);
+});
+
+/**
+ * The legacy `*_group_protocol` pair substitutes the upstream from its sibling
+ * `*_group_server` key, so the origin is static even though the template is not.
+ */
+test("legacy image_group_protocol derives its client from image_group_server @unit", () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        image_group_protocol: "`${path}/slides/${data}/info`",
+        image_group_server: "https://legacy.example.org",
+    });
+    const { url, client } = registry.resolveBackground({ spec: "s1", isSecureMode: true });
+    expect(url).toBe("https://legacy.example.org/slides/s1/info");
+    expect(client.baseURL).toBe("https://legacy.example.org");
+});
+
+/**
+ * The derived credential has to be refusable: a public upstream that never asked
+ * for `Authorization` answers the preflight it triggers with a CORS failure, not a
+ * 401. An empty `types` array is that refusal — and it had to stop reading as
+ * "unset", which silently resolved back to `["jwt"]`.
+ */
+test("auth.types: [] sends no credential @unit", async () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: {
+            pub: {
+                url: "`https://public.example.org/slides/${data}.dzi`",
+                baseURL: "https://public.example.org",
+                auth: { types: [] },
+            },
+        },
+        default_background_protocol: "pub",
+    });
+    const { url, client } = registry.resolveBackground({ spec: "s1", isSecureMode: true });
+    const headers = await client._authHeaders(url, "GET");
+    expect(Object.keys(headers)).toEqual([]);
+});

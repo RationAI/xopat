@@ -69,6 +69,12 @@ export interface RemoteEndpointOptions {
          * auth module owning the context decides, and a client constructed before
          * that context was configured still follows it. Falls back to `["jwt"]`.
          * Set it explicitly only to override the owning module.
+         *
+         * An EMPTY array is that override's "none": the endpoint sends no
+         * credential whatever the context holds. It is the only way to say so —
+         * omitting the block resolves to `["jwt"]` — and it is what a public
+         * upstream needs, where an `Authorization` header the server never asked
+         * for costs a CORS preflight it does not answer.
          */
         types?: string[];
         /** Per-instance handler overrides composed on top of global defaults. */
@@ -239,7 +245,10 @@ export class XOpatRemoteEndpoint {
      */
     protected get authTypes(): string[] {
         const explicit = this.auth.types;
-        if (Array.isArray(explicit) && explicit.length) return explicit;
+        // Length is NOT part of the test: `types: []` is an explicit "no
+        // credential", and treating it as "unset" sent the context's JWT to an
+        // endpoint that had asked for none.
+        if (Array.isArray(explicit)) return explicit;
         const declared = appAuth()?.getSecretTypes?.(this.auth.contextId);
         return Array.isArray(declared) && declared.length ? declared : DEFAULT_SECRET_TYPES;
     }

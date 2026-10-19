@@ -177,7 +177,7 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
     private _clientFor(entry: SlideProtocolEntry): HttpClient | undefined {
         const cached = this.clients.get(entry.id);
         if (cached) return cached;
-        const opts = entry.httpClient;
+        const opts = entry.httpClient ?? this._deriveClientOptions(entry);
         if (!opts) return undefined;
         if (!opts.proxy && !opts.baseURL) {
             // Without a transport there is no client to stamp onto the tile
@@ -201,6 +201,72 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             return client;
         } catch (e) {
             console.warn(`[SLIDE_PROTOCOLS] failed to construct HttpClient for protocol "${entry.id}":`, e);
+            return undefined;
+        }
+    }
+
+    /** Entries whose transport was inferred rather than declared. Reported once each. */
+    private derivedClients = new Set<SlideProtocolId>();
+
+    /**
+     * Infer the transport of a URL-template entry that declared no `httpClient`
+     * block — the string form `"wsi_service": "`https://host/v3/...${data}`"`,
+     * and the `__legacy_*` entries synthesized from `image_group_protocol` /
+     * `data_group_protocol`.
+     *
+     * Declaring a slide protocol already names the upstream: the template (or a
+     * legacy `*_group_server`) contains it. Requiring the operator to *repeat*
+     * that origin as `baseURL` purely to get a client made the two env forms
+     * behave differently for no reason a deployment can see — the string form
+     * resolved to a bare `fetch`, so its metadata and tile requests carried no
+     * `Authorization`, no session/CSRF headers, no refresh-on-401 and no request
+     * scheduling. A 403 on a perfectly authenticated session was the only symptom.
+     *
+     * So the origin is read back out of the template by rendering it with a
+     * sentinel data id. That covers every shape uniformly — query-param templates,
+     * legacy `${path}` substitution, array data — without parsing template syntax.
+     * It yields nothing (and the entry stays client-less, as before) when the
+     * upstream is not static: a `` `${data}` `` template where each slide carries
+     * its own absolute URL, or a relative template in a deployment with no proxy.
+     *
+     * An explicit `httpClient` block always wins; this only fills the gap. The
+     * derived client is unauthenticated-by-default in the only sense that matters:
+     * it attaches whatever credential the MAIN auth context holds, exactly as a
+     * hand-written `{"baseURL": "<that origin>"}` does, and `isCrossOriginUrl`
+     * still refuses to send it anywhere but the derived origin.
+     */
+    private _deriveClientOptions(entry: SlideProtocolEntry): SlideProtocolHttpClientOptions | undefined {
+        if (isFactoryEntry(entry)) return undefined;
+        const origin = this._staticOriginOf(entry as SlideProtocolUrlTemplateEntry);
+        if (!origin) return undefined;
+        if (!this.derivedClients.has(entry.id)) {
+            this.derivedClients.add(entry.id);
+            console.debug(
+                `[SLIDE_PROTOCOLS] protocol "${entry.id}" declares no \`httpClient\` block; binding one to the ` +
+                `origin its URL template resolves to (${origin}). Requests to it now carry the main auth ` +
+                `context's credential. Declare \`httpClient\` explicitly to override: \`auth.contextId\` for a ` +
+                `different identity, \`auth.types: []\` to send none, \`proxy\` to route through the server.`
+            );
+        }
+        return { baseURL: origin };
+    }
+
+    /** Origin a URL template always resolves to, or undefined when it varies per slide. */
+    private _staticOriginOf(entry: SlideProtocolUrlTemplateEntry): string | undefined {
+        // Must not collide with anything a real URL contains, and must be
+        // recognizable in the output: an origin built out of the probe means the
+        // data id IS the upstream, so there is no one origin to bind.
+        const PROBE = "__xopat_origin_probe__";
+        try {
+            const compile = compileUrlEntry(entry);
+            const rendered = compile(entry.legacy && entry.legacyArrayData ? [PROBE] : PROBE);
+            if (typeof rendered !== "string" || !/^https?:\/\//i.test(rendered)) return undefined;
+            const { origin } = new URL(rendered);
+            return origin.includes(PROBE) ? undefined : origin;
+        } catch (e) {
+            // A template that throws on a string probe is not broken — it may
+            // destructure a real data spec. It just cannot be probed; the entry
+            // keeps its previous (client-less) behaviour.
             return undefined;
         }
     }

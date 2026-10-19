@@ -26,9 +26,15 @@ type XOpatClientConfig = {
      * in the template — or an object
      * `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`
      * whose *remaining* fields are forwarded verbatim to `new HttpClient({…})`.
-     * The object form makes every request issued by this protocol's TileSource
-     * (metadata + tiles) flow through the configured HttpClient — gaining proxy
-     * routing, CSRF injection, and JWT/auth headers uniformly; and
+     * Both forms route every request issued by this protocol's TileSource
+     * (metadata + tiles) through an HttpClient — gaining proxy routing, CSRF
+     * injection, and JWT/auth headers uniformly. The string form has no options
+     * to configure one from, so its transport is INFERRED: the origin its
+     * template resolves to becomes the `baseURL` and the main auth context
+     * supplies the credential. The object form is how a deployment overrides
+     * that (`proxy`, a different `auth.contextId`, `auth.types: []` for none) —
+     * and it is required when the template is relative or when the upstream
+     * varies per slide, since neither yields a single origin to bind. And
      * `tileSourceClass` names the TileSource class to construct directly,
      * skipping OSD autodetection so per-slide `options` can shape the metadata
      * request (operator-only — see `SlideProtocolUrlTemplateEntry`).

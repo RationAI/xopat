@@ -377,3 +377,54 @@ module.exports.expandIncludeGlobs = function (basePath, includes, label = undefi
     }
     return expanded;
 }
+
+/**
+ * Static relative ES-module imports (`import … from "./x.mjs"`, `import "./x.mjs"`,
+ * `export … from "./x.mjs"`) of a module, transitively. Dynamic `import()` is
+ * deliberately excluded — that is code its author chose to load lazily.
+ *
+ * The browser discovers a module's imports only after it has fetched and parsed
+ * it, so a plugin whose entry imports a chain of sub-modules pays one round trip
+ * per level (the DICOM plugin: four, ~2 s over a distant link) before it can run.
+ * The page emits these as `<link rel="modulepreload">` so the whole graph is
+ * requested in parallel with the entry.
+ *
+ * Regex-based, not a parser: it only has to find specifiers, a miss merely
+ * costs the round trip it would have cost anyway, and a false hit is a
+ * preloaded file that exists (each one is checked) under the element root.
+ *
+ * @param {string} rootAbs   element directory, absolute, ending with '/'
+ * @param {string} entryRel  entry path relative to rootAbs
+ * @param {(p:string)=>boolean} fileExists
+ * @param {(p:string)=>string} readFile
+ * @param {number} [maxFiles=64] bound on the walk
+ * @return {string[]} dependency paths relative to rootAbs (entry excluded), in discovery order
+ */
+module.exports.collectStaticModuleImports = function (rootAbs, entryRel, fileExists, readFile, maxFiles = 64) {
+    const IMPORT_RE = /(?:^|[;\s])(?:import|export)\s+(?:[^'"`;()]*?\s+from\s+)?["'](\.{1,2}\/[^"']+\.m?js)["']/g;
+    const root = path.posix.normalize(rootAbs.replace(/\\/g, "/"));
+    const seen = new Set([entryRel]);
+    const out = [];
+    const queue = [entryRel];
+    while (queue.length && seen.size <= maxFiles) {
+        const rel = queue.shift();
+        let source;
+        try {
+            source = readFile(root + rel);
+        } catch (e) {
+            continue;
+        }
+        // Strip comments so a commented-out or documented import is not preloaded.
+        source = String(source).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+        for (const m of source.matchAll(IMPORT_RE)) {
+            const dep = path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]));
+            // Never walk out of the element directory.
+            if (dep.startsWith("../") || path.posix.isAbsolute(dep) || seen.has(dep)) continue;
+            seen.add(dep);
+            if (!fileExists(root + dep)) continue;
+            out.push(dep);
+            queue.push(dep);
+        }
+    }
+    return out;
+};

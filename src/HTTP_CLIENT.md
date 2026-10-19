@@ -265,7 +265,7 @@ When a request is sent:
 
 1. Cross-origin URLs (an absolute URL outside `baseURL`'s origin) drop **all** auth headers, with one warning per foreign origin.
 2. If `awaitContext` is on and no secret exists yet, the client waits (bounded, abortable) for `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`.
-3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`).
+3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`). An explicitly **empty** `auth.types` means *no credential*: it is the only way to say so, and length is deliberately not part of that test — reading `[]` as "unset" sent the context's JWT to an endpoint that had asked for none.
 4. For each type:
     - Looks up a secret `getSecret(type, contextId)`.
     - If found, calls the handler with `{ secret, type, contextId, url, method }`.
