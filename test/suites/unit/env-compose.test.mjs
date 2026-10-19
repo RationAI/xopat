@@ -202,8 +202,8 @@ test("a proxy alias with a relative or cleared baseURL is fine @unit", () => {
 
 /* ---------------------------------------------------- the shipped library */
 
-test("base/core + data/wsi-service reproduces env/env.default.json exactly @unit", () => {
-    const composed = composeEnv(["base/core", "data/wsi-service"], {}).env;
+test("the standalone layers reproduce env/env.default.json exactly @unit", () => {
+    const composed = composeEnv(["base/core", "data/wsi-service", "auth/none", "chat/standalone-optional", "flags/standalone-plugins"], {}).env;
     expect(sorted(composed)).toEqual(sorted(readJsonc("env/env.default.json")));
 });
 
