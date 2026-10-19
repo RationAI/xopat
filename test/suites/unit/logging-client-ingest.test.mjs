@@ -175,16 +175,16 @@ test("a client attachment takes the same path a server-side one takes @unit", ()
         client: { ingest: true, attachments: true },
     }));
     const entry = broker.ingestClientRecord({
-        channel: "plugin.mixture-report-assist:trace",
+        channel: "plugin.report-assist:trace",
         level: "trace",
         sensitive: true,
-        message: "MIXTURE_DICTATION_AUDIO",
-        fields: { attachment: { file: "mixture/s1/audio/window-0001.webm", size: 8 } },
-    }, {}, { bytes: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]), file: "mixture/s1/audio/window-0001.webm" });
+        message: "DICTATION_AUDIO",
+        fields: { attachment: { file: "report/s1/audio/window-0001.webm", size: 8 } },
+    }, {}, { bytes: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]), file: "report/s1/audio/window-0001.webm" });
 
     expect(entry, "the record is emitted").not.toBe(null);
-    expect(entry.channel).toBe("client:plugin.mixture-report-assist:trace");
-    expect(entry.fields.attachment.file).toBe("mixture/s1/audio/window-0001.webm");
+    expect(entry.channel).toBe("client:plugin.report-assist:trace");
+    expect(entry.fields.attachment.file).toBe("report/s1/audio/window-0001.webm");
     expect(entry.sensitive).toBe(true);
 });
 
@@ -193,8 +193,8 @@ test("an attachment record still obeys the sensitive gate @unit", () => {
     // true` in a request body would be a switch for logging patient payloads.
     const broker = makeBroker(base({ client: { ingest: true, attachments: true } }));
     const entry = broker.ingestClientRecord({
-        channel: "plugin.mixture-report-assist:trace", level: "trace", sensitive: true,
-        message: "MIXTURE_DICTATION_AUDIO", fields: { attachment: { file: "a.webm", size: 8 } },
+        channel: "plugin.report-assist:trace", level: "trace", sensitive: true,
+        message: "DICTATION_AUDIO", fields: { attachment: { file: "a.webm", size: 8 } },
     }, {}, { bytes: Buffer.from([1, 2]), file: "a.webm" });
 
     expect(entry, "no allowSensitive, no record — and no bytes").toBe(null);

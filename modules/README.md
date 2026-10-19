@@ -245,6 +245,35 @@ nothing. Dev mode never bakes — files stay hot-editable, and the client falls
 back to cached fetches. Production bakes are computed once per server process;
 restart the server to pick up changed files.
 
+## Server-side code (`*.server.*`) and the release binary
+
+A module's server files (`*.server.{ts,mts,cts,js,mjs,cjs}`) are **bundled at build
+time** by `npm run build` (→ `grunt serverBuild`) into `<module>/.server-dist/` and
+recorded in `server/node/server-build-manifest.json`. The standalone binary carries
+no compiler, so an entry that was not built cannot be compiled later — it simply
+answers `RPC_UNKNOWN_METHOD`. Two consequences for authors:
+
+- **Write whatever module style you like.** `import`, `require`, `import()`, an
+  ESM-only dependency and a CJS one can be mixed freely; the bundler resolves it all.
+  The one exception is **top-level await**, which the CJS output cannot express (the
+  build fails naming your file — see `server/node/README.md`).
+- **If something cannot be bundled, declare it** rather than reaching for an esbuild
+  `external` flag, because "external" means "resolve it at runtime" and a packaged
+  binary has no `node_modules`:
+
+  ```jsonc
+  // include.json
+  "server": {
+    "external": ["sharp"],              // kept out of the bundle AND copied into
+                                        // .server-dist/node_modules/ so it resolves
+    "assets": ["vendor/**/*.node"]      // files recorded for packaging
+  }
+  ```
+
+  Native `.node` addons additionally cannot be executed from inside a snapshot: copy
+  one out to the server cache dir before requiring it. Both keys are
+  deployment-trusted build-time config (`include.json`), never session input.
+
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state

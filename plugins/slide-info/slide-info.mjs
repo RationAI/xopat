@@ -479,8 +479,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
         } finally {
             this._resolveVisitedReady();
             // A server-bound visited store (kv:visited -> a server driver) hydrates
-            // asynchronously, so slides marked seen elsewhere (e.g. MIXTURE's
-            // per-user flag) aren't known until now — repaint the switcher so their
+            // asynchronously, so slides marked seen elsewhere (e.g. an
+            // embedding platform's per-user flag) aren't known until now — repaint the switcher so their
             // badge shows without waiting for the next refresh.
             if (!this.hasCustomBrowser && this.slideBrowser) this.menu?.refresh();
         }

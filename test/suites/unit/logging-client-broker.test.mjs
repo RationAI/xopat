@@ -678,7 +678,7 @@ test("an attachment's own LINE obeys maxRecordBytes, and keeps its pointer @unit
     // at it was gone too.
     const { broker, sent } = attachmentBroker({ forward: { maxRecordBytes: 2_000 } });
     broker.log("test").attachment({
-        file: "mixture/sess-1/audio/window-0001.webm",
+        file: "report/sess-1/audio/window-0001.webm",
         bytes: BYTES(),
         mediaType: "audio/webm",
         segments: "s".repeat(50_000),
@@ -690,7 +690,7 @@ test("an attachment's own LINE obeys maxRecordBytes, and keeps its pointer @unit
     delete line.attachmentBytes;              // the file is not bound by the line cap
     expect(JSON.stringify(line).length).toBeLessThanOrEqual(2_000);
     expect(line.fields.attachment.file, "the pointer survives the trim verbatim")
-        .toBe("mixture/sess-1/audio/window-0001.webm");
+        .toBe("report/sess-1/audio/window-0001.webm");
     expect(line.fields.attachment.size).toBe(8);
     expect(line.fields.attachment.mediaType).toBe("audio/webm");
     expect(

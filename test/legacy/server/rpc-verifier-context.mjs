@@ -73,8 +73,8 @@ const A = { verifiers: { oidc: {} } };
 
 eq("{default} + 'core' resolves to default  (THE reported regression)",
     resolveVerifierContext({ default: D }, "core").key, "default");
-eq("{default:[verifiers]} + 'core' resolves  (the MIXTURE deployment shape)",
-    resolveVerifierContext({ default: { verifiers: ["mixture-session"], mode: "all" } }, "core").key, "default");
+eq("{default:[verifiers]} + 'core' resolves  (a plugin-verifier deployment shape)",
+    resolveVerifierContext({ default: { verifiers: ["plugin-session"], mode: "all" } }, "core").key, "default");
 eq("{core} + absent resolves core  (no downgrade by omitting the field)",
     resolveVerifierContext({ core: C }, undefined).key, "core");
 

@@ -7,7 +7,7 @@
  *
  *  1. TAP-ish — `ok N - name` / `not ok N - name`, optionally with a detail on
  *     an indented continuation line or a `  # <json>` suffix. Used by 11 of the
- *     13 scripts (`test/server/*`, `test/io/*`, `test/ui/*`, `test/mixture/*`).
+ *     13 scripts (`test/server/*`, `test/io/*`, `test/ui/*`).
  *  2. Summary-only — `test/dicom/derived-conformance.mjs` counts internally and
  *     prints `DICOM conformance: N checks passed.`, or on failure a stderr block
  *     of `  ✗ name` followed by indented `expected`/`actual` lines.

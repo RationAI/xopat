@@ -26,8 +26,8 @@ import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const CHANNEL = "plugin.mixture-report-assist:trace";
-const AUDIO = "mixture/sess-1/audio/window-0001.webm";
+const CHANNEL = "plugin.report-assist:trace";
+const AUDIO = "report/sess-1/audio/window-0001.webm";
 /** Recognisable bytes: enough to prove the file is the one that was sent. */
 const BYTES = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5, 6, 7, 8]);
 
@@ -39,7 +39,7 @@ function audioRecord(over = {}) {
         level: "trace",
         channel: CHANNEL,
         sensitive: true,
-        message: "MIXTURE_DICTATION_AUDIO",
+        message: "DICTATION_AUDIO",
         fields: { attachment: { file: AUDIO, size: BYTES.length, mediaType: "audio/webm" } },
         attachmentBytes: BYTES.toString("base64"),
         ...over,
@@ -181,7 +181,7 @@ test("an accepted attachment becomes a real file beside the transcript", {
         // THE SERVER OWNS THE PATH, and that is the assertion — not a convenience.
         // The sidecar directory is shared by every caller and the transport writes
         // with `wx`, treating EEXIST as success, so a client-chosen path is a
-        // cross-caller write primitive: post `mixture/sess-1/audio/window-0001.webm`
+        // cross-caller write primitive: post `report/sess-1/audio/window-0001.webm`
         // first and the real owner's window is silently never written while its line
         // still reads `stored: true`. Names like that are predictable, so it needs
         // no guessing. Hence the prefix, and hence the client's name surviving as
