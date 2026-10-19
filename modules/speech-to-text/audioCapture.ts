@@ -118,6 +118,14 @@ export interface CaptureHealth {
     portIdleMs: number;
     /** ms since the archive recorder last flushed bytes; -1 when there is no archive. */
     archiveIdleMs: number;
+    /**
+     * Frames the Silero engine has emitted this session; -1 when it is not the engine.
+     *
+     * `0` while `clock === "silero"` means the model loaded and attached but the
+     * renderer never pulled its graph — which `vadIdleMs: -1` cannot distinguish from
+     * a capture that simply has not started yet.
+     */
+    sileroFrames: number;
 }
 
 /** Why a capture heartbeat fired. */
@@ -329,6 +337,9 @@ function mapGumError(e: any): CaptureError {
  *  segment's "silence" verdict is a measurement hole, not real silence. */
 const VAD_STALL_MS = 2000;
 
+/** Consecutive stalled polls before the session gives up its engine. See `_vadStallStrikes`. */
+const VAD_STALL_STRIKES = 2;
+
 /** Silence long enough to be a word gap — where a duration-capped segment may cut. */
 const SOFT_CUT_SILENCE_MS = 300;
 /** How long past the duration cap we keep waiting for that word gap before forcing a cut. */
@@ -403,6 +414,8 @@ interface SegmentRecording {
     chunks: Blob[];
     /** The 16 kHz frames of a Silero-judged segment (its WAV upload); null otherwise. */
     pcm: Float32Array[] | null;
+    /** [vad-debug] TEMPORARY Silero prob histogram: [>=0.5, 0.35-0.5, 0.2-0.35, <0.2]. */
+    dbgHist?: number[];
     /** The engine that judged this segment (fixed at creation; a live switch never rewrites it). */
     vad: VadEngine;
     startedAt: number;
@@ -422,6 +435,15 @@ interface SegmentRecording {
 }
 
 export class AudioCapture {
+    /**
+     * How long a starting session waits for the VAD model before opening the
+     * microphone on the amplitude gate anyway. A hard ceiling, not a default:
+     * consumers watch for `capture-started` on their own (5 s in the chat
+     * controller) and restart a capture that does not report one, so a wait
+     * longer than that turns a slow model download into a restart loop.
+     */
+    static readonly VAD_START_GRACE_MS = 2500;
+
     private _stream: MediaStream | null = null;
     private _recorder: MediaRecorder | null = null;
     private _chunks: Blob[] = [];
@@ -522,6 +544,16 @@ export class AudioCapture {
     private _detachTrack: (() => void) | null = null;
     /** Timestamp of the last VAD tick (rAF or worklet). Stall watchdog input. */
     private _lastVadTickAt = 0;
+    /**
+     * Consecutive `vad-stalled` verdicts from the health poll.
+     *
+     * The demotion it triggers is permanent for the session, and the poll samples a
+     * 2 s threshold once a second — so a single hiccup (a GC pause, a frame that
+     * landed a few ms late) used to cost the whole dictation the better engine. Two
+     * in a row is still under three seconds of evidence, and any healthy verdict
+     * clears it.
+     */
+    private _vadStallStrikes = 0;
     /**
      * Timestamp of the last worklet port message, stamped BEFORE the `_recording`
      * gate — it separates "the worklet stopped posting" from "it posts and we
@@ -1071,6 +1103,29 @@ export class AudioCapture {
     }
 
     /**
+     * Start fetching the VAD model now, in the background.
+     *
+     * `_selectVad()` waits only `VAD_START_GRACE_MS` at capture start, so a model
+     * that is not there yet costs the first dictation its Silero gate — the whole
+     * session, since the engine is chosen once and the PCM segments need frames from
+     * the first one. The assets are ~16 MB, served uncompressed, and `immutable` once
+     * cached, so this is a one-time cost with no reason to land on a click.
+     *
+     * Call it when dictation becomes LIKELY (a voice panel opening, a mic hover), not
+     * at module construction: there it is a boot cost on every page that merely
+     * includes this module, competing with slide tiles for the same bandwidth.
+     *
+     * Deliberately the same shape as the push-to-talk path's opportunistic load
+     * (`_upgradeToSilero`): fire and forget, never awaited, failures reported by
+     * `load()` itself. Idempotent — `load()` is memoized.
+     */
+    prewarmVad(): void {
+        const eng = this._silero;
+        if (!eng || eng.state !== "idle") return;
+        void eng.load("prewarm").catch(() => { /* reported by load() */ });
+    }
+
+    /**
      * One-shot only: hand the verdict to the Silero engine if it is already loaded.
      * Its first frame retires the amplitude clock; until then (and if it never
      * comes) the amplitude gate judges. A not-yet-loaded engine starts loading for
@@ -1080,7 +1135,7 @@ export class AudioCapture {
         const eng = this._silero;
         if (!eng) return;
         if (eng.state !== "ready") {
-            if (eng.state !== "loading") void eng.load().catch(() => { /* reported by load() */ });
+            if (eng.state !== "loading") void eng.load("one-shot").catch(() => { /* reported by load() */ });
             return;
         }
         const stream = this._stream;
@@ -1116,10 +1171,21 @@ export class AudioCapture {
     }
 
     /**
-     * Which engine a continuous session runs on. Awaits the Silero load (memoized:
-     * only the first session ever waits, bounded by `loadTimeoutMs`) so the session
-     * starts with the engine that will judge it — the PCM segments need frames from
-     * the very first one. Any failure is reported once and answered with amplitude.
+     * Which engine a continuous session runs on. Waits a SHORT grace for the Silero
+     * load — never the whole download — because the microphone opening is what the
+     * user is waiting for, and the engine is a quality upgrade on top of it.
+     *
+     * This used to await the load outright, bounded only by `loadTimeoutMs` (15 s).
+     * That put the ~16 MB, uncompressed model on the critical path of `startSegmented`,
+     * so on a slow link no `capture-started` arrived for fifteen seconds — while the
+     * consumer's own "did the microphone open" timer (5 s in the chat controller)
+     * gave up, restarted the session, and re-entered the same wait. The result was a
+     * dictation that never started, a `stale-session` recovery loop every five
+     * seconds, and a VAD that finished loading into an engine already marked failed.
+     *
+     * A session that starts on amplitude stays on amplitude — the PCM segments need
+     * frames from the first one — but the load keeps running, so the NEXT session
+     * finds the engine ready. Any failure is reported once and answered with amplitude.
      */
     private async _selectVad(): Promise<VadEngine> {
         const eng = this._silero;
@@ -1128,11 +1194,24 @@ export class AudioCapture {
             this._noteVadFallback("silero unsupported in this browser");
             return "amplitude";
         }
+        // `loadTimeoutMs` may only SHORTEN the grace. A deployment raising it was the
+        // documented cure for a slow link, and it is exactly what starves the mic.
+        const grace = Math.max(0, Math.min(eng.loadTimeoutMs, AudioCapture.VAD_START_GRACE_MS));
+        let timer: any = null;
         try {
-            await eng.load();
+            const outcome = await Promise.race([
+                eng.load("selectVad").then(() => "ready" as const),
+                new Promise<"late">(resolve => { timer = setTimeout(() => resolve("late"), grace); }),
+            ]);
+            if (outcome === "late") {
+                this._noteVadFallback(`silero still loading after ${grace} ms`);
+                return "amplitude";
+            }
         } catch (e) {
             this._noteVadFallback((e as any)?.message || "silero load failed");
             return "amplitude";
+        } finally {
+            if (timer) clearTimeout(timer);
         }
         return pickVadEngine({requested: "silero", supported: true, load: eng.state});
     }
@@ -1158,6 +1237,12 @@ export class AudioCapture {
         // The frame is the library's buffer: copy it, it is reused for the next one.
         const rec = this._segRec;
         if (rec?.pcm) rec.pcm.push(f.frame.slice());
+        if (rec?.pcm) { // [vad-debug]
+            const h = rec.dbgHist || (rec.dbgHist = [0, 0, 0, 0]);
+            const p = f.prob;
+            const k = p >= 0.5 ? 0 : p >= 0.35 ? 1 : p >= 0.2 ? 2 : 3;
+            h[k] = (h[k] ?? 0) + 1;
+        }
         // No segment recorder ticks under Silero — the frames ARE the audio flowing,
         // so they carry the liveness beat the recorder timeslices used to.
         this._lastRecorderDataAt = f.t;
@@ -1177,10 +1262,11 @@ export class AudioCapture {
      * frames flush as WAV, its evidence marked stalled so it degrades open) and the
      * successor records through MediaRecorder. Never switches back within a session.
      */
-    private _switchToAmplitude(reason: string): void {
+    private _switchToAmplitude(reason: string, evidence?: Record<string, unknown>): void {
         if (this._vad !== "silero" || !this._recording || !this._segmented) return;
         const processInput = this._segProcessInput;
-        APPLICATION_CONTEXT.log("module.speech-to-text:vad").warn({reason}, "silero VAD stalled, switching to the amplitude gate");
+        APPLICATION_CONTEXT.log("module.speech-to-text:vad")
+            .warn({reason, ...(evidence || {})}, "silero VAD stalled, switching to the amplitude gate");
         this._noteVadFallback(reason);
         try { this._silero?.detach(); } catch (_e) { /* ignore */ }
         this._vad = "amplitude";
@@ -1312,6 +1398,10 @@ export class AudioCapture {
             vadIdleMs: since(this._lastVadTickAt),
             portIdleMs: since(this._lastPortMsgAt),
             archiveIdleMs: since(this._lastArchiveDataAt),
+            // -1 when Silero is not the engine. 0 while it is means the model loaded
+            // and attached but the renderer never pulled its graph — a different
+            // problem from frames that started and stopped.
+            sileroFrames: this._vad === "silero" ? (this._silero?.frames ?? -1) : -1,
         };
     }
 
@@ -1367,7 +1457,12 @@ export class AudioCapture {
         const advancing = ctxTime > this._lastCtxTime;
         this._lastCtxTime = ctxTime;
 
-        const verdict = classifyCapture({
+        // Kept as a value rather than inlined: it is both the classifier's input and
+        // the only explanation a fallback warning can carry. Logging the verdict
+        // without the numbers that produced it is what made "silero frames stalled"
+        // impossible to act on — two different rules produce that verdict, and they
+        // are different faults.
+        const evidence = {
             recording: this._recording,
             contextState: ctx?.state ?? "none",
             trackState: track?.readyState ?? "none",
@@ -1375,7 +1470,8 @@ export class AudioCapture {
             msSinceVadTick: this._lastVadTickAt ? Math.round(now - this._lastVadTickAt) : -1,
             msSinceRecorderData: this._lastRecorderDataAt ? Math.round(now - this._lastRecorderDataAt) : -1,
             contextTimeAdvancing: advancing,
-        }, {vadStallMs: VAD_STALL_MS, dataStallMs: DATA_STALL_MS});
+        };
+        const verdict = classifyCapture(evidence, {vadStallMs: VAD_STALL_MS, dataStallMs: DATA_STALL_MS});
 
         if (verdict === "context-suspended") {
             // The single most likely cause of a "dead" VAD, and a one-line cure.
@@ -1389,11 +1485,27 @@ export class AudioCapture {
             // trusted to discard audio — but the microphone is fine and the session
             // keeps running. Beat, so nobody upstream mistakes this for a dead mic.
             this._segVadStalled = true;
-            if (this._vad === "silero") this._switchToAmplitude("silero frames stalled");
+            // One sample is not a verdict when the answer is irreversible: give the
+            // engine a second poll before handing the session to the worse gate.
+            if (this._vad === "silero" && ++this._vadStallStrikes < VAD_STALL_STRIKES) {
+                this._beat("poll", 0);
+                return;
+            }
+            if (this._vad === "silero") {
+                this._switchToAmplitude("silero frames stalled", {
+                    ...evidence,
+                    contextTime: ctxTime,
+                    // Zero here means the engine never produced a frame at all, which
+                    // `msSinceVadTick: -1` alone cannot say (the classifier reaches the
+                    // same verdict through `contextTimeAdvancing`).
+                    frames: this._silero?.frames ?? -1,
+                });
+            }
             else this._recoverVadClock();
             this._beat("poll", 0);
             return;
         }
+        this._vadStallStrikes = 0;
         if (verdict !== "healthy") {
             // device-lost / dead: let the consumer's liveness clock age (no beat), and
             // SAY SO. The verdict used to be computed and dropped here, so a microphone
@@ -1667,7 +1779,7 @@ export class AudioCapture {
      * wrong answer, because the last blob is produced in the recorder's `onstop` handler,
      * which is a browser event delivered later. For a dictation shorter than one window
      * that blob is the ONLY one, so the honest answer flips from "nothing" to "everything"
-     * a few milliseconds after stop. That race silently cost the MIXTURE review modal its
+     * a few milliseconds after stop. That race silently cost a downstream review UI its
      * whole-audio transcript on every short dictation.
      *
      * Resolves immediately when nothing is pending — no archive, already sealed, or the
@@ -1867,6 +1979,7 @@ export class AudioCapture {
         const type = this._segMime || (recording.chunks[0]?.type) || "audio/webm";
         // A Silero segment uploads exactly the frames the VAD judged, as WAV.
         const blob = recording.pcm ? wavBlob(recording.pcm) : new Blob(recording.chunks, {type});
+        const dbgSamples = recording.pcm ? recording.pcm.reduce((a, f) => a + f.length, 0) : -1; // [vad-debug]
         recording.pcm = null;
         const action = recording.action;
         // A recorder torn down or errored mid-segment carries no snapshot; judge it by
@@ -1922,6 +2035,7 @@ export class AudioCapture {
             discard("session-ended");
         }
         if (probe) meta.probe = true;
+        this._dbgSegment(recording, blob, meta, dbgSamples, emit, heard); // [vad-debug]
         if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({action, vad: meta.vad, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, speechSpanMs, probe, failOpen: this._segFailOpen, emit, stale}, "segment finished");
         if (emit) {
             // The index is consumed only by an EMITTED segment: the consumer's ordered
@@ -1933,6 +2047,33 @@ export class AudioCapture {
             try { recording.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
         }
         if (isFinal) this._finishSegmented();
+    }
+
+    /** [vad-debug] TEMPORARY per-segment diagnostics + the exact uploaded blob. Remove after diagnosis. */
+    private _dbgSeq = 0;
+    private _dbgSegment(recording: SegmentRecording, blob: Blob, meta: SegmentMeta, samples: number, emit: boolean, heard: boolean): void {
+        try {
+            const log = APPLICATION_CONTEXT.log("module.speech-to-text:vad");
+            const seq = this._dbgSeq++;
+            const fields = {
+                seq, token: recording.token, startedAt: Math.round(recording.startedAt), vad: recording.vad, action: recording.action, emit, heard,
+                durationMs: Math.round(meta.durationMs), voicedMs: Math.round(meta.voicedMs),
+                speechSpanMs: Math.round(meta.speechSpanMs), maxPeak: meta.maxPeak,
+                hist: recording.dbgHist || null,
+                frames: recording.dbgHist ? recording.dbgHist.reduce((a, b) => a + b, 0) : -1,
+                pcmSamples: samples, pcmMs: samples >= 0 ? Math.round(samples / 16) : -1,
+                gate: this._gate?.snapshot?.() ?? null, blobSize: blob.size, blobType: blob.type,
+            };
+            log.info(fields, "[vad-debug] segment");
+            if (!blob.size || !log.isEnabled("trace")) return;
+            const ext = /wav/.test(blob.type) ? "wav" : /ogg/.test(blob.type) ? "ogg" : /mp4/.test(blob.type) ? "m4a" : "webm";
+            void blob.arrayBuffer().then(bytes => log.attachment({
+                file: `stt-debug/seg-${recording.token}-${String(seq).padStart(4, "0")}.${ext}`,
+                bytes, mediaType: blob.type, seq, vad: recording.vad, emit,
+            }, "[vad-debug] segment audio"));
+        } catch (e) {
+            console.error("[vad-debug] failed", e);
+        }
     }
 
     /**

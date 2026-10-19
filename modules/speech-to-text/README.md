@@ -257,9 +257,11 @@ silence, ahead of every audio heuristic. `temperature=0` is sent on that path to
 
 ### The speech detector (VAD)
 
-The verdict "is this speech" comes from **Silero VAD** (v5, via
+The verdict "is this speech" comes from **Silero VAD** (v6, via
 [`@ricky0123/vad-web`](https://www.vad.ricky0123.com/) over onnxruntime-web, WASM
-backend) — a model that scores 32 ms frames for *voice*, not loudness. The
+backend, which must be **>= 0.0.31**: older releases fed the model bare frames
+without the 64-sample context window and it under-scored real speech, discarding
+whole segments of dictation) — a model that scores 32 ms frames for *voice*, not loudness. The
 amplitude peak meter this module used before is still present as the **fallback**
 engine. Both feed one pure gate (`speechGate.ts`): Silero as a probability with
 hysteresis (on at `positiveSpeechThreshold`, off below `negativeSpeechThreshold`),
@@ -274,15 +276,16 @@ whole-session archive stays a MediaRecorder/Opus recording. `meta.vad` /
 (`"silero"` | `"amplitude"` | `"none"`).
 
 One engine instance lives for the page: it owns its `AudioContext`, loads the model
-once (the first dictation waits for it — ~16 MB the first time ever, browser-cached
-after), and attaches to each capture's stream per session. It **falls back** to the
-amplitude gate — reported once per session as `capture-warning {code:
-"vad-fallback"}` — when the assets are missing, the load exceeds `vad.loadTimeoutMs`,
+once (~16 MB the first time ever, browser-cached after; a starting session waits only
+a short grace for it, never the whole download), and attaches to each capture's stream
+per session. It **falls back** to the amplitude gate — reported once per session as
+`capture-warning {code: "vad-fallback"}` — when the assets are missing, the model has
+not arrived by the time a session starts,
 the browser lacks `AudioWorklet`/WebAssembly, or the frames stop mid-session while
 the microphone is live (the open PCM segment flushes as WAV, its successor records
 through MediaRecorder; a session never switches back). The assets are served
 same-origin from `dist/silero/` (copied out of `node_modules` by the module build:
-the worklet bundle, `silero_vad_v5.onnx`, the onnxruntime-web glue and wasm), so no
+the worklet bundle, `silero_vad_v6.onnx`, the onnxruntime-web glue and wasm), so no
 CDN, no hash pinning and nothing `secureMode` needs to gate. A deployment that
 *enforces* a CSP needs `script-src 'self' 'wasm-unsafe-eval'` for it (the worklet
 module, the wasm, and the dynamic `import()` of the ORT glue); threads are off, so
@@ -308,7 +311,7 @@ a session option):
 | `engine` | `"silero"` | `"amplitude"` disables the Silero engine entirely (no assets fetched). |
 | `positiveSpeechThreshold` | 0.5 | Silero probability at which speech turns on. |
 | `negativeSpeechThreshold` | 0.35 | Silero probability below which speech turns off. |
-| `loadTimeoutMs` | 15000 | Bound on the first-ever model load before the session falls back to amplitude. |
+| `loadTimeoutMs` | 15000 | How long a STARTING session waits for the model before running on the amplitude gate instead — capped by the capture's own `VAD_START_GRACE_MS` (2.5 s), so it can only shorten the wait. It no longer bounds the load: the download continues in the background and lands into the next session, because the microphone opening is what the user is waiting for and a longer wait is what made a consumer's own "did the mic open" timer restart the capture in a loop. The assets are ~16 MB and xOpat's server does **not** compress responses, so a deployment behind a slow link wants gzip/brotli at the proxy — raising this value is no longer the cure. The model is not prefetched at module construction (that was a boot cost on every page including the module); a voice UI calls `prewarmVad()` when it mounts, which is what keeps the first dictation on Silero. |
 | `assetsUrl` | `<module>/dist/silero/` | Where the vendored assets are served from (same origin). Absolute or app-relative; resolved against the page — onnxruntime-web needs an absolute base for its dynamic `import()` of the wasm glue. |
 
 On noise that *does* carry enough acoustic energy to pass the gate,
@@ -362,7 +365,7 @@ stable. Both flow through `TranscriptionOptions` to the driver, so any consumer
 ```
 
 **The prompt is OFF by default (`promptMaxChars: 0`) — nothing is sent.** It was the
-cause of every "dropped content" symptom in the MIXTURE field rounds on a self-hosted
+cause of every "dropped content" symptom in field testing on a self-hosted
 `whisper-large-v3`. Measured on that endpoint (one 93 s dictation, the same blob each
 time, `verbose_json`, `temperature=0`):
 
@@ -524,7 +527,7 @@ Each segment's `metrics` carry `language` (what the recognizer reported, primary
 `languageHint` (what the request said; undefined = detected). The module's own default glossary
 (`prompt` static meta) is English and is never sent into a non-English session; a caller's
 prompt is its own responsibility — the chat composer drops its English glossary once the
-language is pinned and sends only the consumer's terms, which the MIXTURE plugin sets in the
+language is pinned and sends only the consumer's terms, which a consumer plugin can set in the
 dictation's language from its translated vocabulary. The prompt stays **off by default**
 (`promptMaxChars` 0; it was measured to truncate output on the CERIT backend when long). To try
 it for a language: set `promptMaxChars: 120` on a test deployment, dictate, and compare the raw
@@ -666,6 +669,22 @@ Direct module users keep the clean-start default; a consumer that retains audio 
 its lifetime via `clearSessionAudio()`. `clearSessionAudio()` also **aborts** any window upload
 still in flight, so "delete my recording" means none of it leaves the browser
 afterwards.
+
+#### `onWindowAudio` — the one moment the bytes exist
+
+A consumer that wants to KEEP a window's audio (e.g. a reporting trace that archives
+each one as a file for review) cannot take it from any of the hooks above, because
+of the decode: a window that transcribes frees its blob immediately, a window that
+never decodes never reaches `onWindow` at all — and that is the window somebody
+would actually want to listen to — and in `lazy` mode `onWindow` never fires.
+
+So `onWindowAudio` fires at the **seal**, before anything is decoded, in both
+window modes and regardless of how the decode later goes. The blob is handed over,
+not copied: read it, do not retain it past the session. It is raw patient dictation,
+and a consumer that ships it anywhere is making a PHI decision and owns it. The
+callback must not throw and must not block — it runs on the chain that transcribes
+the case, and a slow tap delays the transcript. A window sealed after
+`clearSessionAudio()` never reaches it, so "delete my recording" stays true.
 
 Every window has a state — `pending` (queued or decoding), `done`, `retryable`
 (no text, audio still held: `transcribeSessionAudio()` retries it), `failed` (no

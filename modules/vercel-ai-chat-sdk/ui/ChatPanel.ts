@@ -262,6 +262,8 @@ export class ChatPanel extends BaseComponent {
     _voicePromptTerms: string[] = [];
     /** The dictation's language once pinned (`voice-language`); "" until then. Gates the English glossary. */
     _voiceSessionLanguage = '';
+    /** The one consumer allowed to receive raw window audio. See setDictationAudioTap. */
+    _dictationAudioTap: ((window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void) | null = null;
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
@@ -964,6 +966,17 @@ export class ChatPanel extends BaseComponent {
                 this._emit("voice-error", { ...info });
             },
             onWindow: (window) => this._emit("voice-window", { ...window }),
+            // Audio is NOT emitted as an event. Every other voice signal here is a
+            // fact about the dictation; this is the dictation itself, and a
+            // broadcast that any listener receives is the wrong shape for PHI. One
+            // consumer registers for it explicitly (`setDictationAudioTap`) and is
+            // the only one that ever sees the bytes.
+            onWindowAudio: (window) => {
+                const tap = this._dictationAudioTap;
+                if (!tap) return;
+                try { tap(window); }
+                catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "dictation audio tap failed"); }
+            },
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -3409,6 +3422,18 @@ export class ChatPanel extends BaseComponent {
     }
 
     /**
+     * Register the single consumer that receives each archive window's audio as it
+     * seals (before the decode frees it). `null` unregisters.
+     *
+     * One tap, not a subscriber list: these are the raw bytes of clinical
+     * dictation, so who holds them is a decision that should be visible in one
+     * place rather than accumulated by whoever called `addHandler`.
+     */
+    setDictationAudioTap(tap: ((window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void) | null): void {
+        this._dictationAudioTap = typeof tap === "function" ? tap : null;
+    }
+
+    /**
      * Extra vocabulary for the transcription bias prompt, on top of the built-in
      * glossary. Rebuilt into the prompt at the next capture (it is resolved lazily per
      * session), so a consumer can keep this in step with what it has learned.
@@ -3753,7 +3778,7 @@ export class ChatPanel extends BaseComponent {
      * posted it as a message.
      *
      * Each piece was already reported as an accepted `continuous` segment while it
-     * was being captured, so an observer (the mixture report extractor) has it
+     * was being captured, so an observer (e.g. a report extractor) has it
      * banked. Re-report it PER PIECE with the original text and
      * `mode: "discarded"`, which is the only signal that lets that observer match
      * and remove what it banked. `accepted: false` keeps the invariant that a

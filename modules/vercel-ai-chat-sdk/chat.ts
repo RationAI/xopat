@@ -3188,7 +3188,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * transcribed in the background. Between the two, the session looks empty.
      *
      * For a dictation shorter than one ~90 s window that window is the only one, so an
-     * immediate read reported "no audio" every time — and MIXTURE's review modal silently
+     * immediate read reported "no audio" every time — and a downstream review UI silently
      * showed the per-segment transcript that the whole-audio pass exists to replace.
      *
      * `signal` cancels the wait, not the decode: giving up here leaves the work running,
@@ -3231,6 +3231,23 @@ When scripting is not available or insufficient, explain the limitation clearly.
             const truncated = !!(audio?.truncated) || !!panel?.isSessionAudioTruncated?.();
             return { count, windows: counts.total, pending: counts.pending, retryable: counts.retryable || 0, failed: counts.failed || 0, truncated };
         } catch (_e) { return null; }
+    }
+
+    /**
+     * Receive each dictation window's AUDIO as it seals, before the decode frees
+     * it. `null` unregisters; a second call replaces the first.
+     *
+     * Deliberately a single tap rather than an event: every other voice signal is
+     * a fact about the dictation, this is the dictation itself. A consumer that
+     * takes it is taking PHI and owns what happens next — an archive for review, a
+     * debug upload the deployment explicitly turned on, and nothing implicit.
+     *
+     * Windows only exist while the recording archive is on (transcript-only mode).
+     */
+    setDictationAudioTap(tap: ((window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void) | null): void {
+        const panel: any = this.chatPanel;
+        try { panel?.setDictationAudioTap?.(tap); }
+        catch (_e) { /* voice absent — nothing to tap */ }
     }
 
     /**
