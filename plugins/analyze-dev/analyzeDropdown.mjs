@@ -39,7 +39,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 const examination = await api.examinations.create(entry.caseId, entry.appId);
                 const scope = await api.getScopeFrom(examination);
                 const viewerId = String(VIEWER.uniqueId);
-                await this._fetchAndRenderResults(
+                return await this._fetchAndRenderResults(
                     { id: entry.jobId, _scope: scope },
                     entry.appId,
                     viewerId
@@ -87,13 +87,20 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 const status = res?.status === 'COMPLETED' ? 'COMPLETED' : 'FAILED';
+                let hasAnnotations = false;
+                if (status === 'COMPLETED') {
+                    this._setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
+                    hasAnnotations = await this._fetchAndRenderResults(res, entry.appId, viewerId);
+                }
                 if (res?.id) this._jobHistory.recordJob({
                     jobId: res.id,
                     appId: entry.appId,
                     appName: entry.appName,
                     caseId: entry.caseId,
-                    name: `${entry.name} (rerun)`,
+                    name: entry.name,
+                    rerunOf: entry.jobId,
                     status,
+                    hasAnnotations,
                     timestamp: Date.now(),
                     inputs,
                     bounds: annotBounds,
@@ -101,8 +108,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 if (status === 'COMPLETED') {
-                    this._setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
-                    await this._fetchAndRenderResults(res, entry.appId, viewerId);
                     const valueOutputs = await this._fetchOutputValues(res, entry.appId);
                     if (valueOutputs.length > 0) this._showOutputValuesWindow(valueOutputs);
                 } else {
@@ -233,6 +238,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         return this.getOption('caseId') || this.params.caseId || plugin('empaia')?.scopeAPI?.activeCaseId || null;
     }
 
+    /**
+     * Draw the job's annotation outputs on the results overlay.
+     * @returns {Promise<boolean|undefined>} true when something was drawn, false when the job
+     *   has no annotations, undefined when that could not be determined
+     */
     async _fetchAndRenderResults(finalJob, appId, viewerId) {
         if (!this._empaiaConvertor) {
             try {
@@ -260,7 +270,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 .map(([key]) => key);
 
             if (!annotationKeys.length) {
-                return;
+                return false;
             }
 
             const scope = finalJob._scope;
@@ -273,6 +283,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             }
 
             const allShapes = [];
+            let fetchFailed = false;
             for (const key of annotationKeys) {
                 const collectionId = job.outputs[key];
                 if (!collectionId) {
@@ -286,15 +297,17 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     const decoded = await this._empaiaConvertor.decode({ items: result.items, presets: [] });
                     if (decoded?.objects) allShapes.push(...decoded.objects.filter(Boolean));
                 } catch (e) {
+                    fetchFailed = true;
                     console.warn('[analyze] failed to fetch/decode annotations for key', key, e);
                 }
             }
 
             if (!allShapes.length) {
-                return;
+                return fetchFailed ? undefined : false;
             }
 
             await this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
+            return true;
 
         } catch (e) {
             console.error('[analyze] _fetchAndRenderResults failed', e);
@@ -558,10 +571,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             const viewerId = String(VIEWER.uniqueId);
             const bannerId = 'banner';
             const appLabel = app?.name_short || app?.name || 'Job';
-            const name = nameInput.value.trim() || (() => {
-                const now = new Date();
-                return `${appLabel} – ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-            })();
+            // '' when not given: the history shows the app name instead
+            const name = nameInput.value.trim();
             const setJobBanner = (label, colorKey, bounds) => this._setJobBanner(label, colorKey, bounds);
 
             if (!inputsLoaded) {
@@ -607,9 +618,10 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 });
 
                 const isSuccess = res?.status === 'COMPLETED';
+                let hasAnnotations = false;
                 if (isSuccess) {
                     setJobBanner(`${appLabel}: Completed`, 'SUCCESS', annotBounds);
-                    await this._fetchAndRenderResults(res, appId, viewerId);
+                    hasAnnotations = await this._fetchAndRenderResults(res, appId, viewerId);
                     const valueOutputs = await this._fetchOutputValues(res, appId);
                     if (valueOutputs.length > 0) {
                         this._showOutputValuesWindow(valueOutputs);
@@ -625,6 +637,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                         caseId,
                         name,
                         status: isSuccess ? 'COMPLETED' : 'FAILED',
+                        hasAnnotations,
                         timestamp: Date.now(),
                         inputs,
                         bounds: annotBounds,

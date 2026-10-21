@@ -9,6 +9,11 @@ function _appLabel(entry) {
     return entry.appName || entry.appId?.slice(0, 8) || '?';
 }
 
+/** The typed job name, or the app name when none was given. */
+function _displayName(entry) {
+    return entry.name || _appLabel(entry);
+}
+
 const spinner = () => span({ class: 'loading loading-spinner loading-xs' });
 
 class JobHistory {
@@ -81,7 +86,7 @@ class JobHistory {
         const query = this.searchQuery.val.trim().toLowerCase();
         const appFilter = this.appFilter.val;
         return history.filter(entry => {
-            if (query && !entry.name?.toLowerCase().includes(query)) return false;
+            if (query && !_displayName(entry).toLowerCase().includes(query)) return false;
             if (appFilter && _appLabel(entry) !== appFilter) return false;
             return true;
         });
@@ -217,14 +222,17 @@ class JobHistoryPanel extends UI.BaseComponent {
     }
 }
 
-/** One history entry: status, name, show/hide toggle and the collapsible action row. */
+/**
+ * One history entry: a single row with status, name, time and the actions, plus the
+ * inline results panel. The eye is hidden for jobs known to have no annotations.
+ */
 class JobHistoryCard extends UI.BaseComponent {
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
         this.history = options.history;
         this.entry = options.entry;
-        this.moreOpen = van.state(false);
         this.resultsOpen = van.state(false);
+        this.confirmDelete = van.state(false);
         this.busy = van.state('');
         const visible = this.history.isJobVisible(this.entry.jobId);
         this.classMap.base = 'p-2 rounded-box bg-base-200 mb-1';
@@ -234,38 +242,31 @@ class JobHistoryCard extends UI.BaseComponent {
 
     create() {
         const { entry, history } = this;
+        const completed = entry.status === 'COMPLETED';
+        const name = _displayName(entry);
+        const app = _appLabel(entry);
         return div({ ...this.commonProperties },
-            div({ class: 'flex items-center gap-1 text-xs flex-wrap' },
-                span({ class: 'w-2 h-2 rounded-full flex-shrink-0 ' + (entry.status === 'COMPLETED' ? 'bg-success' : 'bg-error') }),
-                span({ class: 'font-medium' }, entry.name),
-                span({ class: 'opacity-50' }, `· ${_appLabel(entry)}`),
-                span({ class: 'opacity-50' }, `· ${_fmtTs(entry.timestamp)}`),
-            ),
-            div({ class: 'flex gap-1 mt-1 items-center' },
-                this._renderToggleButton(),
-                button({
-                    type: 'button',
-                    class: 'btn btn-xs btn-square btn-ghost',
-                    title: 'More actions',
-                    onclick: () => { this.moreOpen.val = !this.moreOpen.val; },
-                }, i({ class: 'ph-light ph-dots-three' })),
-            ),
-            div({ class: () => this.moreOpen.val ? '' : 'hidden' },
-                div({ class: 'flex gap-1 mt-1' },
-                    this._renderActionButton('rerun', 'Rerun', () => this._rerun()),
-                    entry.status === 'COMPLETED'
-                        ? this._renderActionButton('results', 'Results', () => this._toggleResults())
+            div({ class: 'flex items-center gap-1 text-xs' },
+                span({
+                    class: 'w-2 h-2 rounded-full flex-shrink-0 ' + (completed ? 'bg-success' : 'bg-error'),
+                    title: completed ? 'Completed' : 'Failed',
+                }),
+                span({ class: 'font-medium truncate min-w-0', title: name }, name),
+                entry.rerunOf ? span({ class: 'badge badge-xs badge-outline opacity-60 flex-shrink-0' }, 'rerun') : null,
+                name !== app ? span({ class: 'opacity-50 truncate min-w-0' }, `· ${app}`) : null,
+                span({ class: 'ml-auto opacity-50 whitespace-nowrap flex-shrink-0' }, _fmtTs(entry.timestamp)),
+                div({ class: 'flex items-center flex-shrink-0' },
+                    entry.hasAnnotations === false ? null : this._renderToggleButton(),
+                    this._renderActionButton('rerun', 'ph-arrow-clockwise', 'Rerun', () => this._rerun()),
+                    completed
+                        ? this._renderActionButton('results', 'ph-list-bullets', 'Results', () => this._toggleResults())
                         : null,
-                    button({
-                        type: 'button',
-                        class: 'btn btn-xs btn-ghost text-error',
-                        onclick: () => history.deleteJob(entry.jobId),
-                    }, '×'),
+                    this._renderDeleteButton(),
                 ),
-                () => this.resultsOpen.val
-                    ? this._renderResults(history._resultsCache.get(entry.jobId) || [])
-                    : span({ class: 'hidden' }),
             ),
+            () => this.resultsOpen.val
+                ? this._renderResults(history._resultsCache.get(entry.jobId) || [])
+                : span({ class: 'hidden' }),
             () => {
                 const message = history.entryErrors.val[entry.jobId];
                 return message ? div({ class: 'text-xs text-error mt-1' }, message) : span({ class: 'hidden' });
@@ -286,13 +287,33 @@ class JobHistoryCard extends UI.BaseComponent {
             : i({ class: `ph-light ${visible ? 'ph-eye' : 'ph-eye-slash'}` }));
     }
 
-    _renderActionButton(key, label, onclick) {
+    _renderActionButton(key, icon, title, onclick) {
         return button({
             type: 'button',
-            class: 'btn btn-xs btn-ghost',
+            class: 'btn btn-xs btn-square btn-ghost',
+            title,
             disabled: () => this.busy.val === key,
             onclick,
-        }, () => this.busy.val === key ? spinner() : span(label));
+        }, () => this.busy.val === key ? spinner() : i({ class: `ph-light ${icon}` }));
+    }
+
+    /** Two-step delete: the first click arms the button for 3 s, the second one deletes. */
+    _renderDeleteButton() {
+        return button({
+            type: 'button',
+            class: () => this.confirmDelete.val
+                ? 'btn btn-xs btn-error'
+                : 'btn btn-xs btn-square btn-ghost text-error',
+            title: () => this.confirmDelete.val ? 'Click again to delete' : 'Delete from history',
+            onclick: () => {
+                if (this.confirmDelete.val) {
+                    this.history.deleteJob(this.entry.jobId);
+                    return;
+                }
+                this.confirmDelete.val = true;
+                setTimeout(() => { this.confirmDelete.val = false; }, 3000);
+            },
+        }, () => this.confirmDelete.val ? span('Delete?') : i({ class: 'ph-light ph-trash' }));
     }
 
     async _toggleVisibility(visible) {
@@ -303,8 +324,10 @@ class JobHistoryCard extends UI.BaseComponent {
         }
         this.busy.val = 'toggle';
         try {
-            await history._onShow(entry);
-            history.refresh();
+            const hasAnnotations = await history._onShow(entry);
+            // Learned on first show for entries recorded before `hasAnnotations` existed.
+            if (hasAnnotations === false) history.updateJob(entry.jobId, { hasAnnotations });
+            else history.refresh();
         } catch (e) {
             console.error('[job-history] show failed', e);
             history.showEntryError(entry.jobId, e?.message || 'Failed to load annotations');

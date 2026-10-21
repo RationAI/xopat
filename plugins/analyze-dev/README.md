@@ -23,6 +23,8 @@ Files
   saved with the session, but are never synced back to EMPAIA.
 - `jobHistory.mjs`: `JobHistory` (storage in the `jobHistory` plugin option) and the modal UI
   (`JobHistoryPanel`, `JobHistoryCard`): search by job name, filter by app, inline results panel.
+  Each card is one row: status dot, name (the app name when no name was given), time, and icon
+  actions (show/hide, rerun, results, delete; delete needs a second click within 3 s).
   Also exposes `window.renderJobOutputValues`.
 
 Job flow
@@ -47,7 +49,10 @@ Job flow
    - `collection` with `items.reference` is decoded by the `empaia` convertor and shown on the overlay.
    - `collection` without a reference holds values, shown in a "Job Results" window.
 6. Every job with an id is recorded in the history together with its inputs and ROI bounds, so
-   it can be rerun with an editable copy of its inputs.
+   it can be rerun with an editable copy of its inputs. A rerun keeps the job name and stores
+   `rerunOf` (the source job id), shown as a "rerun" badge. `hasAnnotations` records whether
+   annotations were drawn; when it is `false` the card has no show/hide toggle. When it is
+   unknown (an output failed to load), the first show records it.
 
 Options
 -------
