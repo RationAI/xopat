@@ -363,6 +363,15 @@ export interface IOPipelineOptions {
      *  `cookies` KV driver to every write. Operator-controlled, never
      *  session-derived (§7). */
     cookieAttributes?: CookieAttributes;
+    /**
+     * Lazy getter for the session's per-sink on/off map (`params.ioSinks`).
+     *
+     * Session-derived and therefore untrusted: it is honoured only for sinks the
+     * operator marked `sessionControllable` in `ENV.client.io.sinks`, and only
+     * real booleans are read out of it. Injected rather than read off a global so
+     * the seam is testable without an APPLICATION_CONTEXT.
+     */
+    getSessionSinks?: () => unknown;
 }
 
 /**
@@ -434,10 +443,23 @@ export class IOPipeline implements IOPipelineLike {
      * as the admin `bindings` block is). See {@link claimBinding}.
      */
     private readonly bindingClaims = new Map<string, Array<{ claimantUid: string; targets: IOBindingTarget[] }>>();
+    /**
+     * Per-sink on/off decided outside ENV: seeded once from the session's
+     * `params.ioSinks` and mutated by {@link setSinkEnabled}.
+     *
+     * Seeded lazily and only once, so this map — not the session payload — is the
+     * live state afterwards. A later `APPLICATION_CONTEXT.setOption("ioSinks", …)`
+     * is deliberately NOT an entry point: the API is `setSinkEnabled`, which is
+     * where the operator's `sessionControllable` gate lives.
+     */
+    private readonly sessionSinkState = new Map<string, boolean>();
+    private sessionSinksSeeded = false;
+    private readonly getSessionSinks: () => unknown;
 
     constructor(options: IOPipelineOptions) {
         this.POST_DATA = options.POST_DATA;
         this.getConfig = options.getConfig;
+        this.getSessionSinks = options.getSessionSinks ?? (() => undefined);
         this.getViewers = options.getViewers ?? (() => []);
         this.notifier = options.notify ?? ((m, l) => {
             const fn = l === "error" ? console.error : l === "warn" ? console.warn : console.info;
@@ -493,6 +515,7 @@ export class IOPipeline implements IOPipelineLike {
         };
     }
 
+    /** Every registered sink, switched on or not — pair with {@link isSinkEnabled}. */
     listSinks() { return Array.from(this.sinks.values()); }
     getSink(id: string) { return this.sinks.get(id); }
 
@@ -934,29 +957,87 @@ export class IOPipeline implements IOPipelineLike {
             }
         }
 
+        // A sink the operator (or an allowed session) switched OFF is unplugged,
+        // not missing: drop it here, and when that empties an otherwise-configured
+        // list, answer `undefined` so the caller can tell that case apart.
+        // Leaving a disabled sink in `filterRegistered` would park the (owner,
+        // capability) in `pendingBindings` and refuse every write with
+        // `W_IO_SINK_NOT_READY`, i.e. hold data for a destination that is switched
+        // off on purpose. An UNREGISTERED sink must keep going through
+        // `filterRegistered` — that one may still be on its way.
+        const route = (list: IOBindingTarget[]): IOResolvedBinding[] | undefined => {
+            const live = (list ?? []).filter((raw) => {
+                const sink = normalizeBindingTarget(raw)?.sink;
+                return !sink || this.isSinkEnabled(sink);
+            });
+            if (!live.length && list?.length) return undefined;
+            return this.filterRegistered(live, isKv, ownerUid, capabilityId);
+        };
+
+        // ...and an unplugged list does NOT resume the cascade. Falling through to
+        // a lower-precedence rule resolves the capability to a binding the higher
+        // one just overrode: switching off the operator's `crud:*` sink brought the
+        // owner's own include.json default back to life, so a session with
+        // `params.ioSinks: {"<sink>": false}` REDIRECTED the data instead of
+        // stopping it — the exact thing `sessionControllable` must not be able to
+        // do (src/config.json: "a session cannot redirect data"). Only a bundle
+        // continues, and only as far as Rule 5's built-in local sinks, so "do not
+        // upload, but let me keep a file" stays expressible.
+        const unplugged = (): IOResolvedBinding[] =>
+            cap?.kind === "bundle" ? this.builtinFallback(owner, cap, capabilityId, isKv) : [];
+
         // Rule 2: explicit admin binding.
         const explicit = cfg.bindings?.[ownerId]?.[capabilityId]
                       ?? cfg.bindings?.[ownerUid]?.[capabilityId];
-        if (explicit !== undefined) return this.filterRegistered(explicit, isKv, ownerUid, capabilityId);
+        if (explicit !== undefined) {
+            const routed = route(explicit);
+            if (routed !== undefined) return routed;
+            return unplugged();
+        }
 
         // Rule 2.5: a sink-providing module claimed this capability at runtime.
         // Below the operator (Rule 2) and above the owner's own include.json
         // default, because the claimant knows the deployment it is running in
         // and the include.json author does not. See claimBinding().
         const claimed = this.claimedTargets(ownerId, ownerUid, capabilityId);
-        if (claimed !== undefined) return this.filterRegistered(claimed, isKv, ownerUid, capabilityId);
+        if (claimed !== undefined) {
+            const routed = route(claimed);
+            if (routed !== undefined) return routed;
+            return unplugged();
+        }
 
         // Rule 3: include.json default for this owner.
         const fromInclude = owner.defaultBindings[capabilityId];
-        if (fromInclude !== undefined) return this.filterRegistered(fromInclude, isKv, ownerUid, capabilityId);
+        if (fromInclude !== undefined) {
+            const routed = route(fromInclude);
+            if (routed !== undefined) return routed;
+            return unplugged();
+        }
 
         // Rule 4 (KV only): inherit from `core` if the admin set one.
         if (isKv && ownerId !== "core") {
             const fromCore = cfg.bindings?.["core"]?.[capabilityId];
-            if (fromCore !== undefined) return this.filterRegistered(fromCore, isKv, ownerUid, capabilityId);
+            if (fromCore !== undefined) {
+                const routed = route(fromCore);
+                if (routed !== undefined) return routed;
+                return unplugged();
+            }
         }
 
-        // Rule 5: built-in fallback.
+        return this.builtinFallback(owner, cap, capabilityId, isKv);
+    }
+
+    /**
+     * Rule 5: the built-in fallback, reached both by an owner nobody configured
+     * and by a bundle whose configured destinations are all switched off.
+     */
+    private builtinFallback(
+        owner: OwnerRecord,
+        cap: IOCapability | undefined,
+        capabilityId: string,
+        isKv: boolean,
+    ): IOResolvedBinding[] {
+        const ownerId = owner.ownerId;
         if (cap?.kind === "bundle") {
             // Slide-aware owners key bundles by ctx.key ("<viewerId>::<backgroundId>").
             // `session-memory` carries them across in-session slide switches;
@@ -969,8 +1050,8 @@ export class IOPipeline implements IOPipelineLike {
             // reversed, the empty read would wipe the just-restored data.
             if (isViewerBackgroundScoped(owner.bundleScope)) {
                 const list: IOResolvedBinding[] = [];
-                if (this.sinks.has("session-memory")) list.push(bareBinding("session-memory"));
-                if (this.sinks.has("post-data")) list.push(bareBinding("post-data"));
+                if (this.hasLiveSink("session-memory")) list.push(bareBinding("session-memory"));
+                if (this.hasLiveSink("post-data")) list.push(bareBinding("post-data"));
                 if (!list.length) {
                     console.warn(
                         `[IO] owner "${ownerId}" uses bundleScope "${owner.bundleScope}" but neither ` +
@@ -979,7 +1060,7 @@ export class IOPipeline implements IOPipelineLike {
                 }
                 return list;
             }
-            return this.sinks.has("post-data") ? [bareBinding("post-data")] : [];
+            return this.hasLiveSink("post-data") ? [bareBinding("post-data")] : [];
         }
         if (isKv) {
             const ns = capabilityId.slice(3);
@@ -1162,6 +1243,13 @@ export class IOPipeline implements IOPipelineLike {
         } catch { /* viewer manager may not yet exist */ }
     }
 
+    /**
+     * Does this owner (optionally: this capability) have anywhere to write?
+     *
+     * Answers from resolved bindings, so a capability whose only sink is switched
+     * off ({@link setSinkEnabled}) reads as disabled — the same as one nothing
+     * ever bound.
+     */
     isEnabled(ownerUid: string, capabilityId?: string): boolean {
         const owner = this.owners.get(ownerUid);
         if (!owner || owner.disabled) return false;
@@ -1174,6 +1262,115 @@ export class IOPipeline implements IOPipelineLike {
 
     sinkOverrides(sinkId: string): Record<string, unknown> {
         return this.getConfig()?.sinkOverrides?.[sinkId] ?? {};
+    }
+
+    // ── sink availability ──────────────────────────────────────────────
+
+    /** Operator policy for one sink, or `{}`. @private */
+    private sinkPolicy(sinkId: string): { enabled?: boolean; sessionControllable?: boolean } {
+        return this.getConfig()?.sinks?.[sinkId] ?? {};
+    }
+
+    /**
+     * Read the session's `ioSinks` map into {@link sessionSinkState}, once.
+     *
+     * Untrusted input: anything that is not a real boolean is ignored rather than
+     * coerced, so `{"mlflow": "false"}` from a hand-written URL cannot read as
+     * `true` (nor as `false` — it simply says nothing).
+     * @private
+     */
+    private seedSessionSinks(): void {
+        if (this.sessionSinksSeeded) return;
+        this.sessionSinksSeeded = true;
+        let raw: unknown;
+        try {
+            raw = this.getSessionSinks();
+        } catch (e) {
+            console.warn("[IO] reading session sink toggles failed:", e);
+            return;
+        }
+        if (typeof raw === "string") {
+            try { raw = JSON.parse(raw); } catch { return; }
+        }
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+        for (const [sinkId, value] of Object.entries(raw as Record<string, unknown>)) {
+            if (typeof value === "boolean" && sinkId) this.sessionSinkState.set(sinkId, value);
+        }
+    }
+
+    /**
+     * Is this sink plugged in right now?
+     *
+     * `ENV.client.io.sinks.<id>.enabled` is the baseline (default `true`); a
+     * session/runtime value overrides it **only** where the operator opted in with
+     * `sessionControllable`. Unregistered sinks are not this question — see
+     * {@link listSinks} / the pending-binding path.
+     */
+    isSinkEnabled(sinkId: string): boolean {
+        const policy = this.sinkPolicy(sinkId);
+        const baseline = policy.enabled !== false;
+        if (!policy.sessionControllable) return baseline;
+        this.seedSessionSinks();
+        const override = this.sessionSinkState.get(sinkId);
+        return override === undefined ? baseline : override;
+    }
+
+    /**
+     * Plug a sink in, or unplug it, at runtime.
+     *
+     * The caller is code acting for a session (an embedding app's script, a plugin
+     * UI), so the operator decides whether it may: without
+     * `ENV.client.io.sinks.<id>.sessionControllable` this refuses and the ENV
+     * baseline stands. That is what makes "the admin pinned it on" true rather
+     * than advisory.
+     *
+     * Unplugging does not unregister the sink. The binding resolver skips a
+     * disabled sink as if nothing had named it, which is why writes continue to
+     * whatever else is bound (or to the built-in local sinks) instead of piling up
+     * behind a destination that will never answer.
+     *
+     * @param sinkId
+     * @param enabled
+     * @return whether the change was allowed (also `true` for a no-op change)
+     * @event io:sink-enabled
+     * @event io:sink-disabled
+     */
+    setSinkEnabled(sinkId: string, enabled: boolean): boolean {
+        if (!sinkId) return false;
+        const policy = this.sinkPolicy(sinkId);
+        if (!policy.sessionControllable) {
+            console.warn(
+                `[IO] sink "${sinkId}" is not session-controllable; ` +
+                `set ENV.client.io.sinks.${sinkId}.sessionControllable to allow this.`,
+            );
+            return false;
+        }
+        const next = !!enabled;
+        const before = this.isSinkEnabled(sinkId);
+        this.seedSessionSinks();
+        this.sessionSinkState.set(sinkId, next);
+        if (before === next) return true;
+
+        this.bindingCache.clear();
+        // Both are verdicts about a routing decision that no longer applies: a
+        // binding held for this sink, and anything already reported about it.
+        for (const [key, ids] of Array.from(this.pendingBindings.entries())) {
+            if (ids.includes(sinkId)) this.pendingBindings.delete(key);
+        }
+        this.reportedBindingIssues.clear();
+        this.scheduleBindingValidation();
+        this.emitQueueEvent_(next ? "io:sink-enabled" : "io:sink-disabled", { sinkId });
+        // Re-use the registration announcement on the way back in: it already
+        // means "resources holding writes for this sink may move again"
+        // (io-resource.ts listens for exactly this), and a second resume path
+        // would be one more thing to keep in sync.
+        if (next && this.sinks.has(sinkId)) this.emitQueueEvent_("io:sink-registered", { sinkId });
+        return true;
+    }
+
+    /** Registered AND plugged in — what binding resolution actually requires. @private */
+    private hasLiveSink(sinkId: string): boolean {
+        return this.sinks.has(sinkId) && this.isSinkEnabled(sinkId);
     }
 
     private invalidateBindingCache(ownerUid: string) {

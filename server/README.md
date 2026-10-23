@@ -456,6 +456,8 @@ response advertises `Accept-Ranges`, no code path changes.
 | Key | Purpose | Default |
 |---|---|---|
 | `staticRoots` | Extra directories the static handler may serve (buffered, no ranges) | `[]` |
+| `staticMaxAge` | Seconds a production browser may reuse an **unversioned** asset (no `?v=`: element sub-module `import()`s, fonts, logos, model weights) before revalidating its ETag. `0` = revalidate every time. Dev mode always revalidates; versioned assets stay `immutable` | `3600` |
+| `compression` | Brotli/gzip for text assets (`.js/.mjs/.css/.json/.html/.svg/.wasm/…`) and the viewer page, negotiated on `Accept-Encoding`. Bodies are compressed once per file version and kept in the bounded `core:static-compressed` cache. Media (ranged) responses are never compressed. `false` turns it off — do that when a reverse proxy in front already compresses | `{ "enabled": true, "minBytes": 1024, "maxCacheBytes": 134217728 }` |
 | `media.roots` | Directories served **streamed and `Range`-aware**. Absent = the feature is off | unset |
 | `media.extensions` | Extensions reachable inside a media root; omit for any | unset |
 | `media.maxRangeBytes` | Ceiling on one ranged read; a longer request is clamped | `33554432` |

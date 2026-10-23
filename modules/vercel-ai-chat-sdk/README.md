@@ -48,6 +48,11 @@ feedback. Not persisted, never enters turn context; tagged `metadata.internalSou
 so transcript consumers can filter it out.
 Voice: `isVoiceAvailable()` · `startVoiceCapture()` · `stopVoiceCapture()` · `finishVoiceCapture()` · `dictateOnce()`
 · `hasHeldVoiceText()` · `submitHeldVoiceText()` · `discardHeldVoiceText()`.
+`setDictationAudioTap(fn|null)` hands one consumer each archive window's **audio** as it seals, before
+the decode frees it (`speech-to-text`'s `onWindowAudio`; windows exist only while the recording archive
+is on, i.e. transcript-only mode). Deliberately a single tap rather than an event: every other voice
+signal here is a fact ABOUT the dictation, this is the dictation itself, so who holds the bytes is one
+visible decision instead of whoever happened to call `addHandler`. The consumer owns the PHI.
 `stopVoiceCapture()` discards a mid-turn utterance; `finishVoiceCapture()` flushes and submits it first ("finish and submit").
 Speech captured after the assistant has been computing for more than `voice.busyHoldMs` (default 4 s) is **held** as an
 editable composer draft rather than auto-submitted — a long reply must not turn thinking out loud into the next question.
@@ -194,7 +199,7 @@ Current line — **`ai@7`, provider spec `v4`**:
 | `@ai-sdk/provider` | `^4` | `modules/vercel-ai-chat-sdk` |
 | `@ai-sdk/anthropic` | `^4` | `plugins/chat-anthropic` |
 | `@ai-sdk/openai` | `^4` | `plugins/chat-openai` |
-| `@ai-sdk/openai-compatible` | `^3` | `plugins/chat-openai-compatible`, `plugins/chat-mixture`, `plugins/pathology-medgemma` |
+| `@ai-sdk/openai-compatible` | `^3` | `plugins/chat-openai-compatible`,  `plugins/pathology-medgemma` |
 
 To find the right major for a core version, read npm's dist-tags rather than guessing —
 Vercel publishes one per line:
@@ -300,7 +305,6 @@ Config keys that accept a reference:
 | Key | Where |
 |-----|-------|
 | `defaultProviderId` | `modules/vercel-ai-chat-sdk/include.json` (must be picker-visible) |
-| `extractionProviderId` | `plugins/mixture-report-assist/include.json` |
 | `drivers.<name>.providerId` | `modules/pathology-foundation/include.json` |
 | `vercel.providerId` | `modules/speech-to-text` static meta |
 
@@ -476,7 +480,7 @@ states:
 | `false` | the operator declares the endpoint keyless ⇒ `apiKey` is registered `required: false` and discovery runs with no credential |
 
 Secure config only, like `contexts`/`hidden` — never RPC `input` (§7). Provider types that declare
-no required secret (medgemma, mixture, adapters with a static catalogue) are unaffected.
+no required secret (medgemma, adapters with a static catalogue) are unaffected.
 
 ## What the system prompt costs, and why it is shaped this way
 
@@ -553,8 +557,8 @@ What it is **not** is a billing figure. Scope is deliberately small:
 - **OpenAI-compatible endpoints report nothing unless asked.** `@ai-sdk/openai-compatible` only
   sends `stream_options: {include_usage: true}` when its provider is built with
   `includeUsage: true`; without it the backend streams no usage block and the SDK returns an
-  object whose every field is `undefined`. The `includeUsage` provider setting (chat-openai-compatible,
-  chat-mixture) turns it on and is **off by default**: the field is standard OpenAI, but a stricter
+  object whose every field is `undefined`. The `includeUsage` provider setting (chat-openai-compatible)
+  turns it on and is **off by default**: the field is standard OpenAI, but a stricter
   backend can reject it, and that would break chat rather than merely the readout. When it is off the
   panel says so and names the switch. `@ai-sdk/openai` and `@ai-sdk/anthropic` always report, so they
   need no opt-in.

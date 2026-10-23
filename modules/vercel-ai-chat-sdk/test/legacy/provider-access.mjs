@@ -242,9 +242,9 @@ console.log("# provider references");
     });
 
     const glm = managed("prov_a", "chat-openai-compatible", "openai-compatible");
-    const mixture = managed("prov_b", "chat-mixture", "mixture");
+    const custom = managed("prov_b", "chat-custom", "custom");
     const medgemma = managed("prov_c", "pathology-medgemma", "medgemma", { hidden: true });
-    const all = [glm, mixture, medgemma];
+    const all = [glm, custom, medgemma];
 
     // Precedence
     ok("an exact instance id resolves", matchProviderRef(all, "prov_a")?.id === "prov_a");
@@ -252,8 +252,8 @@ console.log("# provider references");
     ok("a plugin id resolves — the case that failed in the field",
         matchProviderRef(all, "chat-openai-compatible")?.id === "prov_a");
     ok("…on the plugin tier", matchProviderRef(all, "chat-openai-compatible")?.tier === "plugin");
-    ok("a managed key resolves", matchProviderRef(all, "chat-mixture:mixture:default")?.id === "prov_b");
-    ok("a type id resolves", matchProviderRef(all, "mixture")?.id === "prov_b");
+    ok("a managed key resolves", matchProviderRef(all, "chat-custom:custom:default")?.id === "prov_b");
+    ok("a type id resolves", matchProviderRef(all, "custom")?.id === "prov_b");
     ok("an unknown reference resolves to null", matchProviderRef(all, "nope") === null);
 
     // R3 — a hidden provider stays referenceable; that is the documented use case.
@@ -264,11 +264,11 @@ console.log("# provider references");
     // managedKey wins over a plugin id that names a different provider.
     {
         const collide = [
-            { id: "chat-mixture", typeId: "x", origin: "operator", metadata: {} },
-            managed("prov_z", "p", "t", { managedKey: "chat-mixture" }),
+            { id: "chat-custom", typeId: "x", origin: "operator", metadata: {} },
+            managed("prov_z", "p", "t", { managedKey: "chat-custom" }),
         ];
         ok("an exact id beats another record's colliding managed key",
-            matchProviderRef(collide, "chat-mixture")?.id === "chat-mixture");
+            matchProviderRef(collide, "chat-custom")?.id === "chat-custom");
     }
     {
         const tiered = [

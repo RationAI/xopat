@@ -5,20 +5,21 @@
 //
 // Config: server.secure.modules["saml-auth"].contexts.<ctx> — see README.md.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createRequire } from "node:module";
 
-// These three are loaded through createRequire, NOT a static import, on purpose.
-// The server-module-loader bundles us with esbuild as `format: "esm"`, and
-// node-saml pulls in `debug`, which does `require("tty")` at load time — a
-// dynamic require of a builtin, which esbuild cannot express in ESM output and
-// which therefore throws "Dynamic require of \"tty\" is not supported" the moment
-// the bundle is imported (the whole module then 404s every RPC). Requiring them
-// at runtime keeps them OUT of the bundle and lets Node resolve them normally
-// from the hoisted node_modules. Do not "tidy" these back into imports.
-const _require = createRequire(import.meta.url);
-const { SAML } = _require("@node-saml/node-saml");
-const { DOMParser } = _require("@xmldom/xmldom");
-const xpath = _require("xpath");
+// Static imports, so these three are INLINED into the bundle.
+//
+// They used to be `createRequire` calls, because server bundles were ESM and
+// node-saml pulls in `debug`, which does `require("tty")` at load time: a
+// dynamic require of a builtin that esbuild cannot express in ESM output, so the
+// bundle threw `Dynamic require of "tty" is not supported` on import and the
+// module 404'd every RPC. Server bundles are CJS now (see
+// `server/node/server-module-loader.js` → BUILD_FORMAT), where that require is
+// expressible — and keeping them out of the bundle became the worse failure:
+// a packaged binary has no `node_modules` to resolve them from, so SAML
+// registration died with `Cannot find module '@node-saml/node-saml'`.
+import { SAML } from "@node-saml/node-saml";
+import { DOMParser } from "@xmldom/xmldom";
+import * as xpath from "xpath";
 
 /** node-saml's SAML instance — typed loosely because it is required at runtime. */
 type SamlSp = any;

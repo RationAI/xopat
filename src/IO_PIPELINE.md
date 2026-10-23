@@ -362,6 +362,32 @@ Net result: only the originating peer fires upstream; the server sees ONE op per
 
 A future session controller can mutate this list on `session-started` / `session-ended` and call `IO_PIPELINE.invalidateAll()`. Heavier-handed than the `accepts` pattern (it disables the binding entirely, including legitimate local creates) so prefer the `accepts` pattern for normal session sync. The `disabledCapabilities` slot is here for scenarios where you want a hard guarantee that a guest cannot fire upstream at all.
 
+**Per-sink on/off** (is this destination plugged in?): `ENV.client.io.sinks` carries the operator's baseline and says whether a session may change it.
+
+```jsonc
+"io": {
+  "sinks": {
+    // default: { "enabled": true, "sessionControllable": false }
+    "mlflow": { "enabled": true, "sessionControllable": true }
+  }
+}
+```
+
+A session then expresses its choice in `params.ioSinks` (`{"mlflow": false}`), and code calls `IO_PIPELINE.setSinkEnabled("mlflow", false)`. Both are honoured **only** where `sessionControllable` is set; without it the call is refused and the session value is not even read, which is how a deployment pins a sink on (or off) against a hostile bundle. The security decision — may anything but the operator route data here — is therefore read from the server-only `ENV.client.io`, never from `getOption`; only the resulting boolean is session-derived (AGENTS.md §7). Read the current answer with `IO_PIPELINE.isSinkEnabled(id)`; `listSinks()` still lists every *registered* sink, switched on or not.
+
+A disabled sink is **unplugged, not missing**, and the difference matters:
+
+| state | resolution | writes |
+|---|---|---|
+| sink not registered **yet** | binding keeps naming it; (owner, capability) parked in `pendingBindings` | **held**, dispatch refuses `W_IO_SINK_NOT_READY` — a late sink must not lose data |
+| sink registered but **disabled** | skipped; a list left empty by that does **not** resume the rule cascade — a `bundle` goes straight to the built-in fallback (Rule 5), anything else resolves to nothing | bundle: local/exportable; otherwise inert |
+
+So a bundle capability bound only to a disabled sink lands on the built-in `session-memory` / `post-data` — the local, exportable destination, which is what "not plugged in" should mean. A `crud:*` capability has no built-in fallback, so it resolves to nothing and dispatch is inert (`{ok: true}`, no refusal): deliberate, since the refusal path belongs to a destination that is *supposed* to answer.
+
+The cascade stops on purpose. Resuming it would resolve the capability to a binding the *disabled* rule had overridden — switching off the operator's `crud:*` sink used to bring the owner's own `include.json` default back to life, so a `sessionControllable` session toggle **redirected** the data instead of stopping it. An off switch unplugs one destination; it never picks a different one. Switching a sink back on invalidates the binding cache and re-emits `io:sink-registered`, so resources holding writes move again; the toggle itself also emits `io:sink-enabled` / `io:sink-disabled` for UI that wants to say so.
+
+Prefer this over deleting a `bindings` entry for anything that is a *runtime* decision — the binding stays declared, so switching back on needs no redeploy.
+
 **What lives where**:
 
 | Concern | Where it's solved |
@@ -370,6 +396,7 @@ A future session controller can mutate this list on `session-started` / `session
 | Single-peer upstream dispatch | Sink `accepts(ctx) => isLocal`. No pipeline change. |
 | Cross-peer dedup of any leak through (e.g. misconfigured sink) | `clientOpId` (Phase 8) — server dedups across retries from the same peer. For cross-peer dedup, the future session DELTA should carry the originating peer's `clientOpId` so all peers reuse it; the server sees ONE id. |
 | Blanket admin override during sessions | `ENV.client.io.disabledCapabilities`. |
+| Is one destination plugged in for this session | `ENV.client.io.sinks.<id>` + `params.ioSinks` / `IO_PIPELINE.setSinkEnabled`. |
 | Multi-master conflict resolution (CRDT/OT) | Out of scope for the IO pipeline. Lives in the session sync layer.|
 
 ### Sync core, queued dispatch
@@ -1063,6 +1090,12 @@ Restore additionally applies **last non-empty payload wins** — every readable 
 
 These events let monitoring code distinguish between "sink said no, but other sinks may have succeeded" (`io:refused`), "this sink was the wrong one for this ctx" (`io:rejected-by-accepts`), "nothing wrote anywhere" (`io:fully-refused`), and "this binding was never going to work" (`io:invalid-binding`).
 
+Availability changes are a separate, non-refusal pair:
+
+| Event | When |
+|-------|------|
+| `io:sink-enabled` / `io:sink-disabled` | `setSinkEnabled` actually changed a sink's availability (payload: `sinkId`). Routing has already been re-resolved when they fire. Enabling also re-emits `io:sink-registered`, which is what makes resources holding writes retry. |
+
 For Use case B from the verification plan — admin binds `module.some-other.bundle-export = ["remote-anno"]` by mistake, and `remote-anno` only handles annotations — the user sees:
 
 - a toast with the sink's `userMessage` (from `surfaceRefusal`),
@@ -1230,6 +1263,8 @@ One `console.warn` is emitted, listing exactly which drivers were substituted. T
 ```
 
 Rule 4 (inherit from `core`) propagates this to every plugin and module owner. This is operator policy and therefore lives in the server-only `ENV.client.io` block — deliberately *not* a `setup.*` flag, since `setup` is readable and overridable through `getOption` (session / POST_DATA / URL). The pre-existing `setup.bypassCache` / `bypassCookies` flags stay where they are: those are genuine user preferences about persistence.
+
+`setup.ioSinks` is the one IO key that *is* session-readable, and it is not a counter-example: it carries only the session's wish, while `ENV.client.io.sinks.<id>.sessionControllable` — server-only — decides whether that wish is read at all. The authority stays in ENV; what travels in the session is a boolean the operator already agreed to honour.
 
 ---
 

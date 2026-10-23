@@ -60,25 +60,69 @@ These files can exist in plugins or modules.
 
 Named exports from these files are exposed as RPC-callable methods.
 
-### How `*.server.ts` is built (`server-module-loader.js`)
+### How a server file is built (`server-module-loader.js`)
 
-TypeScript server files are bundled per element with esbuild (`bundle`, `platform:
-node`, `format: esm`) into `<element>/.server-dist/`, then imported. Two properties of
-that pipeline are worth knowing before you debug one:
+Every server file — `.server.ts`, `.mts`, `.cts`, `.js`, `.mjs`, `.cjs` alike — is
+**bundled per entry** with esbuild (`bundle`, `platform: node`, `format: cjs`) into
+`<element>/.server-dist/<rel>.cjs` and loaded with `require`. There is no
+per-extension branch and nothing is copied verbatim.
 
-- **A failed import looks like a missing method.** The module registers nothing, so the
+**The build happens at build time.** `npm run build` (→ `grunt serverBuild`) builds
+every entry of every plugin and module and records them in
+`server/node/server-build-manifest.json`. The on-demand compile in the loader is a
+dev convenience on top of that, using the same options and the same freshness rule.
+
+Properties worth knowing before you debug one:
+
+- **Authoring style is free, module system included.** `import`, `require`,
+  `import()`, an ESM-only dependency (`ai@7`, `@ai-sdk/*`) and a CJS one can be mixed
+  in one file: esbuild resolves all of it at build time. What you cannot use is
+  **top-level await** — `format: cjs` cannot express it, and esbuild fails the build
+  naming the file instead of letting it break at runtime.
+- **Do not mark a dependency external to "fix" a bundling error.** External means
+  "resolved at runtime", and a packaged release has no `node_modules` to resolve
+  from — that is how SAML registration died with `Cannot find module
+  '@node-saml/node-saml'` in a binary. If something genuinely cannot be inlined (a
+  native `.node` addon), declare it: `include.json` → `"server": { "external": [...],
+  "assets": [...] }`, which also copies the package next to the bundle so it resolves
+  in a snapshot too.
+- **A failed load looks like a missing method.** The module registers nothing, so the
   call comes back as `{ code: "RPC_UNKNOWN_METHOD" }` — check the server log for the
-  import error rather than hunting for a typo in the export.
-- **The bundle is ESM but dependencies may be CJS.** esbuild rewrites a CJS
-  `require("x")` into a shim that needs a real `require` in scope; the build injects one
-  via a `createRequire` banner, so CommonJS dependencies keep working. Never "fix" such
-  a dependency by marking it external — that just moves the failure to load time.
-- **The build cache is keyed on source mtime AND a build key** (`BUILD_FORMAT_VERSION`,
-  the esbuild version, and the installed-dependency identity from
-  `node_modules/.package-lock.json`). This is what makes an `npm install` rebuild every
-  element: no `*.server.ts` mtime changes when a dependency major moves, and stale
-  bundles would otherwise leave the deployment running two majors of the same library at
-  once. Bump `BUILD_FORMAT_VERSION` whenever you change the esbuild options.
+  load error, and in a packaged build check that the entry is in the manifest.
+- **Freshness is keyed on the whole input graph AND a build key**
+  (`BUILD_FORMAT_VERSION`, the esbuild version, and the installed-dependency identity
+  from `node_modules/.package-lock.json`). The graph half comes from esbuild's
+  metafile, because a bundle inlines what it imports: keying on the entry's mtime
+  alone reported "up to date" after an edit to an imported file and served the
+  previous bundle. The build-key half is what makes an `npm install` rebuild
+  everything — no server file's mtime changes when a dependency major moves, and
+  stale bundles would leave the deployment running two majors of one library at once.
+  Bump `BUILD_FORMAT_VERSION` whenever you change the esbuild options.
+
+### Packaged builds (`pkg` / SEA)
+
+A release binary is a read-only snapshot with no esbuild in it, so the loader
+switches behaviour on `constants.PACKAGED` (`process.pkg`, `node:sea`, or
+`XOPAT_PACKAGED=1` to exercise the path from a source tree):
+
+- bundles are never compiled and nothing is written next to sources — a prebuilt
+  artifact is `require`d, or the load fails with a message saying to rebuild;
+- the **manifest** is the authority for which elements exist and which sources were
+  built. A `readdirSync` over the snapshot filesystem is not: an empty result there is
+  indistinguishable from "this element ships no server code";
+- `tryServerFile` answers from the manifest too, so a cross-element target such as
+  `module:vercel-ai-chat-sdk/server/providerRegistration.server.ts` resolves even
+  though the `.ts` source is not shipped;
+- role capabilities come from the prebuilt `src/dist/user-roles-core.cjs`, not from an
+  in-memory TypeScript transform (which is why `roles.js` failed closed in every
+  binary before);
+- `import()` of a snapshot file does **not** work — pkg runs the entry through `vm`
+  with no `importModuleDynamically` callback, so it throws
+  `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`. That is the reason bundles are CJS.
+
+Packaging requires `pkg.scripts` (not `assets`) to list the bundles: only `scripts`
+entries are require-able by a computed path. `test/suites/unit/server-packaged-loader.test.mjs`
+exercises this whole path without building a binary.
 
 ### Example
 
@@ -942,7 +986,9 @@ This prevents the server from flooding a broken upstream.
 
 `runtime: { isolation: "worker" }` is **not wired up**. The policy normalizer
 does not read `isolation`, nothing constructs a `worker_threads` Worker, and
-`server/node/rpc-method-worker.js` is an unreferenced sketch. A method declaring
+`server/node/rpc-method-worker.js` is an unreferenced sketch (it now at least
+loads modules through the one shared loader rather than its own copy, which had
+no TypeScript branch at all). A method declaring
 it runs exactly like any other method, in-process — do not rely on the isolation
 for anything security-relevant.
 
@@ -987,7 +1033,7 @@ The Docker image picks the clustered entrypoint automatically when
 | **`maxConcurrency` / `queueLimit`** | Interpreted as **deployment-wide** budgets and divided by the worker count (floor 1). A method declaring `maxConcurrency: 8` under `XOPAT_WORKERS=4` gets 2 per worker. |
 | **Circuit breakers** | Still per-worker. A downed upstream is probed by each worker independently. |
 | **Retention sweeps** | One leader at a time, elected by a lease on `<storageRoot>/.sweep.lock`. Not tied to worker id, so a worker restart does not lose the leader permanently. |
-| **Builds** | `*.server.ts` compilation is serialized across processes with a per-output lock and lands via atomic rename, so a cold multi-worker boot compiles once. |
+| **Builds** | Nothing is normally built at run time (`npm run build` prebuilds every entry). The dev-time on-demand compile is serialized across processes with a per-output lock and lands via atomic rename, so a cold multi-worker boot compiles once; a packaged build never compiles at all. |
 | **Logs / introspection** | Per-worker. `getLogs` / `getStorageStats` answer for whichever worker served the call; each record carries its `pid`. |
 
 Other multi-process topologies (k8s replicas, PM2 fork mode) look single-process

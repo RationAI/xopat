@@ -1,5 +1,30 @@
 # Changelog
 
+### 3.1.2
+
+Easier deployment, faster loading, and more control over annotations and saved data.
+
+**Features**:
+
+* **Packaging** — new standalone build tooling; server code in plugins/modules can use modern imports.
+* **Performance** — server compresses assets and the viewer page; smaller logo.
+* **Saving data** — storage destinations can be turned on/off per session, if the deployment allows it.
+* **Logging** — logs can include attached files (off by default).
+* **Annotations** — clearer locking: user locks vs. read-only annotations from analyses; lock/unlock
+  from the annotation list; translated context menus.
+* **Voice** — more reliable speech detection, faster first start.
+* **Slides** — simpler authenticated slide sources; credentials are never sent to other servers
+  unless configured.
+* **Defaults** — standalone setup ships only stable plugins.
+
+**Bugfixes**:
+
+* Annotation lock and private-annotation export fixes.
+* Voice start timing fix.
+* Docker images updated for security fixes.
+* Questionnaire plugin renamed; docs fixes.
+
+
 ### 3.1.1
 
 Improvements across dictation, reporting, measurements, UI, rendering, web-tiff and security, with

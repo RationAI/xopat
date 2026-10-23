@@ -54,6 +54,9 @@ Try to avoid patches in general and prefer clean rewrites and API improvements. 
   The build must produce an `index.workspace.js` file (via `esbuild` or custom bundlers), which is the unified bundle that xOpat will load dynamically.
   Alernatively, this file can be present as the module main file and the build can be skipped.
 
+#### Server-side element code is prebuilt into the release
+`*.server.{ts,mts,cts,js,mjs,cjs}` files are bundled at **build** time (`npm run build` → `grunt serverBuild`) into `<element>/.server-dist/*.cjs` and recorded in `server/node/server-build-manifest.json`; the standalone binary (`@yao-pkg/pkg`) carries no compiler and a read-only filesystem, so an entry that was not built answers `RPC_UNKNOWN_METHOD` forever. Write any module style you like — `import`, `require`, `import()`, ESM-only and CJS dependencies, mixed in one file — but **no top-level await** (the CJS output cannot express it; the build fails naming the file). Never "fix" a bundling error by marking a dependency external: external means resolved at runtime, and a binary has no `node_modules`. Declare the genuine cases in `include.json` → `"server": {"external": [...], "assets": [...]}`. See `server/node/README.md` → *How a server file is built* / *Packaged builds*.
+
 #### Typescript and dependencies
 Modules, plugins and core are loosely coupled. No direct import between them can happen. Types need to be available as ambient declarations for global IDE validation. APIs must be exported globally to be accessible from the core, or rely on automatic exposal through the `addModule` or `addPlugin` calls. Reuse functionality from other modules or plugins by requesting hard dependencies via `include.json`, or by using the loader API to listen for conditional availability of a module or plugin (integrate if available, otherwise skip).
 

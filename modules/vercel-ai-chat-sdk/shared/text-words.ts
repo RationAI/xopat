@@ -7,7 +7,7 @@
  * and in Node's full ICU) a sentence has as many words as it has; where the API is
  * missing, runs of letters/digits are the words, which is today's behaviour for English.
  *
- * Deliberately duplicated in the speech-to-text and mixture modules: modules do not
+ * Deliberately duplicated in the speech-to-text module: modules do not
  * import each other.
  */
 

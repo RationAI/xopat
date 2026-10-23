@@ -22,7 +22,43 @@
  * 	borderDashing: number,
  * 	ignoreCustomStyling: boolean
  * }} AuthorConfig
+ *
+ * @typedef {{
+ * 	locked: boolean,
+ * 	interactive: boolean,
+ * 	mutable: boolean,
+ * 	releasable: boolean,
+ * 	reason: string,
+ * 	code: string|null
+ * }} AnnotationLockState
  */
+
+/**
+ * Lock states, as frozen singletons.
+ *
+ * {@link OSDAnnotations#getAnnotationLockState} runs per annotation per visibility
+ * evaluation, so the no-policy path must not allocate. `reason` is a getter and not a
+ * baked value because this executes at module load, when `$.t` is still the placeholder
+ * translator that returns the key's last segment (see AGENTS.md §3).
+ * @private
+ */
+const lockState = (locked, interactive, mutable, releasable, key, code) => Object.freeze({
+    locked, interactive, mutable, releasable, code,
+    get reason() { return key ? $.t(key, { ns: 'annotations' }) : ''; },
+});
+/** Not locked: the ordinary annotation. @private */
+const LOCK_NONE = lockState(false, true, true, false, null, null);
+/** The user's own lock: out of the canvas's way entirely, and releasable again. @private */
+const LOCK_USER = lockState(true, false, false, true, 'lock.refused', 'W_ANNOTATION_LOCKED');
+/** Imposed from outside: still readable and commentable, never editable, never releasable. @private */
+const LOCK_READONLY = lockState(true, true, false, false, 'readOnly.refused', 'W_ANNOTATION_READONLY');
+/**
+ * Both at once. The restrictive half of each wins: non-interactive from the user's lock,
+ * non-releasable from the imposed one — a user may not lift a lock they did not place.
+ * @private
+ */
+const LOCK_BOTH = lockState(true, false, false, false, 'readOnly.refused', 'W_ANNOTATION_READONLY');
+
 window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     constructor() {
@@ -301,29 +337,31 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // bulk `import()` (which raises the same events per preset) replayed
         // every hydrated preset straight back at the bound sink.
 
-        this._registerReadOnlyGuard();
+        this._registerLockGuard();
         this._mirrorPipelineFailures();
     }
 
     /**
-     * Make `annotation.readOnly` mean something on every mutation path at once.
+     * Make a lock mean something on every mutation path at once.
      *
-     * A read-only annotation is one this user may look at but not change: an
-     * analysis job's output, a record another scope owns, anything a rights
-     * resolver has locked. Enforcing that at the IO checkpoint rather than at each
-     * UI entry point is what makes it exhaustive — delete, edit commit, preset
-     * change and even *entering* edit mode all pass through `pre-update` /
+     * A locked annotation is one this user may look at but not change — their own
+     * lock, an analysis job's output, a record another scope owns, anything a
+     * rights resolver has locked. Enforcing that at the IO checkpoint rather than
+     * at each UI entry point is what makes it exhaustive — delete, edit commit,
+     * preset change and even *entering* edit mode all pass through `pre-update` /
      * `pre-delete` with a consistent `meta.kind`, so one guard covers paths that
-     * have not been written yet.
+     * have not been written yet. What exactly is refused comes from
+     * {@link getAnnotationLockState}, so an integration's lock policy is enforced
+     * here too.
      *
      * Comments are deliberately allowed through: they are annotation metadata, not
      * the annotation, and a locked finding is still discussable.
      * @private
      */
-    _registerReadOnlyGuard() {
+    _registerLockGuard() {
         const pipeline = globalThis.IO_PIPELINE;
         if (!pipeline?.registerGuard) return;
-        this._readOnlyGuard = pipeline.registerGuard({
+        this._lockGuard = pipeline.registerGuard({
             ownerId: this.uid,
             resource: "annotation",
             direction: "*",
@@ -335,12 +373,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
                 if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
                 const target = ctx.meta?.object ?? ctx.meta?.previous;
-                if (!target?.readOnly) return { ok: true };
+                const state = this.getAnnotationLockState(target);
+                if (state.mutable) return { ok: true };
+                // The lock toggle itself is the one mutation a releasable lock must let
+                // through — otherwise the flag that makes an annotation immutable also
+                // makes itself unwritable and nothing could ever be unlocked. Gated on
+                // `releasable` rather than on the kind alone: a blanket exemption (as
+                // comments get) would let anyone clear an imposed `readOnly`.
+                if (ctx.meta?.kind === 'lock-change' && state.releasable) return { ok: true };
                 return {
                     ok: false, refused: true,
-                    reason: "annotation is read-only",
-                    userMessage: $.t('readOnly.refused', { ns: 'annotations' }),
-                    code: "W_ANNOTATION_READONLY",
+                    reason: "annotation is locked",
+                    userMessage: state.reason,
+                    code: state.code,
                 };
             },
         });
@@ -1320,6 +1365,141 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._applyAnnotationFiltersToAllViewers();
     }
 
+    /********************* LOCK POLICY **********************/
+
+    /**
+     * Resolve what "locked" currently means for one annotation.
+     *
+     * Two flags feed it. `object.locked` is the **user's** lock, behind the padlock in
+     * the annotation's toolbar: by default the annotation stops responding to the canvas
+     * entirely — it is not hit-tested and not selectable, so the user can draw straight
+     * over it — every mutation is refused, and the user may release it again.
+     * `object.readOnly` is a lock the user did not place and cannot lift (an analysis
+     * job's output, a record another scope owns): it stays selectable, readable and
+     * commentable but refuses every mutation.
+     *
+     * Integrations redefine the *meaning* rather than the flag — see
+     * {@link registerLockPolicy}. Everything downstream reads this one descriptor
+     * (hit-testing, selectability, editability, the IO guard, the padlock icon, the board
+     * badge), so a policy moves all of them at once.
+     *
+     * Allocation-free while no policy is registered; a registered policy costs one object
+     * spread per annotation per evaluation.
+     *
+     * @param {fabric.Object} object
+     * @return {AnnotationLockState} `locked` — draw the padlock closed; `interactive` —
+     *   may be hit-tested and selected on the canvas; `mutable` — `pre-update` /
+     *   `pre-delete` may pass; `releasable` — this user may turn the lock off;
+     *   `reason` / `code` — user-facing refusal message and IO refusal code
+     */
+    getAnnotationLockState(object) {
+        const imposed = !!object?.readOnly, own = !!object?.locked;
+        let state = imposed ? (own ? LOCK_BOTH : LOCK_READONLY) : (own ? LOCK_USER : LOCK_NONE);
+        const policies = this._lockPolicies;
+        if (!policies?.size) return state;
+        for (const [ownerId, policy] of policies) {
+            try {
+                const patch = policy(object, state);
+                if (patch && typeof patch === "object") state = Object.freeze({ ...state, ...patch });
+            } catch (e) {
+                console.warn(`[annotations] lock policy of '${ownerId}' threw:`, e);
+            }
+        }
+        return state;
+    }
+
+    /**
+     * Redefine what locking means, owner-scoped.
+     *
+     * The core answer is deliberately thin — the user's lock takes an annotation out of
+     * the canvas's way, `readOnly` makes one immutable — because the real rule belongs to
+     * whoever owns the data: who may lock, who may release, and whether a locked record
+     * still answers the mouse are questions only an integration can settle.
+     *
+     * Why this rather than writing `evented` / `selectable` / `visible` directly: those
+     * are *derived* in {@link OSDAnnotations.FabricWrapper#_applyAnnotationVisibilityState},
+     * so a directly written flag is silently overwritten by the next filter pass, layer
+     * toggle, zoom or edit. A policy is the only way to state a persistent rule — the same
+     * reason {@link registerVisibilityGate} exists.
+     *
+     * `policy(object, stateSoFar)` returns a **partial** override, or nothing for "no
+     * opinion"; policies compose in registration order, so a later one sees the earlier
+     * one's answer. Throwing is treated as no opinion, so a broken policy cannot lock the
+     * whole canvas. Must be cheap and side-effect free — it runs per annotation per
+     * visibility evaluation.
+     *
+     * @example <caption>Job output stays clickable, but only its owner releases it</caption>
+     * annotations.registerLockPolicy(this.id, (o, state) =>
+     *     o.empaiaJobId ? { interactive: true, releasable: false } : undefined);
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object, AnnotationLockState): (Object|undefined)} policy
+     * @return {function(): void} dispose — unregisters and re-derives interactivity
+     */
+    registerLockPolicy(ownerId, policy) {
+        if (typeof policy !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._lockPolicies = this._lockPolicies || new Map();
+        this._lockPolicies.set(id, policy);
+        this.reapplyVisibility();
+        return () => {
+            if (this._lockPolicies?.get(id) === policy) {
+                this._lockPolicies.delete(id);
+                this.reapplyVisibility();
+            }
+        };
+    }
+
+    /********************* PRIVACY **********************/
+
+    /**
+     * Declare that something in this deployment implements annotation privacy.
+     *
+     * `annotation.private` is a flag xOpat carries but cannot act on: hiding a record
+     * from *other users* is a storage decision, and standalone xOpat has no other users
+     * to hide it from. So the flag is inert — and therefore invisible — until an owner
+     * registers here; without this, "mark as private" would be a toggle whose only
+     * observable effect was that the annotation quietly vanished from exports, which is
+     * worse than not offering it.
+     *
+     * Registering makes the private toggle appear in the annotation's context menu.
+     * Enforcement stays with the registering integration. Export exclusion does NOT
+     * depend on registration — see {@link getPrivacyExcludesExport}.
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @return {function(): void} dispose
+     */
+    registerPrivacyProvider(ownerId) {
+        const id = String(ownerId ?? "");
+        this._privacyProviders = this._privacyProviders || new Map();
+        const record = {};
+        this._privacyProviders.set(id, record);
+        return () => {
+            if (this._privacyProviders?.get(id) === record) this._privacyProviders.delete(id);
+        };
+    }
+
+    /**
+     * Whether `annotation.private` means anything here, i.e. whether to offer the toggle.
+     * @return {boolean}
+     */
+    isPrivacySupported() {
+        return !!this._privacyProviders?.size;
+    }
+
+    /**
+     * Whether private annotations must be left out of exports.
+     *
+     * Decided by the deployment alone, through the `exportPrivate` static meta
+     * (default `true`: private annotations ARE exported). With `exportPrivate: false`
+     * every annotation flagged `private` is withheld, whether or not a provider is
+     * registered — provider presence never decides what leaves the viewer.
+     * @return {boolean}
+     */
+    getPrivacyExcludesExport() {
+        return !this._exportPrivateAnnotations;
+    }
+
     /** Current point-snap settings (live; reflects cache-restored state). */
     getSnap() {
         return { enabled: !!this.snapEnabled, radiusPx: this.snapRadiusPx };
@@ -1893,7 +2073,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationAutoIncrement = 0;
         this._annotationLabelIncrement = 0;
         this._annotationFilters = [];
-		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", true) !== false;
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer

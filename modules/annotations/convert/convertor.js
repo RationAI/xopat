@@ -169,8 +169,9 @@ OSDAnnotations.Convertor = class {
             if (!options.exportsObjects) return undefined;
             let objs = context.toObject(
                 exportAll,
-                // todo move _exportPrivateAnnotations to options
-                !context._exportPrivateAnnotations && ((o) => !o.private),
+                // Private annotations are withheld only when the deployment set
+                // `exportPrivate: false` — see OSDAnnotations#getPrivacyExcludesExport.
+                context.module.getPrivacyExcludesExport() && ((o) => !o.private),
                 ...exportedProps
             ).objects;
 

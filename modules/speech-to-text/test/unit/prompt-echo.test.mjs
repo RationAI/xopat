@@ -30,7 +30,7 @@ const { stripPromptEcho, isPurePromptEcho } = await import(pathToFileURL(outfile
 test.afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 // The shipped base glossary (modules/vercel-ai-chat-sdk/locales/en.json, voice.transcriptionPrompt) plus a
-// report-term tail like the one mixture-report-assist appends.
+// report-term tail
 const GLOSSARY = "Histology and pathology dictation. Common terms: histology, histopathology, " +
     "immunohistochemistry, hematoxylin and eosin, H&E stain, mitosis, mitotic figures, stroma, " +
     "stromal, carcinoma, adenocarcinoma, squamous cell, epithelium, epithelial, dysplasia, " +

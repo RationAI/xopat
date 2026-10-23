@@ -732,9 +732,8 @@ try {
 
         // Provider REFERENCES. A managed instance id is re-minted on every server start, so
         // deployment config can only name a provider by a stable reference — plugin id, type
-        // id or managed key. Referencing one by plugin id is what
-        // `mixture-report-assist.extractionProviderId: "chat-openai-compatible"` does, and it
-        // used to fail with `Unknown provider 'chat-openai-compatible'.` at first inference.
+        // id or managed key. Referencing one by plugin id (e.g. a consumer's
+        // `extractionProviderId: "chat-openai-compatible"`) used to fail with `Unknown provider 'chat-openai-compatible'.` at first inference.
         if (PROVIDER_ID) {
             // Type id and managed key come from the registration result, not a literal: this
             // deployment's secure config sets `providerDefaults.id` (here "stress-fake"), so

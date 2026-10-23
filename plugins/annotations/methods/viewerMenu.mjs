@@ -294,7 +294,9 @@ export const viewerMenuMethods = {
      * @param {Object} opts
      * @param {Event}   opts.originalEvent original DOM event (for paste-position math)
      * @param {boolean} [opts.includePresetSelection=true]
-     * @param {boolean} [opts.includeMarkAsPrivate=true]
+     * @param {boolean} [opts.includeMarkAsPrivate=true] only shown when something in
+     *   this deployment implements privacy (OSDAnnotations#registerPrivacyProvider)
+     * @param {boolean} [opts.includeLock=true]
      * @param {boolean} [opts.includeMoveToLayer=true]
      */
     _buildAnnotationContextActions(active, fabric, opts = {}) {
@@ -303,6 +305,7 @@ export const viewerMenuMethods = {
             source,
             includePresetSelection = true,
             includeMarkAsPrivate = true,
+            includeLock = true,
             includeMoveToLayer = true,
         } = opts;
         const wrapped = { originalEvent };
@@ -325,10 +328,13 @@ export const viewerMenuMethods = {
             const handler = active
                 ? this._clickAnnotationChangePreset.bind(this, active)
                 : this._clickPresetSelect.bind(this, true);
-            presetTitle = active ? 'Change preset' : 'Select preset for left click';
+            presetTitle = this.t(active
+                ? 'annotations.contextMenu.changePreset'
+                : 'annotations.contextMenu.selectPresetLeft');
             presetItems = [];
             this.context.presets.foreach((preset) => {
-                const category = preset.getMetaValue('category') || 'unknown';
+                const category = preset.getMetaValue('category')
+                    || this.t('annotations.viewerMenu.unknownPreset');
                 const icon = preset.objectFactory.getIcon();
                 const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
                 presetItems.push({
@@ -356,23 +362,24 @@ export const viewerMenuMethods = {
         const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
         const handlerDelete = this._deleteAnnotation.bind(this, active);
         const cudActions = [
-            { title: 'Copy',   icon: 'ph-copy',           containerCss: !active && 'opacity-50',  action: () => active && handlerCopy() },
-            { title: 'Cut',    icon: 'ph-scissors',       containerCss: !active && 'opacity-50',  action: () => active && handlerCut() },
-            { title: 'Paste',  icon: 'ph-clipboard-text', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() },
-            { title: 'Delete', icon: 'ph-trash',          containerCss: !active && 'opacity-50',  action: () => active && handlerDelete() },
+            { title: this.t('annotations.contextMenu.copy'),   icon: 'ph-copy',           containerCss: !active && 'opacity-50',  action: () => active && handlerCopy() },
+            { title: this.t('annotations.contextMenu.cut'),    icon: 'ph-scissors',       containerCss: !active && 'opacity-50',  action: () => active && handlerCut() },
+            { title: this.t('annotations.contextMenu.paste'),  icon: 'ph-clipboard-text', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() },
+            { title: this.t('annotations.contextMenu.delete'), icon: 'ph-trash',          containerCss: !active && 'opacity-50',  action: () => active && handlerDelete() },
         ];
 
         let layerItems = null;
         if (active && includeMoveToLayer && typeof fabric?.setAnnotationLayer === 'function') {
             const layers = fabric.getAllLayers?.() || [];
             layerItems = [{
-                title: '(no layer)',
+                title: this.t('annotations.contextMenu.noLayer'),
                 icon: 'ph-stack',
                 action: () => fabric.setAnnotationLayer(active, null),
             }];
             for (const layer of layers) {
                 layerItems.push({
-                    title: layer.name || `Layer ${layer.id}`,
+                    title: layer.name
+                        || this.t('annotations.contextMenu.layerNamed', { id: layer.id }),
                     icon: 'ph-stack',
                     action: () => fabric.setAnnotationLayer(active, layer.id),
                 });
@@ -382,7 +389,7 @@ export const viewerMenuMethods = {
         let zOrderItems = null;
         if (active && typeof fabric?.canvas?.sendToBack === 'function') {
             zOrderItems = [{
-                title: 'Send to back',
+                title: this.t('annotations.contextMenu.sendToBack'),
                 icon: 'ph-caret-double-down',
                 action: () => {
                     // Fabric draws the active object on top regardless of
@@ -396,13 +403,32 @@ export const viewerMenuMethods = {
             }];
         }
 
+        // The lock. Reachable from here as well as from the padlock, because a
+        // locked annotation is by default out of the canvas's way entirely — the
+        // board row's menu is then the only way back to it.
+        let lockItem = null;
+        if (active && includeLock) {
+            const lock = this.context.getAnnotationLockState(active);
+            // A lock this user may not lift is not offered as a menu entry at all.
+            if (!lock.locked || lock.releasable) {
+                lockItem = {
+                    title: this.t(lock.locked ? 'annotations.lock.unlock' : 'annotations.lock.lock'),
+                    icon: lock.locked ? 'ph-lock-open' : 'ph-lock',
+                    action: () => fabric.setAnnotationLocked(active, !lock.locked),
+                };
+            }
+        }
+
+        // Privacy is about who ELSE sees the annotation, which only a storage
+        // integration can enforce; with nothing implementing it the flag is inert, so
+        // the toggle is not offered (it would read as "hide from whom?").
         let privateItem = null;
-        if (active && includeMarkAsPrivate) {
+        if (active && includeMarkAsPrivate && this.context.isPrivacySupported()) {
             const props = this._getAnnotationProps(active);
             const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
             privateItem = {
-                title: props.private ? 'Unmark as private' : 'Mark as private',
-                icon: props.private ? 'visibility' : 'visibility_lock',
+                title: this.t(props.private ? 'annotations.privacy.unmark' : 'annotations.privacy.mark'),
+                icon: props.private ? 'ph-eye-slash' : 'ph-eye',
                 action: () => handlerMarkPrivate(),
             };
         }
@@ -427,13 +453,14 @@ export const viewerMenuMethods = {
 
             const targetChildren = (apply, excludeLayerId) => {
                 const items = [{
-                    title: '(new collapsed layer)',
+                    title: this.t('annotations.contextMenu.newCollapsedLayer'),
                     icon: 'ph-stack',
                     action: () => apply({ kind: 'new' }),
                 }];
                 for (const l of layersFor(excludeLayerId)) {
                     items.push({
-                        title: l.name || `Layer ${l.id}`,
+                        title: l.name
+                            || this.t('annotations.contextMenu.layerNamed', { id: l.id }),
                         icon: 'ph-stack',
                         action: () => apply({ kind: 'layer', layerId: l.id }),
                     });
@@ -443,7 +470,7 @@ export const viewerMenuMethods = {
 
             const groupItems = [];
             groupItems.push({
-                title: `From selection (${selectionCount})`,
+                title: this.t('annotations.contextMenu.fromSelection', { count: selectionCount }),
                 icon: 'ph-bounding-box',
                 containerCss: !fromSelectionEnabled && 'opacity-50',
                 children: fromSelectionEnabled
@@ -458,10 +485,10 @@ export const viewerMenuMethods = {
                 const categoryValue = (categoryRaw && typeof categoryRaw === 'object')
                     ? categoryRaw.value : categoryRaw;
                 const criteria = [
-                    { id: 'factory',  label: 'Same shape type',   value: active.factoryID },
-                    { id: 'preset',   label: 'Same preset',       value: active.presetID },
-                    { id: 'author',   label: 'Same author',       value: active.author ?? active.sessionID },
-                    { id: 'category', label: 'Same category text', value: categoryValue },
+                    { id: 'factory',  label: this.t('annotations.contextMenu.sameShapeType'),   value: active.factoryID },
+                    { id: 'preset',   label: this.t('annotations.contextMenu.samePreset'),       value: active.presetID },
+                    { id: 'author',   label: this.t('annotations.contextMenu.sameAuthor'),       value: active.author ?? active.sessionID },
+                    { id: 'category', label: this.t('annotations.contextMenu.sameCategoryText'), value: categoryValue },
                 ];
                 const excludeId = active.layerID ?? '';
                 for (const c of criteria) {
@@ -479,7 +506,7 @@ export const viewerMenuMethods = {
             }
 
             if (groupItems.length) {
-                groupParent = { title: 'Group', icon: 'ph-bounding-box', children: groupItems };
+                groupParent = { title: this.t('annotations.contextMenu.group'), icon: 'ph-bounding-box', children: groupItems };
                 // For the legacy flat path, drop separator placeholders.
                 groupItemsFlat = groupItems.filter(it => it.title !== '');
             }
@@ -498,12 +525,13 @@ export const viewerMenuMethods = {
             }
             children.push(...cudActions);
             if (layerItems) {
-                children.push({ title: 'Move to layer', icon: 'ph-stack', children: layerItems });
+                children.push({ title: this.t('annotations.contextMenu.moveToLayer'), icon: 'ph-stack', children: layerItems });
             }
             if (groupParent) children.push(groupParent);
             if (zOrderItems) children.push(...zOrderItems);
+            if (lockItem) children.push(lockItem);
             if (privateItem) children.push(privateItem);
-            return [{ title: 'Annotation', icon: 'ph-shapes', children }];
+            return [{ title: this.t('annotations.contextMenu.annotation'), icon: 'ph-shapes', children }];
         }
 
         // Legacy `window.DropDown` fallback — flat list with header rows.
@@ -514,20 +542,21 @@ export const viewerMenuMethods = {
             actions.push({ title: `${presetTitle}:` });
             actions.push(...presetItems);
         }
-        actions.push({ title: 'Actions:' });
+        actions.push({ title: `${this.t('annotations.contextMenu.actions')}:` });
         actions.push(...cudActions);
         if (layerItems) {
-            actions.push({ title: 'Move to layer:' });
+            actions.push({ title: `${this.t('annotations.contextMenu.moveToLayer')}:` });
             actions.push(...layerItems);
         }
         if (groupItemsFlat) {
-            actions.push({ title: 'Group:' });
+            actions.push({ title: `${this.t('annotations.contextMenu.group')}:` });
             actions.push(...groupItemsFlat);
         }
         if (zOrderItems) actions.push(...zOrderItems);
-        if (privateItem) {
-            actions.push({ title: 'Modify annotation:' });
-            actions.push(privateItem);
+        if (lockItem || privateItem) {
+            actions.push({ title: `${this.t('annotations.contextMenu.modifyAnnotation')}:` });
+            if (lockItem) actions.push(lockItem);
+            if (privateItem) actions.push(privateItem);
         }
         return actions;
     },
@@ -626,7 +655,13 @@ export const viewerMenuMethods = {
             return this._buildAnnotationContextActions(active, fabric, {
                 originalEvent: ctx.event,
                 source: ctx.source,
-                includeMarkAsPrivate: true,
+                // Privacy is not the question the global window's "..." menu
+                // asks — it hangs off the annotation itself there. Declined at
+                // the SOURCE rather than filtered out of the result: the result
+                // is one nested "Annotation" parent on the flyout path, so a
+                // caller filtering top-level titles removed nothing, and on the
+                // flat path it left the group header with nothing under it.
+                includeMarkAsPrivate: ctx.source !== 'annotation-more',
                 includeMoveToLayer: true,
                 includePresetSelection: true,
             });

@@ -32,6 +32,7 @@ const { getServerLogging, setLoggingConfig } = require("./logging");
 const { setServerConfigSnapshot } = require("./server-helpers");
 const { getServerStorage, setStorageConfig } = require("./storage");
 const { validateUpstreamUrl, SsrfBlockedError } = require("./ssrf-guard");
+const compression = require("./compression");
 
 
 const PROJECT_PATH = "";
@@ -121,8 +122,9 @@ process.on('uncaughtException', error => {
     setTimeout(() => process.exit(1), 1000).unref();
 });
 
-const CACHE_DIR = process.env.XOPAT_CACHE_DIR
-    || path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "server/.cache");
+// constants.DEFAULT_CACHE_DIR rather than a path under the application root:
+// in a packaged build that root is the read-only snapshot.
+const CACHE_DIR = process.env.XOPAT_CACHE_DIR || constants.DEFAULT_CACHE_DIR;
 
 /**
  * Publish `server.secure.storage` (and the public `server.logging` block) before
@@ -286,6 +288,18 @@ function normalizeFrameAncestors(value) {
 let EXPOSE_SCHEME_ROUTES = DEV_MODE;
 
 /**
+ * `core.server.staticMaxAge` — seconds a production browser may reuse an
+ * UNVERSIONED asset (no `?v=`: dynamic `import()`s of element sub-modules,
+ * fonts, logos, model weights) before revalidating against its ETag.
+ *
+ * These used to be `no-store`, so every page load re-downloaded them in full
+ * and could not even get a 304 — over a distant link that was ~3.5 MB and a
+ * dozen serial round trips per load. Dev mode keeps `no-cache` so edits are
+ * never hidden. `0` means revalidate every time (`no-cache`).
+ */
+let STATIC_MAX_AGE = 3600;
+
+/**
  * `core.server.secure.examples` — sessions this deployment publishes as
  * ready-to-open URLs in the startup banner. Server-only by construction (the
  * `server.secure` strip), printed unconditionally: a deployment that bothered to
@@ -305,6 +319,9 @@ let PUBLISHED_EXAMPLES = {};
         );
         setStorageConfig(core?.CORE?.server?.secure?.storage || core?.CORE_SECURE?.storage || {});
         setLoggingConfig(core?.CORE?.server?.logging || {});
+        compression.setCompressionConfig(core?.CORE?.server?.compression);
+        const maxAge = Number(core?.CORE?.server?.staticMaxAge);
+        if (Number.isFinite(maxAge) && maxAge >= 0) STATIC_MAX_AGE = Math.floor(maxAge);
         const roots = core?.CORE?.server?.staticRoots;
         if (Array.isArray(roots)) EXTRA_STATIC_ROOTS = roots.filter(r => typeof r === "string");
 
@@ -1352,23 +1369,45 @@ async function responseStaticFile(req, res, target, urlObj) {
         headers["Cache-Control"] = "no-cache";
     } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
-    } else if (target.media) {
-        // `no-store` would forbid keeping the partial responses a tile decoder
-        // re-reads constantly; revalidation against the ETag is what we want.
+    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE) {
+        // Media: `no-store` would forbid keeping the partial responses a tile
+        // decoder re-reads constantly. Dev: an edit must show on the next load.
+        // Either way revalidation against the ETag keeps it a cheap 304.
         headers["Cache-Control"] = "no-cache";
     } else {
-        headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
-        headers["Pragma"] = "no-cache";
-        headers["Expires"] = "0";
+        headers["Cache-Control"] = `public, max-age=${STATIC_MAX_AGE}, stale-while-revalidate=86400`;
+    }
+
+    if (target.media) {
+        const inm = req.headers["if-none-match"];
+        if (inm && inm.split(",").some(t => t.trim() === etag)) {
+            res.writeHead(304, headers);
+            return res.end();
+        }
+        return responseMediaFile(req, res, target, headers, etag);
+    }
+
+    // Media is never compressed: ranges address raw byte offsets.
+    const encoding = compression.isCompressible(target.path, target.stat.size)
+        ? compression.negotiateEncoding(req.headers["accept-encoding"])
+        : null;
+    if (compression.isCompressible(target.path, target.stat.size)) {
+        // The representation depends on Accept-Encoding even when this
+        // particular client got the identity body.
+        headers["Vary"] = "Accept-Encoding";
     }
 
     const inm = req.headers["if-none-match"];
-    if (inm && inm.split(",").some(t => t.trim() === etag)) {
+    const matches = (tag) => inm && inm.split(",").some(t => t.trim() === tag);
+    if (encoding && matches(compression.encodedEtag(etag, encoding))) {
+        headers["ETag"] = compression.encodedEtag(etag, encoding);
         res.writeHead(304, headers);
         return res.end();
     }
-
-    if (target.media) return responseMediaFile(req, res, target, headers, etag);
+    if (matches(etag)) {
+        res.writeHead(304, headers);
+        return res.end();
+    }
 
     let content;
     try {
@@ -1377,6 +1416,20 @@ async function responseStaticFile(req, res, target, urlObj) {
         logger.warn(`[static] read failed for '${target.path}':`, e?.code || e);
         res.writeHead(500, { "Content-Type": "text/plain" });
         return res.end("Sorry, check with the site admin.");
+    }
+
+    if (encoding) {
+        let encoded = null;
+        try {
+            encoded = await compression.getCompressed(`${target.path}|${validator}`, content, encoding);
+        } catch (e) {
+            logger.warn(`[static] compression failed for '${target.path}':`, e?.code || e);
+        }
+        if (encoded) {
+            headers["Content-Encoding"] = encoding;
+            headers["ETag"] = compression.encodedEtag(etag, encoding);
+            content = encoded;
+        }
     }
 
     headers["Content-Length"] = content.length;
@@ -1791,15 +1844,21 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
     // X-Content-Type-Options: nosniff, which forbids the browser from guessing.
     // Without this header the viewer is delivered as plain text and the user sees
     // the page source.
-    res.writeHead(200, {
+    // ~200 KB with baked locales and declarations, so worth compressing — but
+    // per request and uncached, since the body is per-session.
+    const { body, encoding } = await compression.compressDynamic(req, html);
+    const headers = {
         'Content-Type': 'text/html; charset=utf-8',
         // The document carries this session's CSRF token (and, in embedding
         // mode, its id). It is per-session by construction, so no shared cache
         // or back/forward store may keep a copy for the next visitor.
         'Cache-Control': 'no-store',
-    });
-    res.write(html);
-    res.end();
+        'Vary': 'Accept-Encoding',
+        'Content-Length': body.length,
+    };
+    if (encoding) headers['Content-Encoding'] = encoding;
+    res.writeHead(200, headers);
+    res.end(body);
 }
 
 async function responseDeveloperSetup(req, res) {
@@ -2261,7 +2320,7 @@ process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 process.on('SIGINT', () => { shutdown('SIGINT'); });
 function onListening() {
     const ENV = process.env.XOPAT_ENV;
-    const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
+    const existsDefaultLocation = fs.existsSync(`${constants.ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
         logger.info("Using env/env.json..");
     } else if (ENV) {

@@ -179,16 +179,48 @@ module.exports = function(grunt) {
         done();
     });
 
+    // Prebuild every plugin/module `*.server.*` entry (plus the shared role
+    // resolver) and record them in the server build manifest.
+    //
+    // Part of `build`, not an opt-in script: a packaged binary has no esbuild and
+    // a read-only filesystem, so an entry that is not built here can never be
+    // compiled later — its RPC just answers `RPC_UNKNOWN_METHOD`. The reducers
+    // (rather than the `package.json` gate `workspaceBuild` uses) are what makes
+    // this cover elements that ship only an `include.json`.
+    grunt.registerTask('serverBuild', 'Prebuild server-side bundles for every plugin/module', async function() {
+        const done = this.async();
+        const logger = {
+            log: (m) => grunt.log.writeln(m),
+            warn: (m) => grunt.log.warn(m),
+            error: (m) => grunt.log.error(m),
+        };
+        // reduceFolder invokes its accumulator synchronously and does not await,
+        // so collect first and build afterwards (same reason as bundleModules).
+        const items = [];
+        const collect = (kind) => (acc, item, folder) => {
+            acc.push({ kind, id: item.id || folder, directory: item.directory });
+            return acc;
+        };
+        grunt.util.reduceModules(collect("module"), items);
+        grunt.util.reducePlugins(collect("plugin"), items);
+        try {
+            await BuildLogic.buildAllServerEntries(items, logger);
+            done();
+        } catch (e) {
+            grunt.fail.warn(e.message);
+        }
+    });
+
     // Production build: also compiles the core (per-file dist AND the single
     // minified src/dist/xopat-core.min.js bundle) so `client.production` has a
     // complete set of min artifacts to serve. `buildCore` was previously absent
     // here, so `minify` never produced the core dist at all. `bundleModules`
     // produces the per-item ESM bundles (index.min.mjs) for `.mjs` includes.
-    grunt.registerTask('minify', ['workspaceBuild', 'buildUI', 'buildCore', 'prepMinify', 'uglify', 'bundleModules']);
+    grunt.registerTask('minify', ['workspaceBuild', 'serverBuild', 'buildUI', 'buildCore', 'prepMinify', 'uglify', 'bundleModules']);
     grunt.registerTask('default', ['minify']);
     grunt.registerTask('all', ['minify']);
 
-    grunt.registerTask('build', ['workspaceBuild', 'buildUI', 'buildCore']);
+    grunt.registerTask('build', ['workspaceBuild', 'serverBuild', 'buildUI', 'buildCore']);
     grunt.registerTask('buildUI', async function() {
         const done = this.async();
         try {await BuildLogic.buildUI({

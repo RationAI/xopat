@@ -13,9 +13,35 @@
  * development. These pin both halves.
  */
 import { test, expect } from "@xopat/test-harness";
+import fsp from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
+import path from "node:path";
+import zlib from "node:zlib";
+import { fileURLToPath } from "node:url";
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /** An asset that exists in every deployment and is always version-stamped. */
 const ASSET = "/src/config.json";
+
+/**
+ * GET without transparent decoding — `fetch` decompresses and hides what was
+ * actually on the wire, which is the thing under test.
+ */
+function rawGet(xopatServer, urlPath, headers = {}) {
+    const url = new URL(urlPath, xopatServer.baseURL);
+    const lib = url.protocol === "https:" ? https : http;
+    return new Promise((resolve, reject) => {
+        const req = lib.get(url, { headers }, (res) => {
+            const chunks = [];
+            res.on("data", c => chunks.push(c));
+            res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+            res.on("error", reject);
+        });
+        req.on("error", reject);
+    });
+}
 
 test("a versioned asset is frozen when the server is not in dev mode", {
     tag: ["@integration"],
@@ -44,9 +70,61 @@ test("a conditional re-request is cheap either way", {
     expect(second.status).toBe(304);
 });
 
-test("an unversioned asset is never cached", { tag: ["@integration"] }, async ({ xopatServer }) => {
+test("an unversioned asset is reusable for a bounded time, then revalidated", {
+    tag: ["@integration"],
+}, async ({ xopatServer }) => {
+    // Unversioned assets are the dynamic `import()`s of element sub-modules,
+    // fonts, logos and model weights. They used to be `no-store`: every load
+    // re-downloaded them in full, a dozen serial round trips over a distant
+    // link. Bounded `max-age` keeps an edit-on-deploy visible within the hour.
     const res = await fetch(`${xopatServer.baseURL}${ASSET}`);
-    expect(res.headers.get("cache-control")).toMatch(/no-store|no-cache/);
+    const cc = res.headers.get("cache-control") ?? "";
+    expect(cc).not.toMatch(/no-store|immutable/);
+    expect(cc).toMatch(/max-age=\d+/);
+    expect(res.headers.get("etag"), "revalidation needs a validator").toBeTruthy();
+});
+
+test("a text asset is compressed when the client accepts it", {
+    tag: ["@integration"],
+}, async ({ xopatServer }) => {
+    // Raw bundles were ~8 MB per cold load; over a thin link that was the
+    // whole startup time.
+    const original = await fsp.readFile(path.join(REPO, ASSET));
+    for (const encoding of ["br", "gzip"]) {
+        const raw = await rawGet(xopatServer, `${ASSET}?v=3.1.0`, { "Accept-Encoding": encoding });
+        expect(raw.status).toBe(200);
+        expect(raw.headers["content-encoding"]).toBe(encoding);
+        expect(raw.headers["vary"] ?? "").toMatch(/accept-encoding/i);
+        expect(raw.body.length).toBeLessThan(original.length);
+        const decoded = encoding === "br" ? zlib.brotliDecompressSync(raw.body) : zlib.gunzipSync(raw.body);
+        expect(decoded.equals(original), `${encoding} body decodes to the file`).toBe(true);
+
+        // The ETag names the representation, so it must differ from the
+        // identity one — and revalidating it must still be a 304.
+        expect(raw.headers["etag"]).toMatch(new RegExp(`-${encoding}"$`));
+        const again = await rawGet(xopatServer, `${ASSET}?v=3.1.0`, {
+            "Accept-Encoding": encoding, "If-None-Match": raw.headers["etag"],
+        });
+        expect(again.status).toBe(304);
+    }
+
+    const identity = await rawGet(xopatServer, `${ASSET}?v=3.1.0`, { "Accept-Encoding": "identity" });
+    expect(identity.headers["content-encoding"]).toBeUndefined();
+    expect(identity.body.equals(original)).toBe(true);
+});
+
+test("binary assets are not recompressed", { tag: ["@integration"] }, async ({ xopatServer }) => {
+    const raw = await rawGet(xopatServer, "/src/assets/logos/xopat-logo.png", { "Accept-Encoding": "br, gzip" });
+    expect(raw.status).toBe(200);
+    expect(raw.headers["content-encoding"]).toBeUndefined();
+});
+
+test("the viewer page is compressed and never cached", { tag: ["@integration"] }, async ({ xopatServer }) => {
+    const raw = await rawGet(xopatServer, "/", { "Accept-Encoding": "br" });
+    expect(raw.status).toBe(200);
+    expect(raw.headers["content-encoding"]).toBe("br");
+    expect(raw.headers["cache-control"]).toMatch(/no-store/);
+    expect(zlib.brotliDecompressSync(raw.body).toString("utf8")).toMatch(/<html/i);
 });
 
 test("a long file extension still reaches the static handler", {

@@ -130,6 +130,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "private",
         "comments",
         "label",
+        "locked",
         "readOnly",
     ];
 
@@ -154,7 +155,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "label",
         // A lock is intrinsic state of the annotation, not a rendering detail:
         // if it did not survive the import trim it would silently evaporate on
-        // reload and the object would become editable again.
+        // reload and the object would become editable again. Both flags: the
+        // user's own lock and the one imposed on them.
+        "locked",
         "readOnly",
     ];
 
@@ -736,22 +739,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
                 });
             }
-            // A read-only annotation shows a padlock that is exactly that — a
-            // statement, not a toggle. Reusing the `private` toggle here would let
-            // the lock icon flip while the annotation stays locked, which reads as
-            // a broken control.
-            slots.push(target?.readOnly ? {
+            // The padlock is the lock, resolved through the module so that an
+            // integration's lock policy drives the icon and the click together. It is
+            // NOT the `private` toggle: `private` is about who else may see the
+            // annotation, lives in the "..." menu with an eye, and in a deployment
+            // where nothing implements privacy is not offered at all.
+            //
+            // A lock this user cannot lift shows a padlock that is exactly that — a
+            // statement, not a toggle. Letting the icon flip while the annotation
+            // stayed locked reads as a broken control.
+            const lock = self._context.getAnnotationLockState(target);
+            slots.push({
                 id: 'lock',
-                icon: 'ph-lock',
+                icon: lock.locked ? 'ph-lock' : 'ph-lock-open',
                 countText: '',
-                onClick: null,
-            } : {
-                id: 'lock',
-                icon: target?.private ? 'ph-lock' : 'ph-lock-open',
-                countText: '',
-                onClick: () => {
+                onClick: (lock.locked && !lock.releasable) ? null : () => {
                     const wrapper = self._context.fabric;
-                    if (wrapper && target) wrapper.setAnnotationPrivate(target, !target.private);
+                    if (wrapper && target) wrapper.setAnnotationLocked(target, !lock.locked);
                 },
             });
             slots.push({
