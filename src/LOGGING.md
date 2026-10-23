@@ -126,11 +126,11 @@ a file, with the bytes travelling beside it.
 
 ```ts
 log.attachment({
-    file: "mixture/sess-42/audio/window-0003.webm",
+    file: "logs/sess-42/audio/window-0003.webm",
     bytes: await blob.arrayBuffer(),
     mediaType: blob.type,
     index: 3,
-}, "MIXTURE_DICTATION_AUDIO");
+}, "MY_DICTATION_AUDIO");
 ```
 
 The line lands like any other record — channel, level, `fields.attachment` with
@@ -171,10 +171,6 @@ deployment whose body limit sits under the client's cap (`client.attachments`
 off leaves the 256 kB default against a 4 MB cap) re-encodes and re-uploads every
 sealed window for the whole session — patient audio on the wire, repeatedly, for
 guaranteed nothing.
-
-`env/parts/logging/mixture-report-trace.json` is a worked example: a reporting
-session's whole trace plus its dictation recordings, in one NDJSON file with the
-audio beside it.
 
 ## Forwarding
 

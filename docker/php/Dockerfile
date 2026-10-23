@@ -5,7 +5,7 @@ ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
 ENV NVM_DIR=/usr/local/nvm
-ENV NODE_VERSION=18.7.0
+ENV NODE_VERSION=24.22.1
 ENV NODE_PATH=$NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
 ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
@@ -32,7 +32,7 @@ WORKDIR /usr/app
 RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     # Node (see https://stackoverflow.com/questions/25899912/how-to-install-nvm-in-docker)
     && mkdir $NVM_DIR \
-    && curl https://raw.githubusercontent.com/creationix/nvm/v0.39.1/install.sh | bash \
+    && curl https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash \
     && . $NVM_DIR/nvm.sh \
     && nvm install $NODE_VERSION \
     && nvm alias default $NODE_VERSION \
