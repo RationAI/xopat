@@ -182,15 +182,14 @@ So the flag is inert, and therefore not offered, until an owner says it means
 something:
 
 ```js
-annotations.registerPrivacyProvider(this.id, { excludeFromExport: true });
+annotations.registerPrivacyProvider(this.id);
 ```
 
-That makes the eye toggle appear in the annotation's `…` menu and, with
-`excludeFromExport`, withholds private annotations from exports (the deployment's
-`exportPrivate` static meta forces them back in). With no provider registered,
-nothing is hidden and nothing is dropped from an export — a toggle whose only
-observable effect is that annotations quietly vanish from a file is worse than no
-toggle.
+That makes the eye toggle appear in the annotation's `…` menu. Export exclusion does
+**not** depend on it: it is the deployment's `exportPrivate` static meta alone
+(default `true` — private annotations are exported). Set
+`ENV.modules.annotations.exportPrivate: false` to withhold every annotation flagged
+`private` from all exports, whether or not a provider is loaded right now.
 
 A read-only annotation can still be **evicted**: `fabric.dropAnnotations(objects)`
 removes local copies without dispatching to any sink, running guards, or pushing

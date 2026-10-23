@@ -169,10 +169,8 @@ OSDAnnotations.Convertor = class {
             if (!options.exportsObjects) return undefined;
             let objs = context.toObject(
                 exportAll,
-                // Private annotations are withheld only where privacy is actually
-                // implemented (see OSDAnnotations#registerPrivacyProvider). With nothing
-                // implementing it the flag is inert, and silently dropping annotations
-                // from an export because of an inert flag only confuses.
+                // Private annotations are withheld only when the deployment set
+                // `exportPrivate: false` — see OSDAnnotations#getPrivacyExcludesExport.
                 context.module.getPrivacyExcludesExport() && ((o) => !o.private),
                 ...exportedProps
             ).objects;

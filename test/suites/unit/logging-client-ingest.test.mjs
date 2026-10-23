@@ -199,3 +199,15 @@ test("an attachment record still obeys the sensitive gate @unit", () => {
 
     expect(entry, "no allowSensitive, no record — and no bytes").toBe(null);
 });
+
+test("bytes are gated as sensitive trace whatever the client claimed @unit", () => {
+    // `logger.attachment` is sensitive-at-trace by definition. A client that sends
+    // bytes on an `info`, non-sensitive record must not slip them past that gate.
+    const broker = makeBroker(base({ client: { ingest: true, attachments: true } }));
+    const entry = broker.ingestClientRecord({
+        channel: "plugin.report-assist", level: "info", sensitive: false,
+        message: "DICTATION_AUDIO", fields: { attachment: { file: "a.webm", size: 2 } },
+    }, {}, { bytes: Buffer.from([1, 2]), file: "a.webm" });
+
+    expect(entry, "no allowSensitive, no record — and no bytes").toBe(null);
+});

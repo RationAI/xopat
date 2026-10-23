@@ -47,7 +47,7 @@
     // lines) are clickable. Clamped to 0..32.
     "hitTolerancePx": 5,
     // Whether to include private annotations in module export
-    "exportPrivate" : false,
+    "exportPrivate" : true,
     // If default preset should be provided
     "provideDefaultPresets": true,
     //Arguments to format convertors

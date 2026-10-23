@@ -513,10 +513,11 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
         }
         this._capture = new AudioCapture({workletUrl, silero});
         // NOT prewarmed here. This constructor runs at module load, on every page
-        // that includes speech-to-text, so prewarming made ~16 MB of uncompressed
-        // ONNX/WASM a boot cost for the majority of sessions that never dictate —
-        // competing with slide tiles for bandwidth exactly when the viewer needs it.
-        // The load stays on first use (`_selectVad()` at capture start, memoized).
+        // that includes speech-to-text, so prewarming made ~16 MB of ONNX/WASM (only
+        // the `.wasm` is compressed in transit) a boot cost for the majority of
+        // sessions that never dictate — competing with slide tiles for bandwidth
+        // exactly when the viewer needs it. The load stays on first use (capture
+        // start, alongside the permission prompt; memoized).
         // A voice UI that knows dictation is imminent — a panel opening, a mic
         // hover — should call `capture.prewarmVad()` itself at that moment.
         this._localeReady = this.loadLocale().catch((e: any) =>
@@ -820,7 +821,8 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      *
      * For a voice UI that has just been mounted or opened. Deliberately NOT called
      * from this module's constructor: that runs on every page including this module,
-     * and made a ~16 MB uncompressed download a boot cost for the majority of
+     * and made a ~16 MB download (the `.wasm` is compressed when the client negotiates
+     * `br`/`gzip`, the `.onnx` model never is) a boot cost for the majority of
      * sessions that never dictate. Fire-and-forget, memoized, best-effort — a
      * session that starts before it lands simply runs on the amplitude gate.
      */

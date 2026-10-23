@@ -229,26 +229,38 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
      * upstream is not static: a `` `${data}` `` template where each slide carries
      * its own absolute URL, or a relative template in a deployment with no proxy.
      *
-     * An explicit `httpClient` block always wins; this only fills the gap. The
-     * derived client is unauthenticated-by-default in the only sense that matters:
-     * it attaches whatever credential the MAIN auth context holds, exactly as a
-     * hand-written `{"baseURL": "<that origin>"}` does, and `isCrossOriginUrl`
-     * still refuses to send it anywhere but the derived origin.
+     * An explicit `httpClient` block always wins; this only fills the gap.
+     *
+     * Credentials degrade closed. Only a template resolving to the viewer's OWN
+     * origin gets the MAIN auth context's credential implicitly. A foreign origin
+     * gets the transport (scheduling, retries) but `auth.types: []` — handing the
+     * user's JWT/session to a third-party tile server must be something the
+     * operator wrote down (`"httpClient": {"baseURL": "<origin>"}`), not something
+     * inferred from a template.
      */
     private _deriveClientOptions(entry: SlideProtocolEntry): SlideProtocolHttpClientOptions | undefined {
         if (isFactoryEntry(entry)) return undefined;
         const origin = this._staticOriginOf(entry as SlideProtocolUrlTemplateEntry);
         if (!origin) return undefined;
+        const sameOrigin = typeof window !== "undefined" && window.location?.origin === origin;
         if (!this.derivedClients.has(entry.id)) {
             this.derivedClients.add(entry.id);
-            console.debug(
-                `[SLIDE_PROTOCOLS] protocol "${entry.id}" declares no \`httpClient\` block; binding one to the ` +
-                `origin its URL template resolves to (${origin}). Requests to it now carry the main auth ` +
-                `context's credential. Declare \`httpClient\` explicitly to override: \`auth.contextId\` for a ` +
-                `different identity, \`auth.types: []\` to send none, \`proxy\` to route through the server.`
-            );
+            if (sameOrigin) {
+                console.debug(
+                    `[SLIDE_PROTOCOLS] protocol "${entry.id}" declares no \`httpClient\` block; binding one to the ` +
+                    `viewer's own origin (${origin}) with the main auth context's credential. Declare ` +
+                    `\`httpClient\` explicitly to override.`
+                );
+            } else {
+                console.warn(
+                    `[SLIDE_PROTOCOLS] protocol "${entry.id}" declares no \`httpClient\` block and resolves to a ` +
+                    `foreign origin (${origin}); requests to it carry NO credential. If that upstream needs the ` +
+                    `user's credential, declare it explicitly: "httpClient": {"baseURL": "${origin}"} ` +
+                    `(plus \`auth.contextId\` for a different identity, or \`proxy\` to route through the server).`
+                );
+            }
         }
-        return { baseURL: origin };
+        return sameOrigin ? { baseURL: origin } : { baseURL: origin, auth: { types: [] } };
     }
 
     /** Origin a URL template always resolves to, or undefined when it varies per slide. */

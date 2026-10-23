@@ -266,13 +266,19 @@ answers `RPC_UNKNOWN_METHOD`. Two consequences for authors:
   "server": {
     "external": ["sharp"],              // kept out of the bundle AND copied into
                                         // .server-dist/node_modules/ so it resolves
-    "assets": ["vendor/**/*.node"]      // files recorded for packaging
+    "assets": ["vendor/**/*.node"]      // recorded in the build manifest ONLY
   }
   ```
 
-  Native `.node` addons additionally cannot be executed from inside a snapshot: copy
-  one out to the server cache dir before requiring it. Both keys are
-  deployment-trusted build-time config (`include.json`), never session input.
+  `assets` is currently bookkeeping: `grunt serverBuild` writes it into
+  `server-build-manifest.json`, but nothing feeds it to the binary packager. A file
+  the binary needs must also match a glob in the root `package.json` → `pkg.assets`
+  (or `pkg.scripts`). The same holds for a vendored external: only its
+  `.js`/`.cjs`/`.json` files are covered by the `pkg.scripts` globs, so a native
+  `.node` inside it is not packaged either. Native `.node` addons additionally
+  cannot be executed from inside a snapshot: copy one out to the server cache dir
+  before requiring it. Both keys are deployment-trusted build-time config
+  (`include.json`), never session input.
 
 ## Caveats
 Modules should support IO, otherwise the user will have to re-create

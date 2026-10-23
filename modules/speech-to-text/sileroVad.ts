@@ -171,9 +171,6 @@ export class SileroVadEngine {
     load(caller = "?"): Promise<void> {
         if (this._load) return this._load;
         this._state = "loading";
-        // [vad-debug] TEMPORARY load timing — remove after diagnosis.
-        const dbgT0 = performance.now();
-        log().info({caller, t0: Math.round(dbgT0)}, "[vad-debug] silero load start");
         const attempt = (async () => {
             if (!SileroVadEngine.isSupported()) throw new CaptureError("vad-fallback", "silero unsupported in this browser");
             if (!this._ctx) {
@@ -217,20 +214,17 @@ export class SileroVadEngine {
                 onSpeechEnd: () => { /* unused */ },
                 onVADMisfire: () => { /* unused */ },
             } as any);
-            log().info({caller, micVadNewMs: Math.round(performance.now() - dbgT0)}, "[vad-debug] MicVAD.new resolved"); // [vad-debug]
             this._vad = vad;
             this._armKeepAlive(ctx);
         })();
         this._load = attempt.then(() => {
             this._state = "ready";
-            log().debug("silero VAD ready");
-            log().info({caller, totalMs: Math.round(performance.now() - dbgT0)}, "[vad-debug] silero load ready"); // [vad-debug]
+            log().debug({caller}, "silero VAD ready");
         }, (e: any) => {
             this._state = "failed";
             this._load = null;
-            log().info({caller, totalMs: Math.round(performance.now() - dbgT0), error: String(e?.message || e)}, "[vad-debug] silero load failed"); // [vad-debug]
             const err = e instanceof CaptureError ? e : new CaptureError("vad-fallback", e?.message || String(e));
-            log().warn({error: err.message}, "silero VAD unavailable, amplitude gate will be used");
+            log().warn({caller, error: err.message}, "silero VAD unavailable, amplitude gate will be used");
             throw err;
         });
         // A caller that gave up waiting (grace expired) is no longer holding this

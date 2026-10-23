@@ -414,8 +414,6 @@ interface SegmentRecording {
     chunks: Blob[];
     /** The 16 kHz frames of a Silero-judged segment (its WAV upload); null otherwise. */
     pcm: Float32Array[] | null;
-    /** [vad-debug] TEMPORARY Silero prob histogram: [>=0.5, 0.35-0.5, 0.2-0.35, <0.2]. */
-    dbgHist?: number[];
     /** The engine that judged this segment (fixed at creation; a live switch never rewrites it). */
     vad: VadEngine;
     startedAt: number;
@@ -1108,7 +1106,8 @@ export class AudioCapture {
      * `_selectVad()` waits only `VAD_START_GRACE_MS` at capture start, so a model
      * that is not there yet costs the first dictation its Silero gate — the whole
      * session, since the engine is chosen once and the PCM segments need frames from
-     * the first one. The assets are ~16 MB, served uncompressed, and `immutable` once
+     * the first one. The assets are ~16 MB (the server compresses the `.wasm` when the
+     * client negotiates `br`/`gzip`, never the `.onnx` model) and `immutable` once
      * cached, so this is a one-time cost with no reason to land on a click.
      *
      * Call it when dictation becomes LIKELY (a voice panel opening, a mic hover), not
@@ -1237,12 +1236,6 @@ export class AudioCapture {
         // The frame is the library's buffer: copy it, it is reused for the next one.
         const rec = this._segRec;
         if (rec?.pcm) rec.pcm.push(f.frame.slice());
-        if (rec?.pcm) { // [vad-debug]
-            const h = rec.dbgHist || (rec.dbgHist = [0, 0, 0, 0]);
-            const p = f.prob;
-            const k = p >= 0.5 ? 0 : p >= 0.35 ? 1 : p >= 0.2 ? 2 : 3;
-            h[k] = (h[k] ?? 0) + 1;
-        }
         // No segment recorder ticks under Silero — the frames ARE the audio flowing,
         // so they carry the liveness beat the recorder timeslices used to.
         this._lastRecorderDataAt = f.t;
@@ -1320,12 +1313,16 @@ export class AudioCapture {
         // (clearArchive) when a new dictation begins or the audio has been used.
 
         this._vadFallbackReported = false;
-        // The engine choice overlaps the permission prompt: the first session ever
-        // waits for the Silero model, every later one finds it loaded.
-        Promise.all([
-            navigator.mediaDevices.getUserMedia(this._audioConstraints(opts)),
-            this._selectVad(),
-        ]).then(async ([stream, engine]) => {
+        // The model download overlaps the permission prompt, but the engine choice (and
+        // its short grace) starts only once the microphone is open: a prompt the user
+        // takes ten seconds to answer must not spend the grace, and the first session
+        // runs on Silero only if the model has arrived by then. `load()` is memoized,
+        // so `_selectVad()` joins this download instead of starting another.
+        const eng = this._silero;
+        if (eng && SileroVadEngine.isSupported()) void eng.load("startSegmented").catch(() => { /* reported by load() */ });
+        navigator.mediaDevices.getUserMedia(this._audioConstraints(opts))
+            .then(stream => this._selectVad().then(engine => [stream, engine] as const))
+            .then(async ([stream, engine]) => {
             // The session may have been stopped/replaced before permission resolved.
             if (sessionToken !== this._segSessionToken || !this._segmented) {
                 try { stream.getTracks().forEach(t => t.stop()); } catch (_e) { /* ignore */ }
@@ -1979,7 +1976,6 @@ export class AudioCapture {
         const type = this._segMime || (recording.chunks[0]?.type) || "audio/webm";
         // A Silero segment uploads exactly the frames the VAD judged, as WAV.
         const blob = recording.pcm ? wavBlob(recording.pcm) : new Blob(recording.chunks, {type});
-        const dbgSamples = recording.pcm ? recording.pcm.reduce((a, f) => a + f.length, 0) : -1; // [vad-debug]
         recording.pcm = null;
         const action = recording.action;
         // A recorder torn down or errored mid-segment carries no snapshot; judge it by
@@ -2035,7 +2031,6 @@ export class AudioCapture {
             discard("session-ended");
         }
         if (probe) meta.probe = true;
-        this._dbgSegment(recording, blob, meta, dbgSamples, emit, heard); // [vad-debug]
         if (APPLICATION_CONTEXT.log("module.speech-to-text:vad").isEnabled("debug")) APPLICATION_CONTEXT.log("module.speech-to-text:vad").debug({action, vad: meta.vad, blobSize: blob.size, heard, tracked, voicedMs, maxPeak, speechSpanMs, probe, failOpen: this._segFailOpen, emit, stale}, "segment finished");
         if (emit) {
             // The index is consumed only by an EMITTED segment: the consumer's ordered
@@ -2047,33 +2042,6 @@ export class AudioCapture {
             try { recording.onSegment(blob, this._segIndex++, meta); } catch (_e) { /* consumer error is theirs */ }
         }
         if (isFinal) this._finishSegmented();
-    }
-
-    /** [vad-debug] TEMPORARY per-segment diagnostics + the exact uploaded blob. Remove after diagnosis. */
-    private _dbgSeq = 0;
-    private _dbgSegment(recording: SegmentRecording, blob: Blob, meta: SegmentMeta, samples: number, emit: boolean, heard: boolean): void {
-        try {
-            const log = APPLICATION_CONTEXT.log("module.speech-to-text:vad");
-            const seq = this._dbgSeq++;
-            const fields = {
-                seq, token: recording.token, startedAt: Math.round(recording.startedAt), vad: recording.vad, action: recording.action, emit, heard,
-                durationMs: Math.round(meta.durationMs), voicedMs: Math.round(meta.voicedMs),
-                speechSpanMs: Math.round(meta.speechSpanMs), maxPeak: meta.maxPeak,
-                hist: recording.dbgHist || null,
-                frames: recording.dbgHist ? recording.dbgHist.reduce((a, b) => a + b, 0) : -1,
-                pcmSamples: samples, pcmMs: samples >= 0 ? Math.round(samples / 16) : -1,
-                gate: this._gate?.snapshot?.() ?? null, blobSize: blob.size, blobType: blob.type,
-            };
-            log.info(fields, "[vad-debug] segment");
-            if (!blob.size || !log.isEnabled("trace")) return;
-            const ext = /wav/.test(blob.type) ? "wav" : /ogg/.test(blob.type) ? "ogg" : /mp4/.test(blob.type) ? "m4a" : "webm";
-            void blob.arrayBuffer().then(bytes => log.attachment({
-                file: `stt-debug/seg-${recording.token}-${String(seq).padStart(4, "0")}.${ext}`,
-                bytes, mediaType: blob.type, seq, vad: recording.vad, emit,
-            }, "[vad-debug] segment audio"));
-        } catch (e) {
-            console.error("[vad-debug] failed", e);
-        }
     }
 
     /**

@@ -1463,19 +1463,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * worse than not offering it.
      *
      * Registering makes the private toggle appear in the annotation's context menu.
-     * Enforcement stays with the registering integration.
+     * Enforcement stays with the registering integration. Export exclusion does NOT
+     * depend on registration — see {@link getPrivacyExcludesExport}.
      *
      * @param {string} ownerId registering element's id; re-registering replaces
-     * @param {object} [options]
-     * @param {boolean} [options.excludeFromExport=false] also withhold private
-     *   annotations from bundle/file exports. The deployment keeps the last word through
-     *   the `exportPrivate` static meta, which forces them back in.
      * @return {function(): void} dispose
      */
-    registerPrivacyProvider(ownerId, options = {}) {
+    registerPrivacyProvider(ownerId) {
         const id = String(ownerId ?? "");
         this._privacyProviders = this._privacyProviders || new Map();
-        const record = { excludeFromExport: !!options.excludeFromExport };
+        const record = {};
         this._privacyProviders.set(id, record);
         return () => {
             if (this._privacyProviders?.get(id) === record) this._privacyProviders.delete(id);
@@ -1492,17 +1489,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     /**
      * Whether private annotations must be left out of exports.
-     * @return {boolean} false unless a privacy provider asked for it and the deployment
-     *   did not force private annotations back into exports via `exportPrivate`
+     *
+     * Decided by the deployment alone, through the `exportPrivate` static meta
+     * (default `true`: private annotations ARE exported). With `exportPrivate: false`
+     * every annotation flagged `private` is withheld, whether or not a provider is
+     * registered — provider presence never decides what leaves the viewer.
+     * @return {boolean}
      */
     getPrivacyExcludesExport() {
-        if (this._exportPrivateAnnotations) return false;
-        const providers = this._privacyProviders;
-        if (!providers?.size) return false;
-        for (const record of providers.values()) {
-            if (record.excludeFromExport) return true;
-        }
-        return false;
+        return !this._exportPrivateAnnotations;
     }
 
     /** Current point-snap settings (live; reflects cache-restored state). */
@@ -2078,7 +2073,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationAutoIncrement = 0;
         this._annotationLabelIncrement = 0;
         this._annotationFilters = [];
-		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", true) !== false;
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer

@@ -1176,11 +1176,19 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
         ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}, payload) {
             const cfg = resolveConfig();
             if (!cfg.client.ingest) return null;
-            if (sensitive && !cfg.allowSensitive) return null;
+            // Bytes are user content: whatever level/flag the browser claimed, a
+            // record carrying them is gated exactly like `logger.attachment` —
+            // sensitive, at trace. The client says what happened, never how
+            // sensitive it was.
+            const hasBytes = !!(payload && payload.bytes);
+            const isSensitive = sensitive === true || hasBytes;
+            if (isSensitive && !cfg.allowSensitive) return null;
             const name = `client:${normalizeChannel(channel || "app")}`;
             const args = fields && typeof fields === "object" ? [fields, String(message ?? "")] : [String(message ?? "")];
-            return emit(name, normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info)),
-                sensitive === true, args, { ...bound, source: "client" },
+            const levelLabel = hasBytes ? "trace"
+                : normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info));
+            return emit(name, levelLabel,
+                isSensitive, args, { ...bound, source: "client" },
                 // Bytes the browser sent with this record. They take the SAME path
                 // a server-side `logger.attachment` takes — a destination that can
                 // hold them writes the file, one that cannot says so on the line —

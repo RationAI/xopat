@@ -369,14 +369,43 @@ function resolveArtifact(file, runtime) {
 }
 
 /**
+ * On-disk identity of each `.cjs` artifact as last `require`d, keyed by its
+ * absolute path. Bounded by the number of server entries on disk.
+ */
+const loadedArtifactStamps = new Map();
+
+function artifactStamp(artifact) {
+    try {
+        const { mtimeMs, size } = fs.statSync(artifact);
+        return `${mtimeMs}:${size}`;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Load one built artifact. The ONE place that knows the bundle format: `.cjs`
  * goes through `require`, anything else through `import()`. `version` busts
  * Node's ESM cache after a rebuild and is omitted in a packaged build, where
  * nothing under the snapshot can change.
+ *
+ * A `.cjs` artifact is evicted from `require.cache` ONLY when the bundle on
+ * disk changed since it was last loaded. This runs on every RPC to an item, so
+ * evicting unconditionally re-executed the whole bundle per request and threw
+ * away its module-level state (registries, caches, whatever `register()` set
+ * up at boot). A rebuild replaces the file (rename), which changes the stamp,
+ * so dev edits still take effect on the next call. A failed `require` leaves
+ * nothing in the cache, so a retry re-executes regardless.
  */
 function loadArtifact(artifact, version) {
     if (artifact.endsWith(".cjs")) {
-        delete require.cache[artifact];
+        if (!constants.PACKAGED) {
+            const stamp = artifactStamp(artifact);
+            if (loadedArtifactStamps.get(artifact) !== stamp) {
+                delete require.cache[artifact];
+                loadedArtifactStamps.set(artifact, stamp);
+            }
+        }
         return require(artifact);
     }
     return import(pathToFileURL(artifact).href + (version ? `?v=${version}` : ""));

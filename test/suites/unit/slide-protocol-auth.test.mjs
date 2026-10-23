@@ -217,3 +217,23 @@ test("auth.types: [] sends no credential @unit", async () => {
     const headers = await client._authHeaders(url, "GET");
     expect(Object.keys(headers)).toEqual([]);
 });
+
+/**
+ * Inferring the transport must not infer consent to send a credential. A template
+ * naming a FOREIGN origin (a public third-party tile server) gets the client but no
+ * credential; only the viewer's own origin gets the main context's token implicitly.
+ * Anything else has to be written down as an explicit `httpClient` block.
+ */
+test("a derived client for a foreign origin sends no credential @unit", async () => {
+    const registry = new SlideProtocolRegistry();
+    registry.ingestFromEnv({
+        slide_protocols: {
+            pub: "`https://public.example.org/slides/${data}.dzi`",
+        },
+        default_background_protocol: "pub",
+    });
+    const { url, client } = registry.resolveBackground({ spec: "s1", isSecureMode: true });
+    expect(client.baseURL).toBe("https://public.example.org");
+    const headers = await client._authHeaders(url, "GET");
+    expect(Object.keys(headers)).toEqual([]);
+});
