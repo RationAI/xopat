@@ -564,7 +564,7 @@ export class FullscreenMenus {
         );
 
         let theme = APPLICATION_CONTEXT.getOption("theme");
-        let themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
+        let themePretty = $.t(theme === "auto" ? 'settings.theme.auto' : theme === "light" ? 'settings.theme.light' : 'settings.theme.dark');
 
         const themeSelect = new Select(
             { id: "theme-select", onchange: function () { USER_INTERFACE.Tools.changeTheme(this.value); }, title: $.t('settings.theme.title') },

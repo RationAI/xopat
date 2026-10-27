@@ -30,7 +30,7 @@ These rules override defaults from your training. **Read them before you write a
     - `window.USER_INTERFACE` (core generic UI operations)
     - `window.UTILITIES` (system utilities)
     - Modules and Plugins instances: accessible via `window.xmodule.<name>` and `window.xplugin.<name>`, or safer by using `plugin('id')` and `singletonModule('id')` and `viewerSingletonModule('className', 'viewerLikeRef')` if possible.
-- **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not use Tailwind's dark mode selectors directly; the application relies on DaisyUI's data-theme mechanism. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
+- **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not key CSS on a theme name and prefer DaisyUI tokens over `dark:`; themes are deployment-defined (`<element>/tailwind.preset.js` + ENV `core.setup.branding.themes`/`css`), and dark-only CSS keys on `[data-theme-mode="dark"]`. See `ui/README.md` → *Theming*. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
 - **Icons**: Phosphor Icons (Light) is the **only** icon font xOpat ships. Use `UI.PhIcon` or raw `<i class="ph-light ph-<name>"></i>` markup; names live in `src/libs/phoshor-icons/style.css`. `UI.FAIcon` survives only as a deprecated alias that translates a handful of legacy names — never call it in new code, and never write a `fa-*` class.
 
 > Keep best programming practices in mind — separate responsibilities, design clean interfaces, and avoid unnecessary coupling.
@@ -316,7 +316,8 @@ the model aliases instead of real viewer ids, register a resolver
 - A second markdown renderer, or a private `#`-link convention parsed by one component.
 - `innerHTML +=` / manual node juggling for app-state mechanics.
 - Custom CSS files unless absolutely necessary — use DaisyUI + Tailwind utilities.
-- Tailwind dark-mode selectors directly (the app uses DaisyUI `data-theme`).
+- CSS keyed on a theme name (`[data-theme="xOpat-dark"]`) — use DaisyUI tokens, or `[data-theme-mode="dark"]` for dark-only rules.
+- Override CSS that redefines stock Tailwind utilities (`.rounded-xl`, `.shadow-*`) — change a theme token instead.
 
 ### Deep-dive references
 `ui/README.md` (design system) · `ui/classes/README.md` (`BaseComponent` + Van.js) · `ui/services/README.md` (singletons) · `modules/markdown/README.md` (markdown rendering + `#xopat-…` links).

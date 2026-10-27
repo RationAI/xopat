@@ -565,12 +565,22 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                 // OS preference). Unknown values resolve to "light".
                 const useDark = theme === "dark" ||
                     (theme === "auto" && window.matchMedia('(prefers-color-scheme: dark)').matches);
-                document.body.setAttribute("data-theme", useDark ? "xOpat-dark" : "xOpat-light");
+                const mode = useDark ? "dark" : "light";
+                // DaisyUI theme names come from ENV `core.setup.branding.themes`
+                // (defaultParams, never getOption: operator-trusted, AGENTS.md §7).
+                // The name lands in an attribute selector, so anything but a
+                // plain identifier falls back to the stock theme.
+                const configured = APPLICATION_CONTEXT.defaultParams?.branding?.themes?.[mode];
+                const themeName = typeof configured === "string" && /^[A-Za-z0-9_-]+$/.test(configured) ?
+                    configured : (useDark ? "xOpat-dark" : "xOpat-light");
+                document.body.setAttribute("data-theme", themeName);
+                // `dark:` variants and dark-only CSS key on this, not on a theme name.
+                document.body.setAttribute("data-theme-mode", mode);
                 // Persist the *intent* (auto/dark/light), not the resolved
                 // variant — otherwise calling this on init would silently
                 // collapse "auto" into the current OS preference and the user
                 // would lose their auto setting after a single refresh.
-                const persisted = theme === "auto" ? "auto" : (useDark ? "dark" : "light");
+                const persisted = theme === "auto" ? "auto" : mode;
                 APPLICATION_CONTEXT.setOption("theme", persisted);
             },
         },

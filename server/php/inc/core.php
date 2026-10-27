@@ -415,6 +415,31 @@ function require_branding_head() {
     echo "    <link rel=\"mask-icon\" href=\"$mask\" color=\"$maskColor\">\n";
 }
 
+// Page-root-relative path or absolute http(s) URL. Rejects any other scheme,
+// protocol-relative `//host`, backslashes and whitespace. Mirrors
+// isSafeStylesheetUrl() in server/templates/javascript/core.js.
+function is_safe_stylesheet_url($href) {
+    if (!is_string($href) || $href === "" || preg_match('/[\s\\\\]/', $href)) return false;
+    if (preg_match('/^https?:\/\//i', $href)) return true;
+    return substr($href, 0, 2) !== "//" && !preg_match('/^[a-z][a-z0-9+.-]*:/i', $href);
+}
+
+// Deployment theme stylesheets from ENV core.setup.branding.css, emitted at
+// the end of the head block (after the core CSS) so overrides win by order.
+// Mirrors requireBrandingCss() in server/templates/javascript/core.js.
+function require_branding_css() {
+    global $CORE;
+    $list = (isset($CORE["setup"]["branding"]["css"]) && is_array($CORE["setup"]["branding"]["css"]))
+        ? $CORE["setup"]["branding"]["css"] : [];
+    $version = VERSION;
+    foreach ($list as $href) {
+        if (!is_safe_stylesheet_url($href)) continue;
+        $sep = strpos($href, "?") !== false ? "&" : "?";
+        $url = htmlspecialchars($href . $sep . "v=" . $version, ENT_QUOTES);
+        echo "    <link rel=\"stylesheet\" href=\"$url\">\n";
+    }
+}
+
 function require_lib($name) {
     global $CORE;
     if (isset($CORE["css"]["libs"][$name])) print_css_single($CORE["css"]["libs"][$name], LIBS_ROOT);

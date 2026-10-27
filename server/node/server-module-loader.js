@@ -297,6 +297,7 @@ function fromManifestPath(rel) {
 function writeServerBuildManifest(manifest) {
     fs.writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2) + "\n", "utf8");
     cachedManifest = undefined;
+    cachedArtifactIndex = undefined;
 }
 
 let cachedManifest;
@@ -452,13 +453,40 @@ function artifactMetaFile(outFile) {
     return `${outFile}.meta.json`;
 }
 
+/**
+ * Snapshot taken BEFORE a build, handed to {@link writeArtifactMeta}.
+ *
+ * The stamp is written after the build, so stat-ing then would record an edit
+ * made DURING the build as already included, and the stale bundle would be
+ * served until some other edit. The start time is read off the filesystem's
+ * own clock (a probe file's mtime) rather than `Date.now()`, so a network or
+ * synced filesystem with a skewed clock cannot make every build look stale.
+ */
+function beginArtifactBuild(entryFile, outFile) {
+    const entryMtimeMs = fs.statSync(entryFile).mtimeMs;
+    const probe = `${outFile}.build-start-${process.pid}`;
+    let startedMs = Date.now();
+    try {
+        fs.writeFileSync(probe, "");
+        startedMs = fs.statSync(probe).mtimeMs;
+    } catch { /* fall back to the process clock */ }
+    try { fs.unlinkSync(probe); } catch { /* already gone */ }
+    return { entryMtimeMs, startedMs };
+}
+
 /** Write the freshness stamp. Always LAST: it must never claim a missing bundle. */
-function writeArtifactMeta(outFile, { entryFile, buildKey, inputs }) {
+function writeArtifactMeta(outFile, { entryFile, buildKey, inputs, snapshot }) {
+    let inputsMs = newestInputMs(inputs);
+    // An input touched after the build started may not be what the bundle
+    // holds, and an input we cannot stat is unknown: either way the stamp must
+    // say "stale" so the next check rebuilds. (`Infinity` would serialize as
+    // `null` and, worse, compare as "nothing newer" forever.)
+    if (!Number.isFinite(inputsMs) || (snapshot && inputsMs > snapshot.startedMs)) inputsMs = -1;
     fs.writeFileSync(artifactMetaFile(outFile), JSON.stringify({
-        mtimeMs: fs.statSync(entryFile).mtimeMs,
+        mtimeMs: snapshot ? snapshot.entryMtimeMs : fs.statSync(entryFile).mtimeMs,
         buildKey,
         inputs,
-        inputsMs: newestInputMs(inputs),
+        inputsMs,
     }), "utf8");
 }
 
@@ -673,6 +701,7 @@ async function doCompileServerTs(file, outFile, opts = {}) {
         const tmpOut = path.join(tmpDir, base);
         try {
             fs.mkdirSync(tmpDir, { recursive: true });
+            const snapshot = beginArtifactBuild(file, outFile);
             const result = await esbuild.build(serverBuildOptions({
                 file,
                 outfile: tmpOut,
@@ -687,6 +716,7 @@ async function doCompileServerTs(file, outFile, opts = {}) {
                 entryFile: file,
                 buildKey,
                 inputs: collectBuildInputs(result.metafile, outFile),
+                snapshot,
             });
         } finally {
             await removeTempBuildDir(tmpDir);
@@ -756,6 +786,7 @@ module.exports = {
     manifestSources,
     manifestElements,
     isArtifactFresh,
+    beginArtifactBuild,
     writeArtifactMeta,
     collectBuildInputs,
     readServerBuildManifest,

@@ -586,9 +586,10 @@ input[type="range"].range:focus-visible::-moz-range-thumb {
    washes the right-side-menu headers, scalebar LINK chip / collapse pill and
    other glass chrome into an unreadable milky overlay on dark themes. Repaint
    the gradient with a black tint when the active DaisyUI theme reports a dark
-   color-scheme so the chrome stays legible. */
-[data-theme="xOpat-dark"] .glass,
-[data-theme="xOpat-dark"] .glass.btn-active,
+   color-scheme so the chrome stays legible. Keyed on the mode (set by
+   changeTheme), so a deployment's own dark theme gets the same repaint. */
+[data-theme-mode="dark"] .glass,
+[data-theme-mode="dark"] .glass.btn-active,
 [data-theme="xOpat-detached-mode"] .glass,
 [data-theme="xOpat-detached-mode"] .glass.btn-active {
     background-image: linear-gradient(

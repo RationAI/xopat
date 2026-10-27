@@ -298,6 +298,8 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
  * never hidden. `0` means revalidate every time (`no-cache`).
  */
 let STATIC_MAX_AGE = 3600;
+/** Assets that are code: never reused across releases without revalidating. */
+const UNVERSIONED_CODE_RE = /\.(?:m?js|cjs|css|json|wasm|html?)$/i;
 
 /**
  * `core.server.secure.examples` — sessions this deployment publishes as
@@ -1369,10 +1371,13 @@ async function responseStaticFile(req, res, target, urlObj) {
         headers["Cache-Control"] = "no-cache";
     } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
-    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE) {
+    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE || UNVERSIONED_CODE_RE.test(target.path)) {
         // Media: `no-store` would forbid keeping the partial responses a tile
         // decoder re-reads constantly. Dev: an edit must show on the next load.
-        // Either way revalidation against the ETag keeps it a cheap 304.
+        // Unversioned CODE (a sub-module reached by a relative `import` from a
+        // `?v=` entry): a max-age would let a new release's entry run against
+        // the previous release's sub-modules until the cache expired. Either
+        // way revalidation against the ETag keeps it a cheap 304.
         headers["Cache-Control"] = "no-cache";
     } else {
         headers["Cache-Control"] = `public, max-age=${STATIC_MAX_AGE}, stale-while-revalidate=86400`;
@@ -1790,7 +1795,7 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
 </script>
-`;
+${core.requireBrandingCss()}`;
 
             case "app": {
                 const dtsRegistry = getBakedDtsRegistry(core);

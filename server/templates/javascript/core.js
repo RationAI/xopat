@@ -20,6 +20,14 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         return undefined;
     }
 
+    // Page-root-relative path or absolute http(s) URL. Rejects any other
+    // scheme, protocol-relative `//host`, backslashes and whitespace.
+    function isSafeStylesheetUrl(href) {
+        if (typeof href !== "string" || !href || /[\s\\]/.test(href)) return false;
+        if (/^https?:\/\//i.test(href)) return true;
+        return !href.startsWith("//") && !/^[a-z][a-z0-9+.-]*:/i.test(href);
+    }
+
     function isType(x, type) {
         if (type === "boolean") {
             x = parseBool(x);
@@ -151,6 +159,23 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     <link rel="icon" type="image/png" sizes="16x16" href="${icon16}">
     <link rel="mask-icon" href="${mask}" color="${maskColor}">
 `;
+        },
+
+        // Deployment theme stylesheets from ENV core.setup.branding.css, emitted
+        // at the end of the head block - after tailwind.min.css, style.css and
+        // custom.css - so overrides win by order, not by luck. Only
+        // page-root-relative paths and http(s) URLs pass; anything else
+        // (javascript:, data:, protocol-relative) is dropped.
+        requireBrandingCss: function () {
+            const b = (this.CORE && this.CORE["setup"] && this.CORE["setup"]["branding"]) || {};
+            const list = Array.isArray(b["css"]) ? b["css"] : [];
+            const version = this.VERSION;
+            const escAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            return list.filter(isSafeStylesheetUrl).map(href => {
+                const sep = href.includes("?") ? "&" : "?";
+                return `    <link rel="stylesheet" href="${escAttr(href + sep + "v=" + version)}">\n`;
+            }).join("");
         },
 
         requireLib: function (name) {

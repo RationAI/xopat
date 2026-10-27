@@ -1,7 +1,64 @@
 /** @type {import('tailwindcss').Config} */
 
+// Deployment themes: `<element>/tailwind.preset.js` + XOPAT_TW_PRESET. Only
+// `theme` (extend) and `daisyui.themes` are taken from a preset - content,
+// safelist and plugins stay owned by this file. See ui/README.md "Theming".
+const twPresets = require("./server/utils/node/tailwind-presets");
+const loadedPresets = twPresets.loadPresets(twPresets.findPresetFiles(__dirname));
+
+const coreThemes = [
+    {
+        "xOpat-light": {
+            "primary":   "#570df8",
+            "secondary": "#f000b8",
+            "accent":    "#37cdbe",
+            "neutral":   "#3d4451",
+            "base-100":  "#ffffff",
+            "info":      "#3abff8",
+            "success":   "#36d399",
+            "warning":   "#fbbd23",
+            "error":     "#f87272",
+            '--rounded-box': '0.5rem',
+            '--rounded-btn': '0.375rem',
+            '--rounded-badge': '0.25rem',
+            '--tab-radius': '0.375rem',
+        },
+        "xOpat-dark": {
+            "primary":   "#793ef9",
+            "secondary": "#f000b8",
+            "accent":    "#37cdbe",
+            "neutral":   "#2a323c",
+            "base-100":  "#1d232a",
+            "info":      "#3abff8",
+            "success":   "#36d399",
+            "warning":   "#fbbd23",
+            "error":     "#f87272",
+            '--rounded-box': '0.5rem',
+            '--rounded-btn': '0.375rem',
+            '--rounded-badge': '0.25rem',
+            '--tab-radius': '0.375rem',
+        },
+        "xOpat-detached-mode": {
+            primary: "#89b4fa", // blue
+            secondary: "#f5c2e7", // pink
+            accent: "#94e2d5", // teal
+            neutral: "#11111b", // crust
+            "base-100": "#1e1e2e", // base
+            info: "#74c7ec", // sapphire
+            success: "#a6e3a1", // green
+            warning: "#f9e2af", // yellow
+            error: "#f38ba8", // red
+            '--rounded-box': '0.5rem',
+            '--rounded-btn': '0.375rem',
+            '--rounded-badge': '0.25rem',
+            /* (optional) slightly smaller base text */
+            '--tab-radius': '0.375rem',
+        },
+    },
+];
 
 module.exports = {
+    presets: loadedPresets.map(({ preset }) => ({ theme: preset?.theme || {} })),
     // WARNING: compiling styles for the entire app can take a few minutes
     // `ts` is in here for the same reason the watcher watches it
     // (Gruntfile twinc.watch): a class that exists only in a .ts source was
@@ -64,7 +121,9 @@ module.exports = {
         'er-control__row--image-number',
         'er-control__widget--image',
     ],
-    darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
+    // Keyed on the mode, not a theme name, so `dark:` follows any configured
+    // dark theme (`core.setup.branding.themes.dark`). Set by changeTheme.
+    darkMode: ["selector", '[data-theme-mode="dark"]'],
     theme: {
         spacing: {
             px: '1px',
@@ -96,56 +155,6 @@ module.exports = {
     ],
     /** usage in css: https://v4.daisyui.com/docs/colors/ */
     daisyui: {
-        themes: [
-            {
-                "xOpat-light": {
-                    "primary":   "#570df8",
-                    "secondary": "#f000b8",
-                    "accent":    "#37cdbe",
-                    "neutral":   "#3d4451",
-                    "base-100":  "#ffffff",
-                    "info":      "#3abff8",
-                    "success":   "#36d399",
-                    "warning":   "#fbbd23",
-                    "error":     "#f87272",
-                    '--rounded-box': '0.5rem',
-                    '--rounded-btn': '0.375rem',
-                    '--rounded-badge': '0.25rem',
-                    '--tab-radius': '0.375rem',
-                },
-                "xOpat-dark": {
-                    "primary":   "#793ef9",
-                    "secondary": "#f000b8",
-                    "accent":    "#37cdbe",
-                    "neutral":   "#2a323c",
-                    "base-100":  "#1d232a",
-                    "info":      "#3abff8",
-                    "success":   "#36d399",
-                    "warning":   "#fbbd23",
-                    "error":     "#f87272",
-                    '--rounded-box': '0.5rem',
-                    '--rounded-btn': '0.375rem',
-                    '--rounded-badge': '0.25rem',
-                    '--tab-radius': '0.375rem',
-                },
-                "xOpat-detached-mode": {
-                    primary: "#89b4fa", // blue
-                    secondary: "#f5c2e7", // pink
-                    accent: "#94e2d5", // teal
-                    neutral: "#11111b", // crust
-                    "base-100": "#1e1e2e", // base
-                    info: "#74c7ec", // sapphire
-                    success: "#a6e3a1", // green
-                    warning: "#f9e2af", // yellow
-                    error: "#f38ba8", // red
-                    '--rounded-box': '0.5rem',
-                    '--rounded-btn': '0.375rem',
-                    '--rounded-badge': '0.25rem',
-                    /* (optional) slightly smaller base text */
-                    '--tab-radius': '0.375rem',
-                },
-            },
-        ],
+        themes: twPresets.mergeDaisyThemes(coreThemes, loadedPresets),
     },
-}
-
+};

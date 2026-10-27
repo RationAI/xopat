@@ -351,6 +351,18 @@ type XOpatSetup = {
         maskIcon?: string | null;
         maskIconColor?: string | null;
         logo?: string | null;
+        /**
+         * DaisyUI theme names used for the light / dark mode instead of
+         * `xOpat-light` / `xOpat-dark`. The themes themselves come from an
+         * element's `tailwind.preset.js` (see ui/README.md "Theming").
+         * Names must be plain identifiers (`[A-Za-z0-9_-]`).
+         */
+        themes?: { light?: string | null; dark?: string | null } | null;
+        /**
+         * Stylesheets emitted in the page head AFTER the core CSS, in order.
+         * Page-root-relative paths or absolute http(s) URLs.
+         */
+        css?: string[] | null;
     } | null;
     /**
      * Fast-access icon-only actions pinned into the top app bar, referenced by
