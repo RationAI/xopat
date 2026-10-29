@@ -388,7 +388,8 @@ class XopatServerRuntime {
                     serverBuildDirName: this.serverBuildDirName,
                 });
             }
-            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {} };
+            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {},
+                deployment: core?.DEPLOYMENT?.id || "base" };
             ctx.log = this.logging ? this.logging.log(`server-route${match.prefix.replace(/\//g, ":")}`) : this.logger;
             await match.handler(ctx, urlObj, match.prefix);
         } catch (e) {
@@ -494,6 +495,11 @@ class XopatServerRuntime {
     var out = {};
     if (global.XOPAT_CSRF_TOKEN) out["X-XOPAT-CSRF"] = global.XOPAT_CSRF_TOKEN;
     if (global.XOPAT_SESSION_ID) out["X-XOPAT-Session"] = global.XOPAT_SESSION_ID;
+    // Named deployment this page was served under, so the server resolves RPC
+    // config (core.server.secure) against the same one.
+    var deployment = global.APPLICATION_CONTEXT && global.APPLICATION_CONTEXT.env
+      && global.APPLICATION_CONTEXT.env.deployment;
+    if (deployment && typeof deployment.id === "string") out["X-XOPAT-Deployment"] = deployment.id;
     return out;
   }
 
@@ -1073,6 +1079,10 @@ class XopatServerRuntime {
                 res,
                 core,
                 secure: core?.CORE?.server?.secure || {},
+                // Resolved named deployment (X-XOPAT-Deployment); `secure` above
+                // is already that deployment's. Pass to getStatic*Config when
+                // building state lazily for it.
+                deployment: core?.DEPLOYMENT?.id || "base",
                 session,
                 user: authResult.user,
                 // Never-null-when-known caller identity; see #principalOf. Use

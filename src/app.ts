@@ -78,7 +78,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // be refused rather than silently replacing this one. Also read by
     // `parse-input.js` off `window.XOPAT_DEPLOYMENT_KEY`.
     const deploymentKey = initDeploymentKey(ENV, PLUGINS, MODULES);
-    const savedState = ApplicationLifecycleController.restoreLocalState(deploymentKey);
+    const savedState = ApplicationLifecycleController.restoreLocalState(deploymentKey, (ENV as any).deployment);
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
         MODULES = savedState.MODULES;
@@ -285,6 +285,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         // and repeat the toast on every reload. The next serialization carries
         // THIS deployment's `__envKey`, which is how the session heals.
         delete (CONFIG as any).__foreignDeployment;
+    }
+
+    // The session (or link) named a deployment this server does not define —
+    // the server fell back instead of failing. Only the SERVED id is shown: the
+    // requested name is untrusted input.
+    const servedDeployment = (ENV as any).deployment;
+    if (servedDeployment?.fellBack) {
+        Dialogs.show($.t("messages.deploymentFallback", { id: servedDeployment.id }), 12000, Dialogs.MSG_WARN);
     }
 
     /**

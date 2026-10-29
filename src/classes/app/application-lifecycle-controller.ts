@@ -21,8 +21,14 @@ export class ApplicationLifecycleController {
      *   (`initDeploymentKey`, `classes/app/deployment-key.ts`). A payload that
      *   does not carry exactly this key is refused — including an unstamped one,
      *   which predates the scoping and carries no evidence of its origin.
+     * @param servedDeployment the named deployment the server picked for this
+     *   request (`ENV.deployment`). A payload captured under ANOTHER named
+     *   deployment is put back instead of consumed: `parse-input.js` re-submits
+     *   the cached session so the server serves that deployment, and the payload
+     *   then matches. Bounded — once the server has seen the name (`requested`)
+     *   the payload is judged by the key alone.
      */
-    static restoreLocalState(currentDeploymentKey?: string) {
+    static restoreLocalState(currentDeploymentKey?: string, servedDeployment?: XOpatServedDeployment) {
         if (!XOpatStorageAvailability.sessionStorage) return null;
         const sessionStateKey = "__xopat_session__";
 
@@ -49,6 +55,17 @@ export class ApplicationLifecycleController {
                     // Not `_`-prefixed: the writer's `safeStringify` strips those.
                     const stamp = parsed?.deploymentStamp;
                     const current = currentDeploymentKey;
+                    const capturedUnder = parsed?.ENV?.deployment?.id;
+                    // Put back at most once: if nothing re-submits (no cached
+                    // session to carry the name), the next boot consumes it.
+                    if (current && stamp !== current && typeof capturedUnder === "string"
+                        && capturedUnder !== (servedDeployment?.id ?? "base")
+                        && capturedUnder !== servedDeployment?.requested
+                        && !parsed.deploymentRetry) {
+                        parsed.deploymentRetry = true;
+                        sessionStorage.setItem(sessionStateKey, JSON.stringify(parsed));
+                        return null;
+                    }
                     if (current && stamp !== current) {
                         // Captured under a different deployment. Restoring it would
                         // swap ENV, PLUGINS and MODULES under a viewer that was served

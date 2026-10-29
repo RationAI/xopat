@@ -324,18 +324,21 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
         },
 
         /**
-         * Highlight element in DOM ensuring given menus are open it is
-         * contained in
-         * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
-         * @param {(string|string[])} menuId id of the menu to focus, applicable for menus that can switch between
-         *   different contents
-         * @param id element ID to highlight
+         * Highlight a UI element, first opening the menus/panels it lives in.
+         * @param {string} uiId element id in `USER_INTERFACE.AppBar.Catalog`
+         *   (e.g. "viewer-tab:shaders", "fullscreen:keymap-menu")
          * @param timeout highlight timeout in ms, default 2000
          * @param animated default true
+         * @return {Promise<boolean>} false when the element is not on screen
          */
-        highlight(menuName, menuId, id, timeout = 2000, animated = true) {
-            this.focusMenu(menuName, menuId);
-            this.highlightElementId(id, timeout, animated);
+        async highlight(uiId, timeout = 2000, animated = true) {
+            const located = await UI.Services.AppBar.Catalog?.locate(uiId);
+            const element = located?.element;
+            if (!element) return false;
+            const cls = animated ? "ui-highlight-animated" : "ui-highlight";
+            element.classList.add(cls);
+            setTimeout(() => element.classList.remove(cls), timeout);
+            return true;
         },
 
 

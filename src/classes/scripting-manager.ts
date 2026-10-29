@@ -11,6 +11,7 @@ import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
+import { XOpatUiScriptApi } from "./scripting/ui-api";
 
 
 /**
@@ -1819,6 +1820,7 @@ export class ScriptingManager<
                 new XOpatViewerScriptApi("viewer"),
                 new XOpatVisualizationScriptApi("visualization"),
                 new XOpatPatientScriptApi("patient"),
+                new XOpatUiScriptApi("ui"),
             ];
 
             // Warm the declaration cache up front so the serial ingest below —

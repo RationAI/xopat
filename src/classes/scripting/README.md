@@ -78,6 +78,15 @@ A good namespace usually has:
 
 ---
 
+## Core namespaces
+
+`application`, `viewer`, `visualization`, `patient` (sensitive) and `ui` are registered in
+`ScriptingManager._initializeBuiltins`. `ui` (`ui-api.ts`) explores and drives the interface
+through `USER_INTERFACE.AppBar.Catalog` (see `ui/services/README.md`): `listUi`, `describeUi`,
+`getUiState`, `openUi`, `closeUi`, `showUi` (one-step tour overlay; the message is escaped to
+text) and `invokeUiAction` (behind `requireActionConsent`, cached per element id). It holds no
+knowledge of specific menus — new UI shows up there by registering through the existing registries.
+
 ## Existing API:
 Use the provided base class to implement your scripting and rely on existing functionality.
 ````ts

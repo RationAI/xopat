@@ -179,10 +179,19 @@ function getSecureItemConfig(ctx, explicitId) {
 // config rather than the last published build.
 const CONFIG_SNAPSHOT_KEY = "__XOPAT_SERVER_CONFIG_SNAPSHOT__";
 
-/** Publish the composed server config. Called by core on every core build. */
+/**
+ * Publish the composed server config. Called by core on every core build.
+ *
+ * Kept per named deployment (`server/templates/javascript/deployments.js`):
+ * `core.server.secure` may differ between them. A build that was not asked for
+ * a specific deployment — or whose request fell back — resolved the default,
+ * and that is what a ctx-free read without an explicit deployment sees.
+ */
 function setServerConfigSnapshot(core) {
   const secure = core?.CORE?.server?.secure || core?.CORE_SECURE || {};
-  globalThis[CONFIG_SNAPSHOT_KEY] = {
+  const deployment = core?.DEPLOYMENT || core?.CORE?.deployment || { id: "base" };
+  const store = globalThis[CONFIG_SNAPSHOT_KEY] || { byDeployment: {}, defaultId: null };
+  store.byDeployment[deployment.id] = {
     CORE: {
       server: { secure, devMode: core?.CORE?.server?.devMode === true },
     },
@@ -191,11 +200,18 @@ function setServerConfigSnapshot(core) {
       ? core.objectMergeRecursiveDistinct.bind(core)
       : undefined,
   };
+  if (!deployment.requested || deployment.fellBack || !store.defaultId) store.defaultId = deployment.id;
+  globalThis[CONFIG_SNAPSHOT_KEY] = store;
 }
 
-/** A synthetic ctx over the published snapshot, or `null` before the first build. */
-function snapshotCtx(kind, itemId) {
-  const core = globalThis[CONFIG_SNAPSHOT_KEY];
+/**
+ * A synthetic ctx over the published snapshot, or `null` before the first build.
+ * Without `deploymentId` (or for one not built yet) the default deployment's.
+ */
+function snapshotCtx(kind, itemId, deploymentId) {
+  const store = globalThis[CONFIG_SNAPSHOT_KEY];
+  if (!store) return null;
+  const core = (deploymentId && store.byDeployment[deploymentId]) || store.byDeployment[store.defaultId];
   if (!core) return null;
   return { core, kind, itemId, secure: core.CORE.server.secure };
 }
@@ -203,10 +219,11 @@ function snapshotCtx(kind, itemId) {
 /**
  * The composed (author ⊕ deployer) server config of a plugin/module, without a
  * request ctx. Returns `{}` before core has published a snapshot — treat that as
- * "defaults", never as "configured empty".
+ * "defaults", never as "configured empty". Pass `deploymentId` (`ctx.deployment`)
+ * when the state being built belongs to one named deployment.
  */
-function getStaticItemConfig(kind, id) {
-  const ctx = snapshotCtx(kind, id);
+function getStaticItemConfig(kind, id, deploymentId) {
+  const ctx = snapshotCtx(kind, id, deploymentId);
   return ctx ? getSecureItemConfig(ctx, id) : {};
 }
 
@@ -447,8 +464,8 @@ function createServerHelpers(runtime) {
     // Ctx-free reads of the same config, for lazily-built state that has no
     // request in scope. Prefer the ctx variants when a ctx exists.
     getStaticItemConfig,
-    getStaticModuleConfig: (id) => getStaticItemConfig("module", id),
-    getStaticPluginConfig: (id) => getStaticItemConfig("plugin", id),
+    getStaticModuleConfig: (id, deploymentId) => getStaticItemConfig("module", id, deploymentId),
+    getStaticPluginConfig: (id, deploymentId) => getStaticItemConfig("plugin", id, deploymentId),
     getSecureValue,
     requireSecureValue,
     getRpcAuthConfig,

@@ -225,6 +225,16 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
 
 Plugin-id → plugin-config map; consult each plugin's README.
 
+### `deployment` — named deployment (optional)
+
+The id of a deployment the operator defined in the env `deployments` map
+(`env/README.md` → *Multiple deployments in one env*), e.g. `"deployment": "dicom"`.
+The server serves that configuration (client block, setup, plugins, modules);
+an unknown or absent id falls back to the deployment default and never fails the
+load. The served one is `APPLICATION_CONTEXT.env.deployment`, and exported
+sessions carry it so they reopen under the same deployment. Links can use
+`?deployment=<id>` instead.
+
 <details>
 <summary>Advanced features</summary>
 

@@ -83,6 +83,17 @@ For the full list of process-level server environment variables (host, port,
 workers, dev mode, cache, cookies, JWT secret) across the Node and PHP runtimes,
 see [`ENVIRONMENT.md`](ENVIRONMENT.md).
 
+**Named deployments.** The env may define several `deployments` (overlays over
+the base `core`/`plugins`/`modules`) plus a `defaultDeployment`; each request is
+served one of them, chosen by the session's `deployment` field, `?deployment=`,
+or the `X-XOPAT-Deployment` header (viewer-issued RPC/proxy requests), with
+fallback to the default and then the base env. A server must apply the overlay
+*before* merging `ENV.core` over `config.json` and expose the served
+`{id, requested, fellBack}` as `CORE.deployment`. Boot-only `core.server` keys
+are process-wide and may not vary per deployment (only `core.server.secure`
+may). Reference: `server/templates/javascript/deployments.js`; full description
+in [`env/README.md`](../env/README.md) → *Multiple deployments in one env*.
+
 ### Parse Modules and Plugins
 
 Scanning existing modules and plugins folder and parsing the available items:
