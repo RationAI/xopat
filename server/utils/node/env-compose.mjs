@@ -522,7 +522,7 @@ function hoistBootServerConfig(env, id, composed, conflicts) {
     const server = composed?.core?.server;
     if (!isPlainObject(server)) return;
     for (const key of Object.keys(server)) {
-        if (key === "secure") continue;
+        if (key === "secure" || key === "auth") continue;   // per-deployment, read per request
         const value = server[key];
         delete server[key];
         env.core ??= {};

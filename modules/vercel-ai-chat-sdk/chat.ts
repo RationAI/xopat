@@ -10,6 +10,7 @@ import {
 } from './shared/script-text';
 import { matchProviderRef } from './shared/providerRef';
 import { isAuthError } from './shared/errors';
+import { compileIntentPatterns, matchIntentNamespaces } from './shared/namespace-assistant';
 import { serializeStructuredResult } from './shared/structured-result';
 
 /** Where a script came from and what shape it was in when it arrived. */
@@ -1100,39 +1101,30 @@ class ChatModule extends XOpatModuleSingleton {
     /**
      * Cheap keyword routing from the user's message to namespaces they will likely
      * need, so their full signatures are in the system prompt on the FIRST model step
-     * (no attempt-fail or describe round-trip). English-biased — a miss costs nothing
-     * (the attempt-first flow with signature feedback is the backstop). Sensitive
-     * namespaces (e.g. `patient`) NEVER hint-expand: their docs enter the prompt only
-     * after an actual consent-gated call or describe.
+     * (no attempt-fail or describe round-trip). The patterns are declared by each
+     * namespace (`ScriptApiMetadata.assistant.intentPatterns`) — this module holds none.
+     * A miss costs nothing (the attempt-first flow with signature feedback is the
+     * backstop). Sensitive namespaces (e.g. `patient`) NEVER hint-expand: core strips
+     * their patterns, and the consent check below refuses them again.
      */
-    static NAMESPACE_INTENT_HINTS: Record<string, RegExp> = {
-        annotationsRead: /annotat|measure|outlin|marking|comment/i,
-        annotationsWrite: /annotat|draw|outlin|\bmark\b|label/i,
-        // Appearance vocabulary counts as visualization intent: "the overlay is ugly",
-        // "too dark", "hard to see" are shader-configuration requests, not analysis ones.
-        visualization: /heat\s*map|overlay|colou?r\s*map|visuali[sz]|shader|layer|channel|opacity|render|palette|contrast|brightness|threshold|ugly|nicer?|prettier|washed|too (?:dark|bright|faint)|hard to see/i,
-        pathology: /tissue|tumou?r|lesion|biops|analy[sz]e|segment|region of interest|slide overview|explore|patholog|histolog|stain|magnif|whole[- ]slide|\bwsi\b|cellular|nuclei|interrogat|montage|invasi/i,
-        mlflowSink: /mlflow|experiment|metric/i,
-        // A namespace with no hint here can only reach the full tier by FAILING first.
-        // These three had none, and the cost was concrete: asked for "a questionnaire +
-        // a recording", the model had names-only catalogue entries for both, read
-        // `bindPageTour` under `questionnaire`, and called it on `recorder` three times.
-        questionnaire: /question(n?aire|s)?|survey|\bform\b|quiz|exam\b|assessment|respondent|self[- ]test|teaching case/i,
-        recorder: /record(ing|er|ed)?|\btour\b|walk[- ]?through|narrat|voice[- ]?over|presentation|guided|playback|slide ?show|storyboard/i,
-        measurements: /measur|distance|\barea\b|perimeter|diameter|calibrat|µm|micron|micrometer|scale ?bar|\bmm\b/i,
-    };
-
     applyIntentExpansionHints(userText: string): void {
         const text = String(userText || '');
         if (!text) return;
-        const hits: string[] = [];
-        for (const [ns, re] of Object.entries(ChatModule.NAMESPACE_INTENT_HINTS)) {
-            const entry = this._scriptConsent[ns];
-            if (!entry?.granted || entry.sensitive) continue;
-            if (re.test(text)) hits.push(ns);
+        // Compiled once per manifest object (the core caches it per generation).
+        const manifest = this.getAllowedScriptApiManifest();
+        let compiled = this._intentPatternCache.get(manifest);
+        if (!compiled) {
+            compiled = compileIntentPatterns(manifest);
+            this._intentPatternCache.set(manifest, compiled);
         }
+        const hits = matchIntentNamespaces(compiled, text).filter((ns) => {
+            const entry = this._scriptConsent[ns];
+            return entry?.granted && !entry.sensitive;
+        });
         if (hits.length) this._markNamespacesExpanded(hits);
     }
+
+    _intentPatternCache: WeakMap<object, Array<[string, RegExp[]]>> = new WeakMap();
 
     /** Reuse one hardened worker realm across a session's scripts (perf; static-meta opt-out). */
     _shouldReuseScriptWorker(context: any): boolean {

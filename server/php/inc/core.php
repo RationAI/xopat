@@ -67,7 +67,9 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
  * The operator defines `deployments` (+ optional `defaultDeployment`) in the
  * env; the request only names an id. Unknown/malformed/absent names fall back
  * to the default, then to the base ENV. A deployment may only override
- * `core` (with `core.server` limited to `secure`), `plugins` and `modules`.
+ * `core` (with `core.server` limited to `secure` and `auth`), `plugins` and
+ * `modules`. Auth-context consistency across deployments is validated by the
+ * Node server and `npm run up:check` (deployments.js listAuthContextConflicts).
  */
 
 const XOPAT_BASE_DEPLOYMENT = "base";
@@ -117,7 +119,7 @@ function xopat_apply_deployment(array &$ENV, $requested) {
             if ($key === "core" && isset($value["server"])) {
                 $server = is_array($value["server"]) ? $value["server"] : [];
                 foreach (array_keys($server) as $serverKey) {
-                    if ($serverKey !== "secure") {
+                    if (!in_array($serverKey, ["secure", "auth"], true)) {
                         error_log("[deployments] deployments.$id.core.server.$serverKey is process-wide boot config — ignored");
                         unset($server[$serverKey]);
                     }

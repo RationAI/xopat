@@ -657,23 +657,9 @@ export class ViewerOpenPipeline {
                         return layers;
                     }) : [],
                 } : null,
-                visualization: vizEntry ? {
-                    protocol: vizEntry.protocol,
-                    shaders: (() => {
-                        const layers: Array<{ id: string; type: any; dataReferences: any[]; path: string[]; }> = [];
-                        forEachVisualizationShader(vizEntry.shaders || {}, (shader, shaderId, path) => {
-                            layers.push({
-                                id: shader?.id || shaderId,
-                                type: shader?.type,
-                                dataReferences: Array.isArray(shader?.dataReferences)
-                                    ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
-                                    : [],
-                                path,
-                            });
-                        });
-                        return layers;
-                    })(),
-                } : null,
+                // Layers are deliberately absent: editing them is a surgical
+                // change, exactly like switching to another visualization index.
+                visualization: vizEntry ? { protocol: vizEntry.protocol } : null,
             });
         };
         const buildViewerRenderFingerprint = (snapshot: any, viewerIndex: number) => {

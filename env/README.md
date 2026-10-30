@@ -340,18 +340,30 @@ an id and can never inject configuration.
 - **A deployment is an env-shaped overlay** (`core`, `plugins`, `modules`),
   deep-merged over the base with arrays replacing, before anything else reads
   the env. `core.active_client` may switch to another `core.client.<name>` block.
-- **`core.server` may only carry `secure`** (per-deployment module/plugin
-  secrets and proxies). The rest of `core.server` — storage, logging,
-  compression, security/embedding headers, `staticRoots`, `media`, `auth` — is
-  read once per process and cannot vary per request; the server ignores it with
-  an error log and `up:check` refuses it.
+- **`core.server` may only carry `secure` and `auth`** (per-deployment
+  module/plugin secrets, proxies, verifiers, JWT/bearer settings — all read per
+  request). The rest of `core.server` — storage, logging, compression,
+  security/embedding headers, `staticRoots`, `media` — is read once per process
+  and cannot vary per request; the server ignores it with an error log and
+  `up:check` refuses it.
+- **One auth context id = one identity provider, everywhere.** All deployments
+  share the origin's session cookie, and server-side login state (oidc-server,
+  SAML tokens) is stored per context id. Sharing a context id between
+  deployments therefore means single sign-on: log in once, both accept it. For
+  separate logins give each deployment its own context id. Configuring the same
+  id differently (`rpcVerifiers.<id>` together with `core.server.auth`, or
+  `secure.modules.<m>.contexts.<id>`) is an error: logged at boot, refused by
+  `up:check`. Proxy narrowing at login is per deployment
+  (`setSessionAllowedProxies(session, aliases, ctx.deployment)`). Element state
+  and storage are isolated per deployment by core, including per-user data such as
+  chat sessions and stored API keys (`server/STORAGE.md` → *Named deployments*).
 - **Selection.** The viewer POST's session field `"deployment": "<id>"` (or a
   top-level `deployment` form field), else `?deployment=<id>`. Requests the
   viewer issues itself (RPC, `/proxy/`) carry `X-XOPAT-Deployment`, stamped by
   `HttpClient` and the RPC runtime, so server modules see the same deployment.
-  `ctx.deployment` names it; `ctx.secure` / `getSecure*Config(ctx)` are already
-  its config, and `XOPAT_SERVER.getStaticModuleConfig(id, ctx.deployment)` reads
-  it without a ctx (without the second argument: the default deployment).
+  `ctx.secure` / `getSecure*Config(ctx)` are already its config, and
+  `XOPAT_SERVER.getStaticModuleConfig(id)` reads it without a ctx. `ctx.deployment`
+  names it for core; elements have no reason to read it.
 - **Fallback, never failure.** A name that is absent, malformed, unknown, or
   `base` serves `defaultDeployment`; an unset or undefined `defaultDeployment`
   serves the base env alone (id `base`). The browser gets

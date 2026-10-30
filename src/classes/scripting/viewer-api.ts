@@ -19,7 +19,15 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         dtypesSource: {
             kind: "resolve",
             value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/viewer-api.scripts.d.ts")
-        }
+        },
+        assistant: {
+            // Small and used constantly: documenting it in full avoids a failed-call round trip.
+            promptTier: "full",
+            examples: [
+                "To read metadata from the active viewer: `const metadata = await viewer.getMetadata(); return metadata;`",
+                "To capture a screenshot with metadata: `const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return [\"Viewport screenshot captured.\", screenshot, metadata];`",
+            ],
+        },
     };
 
     constructor(namespace: string) {

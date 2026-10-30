@@ -153,6 +153,8 @@ declare namespace XOpatServer {
             ttlMs?: number;
             maxBytes?: number;
             sizeOf?: (value: V, key: string) => number;
+            /** One cache across named deployments. Only for state that follows a login. */
+            crossDeployment?: boolean;
             onEvict?: (key: string, value: V, reason: string) => void | Promise<void>;
             /** 0 disables this cache's own timer. */
             sweepIntervalMs?: number;
@@ -211,8 +213,9 @@ declare namespace XOpatServer {
          * Sessions are minted anonymously and start at `'ALL'`; call this on a
          * completed login. Mutates in place — the session write-back persists it.
          */
-        setSessionAllowedProxies(session: any, aliases: string[] | "ALL" | "NONE"): void;
-        proxyAliasAllowedForSession(session: any, alias: string): boolean;
+        /** With `deploymentId` (`ctx.deployment`) the narrowing applies to that named deployment only. */
+        setSessionAllowedProxies(session: any, aliases: string[] | "ALL" | "NONE", deploymentId?: string): void;
+        proxyAliasAllowedForSession(session: any, alias: string, deploymentId?: string): boolean;
         getRpcAuthConfig(ctx: any, contextId?: string): any | null;
         /** Canonical operator dev flag. Do not invent per-module debug env vars. */
         isDevMode(ctx: any): boolean;
@@ -242,7 +245,9 @@ declare namespace XOpatServer {
         verifyJwtToken(token: string, jwtCfg?: Record<string, any>): any;
         normalizePrincipalUser(raw: any, meta?: Record<string, any>): any | null;
 
-        // Server-side state. See server/STORAGE.md.
+        // Server-side state, isolated per named deployment. See server/STORAGE.md.
+        /** The running deployment's long-lived object of an owner, made by `factory` once. Survives hot reload. */
+        state<T>(ownerUid: string, factory: () => T): T;
         storage: Storage;
         cache: CacheFactory;
         StorageConfigError: ErrorConstructor;

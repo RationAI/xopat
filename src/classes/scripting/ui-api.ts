@@ -11,6 +11,7 @@ import type {
 
 import {XOpatScriptingApi} from "./abstract-api";
 import {fetchDtsCached} from "./dts-fetch";
+import {UI_ASSISTANT_HINTS} from "./ui-api.assistant";
 
 const DEFAULT_LIST_LIMIT = 80;
 const MAX_LIST_LIMIT = 300;
@@ -40,7 +41,8 @@ export class XOpatUiScriptApi extends XOpatScriptingApi implements UiScriptApi {
         dtypesSource: {
             kind: "resolve",
             value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/ui-api.scripts.d.ts")
-        }
+        },
+        assistant: UI_ASSISTANT_HINTS,
     };
 
     private static _targetSeq = 0;

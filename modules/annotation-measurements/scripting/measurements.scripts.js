@@ -8,7 +8,10 @@ ScriptingManager.registerExternalApi(
             dtypesSource: {
                 kind: "url",
                 value: APPLICATION_CONTEXT.url + "modules/annotation-measurements/scripting/measurements.d.ts"
-            }
+            },
+            assistant: {
+                intentPatterns: [/measur|distance|\barea\b|perimeter|diameter|calibrat|µm|micron|micrometer|scale ?bar|\bmm\b/i],
+            },
         };
 
         constructor(namespace) {

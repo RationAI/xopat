@@ -10,6 +10,7 @@ import { stripDuplicatedPartPayloads } from '../shared/attachment-parts';
 import { hashScriptApiManifest, MANIFEST_MISS_CODE } from '../shared/manifest-handle';
 import { buildSystemInstructions, type SystemSegment } from '../shared/system-segments';
 import { stripApiInterfaceDeclaration } from '../shared/api-declarations';
+import { defaultFullNamespaces, namespaceAssistantBlocks, recommendedPatternsBlock } from '../shared/namespace-assistant';
 import { titleFromFirstMessage, DEFAULT_SESSION_TITLE } from '../shared/session-title';
 import { providerIdentityOf } from '../shared/providerRef';
 import { ensureManagedPluginProvider } from './providerRegistration.server';
@@ -106,26 +107,6 @@ function isToolsUnsupportedError(error: any): boolean {
             || msg.includes('no tools') || msg.includes('tool use is not') || msg.includes('tool_choice'))
     );
 }
-
-/**
- * Namespaces documented in full in the system prompt (overridable per deployment via
- * `SendTurnInput.fullPromptNamespaces` ← static meta). Everything else is listed compactly;
- * full docs arrive via the session-expansion block (attempt-first + sticky expansion) or on
- * demand via `describeScriptingApi(...)`.
- *
- * `visualization` is deliberately NOT here. Its declarations are ~19 KB — larger than the
- * other two combined — and a session that never touches shaders paid for them on every step
- * of every message. It is the best possible demotion candidate: biggest, least used, and its
- * workflow guidance already travels with its rendering position (see
- * `expandedNamespacesSystemContent`), so expanding it mid-session restores the full picture.
- *
- * Keeping `application` and `viewer` full is the other half of the trade. They are small
- * (~3 KB and ~10 KB) and used constantly, and a namespace demoted here only really saves
- * tokens while it stays untouched — sticky expansion re-adds it after first use. Demoting the
- * two hot namespaces would therefore buy little while risking a failed-call round trip on the
- * surfaces the model reaches for first; one such retry costs more than the demotion saves.
- */
-const CORE_SCRIPT_NAMESPACES = new Set(['application', 'viewer']);
 
 /**
  * Adapters whose converter folds consecutive system messages into ONE provider-level system
@@ -1010,19 +991,16 @@ function expandedNamespacesSystemContent(
 ): string {
     if (!expandedNamespaces.length || !allowedScriptApi?.namespaces?.length) return '';
     const byName = new Map(allowedScriptApi.namespaces.map((ns) => [ns.namespace, ns]));
-    const blocks = expandedNamespaces
+    const expanded = expandedNamespaces
         .map((name) => byName.get(name))
-        .filter((ns): ns is AllowedScriptApiManifest["namespaces"][number] => !!ns)
-        .map(renderFullNamespace);
+        .filter((ns): ns is AllowedScriptApiManifest["namespaces"][number] => !!ns);
+    const blocks = expanded.map(renderFullNamespace);
     if (!blocks.length) return '';
-    // Namespace-specific workflow guidance travels with the namespace's rendering
-    // position — when `visualization` is compact-by-default and expands here, its
-    // guidance block comes along too.
-    const vizGuidance = expandedNamespaces.includes('visualization')
-        ? visualizationNamespaceGuidance(allowedScriptApi)
-        : '';
+    // A namespace's workflow guidance travels with its full rendering — when a
+    // compact-by-default namespace expands here, its guidance comes along too.
+    const guidance = namespaceAssistantBlocks(expanded, 'guidance');
     return `### Session-expanded namespaces (full signatures — already discovered this session; do NOT call describeScriptingApi for these)
-${blocks.join('\n\n')}${vizGuidance}`;
+${blocks.join('\n\n')}${guidance}`;
 }
 
 function scriptSystemContent(
@@ -1058,7 +1036,7 @@ Calling the scripting API from a host script:
         ].join('\n');
     }
 
-    const fullNamespaces = options.fullNamespaces || CORE_SCRIPT_NAMESPACES;
+    const fullNamespaces = options.fullNamespaces || defaultFullNamespaces(allowedScriptApi);
     const coreNamespaces = allowedScriptApi.namespaces.filter((ns) => fullNamespaces.has(ns.namespace));
     const pluginNamespaces = allowedScriptApi.namespaces.filter((ns) => !fullNamespaces.has(ns.namespace));
 
@@ -1069,18 +1047,13 @@ ${pluginNamespaces.map(renderCompactNamespace).join('\n\n')}`
         : '';
     const namespacesText = `${coreText}${pluginText}`;
 
-    // Viz guidance follows the namespace's rendering position: here when rendered in
-    // full (stable prefix); appended to the session-expansion block when the
-    // namespace is compact and gets expanded mid-session (keeps this block stable).
-    const visualizationGuidance = fullNamespaces.has('visualization')
-        ? visualizationNamespaceGuidance(allowedScriptApi)
-        : '';
-    const pathologyGuidance = pathologyNamespaceGuidance(allowedScriptApi);
-    // Short and UNCONDITIONAL (unlike the workflow block above, which follows the
-    // namespace's compact/full rendering position). Without it the pathology playbook
-    // is the only voice in the prompt when the user talks about what they SEE, and the
-    // agent answers a rendering request by asking for the stain.
-    const visualizationFraming = visualizationFramingBlock(allowedScriptApi);
+    // Namespace-authored blocks. `framing` is unconditional while the namespace is
+    // allowed. `guidance` follows the rendering position: here when rendered in full
+    // (stable prefix); appended to the session-expansion block when the namespace is
+    // compact and gets expanded mid-session (keeps this block stable).
+    const namespaceFraming = namespaceAssistantBlocks(allowedScriptApi.namespaces, 'framing');
+    const namespaceGuidance = namespaceAssistantBlocks(coreNamespaces, 'guidance');
+    const recommendedPatterns = recommendedPatternsBlock(allowedScriptApi);
 
     return `Viewer scripting is available.
 
@@ -1130,150 +1103,11 @@ Output rules:
 - If you need to both explain and execute, put the explanation outside the code block and keep the executable block as the only fenced block.
 - After successful tool execution, read the returned host feedback carefully. Host feedback and script-result parts are authoritative observations from the runtime.
 - After successful tool execution, if the result contains numbers, measurements, coordinates, zoom values, ratios, or metadata, quote them directly and explain them briefly.
-
-Recommended patterns:
-- To inspect viewer contexts: \`const contexts = await application.getGlobalInfo(); return contexts.map(c => ({ contextId: c.contextId, imageName: c.imageName }));\`
-- To read metadata from the active viewer: \`const metadata = await viewer.getMetadata(); return metadata;\`
-- To select a context before viewer calls: \`await application.setActiveViewer(contextId); const metadata = await viewer.getMetadata(); return { contextId, metadata };\`
-- To capture a screenshot with metadata: \`const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return ["Viewport screenshot captured.", screenshot, metadata];\`
-- To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
-
+${recommendedPatterns}
 If scripting is not needed, answer normally in plain user-facing language.
-${visualizationFraming}${visualizationGuidance}${pathologyGuidance}
+${namespaceFraming}${namespaceGuidance}
 Allowed scripting API:
 ${namespacesText}`;
-}
-
-function hasNamespace(allowedScriptApi: AllowedScriptApiManifest | undefined, namespace: string): boolean {
-    if (!allowedScriptApi?.namespaces?.length) return false;
-    return allowedScriptApi.namespaces.some((ns) => ns.namespace === namespace);
-}
-
-/**
- * The ALWAYS-ON half of the visualization guidance: what a "visualization" IS in
- * xOpat, and how to act on a request about it.
- *
- * It is unconditional (the workflow block below is not) because it fixes a
- * misrouting, not a syntax problem. `visualization` is compact-by-default, while
- * the pathology playbook is always present and tells the agent to establish stain
- * and organ up front — so "the visualization is not nice, improve it" was being
- * answered with "which slide, and what stain does it contain?", which is both the
- * wrong question and a stalled turn. Kept to ~12 lines so the ~19 KB demotion of
- * the visualization declarations still pays for itself.
- */
-function visualizationFramingBlock(allowedScriptApi?: AllowedScriptApiManifest): string {
-    if (!hasNamespace(allowedScriptApi, 'visualization')) return '';
-
-    return `
-### What a "visualization" is here (read before answering anything about appearance)
-- Each slide renders as a STACK: the **background** — the scan itself, passed through unchanged by an implicit \`identity\` shader unless configured otherwise — plus an optional **visualization**: a set of shader layers drawn over the data.
-- "the visualization is not nice", "improve how the data is shown", "the overlay is washed out / too dark / unreadable", "use better colours" are **shader-configuration** requests. They are NOT image analysis. They do NOT require the stain, the marker, the specimen site, or any clinical context — do not ask for those here, and do not call \`pathology.setSlideContext\` on their account.
-- Work it out in this order, stopping as soon as you can decide:
-  1. What is rendered NOW — read it from the current-viewer-state block. It already lists every open viewer's active visualization and its layer types. Do not spend a script on it.
-  2. What the data IS — \`visualization.describeData()\` for the sources and their metadata, \`visualization.probeData(dataReference)\` for the actual value range and distribution. Those two decide the shader type, the palette and the thresholds.
-  3. Only if that is inconclusive — no channel information, no usable value range, or you need to judge how the current rendering LOOKS — call \`visualization.critiqueCurrentRendering()\`. It captures what the user sees and returns a short written critique. Treat its wording as evidence, not as your answer.
-  4. Only if all of the above still leave a choice the data cannot settle, ask the user ONE bundled question.
-- If the request names no viewer, apply to every open viewer that has data to show rather than asking which one. Say afterwards what you changed and where.
-- Act, then report: apply the change and state in one line what was applied and how to adjust it. Do not describe a visualization you have not applied.
-`;
-}
-
-/**
- * When the `visualization` namespace is part of the allowed API, inject a
- * compact, prompt-budget-friendly guidance block: how to discover the shader-type
- * vocabulary (so the LLM does not invent names like `color-mapping`), one
- * worked example for `colormap` (the most-attempted shader in past
- * sessions), and the dry-run mandate that pairs with
- * `validateProposedVisualization`.
- */
-function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
-    if (!hasNamespace(allowedScriptApi, 'visualization')) return '';
-
-    return `
-### Visualization namespace — required workflow
-- To choose a shader \`type\`, read \`visualization.getSchema()["x-shaderCatalog"]\` — a compact index of every type the renderer currently offers, each with a \`name\`, an \`intent\` ("pick this when…") and what it \`expects\` from the data. It is derived from the live renderer registry, so it is the authoritative list; conform to the schema exactly and never invent a type name.
-- \`identity\` is the pass-through type: it shows the data as-is and is what the background already uses. Choosing it for an overlay means "render this source raw" — pick a mapping type (\`colormap\`, \`heatmap\`, \`gridheatmap\`, …) when the point is to make VALUES readable.
-- Shader layer fields: \`id\`, \`type\`, a per-type \`params\` object, and ONE OF \`dataReferences: number[]\` (preferred — persisted form, indexes into \`config.data\`; the host resolves them at render time and can bind sources that are not yet loaded into the viewer world) or \`tiledImages: number[]\` (renderer form, concrete OSD world indices; only use after inspecting \`viewer.world\`). Prefer \`dataReferences\` so the visualization survives across sessions and works for not-yet-loaded data. Do NOT invent names like \`blendMode\`, \`color-mapping\`, \`colorMapping\`, \`source\`, etc. — they are not in the schema.
-- For the canonical minimal layer for any type, read \`visualization.getSchema().$defs.shaderLayers.<type>.examples[0]\`. For cross-field invariants (e.g. colormap palette size vs threshold breaks), read \`.x-controlCouplings\` on that schema entry.
-- The host validates every \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\` input against the schema and coupling rules BEFORE applying it, and a rejected input fails with precise JSON-pointer schema errors and coupling violations in the failure feedback. Call the mutating method directly and correct from the returned errors. \`visualization.validateProposedVisualization(viz)\` remains available when you want to iterate on a draft without triggering the user review dialog — and when you do use it, pass its \`normalized\` result to the mutating call instead of writing the config out a second time.
-- Inside a layer's \`params\`, each control envelope is discriminated by its own \`type\` field (the SAME field name as the shader layer's \`type\`, just one nesting level deeper — context disambiguates). Do NOT use \`uiType\`.
-- For the colormap envelope: \`default\` is the SELECTED palette name and \`mode\` constrains which palettes are valid. Pick \`mode\` to match the palette family — \`singlehue\` for single-colour ramps (Blues, Greens, Greys, Purples, Reds); \`sequential\` for perceptual ramps (Viridis, Plasma, Magma, Inferno, Turbo, Hot, YlGnBu, etc.); \`diverging\` for two-ended ramps (RdBu, BrBG, PiYG, Spectral, etc.); \`qualitative\` for categorical sets (Set1, Set2, Paired, Dark2, Accent, etc.). A \`default\` not in the chosen \`mode\`'s group is silently substituted with that mode's default and the user sees the wrong colour. Read \`visualization.getSchema()\` if unsure which group a palette belongs to.
-- If the user declines the visualization review without sending feedback (the script error contains "declined the proposal without giving feedback"), do NOT silently retry with a different shader or palette. Ask the user one short clarifying question — what they wanted different — and only re-propose after they answer.
-- Worked example (colormap rendering channel-0 intensity in Blues with two breaks → three steps):
-  \`\`\`
-  return await visualization.addVisualization({
-    name: "Blue intensity overlay",
-    shaders: { L1: {
-      id: "L1", type: "colormap", dataReferences: [0],
-      params: {
-        color:     { type: "colormap", default: "Blues", steps: 3, mode: "singlehue" },
-        threshold: { type: "advanced_slider", breaks: [0.33, 0.66] },
-        connect: true,
-      },
-    } },
-  }, { makeActive: true });
-  \`\`\`
-`;
-}
-
-//TODO: We might want to have this as part of the respective module, not here.. on the other side this is
-//   a crucial part of the interaction with LLM, so for now keeping it here
-/**
- * When the `pathology` namespace is allowed, inject the orient-first playbook so
- * the agent behaves like a pathologist opening a case: get a whole-slide overview,
- * find the actual tissue, then drill in — all rendered OFF-SCREEN so the user's
- * viewport is never hijacked. `exploreSlide` returns the ranked tissue regions;
- * this block encodes the workflow and the coverage-semantics gotcha.
- */
-function pathologyNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
-    if (!allowedScriptApi?.namespaces?.length) return '';
-    if (!allowedScriptApi.namespaces.some((ns) => ns.namespace === 'pathology')) return '';
-
-    return `
-### Pathology namespace — orient first, browse off-screen
-- Slide-wide jobs (\`exploreSlide\`, \`reviewRegions\`, \`buildOverview\`, region-scoped \`analyzeRegion\`) render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the user's viewport, and the user keeps navigating freely while they run. You do not need to (and must not) navigate the viewer to "see" a part of the slide: pass a \`region\` instead.
-- **"Explore" / "scan" / "go through" / "review X and report" = \`pathology.buildOverview\`, ALWAYS — with or without a named region.** \`exploreSlide\` owns the word but does the least: it is ORIENTATION, one render and a tissue mask, and it returns boxes rather than findings. Answering "explore this core" with it (or with a single \`analyzeRegion\`) hands the user a screenshot where they asked for an examination. A named target does not make it a different job — it makes it a \`scope\`.
-- For ANY question about what is on a slide, or before working on "the tissue"/"a region"/"a tumour", \`pathology.exploreSlide()\` is the cheap first step: it surveys off-screen, detects tissue, and returns \`regions\` (tissue islands in SLIDE READING ORDER — rows top to bottom, left to right — each with a \`bounds\` box), \`slideCoverage\`, and slide metadata (dimensions, µm/px, native magnification). Use it to find out WHERE to work — never as the answer.
-- **A region number says WHERE it is, not how big or how interesting.** "region 3" is the third fragment on the glass, which is how the user counts them off the slide. So never renumber: do not open your own "fragment 1 / fragment 2" sequence over the regions you happen to mention, quote each region's own \`label\` verbatim, and enumerate them in label order unless ranking is the actual point — a report that goes 3, 1, 5 makes the reader's clicks jump around the slide. Interest ranking lives in \`ranked\` / \`rankScore\`, and it is fine to lead with the most significant finding; it is not fine to give it a new number.
-- **SCOPE the exploration to what was actually asked about.** \`exploreSlide\` and \`buildOverview\` both take \`scope\`: \`"slide"\` (default, the whole slide), \`"viewport"\` (what the user is looking at RIGHT NOW), or an explicit \`{x, y, width, height}\`. When the ask is anchored to the current view — "here", "this area", "what am I seeing", "go through this bit" — pass \`scope: "viewport"\`. When it names a region YOU ALREADY REPORTED — "the second core", "that fragment", "region 3" — pass THAT region's \`bounds\` as \`scope\`: your own region list is where a core/fragment/area resolves to coordinates, and a scan the user asked to confine must not run over the whole slide. It is a hard restriction and it is the BETTER read: the same budget spread over a small box surveys it far more finely than a whole-slide pass ever does. Then report it as covering that area: the result's \`coverageScope\` will not be \`"whole-slide"\`, \`warnings\` will say so, and "no X found" inside one region is NOT "no X on this slide".
-- **A follow-up that names no target keeps the previous one.** "do a deep scan", "go deeper", "and the findings?" after two turns about one core mean THAT core — the target is in the conversation, not the sentence. Omitting \`scope\` already does the right thing: it follows the focus region set by the last region-scoped call (\`pathology.getFocusRegion()\` is free — read it when unsure). Because of that, **an omitted \`scope\` is not a request for whole-slide coverage**: when the user genuinely means the whole slide, say \`scope: "slide"\` explicitly, which also clears the focus. Always read \`coverageScope\` / \`scopeBounds\` off the RESULT before describing what was covered.
-- **You can see what a scan will cover before paying for it.** \`pathology.planOverview({ query, scope })\` is CHEAP — it surveys, derives the checklist and ranks the regions without sending a single field to a vision model — and \`pathology.runPlan(planId, { drop: ["region 3"] })\` then runs exactly that plan, minus what you strike off (regions go by \`label\`, never by position). Use it for a scan the user asked for, then **run immediately and say nothing about it** in the normal case. Bring the plan to the user only when there is a real decision: \`overlapPairs\` is non-empty (two regions may be one piece of tissue — dropping one saves calls), \`regionsOmitted\` is above 0 (tissue the run will not reach), \`surveyComplete\` is false (still loading — re-plan, do not run), or \`checklist.source\` came back \`"fallback"\` (the run would ask three generic questions; a better \`query\` fixes it). Turning every scan into a two-step confirmation is its own kind of noise. \`{status: "plan-expired"}\` costs nothing and means plan again — never fall back to \`buildOverview\`, which re-surveys and pays twice.
-- **A budgeted walk that stopped short is CONTINUED, not rebuilt.** \`budget.truncated\`, \`budget.focusUnspent\` or \`budget.plannedNotRead\` above 0 all mean there is more to do: call \`pathology.refineOverview({ addCalls, region?, maxDepth?, query? })\`, which resumes from the cached tree without re-surveying or re-reading anything. Calling \`buildOverview\` again instead pays for every region a second time. Offer it in one sentence — never present a partial scan as a finished examination.
-- To LOOK at a specific place yourself, call \`pathology.analyzeRegion(prompt, { region, magnification | targetPixels })\` — a small patch (e.g. targetPixels ~500k, or a tight bounds) is cheap; request only the resolution the question needs, not a full frame. Without \`region\` it snapshots what the USER currently sees — use that form only for questions about the user's current view ("what am I looking at?").
-- ZOOMING IN IS YOUR JOB, NOT A QUESTION FOR THE USER. Inside a task they already asked for, "the resolution was insufficient", "this needs high-power review" and "I recommend inspecting region N" are instructions to call \`analyzeRegion\` again on that region with a higher \`magnification\` — never sentences to put in the answer. Ask the user only for what they know and you cannot measure (what the specimen is, what they want examined). Establish that ONCE, up front, in one bundled question, and store it with \`pathology.setSlideContext({ stain, stainClass, organ })\`; \`pathology.getSlideContext()\` is free, so check it before asking at all. Everything afterwards is grounded in it automatically.
-- That slide-context question belongs to ANALYSIS requests only. A request about how the slide is DISPLAYED — the visualization, the overlay, the colours, the contrast, "make this look better" — never needs the stain, the stain class or the organ. Do not ask for them, and do not treat an appearance complaint as a request to analyse the tissue.
-- A request to REPORT what is on the slide or on a region ("report the findings", "is there cancer", "what does this show", "review core 3 and report") is an exploration: run ONE \`pathology.buildOverview({ query, scope })\` and write the answer from \`result.evidence\`. \`summary\` is a convenience rendering, not the source of truth. Do not hand-loop \`analyzeRegion\` over the regions.
-- **HOW TO WRITE THAT ANSWER — prose first, the machinery stays out of sight.** \`evidence\` is the BASIS for your answer, not the deliverable. Answer the question the user actually asked, in their words, and put a region link inline on every region you name. Then: (a) **never print \`counts\`** — "28 yes / 0 no / 0 uncertain / 0 not-assessable" is internal bookkeeping nobody can act on, so cite regions instead of tallies; (b) lay the rows out as a TABLE only when \`result.checklist.source\` is not \`"fallback"\` AND more than one feature was asked AND the user asked for a structured or tabular report — otherwise weave the one to three decisive rows into the prose; (c) never explain the link mechanism ("click any region label to jump…") — the links are a visible control and narrating them is noise; (d) keep the model-assisted, not-a-diagnosis framing as ONE closing clause, never as a section heading.
-- **\`checklist.source: "fallback"\` rows are RUN-QUALITY GATES, not findings.** They are three generic questions — does this match what was asked, how much of the field is involved, is the image good enough — that the run falls back to when no checklist could be derived. Presenting them as a results table hands the user a clinical-looking report about nothing. Instead say in ONE sentence that the run had no specific question to work from, and either name a better question to ask or, when \`checklist.fallbackReason\` is \`"no-model"\`/\`"unparseable"\`/\`"error"\`, say it is a setup problem that rephrasing will not fix.
-- **EVERY region you name gets a region link.** Both \`evidence[i].citedBy[j].bounds\` and \`ranked[i].bounds\` are ready to use: \`{x, y, width, height}\` maps straight to \`x, y, w, h\` in the link. Use \`citedBy[j].label\` (or \`ranked[i].label\`) as the link text. Naming a region in prose without linking it leaves the user with no way to find it — if you have its bounds, link it.
-- **Pass a SPECIFIC \`query\`.** It is not decoration: a checklist of named features is derived from it, and that checklist decides what every field is asked, what resolution is rendered, when the walk drills deeper, and what the report rows are. "is there cancer, and is it invasive" produces a run that asks about invasion; "look at this slide" produces a generic one, flagged in \`warnings\` as \`checklist.source: "fallback"\`.
-- **\`present: "not-assessable"\` is NEVER a negative finding**, and neither is \`verdict: "not-assessable"\` on an evidence row. It means the image at that resolution could not show the feature. Never report it as "absent", "not seen" or "negative". When a row has \`underResolved: true\`, say the run never got a close enough look and offer \`interrogateRegion\` on the best region — do not assert.
-- **A walk where EVERY row is \`not-assessable\` did not produce findings — it failed to reach a resolution that could answer.** Lead with that. Do not lay the rows out as a results table, and do not repeat the nodes' architecture-only prose as though it answered the question. Check \`budget\`: \`focusUnspent\` above 0 means it stopped with calls still available, so re-running unchanged will not help — offer \`interrogateRegion\` on the top-ranked region instead.
-- **Warnings: one closing line, not a standing section.** Every \`warnings\` entry must reach the user, but fold them together into a single short \`Limitations:\` line at the END of your answer, in your own words, dropping nothing. Do NOT open an "Important caveats" section on every run. The exception is a safety matter and it LEADS the answer, before any finding: the slide was still loading when surveyed, the survey looks implausible, nothing was read closely enough to count as an examination, the walk stalled with budget unspent, or the walk covered only ONE AREA rather than the slide. Those change what every finding below them means.
-- Navigation (\`viewer.frameImageRegion(bounds)\` or region links) is FOR THE USER — offer it so they can look too, only to detected-tissue bounds, NEVER to guessed or arbitrary coordinates.
-- If \`exploreSlide\`'s \`isComplete\` (or \`buildOverview\`'s \`surveyComplete\`) is false, the render ran on partially-loaded tiles: the numbers are provisional and likely understated — say so and offer to re-run; do NOT conclude the slide is blank, and do NOT report the regions as what the slide contains.
-- If that flag is true and \`slideCoverage\` is ~0 or \`regions\` is empty, tell the user the slide looks blank / has no detectable tissue. Do NOT keep hunting for something to show.
-- \`buildOverview.status: "incomplete"\` means NOTHING was examined — the slide was still loading, or the walk never got close enough to settle a single question. Report that limitation and what fixes it (wait and re-run; \`refineOverview\`). Never assemble findings out of the low-power region prose in that case: it describes architecture and reads exactly like an examination that did not happen. \`isComplete: false\` with \`status: "ok"\` is the milder case — some questions were settled, some were not; report both and do not call it finished.
-- Coverage semantics — every result names its own scope (\`coverageScope\`): \`exploreSlide.slideCoverage\` / \`buildOverview.slideCoverage\` cover \`scopeBounds\`, which is the whole slide unless you passed a \`scope\`; \`annotateTissue.viewCoverage\` is CURRENT-VIEW; \`tissueCoverage.annotationTissueFraction\` is the ANNOTATION's tissue share and \`fractionOfViewTissue\` is the annotation's share of the visible tissue. Quote the number together with its scope.
-- The overview is low-resolution, so \`regions[i].bounds\` are approximate (\`isApproximate: true\`). To outline a region precisely, frame it first, then call \`annotateTissue()\` at that zoom (annotateTissue works on the current view).
-- To CHECK SOMETHING SPECIFIC in one place ("is region 2 invasive?", "are there mitoses here?"), call \`pathology.interrogateRegion(bounds, { questions })\` — it reads the region at a resolution that can answer, tiling it itself, and returns one typed answer per question. Prefer it over \`analyzeRegion\` whenever the question is a checklist rather than "describe this", and never hand-split a region for it.
-- To COMPARE or triage SEVERAL regions, call \`pathology.montageRegions([...])\` — it combines them into one image and answers about all of them in a SINGLE vision call. Use it before spending a call per region.
-- \`pathology.buildDensityMap()\` is FREE (local, no model call) and says where the cells are. Consult it before committing to an expensive scan; \`topSpots\` is the densest spots already computed, as boxes ready for \`interrogateRegion\` or \`montageRegions\`. It is plain data — there is no method to call on the result.
-- To go through tissue region by region ("review the slide", "check each area"), call \`pathology.reviewRegions({ max, feature })\` — it renders each region off-screen and runs the job (default \`analyze\`), returning one result per region. Prefer it over hand-rolling a loop.
-- For a question that needs a map — of the whole slide OR of one region ("where are the regions with X?", "find areas that look like Y", "give me an expert walkthrough", "explore this core") — do NOT hand-loop. First call \`pathology.getOverview()\`; if it returns a tree, answer from it (each node has \`findings\`, \`interest\`, and a \`bounds\` to navigate to with \`viewer.frameImageRegion(node.bounds)\`). If it is null, or its \`query\`/\`builtAtIso\` no longer fits, or \`budget.truncated\` is true, call \`pathology.buildOverview({ query: "X" })\` ONCE — it orients, describes and scores the tissue islands, and drills into the interesting ones on a budget, caching the result. When \`budget.truncated\` is true, tell the user the overview is partial and offer to extend it.
-- Rank your answer by the result's \`ranked\` array (focal regions, highest-interest first) — each \`ranked[i].bounds\` is a tight, on-slide window. Do NOT link the coarse top-level \`root\` boxes: they are whole tissue islands and framing them just shows the slide. Never fabricate or "recentre" coordinates — use the bounds as given.
-- NAME a region by its \`label\` ("region 1", "region 2.1") — in prose and as the region-link text. \`index\` and \`depth\` are 0-based array internals: never print them, and never say "region 0" or "depth 0" to the user.
-- \`segmentAtPoint\` results carry a \`status\`: "empty" is a genuine negative (nothing segmentable there); "rejected-oversegmented" means the run FAILED validation — report it as a failed attempt, never as a finding about the tissue.
-- Present any \`analyzeRegion\`/\`reviewRegions\`/\`hint\` output as model-assisted findings that support the pathologist's own read — never as a definitive diagnosis. Say that in one clause where it belongs; do not give it a heading or a section of its own.
-- CHAIN mechanical steps in one script instead of one script per step. Splitting is only needed when a human-like visual judgement (a screenshot, choosing between regions by appearance) must happen in between. Worked example — orient, frame the largest tissue region and outline it in ONE script:
-  \`\`\`
-  const overview = await pathology.exploreSlide();
-  if (!overview.regions?.length) return { overview, note: "no detectable tissue" };
-  await viewer.frameImageRegion(overview.regions[0].bounds);
-  const annotation = await pathology.annotateTissue();
-  return { slideCoverage: overview.slideCoverage, framedRegion: overview.regions[0], annotation };
-  \`\`\`
-`;
 }
 
 const LIVE_VIEWER_CONTEXT_MAX_VIEWERS = 32;
@@ -2419,6 +2253,9 @@ export async function createSession(ctx: any, input: CreateSessionInput): Promis
     const registry = getRegistry();
     const provider = await registry.getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+    // Before stamping its identity onto a session: a foreign user's provider must
+    // not become this caller's session provider.
+    assertProviderRead(ctx, provider);
 
     // A caller-supplied personality is stored ON THE SESSION, not in the global
     // personality registry. Registering it globally (as this used to) meant a
@@ -2822,8 +2659,8 @@ async function runTurn(
     // Which namespaces render in full unconditionally. Client-configurable (static
     // meta `fullPromptNamespaces` — prompt-shaping only, no security surface: it
     // merely selects which of the client's OWN manifest docs render fully). Bounded
-    // and intersected with the manifest; default keeps the historical core set.
-    let fullNamespaces = CORE_SCRIPT_NAMESPACES;
+    // and intersected with the manifest; default is what the namespaces declare.
+    let fullNamespaces = defaultFullNamespaces(input.allowedScriptApi);
     if (Array.isArray((input as any).fullPromptNamespaces) && (input as any).fullPromptNamespaces.length) {
         const known = new Set((input.allowedScriptApi?.namespaces || []).map((ns) => ns.namespace));
         const requested = (input as any).fullPromptNamespaces

@@ -33,6 +33,9 @@ const {
 } = require("./logging");
 
 const roles = require("./roles");
+const {
+  currentDeployment, setDefaultDeployment, deploymentState, partitionStorage, partitionCache,
+} = require("./deployment-scope");
 
 /**
  * The viewer core config a role decision resolves against.
@@ -202,6 +205,7 @@ function setServerConfigSnapshot(core) {
   };
   if (!deployment.requested || deployment.fellBack || !store.defaultId) store.defaultId = deployment.id;
   globalThis[CONFIG_SNAPSHOT_KEY] = store;
+  setDefaultDeployment(store.defaultId);
 }
 
 /**
@@ -219,11 +223,11 @@ function snapshotCtx(kind, itemId, deploymentId) {
 /**
  * The composed (author ⊕ deployer) server config of a plugin/module, without a
  * request ctx. Returns `{}` before core has published a snapshot — treat that as
- * "defaults", never as "configured empty". Pass `deploymentId` (`ctx.deployment`)
- * when the state being built belongs to one named deployment.
+ * "defaults", never as "configured empty". Reads the running deployment's config
+ * (`deployment-scope.js`); `deploymentId` overrides that for core's own callers.
  */
 function getStaticItemConfig(kind, id, deploymentId) {
-  const ctx = snapshotCtx(kind, id, deploymentId);
+  const ctx = snapshotCtx(kind, id, deploymentId ?? currentDeployment());
   return ctx ? getSecureItemConfig(ctx, id) : {};
 }
 
@@ -520,9 +524,12 @@ function createServerHelpers(runtime) {
     // bounded, lost on restart by design); `storage` for anything that should be
     // bounded AND survivable AND operator-routable. A bare module-level `Map` is
     // neither, which is how the server grew unbounded in the first place.
+    // `state` holds what is neither: plain long-lived objects of a module.
+    // All three are per named deployment, without the caller doing anything.
     // See server/STORAGE.md.
-    storage: stores.storage,
-    cache: stores.cache,
+    state: deploymentState,
+    storage: stores.storage && partitionStorage(stores.storage),
+    cache: stores.cache && partitionCache(stores.cache),
     StorageConfigError,
     // Server-side logging. `log(channel)` for a module-scoped logger
     // ("module.<id>[:sub]"); inside an RPC method prefer the pre-scoped `ctx.log`,

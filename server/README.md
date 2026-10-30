@@ -91,7 +91,8 @@ fallback to the default and then the base env. A server must apply the overlay
 *before* merging `ENV.core` over `config.json` and expose the served
 `{id, requested, fellBack}` as `CORE.deployment`. Boot-only `core.server` keys
 are process-wide and may not vary per deployment (only `core.server.secure`
-may). Reference: `server/templates/javascript/deployments.js`; full description
+and `core.server.auth` may). An auth context id must be configured identically
+in every deployment that defines it — login state is shared per context id. Reference: `server/templates/javascript/deployments.js`; full description
 in [`env/README.md`](../env/README.md) → *Multiple deployments in one env*.
 
 ### Parse Modules and Plugins

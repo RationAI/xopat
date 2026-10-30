@@ -397,6 +397,41 @@ never baked (server logs a warning).
 
 ---
 
+### Do: tell the assistant about your namespace in its own metadata
+
+A namespace is self-contained: everything an assistant (the chat module, or any
+other LLM consumer) should know about it beyond its signatures is declared in
+`ScriptApiMetadata.assistant`, and consumers render it generically. Never add
+per-namespace prompt text, keyword tables or tier lists to the chat module.
+
+```ts
+static ScriptApiMetadata: ScriptApiMetadata<XOpatMyNamespaceScriptApi> = {
+    dtypesSource: { /* … */ },
+    assistant: {
+        // User text matching any pattern documents the namespace in full up front.
+        // Case-insensitive; `g`/`y` are dropped. Stripped for `sensitive` namespaces.
+        intentPatterns: [/my feature|synonym|\bterm\b/i],
+        // "full" documents it on every step (small, hot namespaces only); default compact.
+        promptTier: "compact",
+        // Always shown while the namespace is allowed — keep it short.
+        framing: `### My feature — what a request about it means here\n- …`,
+        // Shown only where the namespace is documented in full (tier, or after expansion).
+        guidance: `### My namespace — required workflow\n- …`,
+        // One-line examples for the "Recommended patterns" list.
+        examples: ["To list things: `return await myNamespace.listThings();`"],
+    },
+};
+```
+
+All fields are optional. The manifest (`getAllowedApiManifest`) carries them as
+`ns.assistant`, with patterns serialized to `{source, flags}`; the chat server
+drops any text field over 32 KB whole. Long texts belong in a sibling file
+(`visualization-api.assistant.ts`, `modules/pathology-foundation/scripting/assistant.ts`).
+Namespaces added with the lightweight `registerNamespace(...)` carry no metadata
+and therefore no assistant hints.
+
+---
+
 ### Do: register namespaces early
 
 Good:
@@ -794,6 +829,7 @@ Before shipping a namespace, check:
 - [ ] No per-script state is stored in globals or statics
 - [ ] Inputs and outputs are plain serializable values
 - [ ] A `.scripts.d.ts` file exists for real namespaces
+- [ ] Assistant hints (intent patterns, guidance) live in `ScriptApiMetadata.assistant`, not in the chat module
 - [ ] The namespace is registered before workers are started
 - [ ] Error messages explain what the script should do next
 

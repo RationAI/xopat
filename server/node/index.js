@@ -19,6 +19,7 @@ const { getCore } = require("../templates/javascript/core");
 const {
     normalizeRequestedDeployment, resolveDeployment, listDeploymentProblems,
 } = require("../templates/javascript/deployments");
+const { currentDeployment, runInDeployment } = require("./deployment-scope");
 const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
@@ -456,8 +457,11 @@ const SESSION_MAX_ENTRIES = Math.max(100, Number(process.env.XOPAT_SESSION_MAX) 
 const sessionEvictionListeners = new Set();
 
 function onSessionEvicted(listener) {
-    sessionEvictionListeners.add(listener);
-    return () => sessionEvictionListeners.delete(listener);
+    // Eviction has no request, so the owner's deployment is the one it subscribed from.
+    const deployment = currentDeployment();
+    const bound = (id) => runInDeployment(deployment, () => listener(id));
+    sessionEvictionListeners.add(bound);
+    return () => sessionEvictionListeners.delete(bound);
 }
 
 function notifySessionEvicted(id) {
@@ -1585,7 +1589,7 @@ async function responseProxy(req, res, requestUrl, session) {
     // unknown-alias answer: which aliases exist is not a restricted session's
     // business. Unrestricted by default — see proxyAliasAllowedForSession.
     if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
-        || !proxyAliasAllowedForSession(session, alias)) {
+        || !proxyAliasAllowedForSession(session, alias, core.DEPLOYMENT?.id)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });

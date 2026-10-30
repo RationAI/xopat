@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const require_ = createRequire(import.meta.url);
-const { resolveDeployment, listDeploymentProblems } =
+const { resolveDeployment, listDeploymentProblems, listAuthContextConflicts } =
     require_(path.join(REPO, "server/templates/javascript/deployments.js"));
 const { getCore } = require_(path.join(REPO, "server/templates/javascript/core.js"));
 const { composeDeployments } = await import("../../../server/utils/node/env-compose.mjs");
@@ -157,4 +157,39 @@ test("the composer refuses what the server would ignore @unit", () => {
     const env = { core: {}, defaultDeployment: "ghost", deployments: { a: { core: { server: { staticRoots: [] } } } } };
     const kinds = composeDeployments(env).conflicts.map((c) => c.kind);
     expect(kinds).toEqual(["deployment", "deployment"]);
+});
+
+test("server.auth may vary per deployment @unit", () => {
+    const env = ENV();
+    env.deployments.dicom.core.server.auth = { jwt: { secretEnv: "DICOM_JWT" } };
+    const r = resolveDeployment(env, "dicom");
+    expect(r.overlay.core.server.auth).toEqual({ jwt: { secretEnv: "DICOM_JWT" } });
+    expect(r.problems).toEqual([]);
+});
+
+test("@security one auth context id must mean one identity provider in every deployment @unit", () => {
+    const env = ENV();
+    env.core.server = { secure: { rpcVerifiers: { lab: { type: "oidc", issuer: "https://a" } } } };
+    // Same id, same config (inherited from the base or restated): single sign-on, fine.
+    env.deployments.standalone.core.server = { secure: { rpcVerifiers: { lab: { type: "oidc", issuer: "https://a" } } } };
+    expect(listAuthContextConflicts(env)).toEqual([]);
+
+    // Same id, other IdP: login state is shared per context id — refused.
+    env.deployments.dicom.core.server.secure.rpcVerifiers = { lab: { type: "oidc", issuer: "https://b" } };
+    expect(listAuthContextConflicts(env).join("\n")).toMatch(/'lab'.*'base' and 'dicom'/s);
+
+    // Separate logins: separate ids.
+    env.deployments.dicom.core.server.secure.rpcVerifiers = { "dicom-lab": { type: "oidc", issuer: "https://b" } };
+    expect(listAuthContextConflicts(env)).toEqual([]);
+
+    // Main-context spellings are one context; server.auth is part of its identity.
+    env.core.server.secure.rpcVerifiers = { core: { type: "jwt" } };
+    env.deployments.dicom.core.server.auth = { jwt: { secretEnv: "OTHER" } };
+    expect(listAuthContextConflicts(env).length).toBe(1);
+
+    // Module login brokers (secure.modules.<m>.contexts) are checked too.
+    const m = { core: { server: { secure: { modules: { "oidc-server-ts": { contexts: { x: { clientId: "a" } } } } } } },
+        deployments: { b: { core: { server: { secure: { modules: { "oidc-server-ts": { contexts: { x: { clientId: "b" } } } } } } } } } };
+    expect(listAuthContextConflicts(m).join("\n")).toMatch(/oidc-server-ts/);
+    expect(listDeploymentProblems(m).length).toBe(1);
 });

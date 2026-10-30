@@ -10,6 +10,7 @@ const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
 const {getServerLogging} = require("./logging");
 const roles = require("./roles");
+const { runInDeployment } = require("./deployment-scope");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
@@ -391,7 +392,7 @@ class XopatServerRuntime {
             const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {},
                 deployment: core?.DEPLOYMENT?.id || "base" };
             ctx.log = this.logging ? this.logging.log(`server-route${match.prefix.replace(/\//g, ":")}`) : this.logger;
-            await match.handler(ctx, urlObj, match.prefix);
+            await runInDeployment(ctx.deployment, () => match.handler(ctx, urlObj, match.prefix));
         } catch (e) {
             this.routeLog.error(`${urlObj.pathname} failed`, e);
             if (!res.headersSent) { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Server route error"); }
@@ -1080,8 +1081,8 @@ class XopatServerRuntime {
                 core,
                 secure: core?.CORE?.server?.secure || {},
                 // Resolved named deployment (X-XOPAT-Deployment); `secure` above
-                // is already that deployment's. Pass to getStatic*Config when
-                // building state lazily for it.
+                // is already that deployment's. Core's: elements get isolation from
+                // XOPAT_SERVER itself and have no reason to read it.
                 deployment: core?.DEPLOYMENT?.id || "base",
                 session,
                 user: authResult.user,
@@ -1120,7 +1121,7 @@ class XopatServerRuntime {
             }
 
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
 
@@ -1274,7 +1275,7 @@ class XopatServerRuntime {
 
         try {
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
             clearTimeout(timeout);
