@@ -655,13 +655,10 @@ export const viewerMenuMethods = {
             return this._buildAnnotationContextActions(active, fabric, {
                 originalEvent: ctx.event,
                 source: ctx.source,
-                // Privacy is not the question the global window's "..." menu
-                // asks — it hangs off the annotation itself there. Declined at
-                // the SOURCE rather than filtered out of the result: the result
-                // is one nested "Annotation" parent on the flyout path, so a
-                // caller filtering top-level titles removed nothing, and on the
-                // flat path it left the group header with nothing under it.
-                includeMarkAsPrivate: ctx.source !== 'annotation-more',
+                // Offered on every source, the global window's "..." menu
+                // included: the row's inline padlock toggles `locked`, not
+                // `private`, so this menu is the only privacy control there.
+                includeMarkAsPrivate: true,
                 includeMoveToLayer: true,
                 includePresetSelection: true,
             });
