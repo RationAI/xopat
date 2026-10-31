@@ -1,0 +1,30 @@
+{
+  "$meta": {
+    "description": "Named deployments: one server, the session picks synthetic / webtiff / geotiff via \"deployment\" or ?deployment=",
+    "clientKey": "localhost"
+    /* Dimensionless: it adds `deployments` beside whatever `data/*` the base
+       composes, it does not replace it. See env/README.md → "Multiple
+       deployments in one env". */
+  },
+  /**
+   * The base composition stays the default (no `defaultDeployment`), so a plain
+   * `?slides=synthetic.dzi` keeps working. The two named deployments reuse the
+   * shipped data fragments through `$layers`; each is composed on its own and
+   * only overrides what it needs.
+   *
+   *     npm run up:dev -- multi-deployment
+   *     http://localhost:9000/?deployment=webtiff
+   *
+   * An unknown name (`?deployment=nope`) falls back to the base and warns once.
+   */
+  "deployments": {
+    "webtiff": {
+      "$meta": { "description": "Remote TIFF/SVS read in the browser" },
+      "$layers": ["data/tiff-webtiff"]
+    },
+    "geotiff": {
+      "$meta": { "description": "GeoTIFF read in the browser" },
+      "$layers": ["data/tiff-geotiff"]
+    }
+  }
+}
