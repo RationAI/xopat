@@ -186,10 +186,14 @@ export type AnnotationCreateInput = {
     layerID?: string | number | null;
 };
 
+/**
+ * Any field other than `locked` is refused (throws) while the annotation is locked or
+ * readOnly. `locked: false` is applied before the edits and `locked: true` after them.
+ */
 export type AnnotationMutablePatch = {
     presetID?: string;
     private?: boolean;
-    /** Refused when the resolved lock state is not releasable. */
+    /** Refused (throws) when the resolved lock state is not releasable. */
     locked?: boolean;
     label?: string | number;
     meta?: AnnotationMeta;

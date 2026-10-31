@@ -132,7 +132,9 @@ function createServerStorage({ cacheDir, getConfig, logger = console } = {}) {
         assertSegment(ownerUid, "owner");
         assertSegment(namespace, "namespace");
         const capabilityId = `${shape}:${namespace}`;
-        const cacheKey = `${ownerUid}|${capabilityId}`;
+        // Bindings and retention follow the capability; only the data is partitioned.
+        const partition = options.partition || "";
+        const cacheKey = `${ownerUid}|${capabilityId}${partition}`;
         const existing = handles.get(cacheKey);
         if (existing) {
             // The cache key is (owner, capability) only, so a second open with
@@ -160,9 +162,9 @@ function createServerStorage({ cacheDir, getConfig, logger = console } = {}) {
         policy.assertSensitivity(ownerUid, capabilityId, options.sensitivity, primary);
 
         const ns = {
-            id: `${ownerUid}/${capabilityId}`,
+            id: `${ownerUid}/${capabilityId}${partition}`,
             ownerUid,
-            namespace,
+            namespace: assertSegment(`${namespace}${partition}`, "namespace"),
             shape,
             capabilityId,
             policy: policy.resolvePolicy(ownerUid, capabilityId, shape, options, options.authorDefaults),

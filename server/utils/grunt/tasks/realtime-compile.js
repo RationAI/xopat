@@ -24,6 +24,7 @@ const cssnano = require("cssnano");
 
 const { buildWorkspaceItem, buildUI, buildCore, inspectWorkspaceBundle } = require("../../mixins/build-logic");
 const {pathsEqual} = require("../../mixins/pathsEqual");
+const { findPresetFiles } = require("../../node/tailwind-presets");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -202,6 +203,10 @@ const twincMerge = function (grunt) {
         const cacheDir   = abs(root, "./.dev-cache");
         const baselineCss = path.join(cacheDir, "baseline.css"); // snapshot of the one-time full build
         const stateFile  = path.join(cacheDir, "state.json");
+        // Element theme presets (`<element>/tailwind.preset.js`) are config
+        // inputs too: tailwind.config.js requires them. Resolved once - a
+        // preset ADDED while the watcher runs needs a restart.
+        const presetFiles = findPresetFiles(root);
         const debounceMs = cfg.debounceMs ?? 150;
         const minify     = cfg.minify !== false; // default true
         const mmOpts     = { windows: false };
@@ -302,7 +307,7 @@ const twincMerge = function (grunt) {
          * "the only way to get a correct stylesheet is grunt css").
          */
         function inputsFingerprint() {
-            return hash([inputCSS, configFile].map((p) => {
+            return hash([inputCSS, configFile, ...presetFiles].map((p) => {
                 try { return `${p}:${fs.readFileSync(p, "utf8")}`; } catch { return `${p}:<missing>`; }
             }).join("\n"));
         }
@@ -511,7 +516,7 @@ const twincMerge = function (grunt) {
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) return "no baseline yet";
             const state = readState();
             if (!state || state.inputs !== inputsFingerprint()) {
-                return "tailwind-spec.css or tailwind.config.js changed";
+                return "tailwind-spec.css, tailwind.config.js or a tailwind.preset.js changed";
             }
             try {
                 if (!hasLayerMarkers(fs.readFileSync(baselineCss, "utf8"))) return "baseline predates the layer markers";
@@ -566,7 +571,8 @@ const twincMerge = function (grunt) {
              * sits at the repo root, outside every watch root - watch it
              * explicitly rather than adding the root as a chokidar entry.
              */
-            const rebaselineFiles = new Set([absPosix(root, inputCSS), absPosix(root, configFile)]);
+            const rebaselineFiles = new Set([absPosix(root, inputCSS), absPosix(root, configFile),
+                ...presetFiles.map((p) => absPosix(root, p))]);
             const watcher = chokidar.watch([...watchRoots, ...rebaselineFiles], {
                 persistent: true,
                 ignoreInitial: true,

@@ -30,7 +30,7 @@ These rules override defaults from your training. **Read them before you write a
     - `window.USER_INTERFACE` (core generic UI operations)
     - `window.UTILITIES` (system utilities)
     - Modules and Plugins instances: accessible via `window.xmodule.<name>` and `window.xplugin.<name>`, or safer by using `plugin('id')` and `singletonModule('id')` and `viewerSingletonModule('className', 'viewerLikeRef')` if possible.
-- **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not use Tailwind's dark mode selectors directly; the application relies on DaisyUI's data-theme mechanism. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
+- **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not key CSS on a theme name and prefer DaisyUI tokens over `dark:`; themes are deployment-defined (`<element>/tailwind.preset.js` + ENV `core.setup.branding.themes`/`css`), and dark-only CSS keys on `[data-theme-mode="dark"]`. See `ui/README.md` → *Theming*. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
 - **Icons**: Phosphor Icons (Light) is the **only** icon font xOpat ships. Use `UI.PhIcon` or raw `<i class="ph-light ph-<name>"></i>` markup; names live in `src/libs/phoshor-icons/style.css`. `UI.FAIcon` survives only as a deprecated alias that translates a handful of legacy names — never call it in new code, and never write a `fa-*` class.
 
 > Keep best programming practices in mind — separate responsibilities, design clean interfaces, and avoid unnecessary coupling.
@@ -74,7 +74,7 @@ Every plugin and module requires an `include.json` containing metadata (like `id
 
 ### Viewer Core
 Has supportive features. Use them for good integration.
-- `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.**
+- `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.** A namespace is self-contained: its LLM-facing hints (intent patterns, prompt tier, framing/guidance, examples) go in its own `ScriptApiMetadata.assistant`, never in the chat module (`src/classes/scripting/README.md`).
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
 - `src/classes/app/shortcut-manager.ts` (`APPLICATION_CONTEXT.shortcuts`) Central keyboard-shortcut registry — register key strokes here (declared defaults, conflict enforcement, user remapping via the Keymap fullscreen-menu panel) instead of attaching raw `key-down`/`key-up` handlers. Contextual keys (Escape/Enter/Delete in widgets and inputs) stay widget-local and are NOT registered. See `src/SHORTCUTS.md`.
 - `src/classes/app/tutorial/` (`APPLICATION_CONTEXT.tutorials`) Interactive tour overlay behind `USER_INTERFACE.Tutorials`. Register tours with `USER_INTERFACE.Tutorials.add(...)`; never build a bespoke highlight overlay. See `src/TUTORIALS.md`.
@@ -227,6 +227,8 @@ Never key a cache directly by request input (a query param, a `Host` header, a
 client-chosen id) without validating it first — a bound stops memory exhaustion,
 it does not stop one caller reading another's entry.
 
+Plain long-lived module state (a registry) goes in `XOPAT_SERVER.state(ownerUid, factory)`: one object per deployment, surviving hot reload.
+
 Full spec: `server/STORAGE.md`. Dev introspection: `POST /__rpc/server/core/getStorageStats`.
 
 ### Server-side logging — never a bare `console.log`, never a `*_DEBUG` env var
@@ -284,6 +286,7 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
    - `AppBar` — mount plugin menus via `AppBar.Edit`, `AppBar.Plugins`, etc.
    - `AppBar.Chrome` — opt-in registry behind the top-bar "hide UI" button. Components register a `VisibilityManager` (or `{is, on, off}` / `{is, set}` duck) via `AppBar.Chrome.register(id, vm)`; everything routed through `AppBar.View.append()` / `View.registerViewComponent()` is enrolled automatically. Floaters outside the View system must call `register` on creation and `unregister` on teardown. Unrelated to `FullscreenMenus`.
    - `AppBar.Actions` — read-only live catalogue aggregating `Tools` / `View` / opt-in (`quickAction: true`) shortcuts into normalized, pinnable action descriptors; `AppBar.Actions.register(id, {label, icon, invoke})` is the escape hatch for functionality in no registry. `AppBar.QuickActions` renders the pinned subset as icon-only buttons in the bar (ENV `core.setup.quickActions` + per-user override; see `ui/services/README.md`).
+   - `AppBar.Catalog` — enumerable map of the whole UI (menus, fullscreen panels, viewer side panels, dock tabs, toolbars, actions, shortcuts) read from the registries above; backs the `ui` scripting namespace the assistant uses to explore, open, highlight and invoke UI. Register UI through the existing registries and it is discoverable — never hand the assistant a hardcoded list of menus.
    - `FloatingManager` — z-index management for floating panels.
    - `FullscreenMenus` — for capturing the whole viewing portal.
    - `GlobalTooltip` — global tooltip emitter.
@@ -316,7 +319,8 @@ the model aliases instead of real viewer ids, register a resolver
 - A second markdown renderer, or a private `#`-link convention parsed by one component.
 - `innerHTML +=` / manual node juggling for app-state mechanics.
 - Custom CSS files unless absolutely necessary — use DaisyUI + Tailwind utilities.
-- Tailwind dark-mode selectors directly (the app uses DaisyUI `data-theme`).
+- CSS keyed on a theme name (`[data-theme="xOpat-dark"]`) — use DaisyUI tokens, or `[data-theme-mode="dark"]` for dark-only rules.
+- Override CSS that redefines stock Tailwind utilities (`.rounded-xl`, `.shadow-*`) — change a theme token instead.
 
 ### Deep-dive references
 `ui/README.md` (design system) · `ui/classes/README.md` (`BaseComponent` + Van.js) · `ui/services/README.md` (singletons) · `modules/markdown/README.md` (markdown rendering + `#xopat-…` links).
@@ -450,6 +454,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 - **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
 - **Key per-source state by `tiledImage.source.tileSourceId`, not `source.url`.** DICOMweb shares `baseUrl` across slides; URL keys collide silently and you'll see one slide's state leak onto another.
 - **`BackgroundConfig` snapshots `_rawValue` at construction.** Mid-flight mutations of `config.data[i]` do **not** propagate. Put custom tile sources on `background.dataReference`, never on `evt.data` after the fact.
+- **One env can serve many named deployments — derive config from the served one.** `deployments` + `defaultDeployment` in the env (`server/templates/javascript/deployments.js`) let the session pick a configuration by id (`session.deployment`, `?deployment=`, `X-XOPAT-Deployment` for viewer-issued requests), with fallback, never failure. Server code reads per-request config from `ctx.secure`. Never assume one process = one config, and never read `ctx.deployment` in an element: core runs element code inside the request's deployment and isolates `XOPAT_SERVER.state` / `storage` / `cache` / `getStatic*Config` for it (`server/STORAGE.md` → *Named deployments*), so long-lived state goes through those, not a module-level variable or `globalThis`. Boot-only `core.server` keys stay process-wide. Login state is shared across deployments per auth context id, so one context id = one identity provider everywhere (enforced at boot / `up:check`); pass `ctx.deployment` to `setSessionAllowedProxies`. See `env/README.md` → *Multiple deployments in one env*.
 - **One origin serves many deployments — persisted boot state must carry the deployment key.** `src/classes/app/deployment-key.ts` computes it once in `initXOpat` from the *served* ENV + plugin/module registries (operators pin it with `core.client.<active>.cacheKey`). It scopes the boot session caches (`xoSessionCache`, `__xopat_session__`) and the plugin-autoload cookie (`_plugins.<key>`) — nothing else. `kv:*` keys stay `<ownerUid>::<key>`, so two envs on one `localhost` *do* share `AppCache`/`AppCookies`; bind them to `memory` if that matters. Anything new that survives a reload and would be invalid under a different env belongs behind this key. *Why:* without it a session captured under one env replays under another with unresolvable data references, and plugins auto-load in deployments that never shipped them.
 - **The boot path's raw storage access is a structural exception — do not "fix" it, and do not copy it.** `__xopat_session__` carries the ENV that configures the pipeline, and `parse-input.js` may *replace* the `POST_DATA` object the pipeline captures by reference, so `bootstrapIOPipeline` cannot run any earlier than it does. New state that must be readable before `initXOpatLoader` therefore belongs in the same club: stamp it with the deployment key, honour `setup.bypassCache`, probe-gate it, and add a `storage-audit` allowlist entry saying *why*. Everything else uses `IO_PIPELINE.kv(...)`. Two consequences worth knowing: `client.io.bindings` does **not** reach these flows (binding `core.kv:cache` to `memory` still writes localStorage at boot), and `bypassCache` suppresses restore/save but **never** eviction of a foreign deployment's entry. *Why:* conflating those two is what let a stale session survive an `XOPAT_ENV` switch.
 - **`kv` values are encoded, and only `set`/`get` know that.** `handle.set` keeps strings verbatim, `String()`s numbers/booleans, JSON-envelopes everything else and deletes on `undefined`; `getItem`/`setItem` are the raw pair for libraries needing a real `Storage`. A value read back as the literal `"[object Object]"` is pre-envelope damage (`String(object)`), treated as absent and removed. *Why:* every object written before this was silently destroyed, and each affected feature failed quietly at its own read site.

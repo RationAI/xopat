@@ -313,6 +313,78 @@ must match the iframe origin or every proxy fetch fails the preflight.
 If you also need cookies in such a deployment, set `js_cookie_domain`
 explicitly — the cookie attribute receives the raw token unchanged.
 
+### Multiple deployments in one env (`deployments`)
+
+One server can act as several applications — a DICOMweb backend, a standalone
+viewer, an MLflow explorer — from one env file. The operator defines named
+**deployments**; the session (or a link) picks which one is served. Same trust
+model as slide protocols: the operator defines the set, the session only names
+an id and can never inject configuration.
+
+```jsonc
+{
+  "core": { ... }, "plugins": { ... }, "modules": { ... },   // base, shared by all
+  "defaultDeployment": "standalone",                         // optional
+  "deployments": {
+    "standalone": { "core": { "setup": { "theme": "light" } } },
+    "dicom": {
+      "$meta": { "description": "DICOMweb backend" },
+      "$layers": ["data/dicomweb-idc"],                       // composer only, see below
+      "core": { "active_client": "dicom" },                   // pick another core.client block
+      "plugins": { "dicom": { "enabled": true } }
+    }
+  }
+}
+```
+
+- **A deployment is an env-shaped overlay** (`core`, `plugins`, `modules`),
+  deep-merged over the base with arrays replacing, before anything else reads
+  the env. `core.active_client` may switch to another `core.client.<name>` block.
+- **`core.server` may only carry `secure` and `auth`** (per-deployment
+  module/plugin secrets, proxies, verifiers, JWT/bearer settings — all read per
+  request). The rest of `core.server` — storage, logging, compression,
+  security/embedding headers, `staticRoots`, `media` — is read once per process
+  and cannot vary per request; the server ignores it with an error log and
+  `up:check` refuses it.
+- **One auth context id = one identity provider, everywhere.** All deployments
+  share the origin's session cookie, and server-side login state (oidc-server,
+  SAML tokens) is stored per context id. Sharing a context id between
+  deployments therefore means single sign-on: log in once, both accept it. For
+  separate logins give each deployment its own context id. Configuring the same
+  id differently (`rpcVerifiers.<id>` together with `core.server.auth`, or
+  `secure.modules.<m>.contexts.<id>`) is an error: logged at boot, refused by
+  `up:check`. Proxy narrowing at login is per deployment
+  (`setSessionAllowedProxies(session, aliases, ctx.deployment)`). Element state
+  and storage are isolated per deployment by core, including per-user data such as
+  chat sessions and stored API keys (`server/STORAGE.md` → *Named deployments*).
+- **Selection.** The viewer POST's session field `"deployment": "<id>"` (or a
+  top-level `deployment` form field), else `?deployment=<id>`. Requests the
+  viewer issues itself (RPC, `/proxy/`) carry `X-XOPAT-Deployment`, stamped by
+  `HttpClient` and the RPC runtime, so server modules see the same deployment.
+  `ctx.secure` / `getSecure*Config(ctx)` are already its config, and
+  `XOPAT_SERVER.getStaticModuleConfig(id)` reads it without a ctx. `ctx.deployment`
+  names it for core; elements have no reason to read it.
+- **Fallback, never failure.** A name that is absent, malformed, unknown, or
+  `base` serves `defaultDeployment`; an unset or undefined `defaultDeployment`
+  serves the base env alone (id `base`). The browser gets
+  `APPLICATION_CONTEXT.env.deployment = {id, requested, fellBack}` and shows one
+  warning toast on a fallback. Definitions never reach the browser.
+- **Links and caches.** An exported or shared session carries the served
+  `deployment`. A hash link or a cold restore from storage that names another
+  deployment is re-submitted once as a POST so the server can serve it; the
+  `requested` echo stops it looping on a name the server refused. The
+  deployment cache key gets a `.dp-<id>` suffix for named deployments (base keys
+  are unchanged), so their browser state stays apart.
+- **Composing.** `$layers` takes any `npm run up` selector (fragments, presets,
+  files). Each deployment is composed on its own with full conflict detection,
+  its inline keys go on top. Boot-only `core.server` config those layers need
+  (a data fragment's `staticRoots`) is hoisted to the base, since it is
+  process-wide anyway: arrays union, a disagreement is a conflict. `$layers`
+  needs the composer — a raw env file served without `npm run up` ignores it.
+  Implementation: `server/templates/javascript/deployments.js` (mirrored in
+  `server/php/inc/core.php`), `composeDeployments` in
+  `server/utils/node/env-compose.mjs`.
+
 ### Deployment cache key (`core.client.<active>.cacheKey`)
 
 Browsers scope storage by **origin**, and one origin routinely serves several

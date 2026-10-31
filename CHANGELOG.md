@@ -1,5 +1,27 @@
 # Changelog
 
+### 3.1.3
+
+One server for many deployments, custom look and feel, and an assistant that knows the user interface.
+
+**Features**:
+
+* **Deployments** — one server can host several named configurations, selected per session, with
+  server state isolated between them by default.
+* **Theming** — deployments can ship their own themes and styles without changing the core.
+* **Assistant** — new scripting API lets the assistant explore, open, highlight and invoke the UI;
+  plugins and modules now describe their own scripting hints for it.
+* **Annotations** — annotations can be styled by custom state (e.g. "processing") and the style
+  persists across selection changes; mark as private is available in the annotation list menu.
+* **Visualization** — editing layers no longer reloads the viewer; sources still in use are kept.
+
+**Bugfixes**:
+
+* The viewer now waits for a started login redirect instead of sending slide requests from a page
+  that is being left.
+* Smaller Node Docker image.
+
+
 ### 3.1.2
 
 Easier deployment, faster loading, and more control over annotations and saved data.

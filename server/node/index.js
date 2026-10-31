@@ -16,6 +16,10 @@ const i18n = require('../../src/libs/i18next.min');
 
 const utils = require('./utils');
 const { getCore } = require("../templates/javascript/core");
+const {
+    normalizeRequestedDeployment, resolveDeployment, listDeploymentProblems,
+} = require("../templates/javascript/deployments");
+const { currentDeployment, runInDeployment } = require("./deployment-scope");
 const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
@@ -298,6 +302,8 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
  * never hidden. `0` means revalidate every time (`no-cache`).
  */
 let STATIC_MAX_AGE = 3600;
+/** Assets that are code: never reused across releases without revalidating. */
+const UNVERSIONED_CODE_RE = /\.(?:m?js|cjs|css|json|wasm|html?)$/i;
 
 /**
  * `core.server.secure.examples` — sessions this deployment publishes as
@@ -307,6 +313,11 @@ let STATIC_MAX_AGE = 3600;
  * `server/node/examples.js`.
  */
 let PUBLISHED_EXAMPLES = {};
+
+/** `{deployments, defaultDeployment}` of the env, read at boot. See `resolveDeploymentId`. */
+let DEPLOYMENT_DEFS = {};
+/** Resolved deployment id for an (untrusted) requested name — cache keying only. */
+const resolveDeploymentId = (requested) => resolveDeployment(DEPLOYMENT_DEFS, requested).id;
 
 (function bootStorageConfig() {
     try {
@@ -396,6 +407,17 @@ let PUBLISHED_EXAMPLES = {};
 
         const examples = core?.CORE?.server?.secure?.examples || core?.CORE_SECURE?.examples;
         if (examples && typeof examples === "object") PUBLISHED_EXAMPLES = examples;
+
+        // Named deployments: the set is read here only to key the production
+        // core cache by the resolved id (dev re-reads the env every request and
+        // never caches). Problems are reported once instead of per request.
+        DEPLOYMENT_DEFS = {
+            deployments: core?.ENV?.deployments,
+            defaultDeployment: core?.ENV?.defaultDeployment,
+        };
+        for (const problem of listDeploymentProblems(core?.ENV)) logger.error?.(`[deployments] ${problem}`);
+        const ids = Object.keys(DEPLOYMENT_DEFS.deployments || {});
+        if (ids.length) logger.info?.(`[deployments] defined: ${ids.join(", ")}; default: ${core?.DEPLOYMENT?.id}`);
     } catch (e) {
         logger.warn?.('[storage] could not pre-read storage config; using defaults:', e?.message || e);
         setStorageConfig({});
@@ -435,8 +457,11 @@ const SESSION_MAX_ENTRIES = Math.max(100, Number(process.env.XOPAT_SESSION_MAX) 
 const sessionEvictionListeners = new Set();
 
 function onSessionEvicted(listener) {
-    sessionEvictionListeners.add(listener);
-    return () => sessionEvictionListeners.delete(listener);
+    // Eviction has no request, so the owner's deployment is the one it subscribed from.
+    const deployment = currentDeployment();
+    const bound = (id) => runInDeployment(deployment, () => listener(id));
+    sessionEvictionListeners.add(bound);
+    return () => sessionEvictionListeners.delete(bound);
 }
 
 function notifySessionEvicted(id) {
@@ -783,7 +808,9 @@ function normalizeLanguage(raw) {
 // change from silently becoming a leak again.
 const _productionCoreCache = SERVER_CACHE.create({
     name: "core:production-core",
-    maxEntries: 32,
+    // modes × languages × named deployments (keyed by resolved id, so bounded
+    // by the env, never by request input).
+    maxEntries: 128,
 });
 
 /**
@@ -792,35 +819,65 @@ const _productionCoreCache = SERVER_CACHE.create({
  * it, and printers track `_coreBundleEmitted` per page render. PLUGINS/MODULES
  * stay shared — request handlers treat them as read-only.
  */
-function _perRequestCoreView(master) {
+function _perRequestCoreView(master, requestedDeployment) {
     const view = Object.create(master);
     view._coreBundleEmitted = false;
     view.CORE = JSON.parse(JSON.stringify(master.CORE));
+    // The cache is keyed by the RESOLVED deployment, so several requested names
+    // (an unknown one, none at all) share an entry. Re-stamp the echo for this
+    // request — the client's mismatch re-POST loop guard reads it.
+    const served = view.CORE.deployment;
+    if (served) {
+        served.requested = requestedDeployment || null;
+        served.fellBack = !!requestedDeployment && requestedDeployment !== served.id;
+        view.DEPLOYMENT = served;
+    }
     return view;
 }
 
-const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly) => {
+/**
+ * The named deployment a request asks for (`server/templates/javascript/deployments.js`).
+ * Untrusted and only a name: the resolver accepts ids the operator defined and
+ * falls back otherwise. Page loads name it in the session (passed explicitly by
+ * `responseViewer`) or `?deployment=`; requests the viewer itself issues (RPC,
+ * proxy) carry `X-XOPAT-Deployment`, stamped by HttpClient.
+ */
+function requestedDeploymentOf(req, url) {
+    const header = req.headers['x-xopat-deployment'];
+    if (typeof header === "string" && header) return header;
+    const param = url?.searchParams?.get('deployment');
+    return param || null;
+}
+
+const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly, requestedDeployment=undefined) => {
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
+    let raw = req.url || "/";
+    if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
+    // use 'http', we don't care about the protocol
+    let url = null;
+    try { url = new URL(raw, `http://${req.headers.host}`); } catch (_) { /* malformed host: no params */ }
+
     let language = null;
-    if (!serverOnly) {
-        let raw = req.url || "/";
-        if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
-        // use 'http', we don't care about the protocol
-        const url = new URL(raw, `http://${req.headers.host}`);
+    if (!serverOnly && url) {
         // TODO: support req.headers['accept-language'] - somma separated list, setup.locale should support multiple fallbacks
         language = normalizeLanguage(url.searchParams.get('lang'));
     }
 
-    const cacheKey = `${serverOnly ? "s" : "c"}:${withPlugins ? "p" : "-"}:${language || ""}`;
+    const requested = normalizeRequestedDeployment(requestedDeployment ?? requestedDeploymentOf(req, url));
+    // Resolve the name against the env before keying the cache: an unknown name
+    // must share the default's entry, or arbitrary names grow it.
+    const deploymentId = resolveDeploymentId(requested);
+
+    const cacheKey = `${serverOnly ? "s" : "c"}:${withPlugins ? "p" : "-"}:${language || ""}:${deploymentId}`;
     const cached = _productionCoreCache.get(cacheKey);
-    if (cached) return _perRequestCoreView(cached);
+    if (cached) return _perRequestCoreView(cached, requested);
 
     const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key],
         !serverOnly, // secure only when not on server
-        { version: STARTUP_VERSION }
+        { version: STARTUP_VERSION, deployment: requested }
     );
 
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
@@ -845,7 +902,7 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serve
 
     if (core.CORE?.client?.production === true && !core.exception) {
         _productionCoreCache.set(cacheKey, core);
-        return _perRequestCoreView(core);
+        return _perRequestCoreView(core, requested);
     }
 
     return core;
@@ -1369,10 +1426,13 @@ async function responseStaticFile(req, res, target, urlObj) {
         headers["Cache-Control"] = "no-cache";
     } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
-    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE) {
+    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE || UNVERSIONED_CODE_RE.test(target.path)) {
         // Media: `no-store` would forbid keeping the partial responses a tile
         // decoder re-reads constantly. Dev: an edit must show on the next load.
-        // Either way revalidation against the ETag keeps it a cheap 304.
+        // Unversioned CODE (a sub-module reached by a relative `import` from a
+        // `?v=` entry): a max-age would let a new release's entry run against
+        // the previous release's sub-modules until the cache expired. Either
+        // way revalidation against the ETag keeps it a cheap 304.
         headers["Cache-Control"] = "no-cache";
     } else {
         headers["Cache-Control"] = `public, max-age=${STATIC_MAX_AGE}, stale-while-revalidate=86400`;
@@ -1529,7 +1589,7 @@ async function responseProxy(req, res, requestUrl, session) {
     // unknown-alias answer: which aliases exist is not a restricted session's
     // business. Unrestricted by default — see proxyAliasAllowedForSession.
     if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
-        || !proxyAliasAllowedForSession(session, alias)) {
+        || !proxyAliasAllowedForSession(session, alias, core.DEPLOYMENT?.id)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -1705,6 +1765,23 @@ async function responseProxy(req, res, requestUrl, session) {
     }
 }
 
+/**
+ * The deployment a viewer POST names: the session's own `deployment` field, else
+ * a top-level `deployment` form field. `undefined` lets the request fall through
+ * to `?deployment=` / the header. The session may arrive as a JSON string
+ * (form posts) — it is parsed here only to read one field.
+ */
+function requestedDeploymentOfPost(postData) {
+    let session = postData?.visualization ?? postData?.visualisation;
+    if (typeof session === "string") {
+        try { session = JSON.parse(session); } catch (_) { session = null; }
+    }
+    const fromSession = session && typeof session === "object" ? session.deployment : undefined;
+    if (typeof fromSession === "string" && fromSession) return fromSession;
+    if (typeof postData?.deployment === "string" && postData.deployment) return postData.deployment;
+    return undefined;
+}
+
 async function responseViewer(req, res, session) {
     // Parse the request url
     let rawData = req.method === 'POST' ? await rawReqToString(req) : undefined;
@@ -1758,7 +1835,7 @@ async function responseViewer(req, res, session) {
         logger.warn(e);
         postData = {};
     }
-    const core = initViewerCoreAndPlugins(req, res);
+    const core = initViewerCoreAndPlugins(req, res, false, true, requestedDeploymentOfPost(postData));
     if (!core) return;
 
     const replacer = function(match, p1) {
@@ -1790,7 +1867,7 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
 </script>
-`;
+${core.requireBrandingCss()}`;
 
             case "app": {
                 const dtsRegistry = getBakedDtsRegistry(core);

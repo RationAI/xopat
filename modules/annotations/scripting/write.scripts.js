@@ -7,7 +7,10 @@ ScriptingManager.registerExternalApi(
             dtypesSource: {
                 kind: "url",
                 value: APPLICATION_CONTEXT.url + "modules/annotations/scripting/common-types.d.ts"
-            }
+            },
+            assistant: {
+                intentPatterns: [/annotat|draw|outlin|\bmark\b|label/i],
+            },
         };
 
         constructor(namespace) {
@@ -409,7 +412,36 @@ ScriptingManager.registerExternalApi(
         updateAnnotation(ref, patch = {}) {
             const object = this._getAnnotationOrThrow(ref);
             const raw = this._clone(patch) || {};
+            const module = this._getModule();
             let touched = false;
+
+            // Through the setter, never a raw write: a script must not outrank the
+            // deployment's lock policy, and the IO guard is what enforces it. A
+            // refused change throws instead of reporting success. Release runs
+            // FIRST and lock LAST, so `{locked: false, label}` and
+            // `{locked: true, label}` both do what they say.
+            const applyLock = (value) => {
+                if (module.getAnnotationLockState?.(object)?.locked === value) return;
+                if (!this._getFabric().setAnnotationLocked?.(object, value)) {
+                    const reason = module.getAnnotationLockState?.(object)?.reason;
+                    throw new Error(`Annotation could not be ${value ? "locked" : "unlocked"}${reason ? `: ${reason}` : "."}`);
+                }
+                touched = true;
+            };
+            const wantLock = raw.locked === undefined ? undefined : !!raw.locked;
+            if (wantLock === false) applyLock(false);
+
+            // label/meta/author/created are direct writes that no IO guard sees, so
+            // the lock is checked here: a locked or readOnly annotation is not
+            // editable by a script any more than by the user.
+            const edits = ["presetID", "private", "label", "meta", "author", "created"]
+                .some(key => raw[key] !== undefined);
+            if (edits) {
+                const state = module.getAnnotationLockState?.(object);
+                if (state && !state.mutable) {
+                    throw new Error(`Annotation is locked${state.reason ? `: ${state.reason}` : "."}`);
+                }
+            }
 
             if (raw.presetID !== undefined) {
                 this.setAnnotationPreset(ref, raw.presetID);
@@ -418,13 +450,6 @@ ScriptingManager.registerExternalApi(
 
             if (raw.private !== undefined) {
                 this._getFabric().setAnnotationPrivate?.(object, !!raw.private);
-                touched = true;
-            }
-
-            // Through the setter, never a raw write: a script must not outrank the
-            // deployment's lock policy, and the IO guard is what enforces it.
-            if (raw.locked !== undefined) {
-                this._getFabric().setAnnotationLocked?.(object, !!raw.locked);
                 touched = true;
             }
 
@@ -447,6 +472,8 @@ ScriptingManager.registerExternalApi(
                 object.created = this._clone(raw.created);
                 touched = true;
             }
+
+            if (wantLock === true) applyLock(true);
 
             if (touched) {
                 this._touchAnnotation(object);

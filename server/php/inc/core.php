@@ -63,6 +63,81 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
 }
 
 /*
+ * Named deployments — mirror of server/templates/javascript/deployments.js.
+ * The operator defines `deployments` (+ optional `defaultDeployment`) in the
+ * env; the request only names an id. Unknown/malformed/absent names fall back
+ * to the default, then to the base ENV. A deployment may only override
+ * `core` (with `core.server` limited to `secure` and `auth`), `plugins` and
+ * `modules`. Auth-context consistency across deployments is validated by the
+ * Node server and `npm run up:check` (deployments.js listAuthContextConflicts).
+ */
+
+const XOPAT_BASE_DEPLOYMENT = "base";
+
+function xopat_is_deployment_id($id) {
+    return is_string($id) && $id !== XOPAT_BASE_DEPLOYMENT
+        && preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $id) === 1;
+}
+
+/** The (untrusted) deployment name the request asks for, or null. */
+function xopat_requested_deployment() {
+    $session = $_POST["visualization"] ?? ($_POST["visualisation"] ?? null);
+    if (is_string($session)) $session = json_decode($session, true);
+    if (is_object($session)) $session = (array)$session;
+    $name = is_array($session) ? ($session["deployment"] ?? null) : null;
+    if (!is_string($name) || $name === "") $name = $_POST["deployment"] ?? null;
+    if (!is_string($name) || $name === "") $name = $_SERVER["HTTP_X_XOPAT_DEPLOYMENT"] ?? null;
+    if (!is_string($name) || $name === "") $name = $_GET["deployment"] ?? null;
+    if (!is_string($name)) return null;
+    $name = substr(trim($name), 0, 64);
+    return $name === "" ? null : $name;
+}
+
+/**
+ * Merge the active deployment into $ENV (in place); returns the served
+ * {id, requested, fellBack} record.
+ */
+function xopat_apply_deployment(array &$ENV, $requested) {
+    $defs = (isset($ENV["deployments"]) && is_array($ENV["deployments"])) ? $ENV["deployments"] : [];
+    $usable = function ($id) use ($defs) {
+        return xopat_is_deployment_id($id) && isset($defs[$id]) && is_array($defs[$id]);
+    };
+    $id = XOPAT_BASE_DEPLOYMENT;
+    if ($requested !== null && $usable($requested)) $id = $requested;
+    else if ($usable($ENV["defaultDeployment"] ?? null)) $id = $ENV["defaultDeployment"];
+    else if (isset($ENV["defaultDeployment"])) {
+        error_log("[deployments] defaultDeployment does not name a defined deployment — using the base ENV");
+    }
+
+    if ($id !== XOPAT_BASE_DEPLOYMENT) {
+        foreach ($defs[$id] as $key => $value) {
+            if ($key === '$meta') continue;
+            if (!in_array($key, ["core", "plugins", "modules"], true) || !is_array($value)) {
+                error_log("[deployments] deployments.$id.$key is not allowed in a deployment — ignored");
+                continue;
+            }
+            if ($key === "core" && isset($value["server"])) {
+                $server = is_array($value["server"]) ? $value["server"] : [];
+                foreach (array_keys($server) as $serverKey) {
+                    if (!in_array($serverKey, ["secure", "auth"], true)) {
+                        error_log("[deployments] deployments.$id.core.server.$serverKey is process-wide boot config — ignored");
+                        unset($server[$serverKey]);
+                    }
+                }
+                $value["server"] = $server;
+            }
+            if (!isset($ENV[$key]) || !is_array($ENV[$key])) $ENV[$key] = [];
+            $ENV[$key] = array_merge_recursive_distinct($ENV[$key], $value);
+        }
+    }
+    return [
+        "id" => $id,
+        "requested" => $requested,
+        "fellBack" => $requested !== null && $requested !== $id,
+    ];
+}
+
+/*
  * Parse CORE Env
  */
 
@@ -210,6 +285,7 @@ function parse_env_config($data, $err) {
 global $ENV;
 
 $parse_exception = null;
+$__deployment = ["id" => XOPAT_BASE_DEPLOYMENT, "requested" => null, "fellBack" => false];
 try {
     $ENV = [];
     $env = getenv('XOPAT_ENV');
@@ -225,6 +301,7 @@ try {
     }
 
     if (!is_array($ENV["core"])) $ENV["core"] = [];
+    $__deployment = xopat_apply_deployment($ENV, xopat_requested_deployment());
     $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
 
 } catch (Exception $e) {
@@ -242,6 +319,8 @@ if (!$client || !isset($CORE["client"][$client])) {
     $C = &$CORE["client"][$client];
 }
 $CORE["client"] = $C;
+// Client-visible served deployment; definitions never ship (see core.js).
+$CORE["deployment"] = $__deployment;
 
 // Coerce the production flag to a real boolean at the client-flatten boundary,
 // so every downstream check is correct even if it arrived as a string (e.g.
@@ -413,6 +492,31 @@ function require_branding_head() {
     echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"$icon32\">\n";
     echo "    <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"$icon16\">\n";
     echo "    <link rel=\"mask-icon\" href=\"$mask\" color=\"$maskColor\">\n";
+}
+
+// Page-root-relative path or absolute http(s) URL. Rejects any other scheme,
+// protocol-relative `//host`, backslashes and whitespace. Mirrors
+// isSafeStylesheetUrl() in server/templates/javascript/core.js.
+function is_safe_stylesheet_url($href) {
+    if (!is_string($href) || $href === "" || preg_match('/[\s\\\\]/', $href)) return false;
+    if (preg_match('/^https?:\/\//i', $href)) return true;
+    return substr($href, 0, 2) !== "//" && !preg_match('/^[a-z][a-z0-9+.-]*:/i', $href);
+}
+
+// Deployment theme stylesheets from ENV core.setup.branding.css, emitted at
+// the end of the head block (after the core CSS) so overrides win by order.
+// Mirrors requireBrandingCss() in server/templates/javascript/core.js.
+function require_branding_css() {
+    global $CORE;
+    $list = (isset($CORE["setup"]["branding"]["css"]) && is_array($CORE["setup"]["branding"]["css"]))
+        ? $CORE["setup"]["branding"]["css"] : [];
+    $version = VERSION;
+    foreach ($list as $href) {
+        if (!is_safe_stylesheet_url($href)) continue;
+        $sep = strpos($href, "?") !== false ? "&" : "?";
+        $url = htmlspecialchars($href . $sep . "v=" . $version, ENT_QUOTES);
+        echo "    <link rel=\"stylesheet\" href=\"$url\">\n";
+    }
 }
 
 function require_lib($name) {

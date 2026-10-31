@@ -296,6 +296,12 @@ export function registerQuestionnaireScriptingApi(): void {
 
         static ScriptApiMetadata = {
             dtypesSource: { kind: "text", value: QUESTIONNAIRE_DTS },
+            assistant: {
+                // Without a hint the namespace reaches the full prompt tier only by FAILING
+                // first: asked for "a questionnaire + a recording", the model read
+                // `bindPageTour` from this name list and called it on `recorder`.
+                intentPatterns: [/question(n?aire|s)?|survey|\bform\b|quiz|exam\b|assessment|respondent|self[- ]test|teaching case/i],
+            },
         };
 
         constructor(namespace: string) {

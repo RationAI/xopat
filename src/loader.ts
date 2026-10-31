@@ -3895,6 +3895,14 @@ ${form}
             // allowlist and would drop an unknown key with a warning.
             data.__envKey = window.XOPAT_DEPLOYMENT_KEY || undefined;
 
+            // The named deployment this session actually ran under, so a shared
+            // link / export reopens the same one (server/templates/javascript/deployments.js).
+            // The served id, not the requested one: after a fallback the session
+            // describes what was really loaded.
+            const deploymentId = (APPLICATION_CONTEXT.env as any)?.deployment?.id;
+            if (typeof deploymentId === "string" && deploymentId !== "base") data.deployment = deploymentId;
+            else delete data.deployment;
+
             // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
             if (viewers.length <= 1) {

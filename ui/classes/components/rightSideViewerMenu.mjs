@@ -284,6 +284,42 @@ export class RightSideViewerMenu extends BaseComponent {
         return this.navigatorMenu;
     }
 
+    /**
+     * Snapshot of this viewer's side panels, for `AppBar.Catalog`.
+     * `anchorId` is the strip button that opens the panel (always rendered
+     * unless the panel is hidden); `bodyId` its content, present while open.
+     * @returns {Array<{id: string, title: string, open: boolean, hidden: boolean, anchorId: string, bodyId: string}>}
+     */
+    listTabs() {
+        return Object.values(this.menu.tabs || {}).map(tab => ({
+            id: tab.id,
+            title: typeof tab.title === "string" ? tab.title : tab.id,
+            open: tab._focused === true && !tab.hidden,
+            hidden: !!tab.hidden,
+            anchorId: `${this.menu.id}-b-opened-${tab.id}`,
+            bodyId: `${this.menu.id}-opendiv-${tab.id}`,
+        }));
+    }
+
+    /**
+     * Reveal (if the user hid it) and expand one side panel. Unlike `menu.focus`,
+     * this never toggles an already-open panel closed.
+     * @param {string} id tab id
+     * @returns {boolean} false for an unknown tab
+     */
+    openTab(id) {
+        const tab = this.menu.tabs?.[id];
+        if (!tab) return false;
+        if (tab.hidden) this.menu._revealTab(tab);
+        if (!tab._focused) this.menu._openTab(tab);
+        return true;
+    }
+
+    /** @param {string} id tab id @returns {boolean} */
+    closeTab(id) {
+        return this.menu.closeTab(id);
+    }
+
     append(title, titleHtml, html, id, pluginId) {
         this.menu.append(title, titleHtml, html, id, pluginId);
     }

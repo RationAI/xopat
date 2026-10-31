@@ -8,6 +8,11 @@
         "remember7Days": "7 days",
         "remember30Days": "30 days"
       },
+      "ui": {
+        "invokeTitle": "Allow the script to use the interface?",
+        "invokeDescription": "The script wants to trigger \"{{label}}\" for you, as if you clicked it.",
+        "invokeConfirm": "Allow"
+      },
       "visualization": {
         "critiqueSystem": "You are judging how well a scientific image visualization reads, not what the specimen is. Comment only on the rendering: contrast, dynamic range, colour choice, whether an overlay is distinguishable from the image beneath it, and whether structure is lost to saturation or washed out. Do not diagnose, do not name tissue types, and do not speculate about the specimen. Answer in at most four short sentences.",
         "critiquePrompt": "Describe what is wrong with how this view is rendered and what would make the data easier to read.",
@@ -308,6 +313,7 @@
       "slideDownloadEmpty": "The server returned an empty file.",
       "slideDownloadFailed": "Could not download the slide: {{error}}",
       "urlInvalid": "Invalid link",
+      "deploymentFallback": "The requested deployment is not available on this server. The session was opened under '{{id}}' instead, so some slides, layers or tools may differ.",
       "sessionOtherDeployment": "This session was created on a different deployment configuration. It was opened anyway, but some slides or layers may not load here. Clear the address bar to start a fresh session.",
       "viewportCopied": "Viewport position copied — paste the shortcut in another viewer to jump there.",
       "clipboardBlocked": "Clipboard access is blocked by the browser.",

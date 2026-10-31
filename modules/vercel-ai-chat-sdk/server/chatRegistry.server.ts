@@ -1154,11 +1154,11 @@ interface ChatRegistryState {
     modelCapabilities: XoBoundedCache<ModelCapabilities>;
     evictionBound: boolean;
     unownedPurgeDone: boolean;
+    /** Refs already warned about, so an ambiguous config logs once rather than per inference. */
+    warnedRefs: Set<string>;
 }
 
 const REGISTRY_STATE_KEY = '__XOPAT_CHAT_SERVER_STATE__';
-/** Pre-state-bag global. Harvested once, then removed. */
-const LEGACY_REGISTRY_KEY = '__XOPAT_CHAT_SERVER_REGISTRY__';
 
 function createRegistryState(): ChatRegistryState {
     const storage = storageOrShim();
@@ -1187,48 +1187,13 @@ function createRegistryState(): ChatRegistryState {
         }) as any,
         evictionBound: false,
         unownedPurgeDone: false,
+        warnedRefs: new Set(),
     };
 }
 
-/**
- * Carry state over from a pre-state-bag registry instance left on `globalThis` by
- * an older build. Best-effort and never fatal: a shape we don't recognise is
- * simply dropped, because a cold registry is recoverable (plugins re-register
- * their managed providers at boot) while a throw here is not.
- */
-function adoptLegacyRegistry(state: ChatRegistryState): void {
-    const g = globalThis as any;
-    const legacy = g[LEGACY_REGISTRY_KEY];
-    if (!legacy) return;
-    delete g[LEGACY_REGISTRY_KEY];
-    let adopted = 0;
-    // Plain maps: adopt the container wholesale.
-    for (const key of [
-        'providerTypes', 'providerAdapters', 'providerInstances', 'providerSecrets',
-    ] as const) {
-        const value = legacy[key];
-        if (value instanceof Map && value.size) { (state as any)[key] = value; adopted += value.size; }
-    }
-    // Bounded caches: copy the ENTRIES in rather than adopting the old Map.
-    // Taking the container would silently reinstate the unbounded map this
-    // change exists to remove.
-    for (const key of ['personalities', 'sessionPrincipal', 'modelCapabilities'] as const) {
-        const value = legacy[key];
-        if (!(value instanceof Map) || !value.size) continue;
-        const target = (state as any)[key] as XoBoundedCache;
-        for (const [k, v] of value) target.set(String(k), v);
-        adopted += value.size;
-    }
-    for (const key of ['sessionStore', 'userSecretsStore'] as const) {
-        const value = legacy[key];
-        if (value && typeof value === 'object') (state as any)[key] = value;
-    }
-    chatLog().warn(`adopted ${adopted} entries from a pre-reload chat registry instance; ` +
-        `state now survives hot reloads independently of the class.`);
-}
-
 class ChatServerRegistry {
-    private static _instance: ChatServerRegistry | undefined;
+    /** Keyed by state, not a single slot: core hands out one state per named deployment. */
+    private static _instances = new WeakMap<ChatRegistryState, ChatServerRegistry>();
 
     /** The reload-surviving data. Identity of this object is what binds an instance to its state. */
     readonly state: ChatRegistryState;
@@ -1251,20 +1216,17 @@ class ChatServerRegistry {
 
     static instance(): ChatServerRegistry {
         const g = globalThis as any;
-        let state: ChatRegistryState = g[REGISTRY_STATE_KEY];
-        if (!state) {
-            state = g[REGISTRY_STATE_KEY] = createRegistryState();
-            adoptLegacyRegistry(state);
-        }
+        const state: ChatRegistryState = xopatServer()?.state
+            ? xopatServer().state(OWNER_UID, createRegistryState)
+            : (g[REGISTRY_STATE_KEY] ??= createRegistryState());
 
-        // `_instance` is a static on the CURRENT class, so a hot reload resets it
-        // to undefined and we rebuild around the surviving state. We only ever
-        // call methods on an instance this class constructed.
-        if (!this._instance || this._instance.state !== state) {
-            this._instance = new ChatServerRegistry(state);
-        }
-        this._instance.bindSessionEviction();
-        return this._instance;
+        // `_instances` is a static on the CURRENT class, so a hot reload resets it and
+        // we rebuild around the surviving state. We only ever call methods on an
+        // instance this class constructed.
+        let instance = this._instances.get(state);
+        if (!instance) this._instances.set(state, instance = new ChatServerRegistry(state));
+        instance.bindSessionEviction();
+        return instance;
     }
 
     registerAdapter(adapter: ChatProviderAdapter): void {
@@ -1611,7 +1573,7 @@ class ChatServerRegistry {
      */
     async getProviderRuntime(providerId: string, opts: { ctx: any; userScope?: string | null }): Promise<{ type: ChatProviderTypeRecord; instance: ChatProviderInstanceRecord; config: Record<string, unknown>; secrets: Record<string, unknown> }> {
         const stored = this.providerInstances.get(providerId);
-        if (!stored) throw new Error(`Unknown provider '${providerId}'.`);
+        if (!stored) throw new ChatProviderAccessError(`Unknown provider '${providerId}'.`, CHAT_ERR_UNKNOWN_PROVIDER);
         assertProviderRead(opts?.ctx, stored);
         const type = this.getProviderType(stored.typeId);
         if (!type) throw new Error(`Unknown provider type '${stored.typeId}'.`);
@@ -1649,8 +1611,7 @@ class ChatServerRegistry {
         };
     }
 
-    /** Refs already warned about, so an ambiguous config logs once rather than per inference. */
-    private warnedRefs = new Set<string>();
+    private get warnedRefs() { return this.state.warnedRefs; }
 
     /**
      * Resolve a provider REFERENCE (instance id / managedKey / plugin id / type id) to a single

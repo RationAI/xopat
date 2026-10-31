@@ -157,7 +157,8 @@ declare interface Window {
 }
 
 /**
- * The two headers that name this browser's xOpat session to our own server.
+ * The headers that name this browser's xOpat session (and served deployment)
+ * to our own server.
  *
  * `X-XOPAT-CSRF` is the long-standing one. `X-XOPAT-Session` exists because a
  * viewer embedded in a third-party page may have **no cookie jar at all** —
@@ -173,6 +174,10 @@ function xopatSessionHeaders(): Record<string, string> {
     if (typeof csrf === "string" && csrf) out["X-XOPAT-CSRF"] = csrf;
     const sessionId = window?.XOPAT_SESSION_ID;
     if (typeof sessionId === "string" && sessionId) out["X-XOPAT-Session"] = sessionId;
+    // Named deployment the page was served under: the proxy resolves its
+    // (per-deployment) `core.server.secure` against the same one.
+    const deploymentId = (window as any)?.APPLICATION_CONTEXT?.env?.deployment?.id;
+    if (typeof deploymentId === "string" && deploymentId) out["X-XOPAT-Deployment"] = deploymentId;
     return out;
 }
 

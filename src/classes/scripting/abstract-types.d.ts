@@ -103,7 +103,37 @@ export type NamespaceSchema<TApi extends ScriptApiObject = ScriptApiObject> = {
     tsSignature?: Partial<Record<MethodKeys<TApi>, string>>;
     tsDeclaration?: Partial<Record<MethodKeys<TApi>, string>>;
     namespaceTsDeclaration?: string;
+    /** Normalized assistant hints (see ScriptApiMetadata.assistant). */
+    assistant?: ScriptApiAssistantManifest;
 } & Partial<Record<MethodKeys<TApi>, boolean>>;
+
+/**
+ * What a namespace tells an assistant (LLM) about itself, beyond its signatures.
+ * Declared on the namespace (`ScriptApiMetadata.assistant`) so the namespace is
+ * self-contained: a consumer such as the chat module renders these generically and
+ * never hardcodes per-namespace knowledge.
+ */
+export type ScriptApiAssistantHints = {
+    /**
+     * Keyword routing: user text matching any pattern makes the consumer document this
+     * namespace in full up front. Matched case-insensitively; `g`/`y` flags are dropped.
+     * Ignored (stripped from the manifest) for `sensitive` namespaces.
+     */
+    intentPatterns?: RegExp[];
+    /** `"full"` documents the namespace in full on every step; default `"compact"`. */
+    promptTier?: "full" | "compact";
+    /** Short block shown whenever the namespace is allowed, whatever its tier. */
+    framing?: string;
+    /** Workflow guidance shown only where the namespace is documented in full. */
+    guidance?: string;
+    /** One-line usage examples (plain JavaScript against the scripting API). */
+    examples?: string[];
+};
+
+/** JSON form of {@link ScriptApiAssistantHints} as carried by the manifest. */
+export type ScriptApiAssistantManifest = Omit<ScriptApiAssistantHints, "intentPatterns"> & {
+    intentPatterns?: Array<{ source: string; flags: string }>;
+};
 
 export type ScriptApiNamespace = Record<string, AnyFn>;
 export type ScriptApiNamespaces = Record<string, ScriptApiNamespace>;
@@ -241,6 +271,8 @@ export interface AllowedScriptApiManifest {
         /** Namespace exposes identifying / patient-sensitive data (see NamespaceSchema.sensitive). */
         sensitive?: boolean;
         tsDeclaration?: string;
+        /** Assistant hints declared by the namespace (see ScriptApiMetadata.assistant). */
+        assistant?: ScriptApiAssistantManifest;
         methods: Array<{
             name: string;
             description?: string;
@@ -346,6 +378,8 @@ export interface ScriptApiMetadata<TApi extends ScriptApiObject = ScriptApiObjec
     tsSignature?: Partial<Record<MethodKeys<TApi>, string>>;
     tsDeclaration?: Partial<Record<MethodKeys<TApi>, string>>;
     dtypesSource?: DtypesSource;
+    /** Assistant-facing hints: intent routing, prompt tier, guidance, examples. */
+    assistant?: ScriptApiAssistantHints;
 }
 
 export interface ScriptManagerStatic<TNamespaces extends ScriptApiNamespaces = ScriptApiNamespaces> {

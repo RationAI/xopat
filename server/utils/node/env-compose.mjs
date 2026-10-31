@@ -37,8 +37,13 @@
  * `test/harness/env-scratch.mjs` (the Playwright deployment matrix).
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { parse } from "comment-json";
+
+// The server's own deployment validator — one definition of what a deployment
+// may carry, so `up:check` refuses exactly what the server would ignore.
+const { listDeploymentProblems } = createRequire(import.meta.url)("../../templates/javascript/deployments.js");
 
 /* ------------------------------------------------------------------ paths */
 
@@ -420,19 +425,27 @@ export function composeLayers(layers) {
     // silently drops the rest, so a fragment writing under the wrong client key
     // produces no conflict yet no effect either.
     const active = env?.core?.active_client;
+    // Named deployments may switch `active_client`; a client block one of them
+    // selects is live, not discarded.
+    const selectable = new Set([active]);
+    for (const def of Object.values(isPlainObject(env?.deployments) ? env.deployments : {})) {
+        const sel = def?.core?.active_client;
+        if (typeof sel === "string") selectable.add(sel);
+    }
     const clients = Object.keys(env?.core?.client ?? {});
-    if (active && clients.length > 1) {
+    const discarded = clients.filter((c) => !selectable.has(c));
+    if (active && discarded.length) {
         warnings.push({
             kind: "inactive-client",
             message: `core.active_client is "${active}" but core.client also defines ${
-                clients.filter((c) => c !== active).map((c) => `"${c}"`).join(", ")
+                discarded.map((c) => `"${c}"`).join(", ")
             } — the server discards those.`,
         });
     }
     if (active) {
         for (const [p, { layer }] of leaves) {
             const m = /^core\.client\.([^.]+)\./.exec(p);
-            if (m && m[1] !== active) {
+            if (m && !selectable.has(m[1])) {
                 warnings.push({
                     kind: "inactive-client-write",
                     message: `${layer.id} writes ${p}, but core.active_client is "${active}" — it has no effect.`,
@@ -446,6 +459,96 @@ export function composeLayers(layers) {
     for (const [p, { layer }] of [...leaves].sort(([a], [b]) => a.localeCompare(b))) provenance[p] = layer.id;
 
     return { env, provenance, conflicts, warnings, layers };
+}
+
+/* ------------------------------------------------------------- deployments */
+
+/**
+ * Expand `deployments.<id>.$layers` in a composed ENV (in place).
+ *
+ * A named deployment (server/templates/javascript/deployments.js) is an
+ * env-shaped overlay; `$layers` lets it be built from the same fragments and
+ * presets as a whole deployment — `"$layers": ["data/dicomweb-idc"]` — instead
+ * of hand-copying their blocks. Each deployment is composed on its own (full
+ * conflict detection among ITS layers, paths reported under
+ * `deployments.<id>.`) and its inline keys go on top as the override. It is
+ * not checked against the base: overriding the base is what it is for.
+ *
+ * Then validated with the server's own rules; problems are conflicts (fatal in
+ * `up:check`), because the server would silently ignore those keys.
+ */
+export function composeDeployments(env, opts = {}) {
+    const conflicts = [], warnings = [], defaults = {}, presetEnv = {}, unresolvableVars = [];
+    const defs = env?.deployments;
+    if (isPlainObject(defs)) {
+        for (const [id, def] of Object.entries(defs)) {
+            if (!isPlainObject(def) || def[LAYERS_KEY] === undefined) continue;
+            const { [LAYERS_KEY]: selectors, ...inline } = def;
+            const expanded = expandSelectors(asList(selectors), opts);
+            const result = composeLayers(expanded.layers);
+            const prefix = (c) => (c.path ? { ...c, path: `deployments.${id}.${c.path}` } : c);
+            conflicts.push(...result.conflicts.map(prefix));
+            warnings.push(...result.warnings.map((w) => ({ ...w, message: `deployments.${id}: ${w.message}` })));
+            Object.assign(defaults, expanded.defaults);
+            for (const [k, v] of Object.entries(expanded.env)) {
+                if (k in presetEnv && presetEnv[k] !== v) {
+                    warnings.push({ kind: "deployment-process-env", message:
+                        `deployments.${id} needs process env ${k}=${v}, another deployment ${presetEnv[k]} — `
+                        + "process env is shared by every deployment; set it once." });
+                }
+                presetEnv[k] = v;
+            }
+            unresolvableVars.push(...expanded.unresolvableVars);
+            hoistBootServerConfig(env, id, result.env, conflicts);
+            // Fragments are whole-ENV shaped; a deployment only takes the parts
+            // it may carry, the validator below reports the rest.
+            defs[id] = mergeDeep(result.env, inline);
+        }
+    }
+    for (const message of listDeploymentProblems(env)) conflicts.push({ kind: "deployment", message });
+    return { conflicts, warnings, defaults, presetEnv, unresolvableVars };
+}
+
+/**
+ * Fragments a deployment pulls in may carry boot-only server config — a data
+ * fragment declaring the `staticRoots` / `media` its slides are served from.
+ * That config is process-wide and cannot vary per deployment, but it is still
+ * needed by it, so it moves to the base: arrays are unioned, an equal value is
+ * fine, a disagreement is a conflict. Only `$layers` content is hoisted; an
+ * inline `core.server.<key>` stays an error, because writing it there states a
+ * per-deployment intent the server cannot honour.
+ */
+function hoistBootServerConfig(env, id, composed, conflicts) {
+    const server = composed?.core?.server;
+    if (!isPlainObject(server)) return;
+    for (const key of Object.keys(server)) {
+        if (key === "secure" || key === "auth") continue;   // per-deployment, read per request
+        const value = server[key];
+        delete server[key];
+        env.core ??= {};
+        env.core.server ??= {};
+        const current = env.core.server[key];
+        if (current === undefined) {
+            env.core.server[key] = clone(value);
+        } else if (Array.isArray(current) && Array.isArray(value)) {
+            for (const item of value) {
+                if (!current.some((c) => deepEqual(c, item))) current.push(clone(item));
+            }
+        } else if (isPlainObject(current) && isPlainObject(value)) {
+            const merged = mergeDeep(current, value);
+            if (!deepEqual(mergeDeep(value, current), merged)) {
+                conflicts.push({ kind: "deployment", message:
+                    `deployments.${id} layers need core.server.${key} ${brief(value)}, which disagrees with the `
+                    + `process-wide ${brief(current)} — boot config is shared by every deployment.` });
+            }
+            env.core.server[key] = merged;
+        } else if (!deepEqual(current, value)) {
+            conflicts.push({ kind: "deployment", message:
+                `deployments.${id} layers need core.server.${key} ${brief(value)}, but it is ${brief(current)} `
+                + "process-wide — boot config is shared by every deployment." });
+        }
+    }
+    if (!Object.keys(server).length) delete composed.core.server;
 }
 
 /** Selector list → composed ENV, in one call. */
@@ -464,7 +567,16 @@ export function composeEnv(selectors, opts = {}) {
         layers.push({ id: "--set", kind: "override", file: null, role: "override", dimension: null, meta: {}, data });
     }
     const result = composeLayers(layers);
-    return { ...result, defaults, presetEnv, unresolvableVars };
+    const deployments = composeDeployments(result.env, opts);
+    return {
+        ...result,
+        conflicts: [...result.conflicts, ...deployments.conflicts],
+        warnings: [...result.warnings, ...deployments.warnings],
+        // The base composition wins a process-env default both sides declare.
+        defaults: { ...deployments.defaults, ...defaults },
+        presetEnv: { ...deployments.presetEnv, ...presetEnv },
+        unresolvableVars: [...unresolvableVars, ...deployments.unresolvableVars],
+    };
 }
 
 /**
@@ -482,6 +594,7 @@ export function loadEnvFile(repoRelativePath, seen) {
     const { layers } = expandSelectors([repoRelativePath], { allowMissingFile: true });
     let env = {};
     for (const layer of layers) env = mergeDeep(env, layer.data);
+    composeDeployments(env);
     return env;
 }
 
@@ -652,6 +765,9 @@ export function formatConflicts(conflicts) {
                 + "  in proxy mode baseURL is the path AFTER /proxy/<alias>/ — the upstream origin belongs"
                 + "\n  to core.server.secure.proxies.<alias>.baseUrl. Clear it (\"baseURL\": null in the"
                 + "\n  preset override) or make it relative.";
+        }
+        if (c.kind === "deployment") {
+            return `CONFLICT  deployments  ${c.message}`;
         }
         if (c.kind === "declared") {
             return `CONFLICT  declared incompatible\n  ${c.parties.map((p) => p.layer).join(" ↔ ")}`;

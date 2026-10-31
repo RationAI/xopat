@@ -1,6 +1,6 @@
 import type {
     AllowedScriptApiManifest, AnyFn, ApiCallMessage, ApiResponseMessage, ContextAwareHostAction,
-    ExecuteScriptOptions, ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiMetadata,
+    ExecuteScriptOptions, ExternalScriptApiRegistration, MethodKeys, NamespaceSchema, NamespacesState, ParsedDts, ScriptApiAssistantHints, ScriptApiAssistantManifest, ScriptApiMetadata,
     ScriptApiNamespaces, ScriptApiObject, ScriptManagerStatic, ScriptMethodManifestEntry, ScriptNamespaceConsentEntry,
     ScriptingContextState, StoredResultSlice, ViewerActionMap, WorkerRecord
 } from "./scripting/abstract-types";
@@ -11,6 +11,7 @@ import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
+import { XOpatUiScriptApi } from "./scripting/ui-api";
 
 
 /**
@@ -63,7 +64,33 @@ const WORKER_SCHEMA_META_KEYS = new Set([
     "name",
     "description",
     "sensitive",
+    "assistant",
 ]);
+
+/**
+ * JSON form of a namespace's `ScriptApiMetadata.assistant`: patterns become
+ * `{source, flags}` (the manifest is hashed and shipped to the server), stateful
+ * `g`/`y` flags are dropped, and a sensitive namespace loses its intent patterns —
+ * a keyword must never pull its docs into a prompt.
+ */
+function normalizeAssistantHints(hints: ScriptApiAssistantHints | undefined, sensitive: boolean): ScriptApiAssistantManifest | undefined {
+    if (!hints || typeof hints !== "object") return undefined;
+    const out: ScriptApiAssistantManifest = {};
+    if (!sensitive && Array.isArray(hints.intentPatterns)) {
+        const patterns = hints.intentPatterns
+            .filter((re): re is RegExp => re instanceof RegExp)
+            .map(re => ({ source: re.source, flags: [...new Set(re.flags.replace(/[gy]/g, "") + "i")].join("") }));
+        if (patterns.length) out.intentPatterns = patterns;
+    }
+    if (hints.promptTier === "full" || hints.promptTier === "compact") out.promptTier = hints.promptTier;
+    if (typeof hints.framing === "string" && hints.framing.trim()) out.framing = hints.framing;
+    if (typeof hints.guidance === "string" && hints.guidance.trim()) out.guidance = hints.guidance;
+    if (Array.isArray(hints.examples)) {
+        const examples = hints.examples.filter((e): e is string => typeof e === "string" && !!e.trim());
+        if (examples.length) out.examples = examples;
+    }
+    return Object.keys(out).length ? out : undefined;
+}
 
 // Cache the debug flag to avoid an APPLICATION_CONTEXT.getOption + try/catch
 // per worker dispatch. Refreshed on the `option-change` broadcast and
@@ -1819,6 +1846,7 @@ export class ScriptingManager<
                 new XOpatViewerScriptApi("viewer"),
                 new XOpatVisualizationScriptApi("visualization"),
                 new XOpatPatientScriptApi("patient"),
+                new XOpatUiScriptApi("ui"),
             ];
 
             // Warm the declaration cache up front so the serial ingest below —
@@ -1988,6 +2016,7 @@ export class ScriptingManager<
                 namespaceTsDeclaration:
                     metadata?.namespaceTsDeclaration ||
                     parsedDts?.namespaceTsDeclaration,
+                assistant: normalizeAssistantHints(metadata?.assistant, !!schema.sensitive),
             };
             this._apiInstances.set(ns, apiInstance);
             console.log(`Registered API namespace '${ns}'.`, this.namespaces[ns]);
@@ -2771,6 +2800,7 @@ export class ScriptingManager<
                 description: schema.description,
                 sensitive: !!schema.sensitive,
                 tsDeclaration: schema.namespaceTsDeclaration,
+                ...(schema.assistant ? { assistant: schema.assistant } : {}),
                 methods,
             });
         }

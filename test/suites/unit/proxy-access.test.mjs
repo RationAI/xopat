@@ -116,3 +116,28 @@ test("@security only an EXPLICIT opt-out unlocks a credential-bearing alias", as
     expect(checkProxyCredentialGate("github", credentialed, { proxyCredentialsRequireAuth: true }).ok).toBe(false);
     expect(checkProxyCredentialGate("github", credentialed, undefined).ok).toBe(false);
 });
+
+test("@security a login narrowing under one named deployment does not reach another", async () => {
+    const { proxyAliasAllowedForSession, setSessionAllowedProxies } = await load();
+    // One session cookie serves every deployment on the origin; alias names are
+    // resolved against each deployment's own `proxies`.
+    const session = { allowedProxies: "ALL" };
+    setSessionAllowedProxies(session, ["cerit"], "dicom");
+    expect(proxyAliasAllowedForSession(session, "mlflow", "dicom")).toBe(false);
+    expect(proxyAliasAllowedForSession(session, "cerit", "dicom")).toBe(true);
+    expect(proxyAliasAllowedForSession(session, "mlflow", "mlflow")).toBe(true);
+    expect(proxyAliasAllowedForSession(session, "mlflow")).toBe(true);
+
+    // A deployment-less narrowing applies everywhere a specific one is absent...
+    const legacy = { allowedProxies: ["cerit"] };
+    setSessionAllowedProxies(legacy, "NONE", "dicom");
+    expect(proxyAliasAllowedForSession(legacy, "cerit", "dicom")).toBe(false);
+    expect(proxyAliasAllowedForSession(legacy, "cerit", "other")).toBe(true);
+    expect(proxyAliasAllowedForSession(legacy, "mlflow", "other")).toBe(false);
+    // ...and replaces every per-deployment value.
+    setSessionAllowedProxies(legacy, "NONE");
+    expect(proxyAliasAllowedForSession(legacy, "cerit", "other")).toBe(false);
+
+    // A malformed per-deployment map still denies.
+    expect(proxyAliasAllowedForSession({ allowedProxies: { byDeployment: [] } }, "cerit", "x")).toBe(false);
+});
