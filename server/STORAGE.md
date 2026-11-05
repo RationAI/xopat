@@ -12,6 +12,33 @@ understands the other.
 
 ---
 
+## Named deployments
+
+One env can serve several named deployments from one process, each with its own
+`core.server.secure`. An element does nothing about this and never reads
+`ctx.deployment`: core runs every RPC method and server route inside the
+request's deployment, and these surfaces resolve against it on each access, even
+when the handle was opened at module load.
+
+- `XOPAT_SERVER.state(ownerUid, factory)`: one long-lived object per deployment,
+  for plain module state such as registries. It also survives a hot reload of the
+  element. Use it instead of a module-level variable or a `globalThis` key;
+  those are shared by every deployment.
+- `storage`: each deployment has its own namespaces. `base` keeps the plain name,
+  a named deployment uses `<namespace>.dp-<id>`. Bindings and retention apply to
+  the unsuffixed capability, so one binding covers all deployments.
+- `cache.create`: each deployment has its own cache, with the full bound.
+  `crossDeployment: true` makes it one cache, only for state that follows a login
+  rather than a deployment (a replay guard, a login handoff), because login state
+  is shared per auth context id.
+- `getStaticModuleConfig(id)` / `getStaticPluginConfig(id)`: the running deployment's
+  config.
+
+With no request in scope (boot, timers) the running deployment is the default one.
+A `XOPAT_SERVER.onSessionEvicted` listener runs in the deployment it subscribed from.
+Changing an env from no `deployments` to a named `defaultDeployment` therefore leaves
+the data under `base`.
+
 ## Which one do I want?
 
 One question decides it: **can the value be serialized?**

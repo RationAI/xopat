@@ -81,11 +81,16 @@ export function resolveDeploymentKey(
 ): string {
     const env = ENV || {};
     const client = env.client || {};
+    // Named deployment served by this page (server/templates/javascript/deployments.js).
+    // One env file serving several deployments must not share caches between
+    // them, even under a pinned key — each one is a different configuration.
+    const deploymentId = typeof env.deployment?.id === "string" ? env.deployment.id : "base";
+    const suffix = deploymentId === "base" ? "" : `.dp-${deploymentId}`;
 
     // Operator override. `sessionCacheKey` is the historical spelling, kept
     // working for deployments that already set it.
     const explicit = client.cacheKey ?? client.sessionCacheKey ?? env.setup?.sessionCacheKey;
-    if (typeof explicit === "string" && explicit) return sanitize(explicit);
+    if (typeof explicit === "string" && explicit) return sanitize(explicit + suffix);
 
     return "v3-" + fnv1a(stableStringify({
         domain: client.domain || "",
@@ -106,7 +111,7 @@ export function resolveDeploymentKey(
         // the deployment.
         plugins: enabledIds(PLUGINS),
         modules: enabledIds(MODULES),
-    }));
+    })) + suffix;
 }
 
 /**

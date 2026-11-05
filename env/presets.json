@@ -19,6 +19,17 @@
       "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off"]
     },
 
+    "multi-deployment": {
+      /**
+       * One server, several named deployments: the synthetic slide by default,
+       * `?deployment=webtiff` / `geotiff` (or a session `"deployment"`) switch
+       * to the in-browser TIFF readers. See env/README.md → "Multiple
+       * deployments in one env".
+       */
+      "description": "Synthetic slide by default; session-selectable webtiff / geotiff deployments",
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off", "demo/multi-deployment"]
+    },
+
     "synthetic": {
       /**
        * The only deployment with NO external dependency at all — no image

@@ -1450,6 +1450,78 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         };
     }
 
+    /********************* VISUAL POLICY **********************/
+
+    /**
+     * The common visuals one annotation renders with, after owner policies.
+     *
+     * Allocates the copy `updateRendering` is allowed to modify; a registered policy
+     * adds one call per annotation per visual refresh.
+     *
+     * @param {fabric.Object} object
+     * @return {OSDAnnotations.CommonAnnotationVisuals} own copy, safe to modify
+     */
+    resolveAnnotationVisuals(object) {
+        const visuals = {...this.presets.commonAnnotationVisuals};
+        const policies = this._visualPolicies;
+        if (!policies?.size) return visuals;
+        for (const [ownerId, policy] of policies) {
+            try {
+                Object.assign(visuals, policy(object, visuals));
+            } catch (e) {
+                console.warn(`[annotations] visual policy of '${ownerId}' threw:`, e);
+            }
+        }
+        return visuals;
+    }
+
+    /**
+     * Style annotations by a state only their owner knows, owner-scoped.
+     *
+     * Why this rather than writing `fill` / `stroke` on the object: those are *derived*
+     * from the preset in {@link OSDAnnotations.FabricWrapper#updateSingleAnnotationVisuals},
+     * so a directly written value is silently overwritten by the next selection change,
+     * preset change, import or change of the common visuals. A policy is the only way to
+     * state a persistent rule — the same reason {@link registerLockPolicy} exists.
+     *
+     * `policy(object, visualsSoFar)` returns a **partial** override of the common visuals
+     * (`modeOutline`, `stroke`, `opacity`, `originalStrokeWidth`), or nothing for "no
+     * opinion". `dashPattern` is an extra key: dash lengths in multiples of the stroke
+     * width, so a pattern keeps its look at every zoom. Policies compose in registration
+     * order; throwing is treated as no opinion. Must be cheap and side-effect free.
+     * The result is not exported: the owner derives it again after an import.
+     *
+     * @example <caption>A region being processed is a dashed outline</caption>
+     * annotations.registerVisualPolicy(this.id, o =>
+     *     o.processing ? { modeOutline: true, opacity: 1, dashPattern: [4, 3] } : undefined);
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object, OSDAnnotations.CommonAnnotationVisuals): (Object|undefined)} policy
+     * @return {function(): void} dispose — unregisters and refreshes the visuals
+     */
+    registerVisualPolicy(ownerId, policy) {
+        if (typeof policy !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._visualPolicies = this._visualPolicies || new Map();
+        this._visualPolicies.set(id, policy);
+        this.reapplyVisuals();
+        return () => {
+            if (this._visualPolicies?.get(id) === policy) {
+                this._visualPolicies.delete(id);
+                this.reapplyVisuals();
+            }
+        };
+    }
+
+    /**
+     * Refresh annotation visuals on every viewer. For a policy owner whose state changed
+     * on many objects; for one object, call
+     * {@link OSDAnnotations.FabricWrapper#updateSingleAnnotationVisuals}.
+     */
+    reapplyVisuals() {
+        for (const instance of OSDAnnotations.FabricWrapper.instances()) instance.updateAnnotationVisuals();
+    }
+
     /********************* PRIVACY **********************/
 
     /**
@@ -1965,6 +2037,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             }
 			if (this.isHelperAnnotation) return;
 			this._factory()?.onZoom(this, zoom, _realZoom);
+			if (this.dashPattern) this.applyDashPattern(this.dashPattern);
+		}
+		/**
+		 * Dash the stroke in multiples of its width, see `registerVisualPolicy`.
+		 * @param {number[]} [pattern] nothing removes the dash
+		 */
+		fabric.Object.prototype.applyDashPattern = function(pattern) {
+			this.dashPattern = pattern;
+			this.set("strokeDashArray", pattern ? pattern.map(length => length * this.strokeWidth) : null);
 		}
 
 		// fabric's stock calcOCoords composes a [1/vpt[0],0,0,1/vpt[3],0,0]

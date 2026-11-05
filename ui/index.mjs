@@ -79,6 +79,7 @@ import { AppBar } from "./services/appBar.mjs";
 import { MobileBottomBar } from "./services/mobileBottomBar.mjs";
 import { FloatingManager } from "./services/floatingManager.mjs";
 import { FullscreenMenus } from "./services/fullscreenMenus.mjs";
+import { ViewerControls } from "./services/viewerControls.mjs";
 
 // MIXINS
 import { VisibilityManager } from "./classes/mixins/visibilityManager.mjs";
@@ -124,6 +125,13 @@ class ServiceContainer {
             this._fullscreenMenus = new FullscreenMenus();
         }
         return this._fullscreenMenus;
+    }
+
+    get ViewerControls() {
+        if (!this._viewerControls) {
+            this._viewerControls = new ViewerControls();
+        }
+        return this._viewerControls;
     }
 }
 

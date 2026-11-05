@@ -94,6 +94,43 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
         return configuration;
     }
 
+    /**
+     * Re-submit a payload to this page as a form POST. Each field value is a
+     * string; objects are JSON-encoded (the server JSON-decodes form values).
+     */
+    function selfPost(fields, url) {
+        const form = document.createElement("form");
+        form.method = "POST";
+        for (const name of Object.keys(fields)) {
+            const value = fields[name];
+            if (value === undefined || value === null) continue;
+            const node = document.createElement("input");
+            node.type = "hidden";
+            node.name = name;
+            node.value = typeof value === "string" ? value : JSON.stringify(value);
+            form.appendChild(node);
+        }
+        form.style.visibility = 'hidden';
+        document.body.appendChild(form);
+        url.hash = "";
+        form.action = String(url);
+        form.submit();
+    }
+
+    // Named deployment this page was served under (server/templates/javascript/deployments.js).
+    // The server picks it from the request, so a session that names another
+    // one and did not arrive through a request the server could read (a hash
+    // link, a cold restore from storage) must be re-submitted. `requested`
+    // echoes what the server was asked for: when it already saw this name and
+    // fell back (unknown / removed deployment), asking again would loop.
+    const servedDeployment = ENV?.deployment || {id: "base", requested: null};
+    const wantsOtherDeployment = (name) => supportsPost
+        && typeof name === "string" && !!name
+        && name !== servedDeployment.id && name !== servedDeployment.requested;
+    // Set once a self-POST is under way: the page is about to be replaced, so
+    // nothing below may restore into, or write over, the boot cache.
+    let redirecting = false;
+
     let session;
     try {
         const url = new URL(window.location.href);
@@ -113,21 +150,17 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 data = urlData;
                 // If it’s already in the hash, parse locally so refresh/share stays stable.
                 if (supportsPost && !fromHash) {
-                    // existing POST redirect logic (unchanged)
-                    const form = document.createElement("form");
-                    form.method = "POST";
-                    const node = document.createElement("input");
-                    node.name = "visualization";
-                    node.value = data;
-                    form.appendChild(node);
-                    form.style.visibility = 'hidden';
-                    document.body.appendChild(form);
-
-                    url.hash = "";
-                    form.action = String(url);
-                    form.submit();
+                    selfPost({visualization: data}, url);
+                    redirecting = true;
                 } else {
                     session = _parse(data);
+                    // A hash is parsed locally so refresh/share stays stable —
+                    // unless it names a deployment the server did not serve.
+                    if (session && !session.error && wantsOtherDeployment(session.deployment)) {
+                        selfPost({visualization: data}, url);
+                        redirecting = true;
+                        session = undefined;
+                    }
                 }
             }
             // Some proxies (e.g. JupyterHub's configurable-http-proxy) re-encode
@@ -259,6 +292,12 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
         // CLOSED: without it, an entry stamped "" would match "" and every
         // deployment would share one cache again.
         const cacheMatchesEnv = (data) => !!envKey && !!data && data.__envKey === envKey;
+        // An entry captured under another named deployment of (presumably) this
+        // server cannot match the key — the key is deployment-specific — but it
+        // is not foreign either: a cold boot re-submits it so the server serves
+        // that deployment, after which the key matches. Only an entry naming a
+        // deployment the server already refused is judged by the key alone.
+        const cacheWantsOtherDeployment = (data) => !!data && wantsOtherDeployment(data.__deployment);
 
         /**
          * Evict a stored session from the store it came from — and only that one.
@@ -302,6 +341,15 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 // Corrupt entry would otherwise throw out of the whole parse and
                 // surface as a boot error with no way for the user to recover.
                 dropSessionCache("stored session is not valid JSON", storage);
+                return null;
+            }
+
+            if (cacheWantsOtherDeployment(data)) {
+                const {__envKey, __deployment, ...fields} = data;
+                if (fields.visualization) delete fields.visualization.__age;
+                console.info(`[xopat] cached session belongs to deployment '${__deployment}'; re-submitting`);
+                selfPost(fields, new URL(window.location.href));
+                redirecting = true;
                 return null;
             }
 
@@ -369,7 +417,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 dropSessionCache("stored session is not valid JSON", storage);
                 return;
             }
-            if (!cacheMatchesEnv(data)) {
+            if (!cacheMatchesEnv(data) && !cacheWantsOtherDeployment(data)) {
                 dropSessionCache(
                     `belongs to a different deployment configuration (${data?.__envKey ?? "unscoped"} != ${envKey})`,
                     storage);
@@ -406,7 +454,9 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
             session.__foreignDeployment = true;
         }
 
-        if (!session) {
+        if (redirecting) {
+            // The page is being replaced by the self-POST; leave the cache alone.
+        } else if (!session) {
             if (!bypassSessionCache && !bypassColdRestore) {
                 // Fall through to sessionStorage when localStorage yields nothing
                 // usable. The previous `else` only consulted sessionStorage when
@@ -417,7 +467,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 // in a sandboxed iframe (opaque origin), so the probe must gate
                 // the argument, not just `restoreFrom`'s body.
                 session = (storageAvail?.localStorage ? restoreFrom(window.localStorage, true) : null)
-                    || (storageAvail?.sessionStorage ? restoreFrom(window.sessionStorage, false) : null);
+                    || (!redirecting && storageAvail?.sessionStorage ? restoreFrom(window.sessionStorage, false) : null);
             }
         } else if (!session.error && !bypassSessionCache && !sessionIsForeign && envKey) {
             // A foreign session is never written back. Without this the boot
@@ -432,6 +482,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
             session.__age = Date.now();
             data.visualization = session;
             data.__envKey = envKey;
+            data.__deployment = servedDeployment.id;
 
             const sessionData = JSON.stringify(data);
             // Local Storage is meant for 'last session', available accross windows, session storage is to prevent

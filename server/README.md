@@ -83,6 +83,18 @@ For the full list of process-level server environment variables (host, port,
 workers, dev mode, cache, cookies, JWT secret) across the Node and PHP runtimes,
 see [`ENVIRONMENT.md`](ENVIRONMENT.md).
 
+**Named deployments.** The env may define several `deployments` (overlays over
+the base `core`/`plugins`/`modules`) plus a `defaultDeployment`; each request is
+served one of them, chosen by the session's `deployment` field, `?deployment=`,
+or the `X-XOPAT-Deployment` header (viewer-issued RPC/proxy requests), with
+fallback to the default and then the base env. A server must apply the overlay
+*before* merging `ENV.core` over `config.json` and expose the served
+`{id, requested, fellBack}` as `CORE.deployment`. Boot-only `core.server` keys
+are process-wide and may not vary per deployment (only `core.server.secure`
+and `core.server.auth` may). An auth context id must be configured identically
+in every deployment that defines it — login state is shared per context id. Reference: `server/templates/javascript/deployments.js`; full description
+in [`env/README.md`](../env/README.md) → *Multiple deployments in one env*.
+
 ### Parse Modules and Plugins
 
 Scanning existing modules and plugins folder and parsing the available items:
@@ -456,7 +468,7 @@ response advertises `Accept-Ranges`, no code path changes.
 | Key | Purpose | Default |
 |---|---|---|
 | `staticRoots` | Extra directories the static handler may serve (buffered, no ranges) | `[]` |
-| `staticMaxAge` | Seconds a production browser may reuse an **unversioned** asset (no `?v=`: element sub-module `import()`s, fonts, logos, model weights) before revalidating its ETag. `0` = revalidate every time. Dev mode always revalidates; versioned assets stay `immutable` | `3600` |
+| `staticMaxAge` | Seconds a production browser may reuse an **unversioned** non-code asset (no `?v=`: fonts, logos, model weights) before revalidating its ETag. `0` = revalidate every time. Unversioned code (`.js`/`.mjs`/`.cjs`/`.css`/`.json`/`.wasm`/`.html`, e.g. element sub-module `import()`s) always revalidates, so one release never runs another's sub-modules. Dev mode always revalidates; versioned assets stay `immutable` | `3600` |
 | `compression` | Brotli/gzip for text assets (`.js/.mjs/.css/.json/.html/.svg/.wasm/…`) and the viewer page, negotiated on `Accept-Encoding`. Bodies are compressed once per file version and kept in the bounded `core:static-compressed` cache. Media (ranged) responses are never compressed. `false` turns it off — do that when a reverse proxy in front already compresses | `{ "enabled": true, "minBytes": 1024, "maxCacheBytes": 134217728 }` |
 | `media.roots` | Directories served **streamed and `Range`-aware**. Absent = the feature is off | unset |
 | `media.extensions` | Extensions reachable inside a media root; omit for any | unset |

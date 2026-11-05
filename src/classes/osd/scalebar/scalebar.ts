@@ -1317,6 +1317,8 @@ OSD.Scalebar.prototype = {
                 // Per-frame handler (see addQuickZoomChrome) — not the 'zoom' event.
                 this.viewer.removeHandler("update-viewport", this._ui.onZoomQuick);
             }
+            // Drop the ViewerControls subscription of this strip's slot.
+            this._ui.unmountControls?.();
 
             // Destroy rotation slider
             if (this._ui.rotSliderEl?.noUiSlider) {

@@ -1,5 +1,6 @@
 const {parse} = require("comment-json");
 const {isUiBundleFresh, isCoreBundleFresh} = require("./utils");
+const {applyDeployment, BASE_DEPLOYMENT} = require("./deployments");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
 module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
@@ -18,6 +19,14 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
             return !!x;
         }
         return undefined;
+    }
+
+    // Page-root-relative path or absolute http(s) URL. Rejects any other
+    // scheme, protocol-relative `//host`, backslashes and whitespace.
+    function isSafeStylesheetUrl(href) {
+        if (typeof href !== "string" || !href || /[\s\\]/.test(href)) return false;
+        if (/^https?:\/\//i.test(href)) return true;
+        return !href.startsWith("//") && !/^[a-z][a-z0-9+.-]*:/i.test(href);
     }
 
     function isType(x, type) {
@@ -151,6 +160,23 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     <link rel="icon" type="image/png" sizes="16x16" href="${icon16}">
     <link rel="mask-icon" href="${mask}" color="${maskColor}">
 `;
+        },
+
+        // Deployment theme stylesheets from ENV core.setup.branding.css, emitted
+        // at the end of the head block - after tailwind.min.css, style.css and
+        // custom.css - so overrides win by order, not by luck. Only
+        // page-root-relative paths and http(s) URLs pass; anything else
+        // (javascript:, data:, protocol-relative) is dropped.
+        requireBrandingCss: function () {
+            const b = (this.CORE && this.CORE["setup"] && this.CORE["setup"]["branding"]) || {};
+            const list = Array.isArray(b["css"]) ? b["css"] : [];
+            const version = this.VERSION;
+            const escAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            return list.filter(isSafeStylesheetUrl).map(href => {
+                const sep = href.includes("?") ? "&" : "?";
+                return `    <link rel="stylesheet" href="${escAttr(href + sep + "v=" + version)}">\n`;
+            }).join("");
         },
 
         requireLib: function (name) {
@@ -358,6 +384,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     }
 
     let CORE, ENV = {};
+    let deployment = { id: BASE_DEPLOYMENT, requested: null, fellBack: false, problems: [] };
     try {
 
         CORE = parse(readFile(core.VIEWER_SOURCES_ABS_ROOT + "config.json"));
@@ -378,6 +405,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         if (!isType(envCore, "object")) {
             ENV["core"] = {};
         }
+
+        // Named deployment overlay (session-selected, see ./deployments.js).
+        // Merged into ENV before anything reads it, so the client flattening,
+        // secure split and plugin/module merge below stay deployment-unaware.
+        deployment = applyDeployment(ENV, defaults.deployment,
+            (a, b) => core.objectMergeRecursiveDistinct(a, b));
+        for (const problem of deployment.problems) console.error(`[deployments] ${problem}`);
 
         CORE = core.objectMergeRecursiveDistinct(CORE, ENV["core"]);
 
@@ -468,6 +502,11 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     CORE["version"] = core.VERSION;
     core["version"] = core.VERSION;
     core.GATEWAY = CORE["gateway"];
+    // Client-visible: which deployment was served and what was asked for. The
+    // echo of `requested` is what stops the client's mismatch re-POST from
+    // looping when the name was refused. Deployment definitions never ship.
+    CORE["deployment"] = { id: deployment.id, requested: deployment.requested, fellBack: deployment.fellBack };
+    core.DEPLOYMENT = CORE["deployment"];
     core.CORE = CORE;
     core.ENV = ENV;
 

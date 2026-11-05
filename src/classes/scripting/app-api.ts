@@ -10,7 +10,15 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
         dtypesSource: {
             kind: "resolve",
             value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts")
-        }
+        },
+        assistant: {
+            // Small and used constantly: documenting it in full avoids a failed-call round trip.
+            promptTier: "full",
+            examples: [
+                "To inspect viewer contexts: `const contexts = await application.getGlobalInfo(); return contexts.map(c => ({ contextId: c.contextId, imageName: c.imageName }));`",
+                "To select a context before viewer calls: `await application.setActiveViewer(contextId); const metadata = await viewer.getMetadata(); return { contextId, metadata };`",
+            ],
+        },
     };
 
     constructor(namespace: string) {

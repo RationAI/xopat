@@ -104,7 +104,7 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 |---|---|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`.                                                                                                                                                                                                                                                                                                                                   |
 | `locale` | string | `"en"` | i18next locale.                                                                                                                                                                                                                                                                                                                                                                                  |
-| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.)                                                                                                                                                                                                                                                                       |
+| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. Theme names per mode come from `branding.themes` (see `ui/README.md` → Theming). (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.)                                                                                                                                                                                                                                                                       |
 | `customBlending` | bool | `false` | Allow user-programmed blending.                                                                                                                                                                                                                                                                                                                                                                  |
 | `debugMode` | bool | `false` | Verbose runtime instrumentation.                                                                                                                                                                                                                                                                                                                                                                 |
 | `webglDebugMode` | bool | `false` | Debug post-processing.                                                                                                                                                                                                                                                                                                                                                                           |
@@ -216,6 +216,7 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
     - **`fixed`** — if `false`, user can change the shader type; default `true`.
     - **`params`** — shader-specific defaults; invalid entries fall back silently.
 - **`name`** — goal label.
+- **`backgrounds`** — background `id`s (or the data ids they show) this goal belongs to. A viewer's goal selector lists only goals that apply to its background, so overlays built for one slide (e.g. job masks) are not offered on another. Omitted = offered everywhere. Forks made by editing a shared goal are bound to the editing background.
 
 > Which visualization a viewer slot renders is not stored here — it is the per-background `visualizationIndex` binding above.
 
@@ -224,6 +225,16 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
 ### `plugins`
 
 Plugin-id → plugin-config map; consult each plugin's README.
+
+### `deployment` — named deployment (optional)
+
+The id of a deployment the operator defined in the env `deployments` map
+(`env/README.md` → *Multiple deployments in one env*), e.g. `"deployment": "dicom"`.
+The server serves that configuration (client block, setup, plugins, modules);
+an unknown or absent id falls back to the deployment default and never fails the
+load. The served one is `APPLICATION_CONTEXT.env.deployment`, and exported
+sessions carry it so they reopen under the same deployment. Links can use
+`?deployment=<id>` instead.
 
 <details>
 <summary>Advanced features</summary>
@@ -308,7 +319,7 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
     - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
     - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
-    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`.
+    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`. The magnification strip hosts the `USER_INTERFACE.ViewerControls` slot (`ui/services/viewerControls.mjs`) — register per-viewport buttons there, not on the scalebar.
     - `app/tutorial/` — the interactive tutorial overlay behind `USER_INTERFACE.Tutorials` = `APPLICATION_CONTEXT.tutorials` (see [`TUTORIALS.md`](TUTORIALS.md)).
     - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
     - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).

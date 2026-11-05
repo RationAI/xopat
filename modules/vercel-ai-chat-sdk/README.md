@@ -242,6 +242,10 @@ It is idempotent: on each boot it finds the existing managed instance (by `manag
 updates it instead of creating a duplicate. See `plugins/chat-openai-compatible/` for a full
 example. Trigger it from the plugin client with `await this.server().ensureXxx(...)`.
 
+**Named deployments.** The registry, sessions and stored keys are per deployment through
+`XOPAT_SERVER` (`server/STORAGE.md`), so each deployment registers its own provider under the
+same type id and `managedKey`, and a provider id from another one answers `CHAT_PROVIDER_UNKNOWN`.
+
 ## Internal (hidden) providers — reuse a model WITHOUT exposing it as a chat agent
 
 Set **`metadata.hidden: true`** on the provider **type** and **instance** to register a model
@@ -488,7 +492,8 @@ The prefix is re-sent on **every step**, and one user message can drive up to 21
 on a provider without prompt caching (anything but Anthropic, see below) a token here is paid
 ~21 times per message. Two rules keep it down; both are easy to undo by accident.
 
-**Only `application` and `viewer` render in full** (`CORE_SCRIPT_NAMESPACES`). `visualization`
+**Only `application` and `viewer` render in full** — because they declare
+`assistant.promptTier: "full"` in their `ScriptApiMetadata`. `visualization`
 is the largest declaration set of the three (~19 KB, more than the other two combined) and is
 untouched by most sessions, so it sits in the compact catalogue and expands on demand — its
 workflow guidance follows its rendering position automatically. Demoting the other two would
@@ -496,6 +501,12 @@ save far less than it looks: sticky expansion re-adds a namespace after its firs
 durable saving is only on namespaces never touched, and a failed call on a hot surface costs a
 whole extra round trip. Deployments can override the set via the `fullPromptNamespaces` static
 meta.
+
+**Namespace-specific prompt content lives with the namespace, never here.** Intent routing
+(`intentPatterns`), the prompt tier, always-on `framing`, tier-following `guidance` and
+`examples` are declared in each namespace's `ScriptApiMetadata.assistant` (see
+`src/classes/scripting/README.md`) and rendered generically by `shared/namespace-assistant.ts`.
+Adding a namespace never requires editing this module.
 
 **The API interface is stripped from the type blob** (`shared/api-declarations.ts`). A
 namespace declaration carries both the supporting types and the API interface itself, while the

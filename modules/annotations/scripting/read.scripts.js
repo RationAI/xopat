@@ -11,7 +11,13 @@ ScriptingManager.registerExternalApi(
             dtypesSource: {
                 kind: "url",
                 value: APPLICATION_CONTEXT.url + "modules/annotations/scripting/common-types.d.ts"
-            }
+            },
+            assistant: {
+                intentPatterns: [/annotat|measure|outlin|marking|comment/i],
+                examples: [
+                    "To report annotations: `const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));`",
+                ],
+            },
         };
 
         constructor(namespace) {

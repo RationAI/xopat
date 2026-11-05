@@ -7,6 +7,7 @@ import { Menu } from '../classes/components/menu.mjs';
 import { PhIcon, componentIconNode } from '../classes/elements/ph-icon.mjs';
 import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 import { AppBarActions, QuickActionsBar } from './appBarActions.mjs';
+import { UiCatalog } from './uiCatalog.mjs';
 
 export class AppBar {
 
@@ -207,6 +208,10 @@ export class AppBar {
         // its first slot-width measurement.
         this.Actions = new AppBarActions(this).init();
         this.QuickActions = new QuickActionsBar(this).init();
+        // Enumerable map of the whole UI (reads every registry above plus
+        // FullscreenMenus, viewer menus, LAYOUT and shortcuts), behind the
+        // `ui` scripting namespace.
+        this.Catalog = new UiCatalog(this).init();
 
         // Toolbar embed slot lives in the bar markup (built by MainLayout).
         // Init now that the bar DOM exists, then ask MainLayout to (re)route

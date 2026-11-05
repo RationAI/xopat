@@ -24,6 +24,7 @@ const cssnano = require("cssnano");
 
 const { buildWorkspaceItem, buildUI, buildCore, inspectWorkspaceBundle } = require("../../mixins/build-logic");
 const {pathsEqual} = require("../../mixins/pathsEqual");
+const { findPresetFiles } = require("../../node/tailwind-presets");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -40,22 +41,26 @@ const nodeLogger = {
 
 async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs, minify, inputOverride }) {
     const inputToUse = inputOverride || inputCSS;
+    // Quote only when a shell parses the command line (Windows). Without a shell
+    // the quotes reach tailwind verbatim and become part of the path, which then
+    // "does not exist".
+    const useShell = process.platform === "win32";
+    const q = (p) => useShell ? `"${toPosix(p)}"` : toPosix(p);
     const args = [
-        "-c", `"${toPosix(configFile)}"`,
-        "-i", `"${toPosix(inputToUse)}"`,
-        "-o", `"${toPosix(outFile)}"`
+        "-c", q(configFile),
+        "-i", q(inputToUse),
+        "-o", q(outFile)
     ];
 
     if (contentGlobs && contentGlobs.length) {
         // Content globs also need to be quoted if they contain spaces
-        const quotedGlobs = contentGlobs.map(g => `"${toPosix(g)}"`).join(",");
-        args.push("--content", quotedGlobs);
+        args.push("--content", contentGlobs.map(q).join(","));
     }
     if (!minify) args.push("--no-minify");
 
     grunt.log.writeln(`[twinc-merge] npx tailwindcss ${args.join(" ")}`);
     await new Promise((resolve, reject) => {
-        const child = spawn("npx", ["tailwindcss", ...args], { stdio: "inherit", shell: process.platform === "win32" });
+        const child = spawn("npx", ["tailwindcss", ...args], { stdio: "inherit", shell: useShell });
         child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`tailwindcss exited ${code}`))));
     });
 }
@@ -202,6 +207,10 @@ const twincMerge = function (grunt) {
         const cacheDir   = abs(root, "./.dev-cache");
         const baselineCss = path.join(cacheDir, "baseline.css"); // snapshot of the one-time full build
         const stateFile  = path.join(cacheDir, "state.json");
+        // Element theme presets (`<element>/tailwind.preset.js`) are config
+        // inputs too: tailwind.config.js requires them. Resolved once - a
+        // preset ADDED while the watcher runs needs a restart.
+        const presetFiles = findPresetFiles(root);
         const debounceMs = cfg.debounceMs ?? 150;
         const minify     = cfg.minify !== false; // default true
         const mmOpts     = { windows: false };
@@ -302,7 +311,7 @@ const twincMerge = function (grunt) {
          * "the only way to get a correct stylesheet is grunt css").
          */
         function inputsFingerprint() {
-            return hash([inputCSS, configFile].map((p) => {
+            return hash([inputCSS, configFile, ...presetFiles].map((p) => {
                 try { return `${p}:${fs.readFileSync(p, "utf8")}`; } catch { return `${p}:<missing>`; }
             }).join("\n"));
         }
@@ -347,7 +356,11 @@ const twincMerge = function (grunt) {
                     if (pathsEqual(itemPath, root)) break;
 
                     const pkgPath = path.join(itemPath, "package.json");
-                    if (fs.existsSync(pkgPath)) {
+                    // Only an element (package.json + include.json) is a build unit.
+                    // A nested package - e.g. a vendored submodule such as
+                    // modules/empation-api/EmpationAPI - is source of its parent
+                    // element; its own scripts need deps that are never installed.
+                    if (fs.existsSync(pkgPath) && fs.existsSync(path.join(itemPath, "include.json"))) {
                         if (!processedDirs.has(itemPath)) {
                             try {
                                 processedDirs.add(itemPath);
@@ -511,7 +524,7 @@ const twincMerge = function (grunt) {
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) return "no baseline yet";
             const state = readState();
             if (!state || state.inputs !== inputsFingerprint()) {
-                return "tailwind-spec.css or tailwind.config.js changed";
+                return "tailwind-spec.css, tailwind.config.js or a tailwind.preset.js changed";
             }
             try {
                 if (!hasLayerMarkers(fs.readFileSync(baselineCss, "utf8"))) return "baseline predates the layer markers";
@@ -566,7 +579,8 @@ const twincMerge = function (grunt) {
              * sits at the repo root, outside every watch root - watch it
              * explicitly rather than adding the root as a chokidar entry.
              */
-            const rebaselineFiles = new Set([absPosix(root, inputCSS), absPosix(root, configFile)]);
+            const rebaselineFiles = new Set([absPosix(root, inputCSS), absPosix(root, configFile),
+                ...presetFiles.map((p) => absPosix(root, p))]);
             const watcher = chokidar.watch([...watchRoots, ...rebaselineFiles], {
                 persistent: true,
                 ignoreInitial: true,

@@ -72,9 +72,10 @@ ENV CYPRESS_INSTALL_BINARY=0
 # The npm cache lives in a cache mount, not a layer. `.git` was needed only for
 # the build. The chmod fixes a Windows/OneDrive build context that arrives with
 # directories at 0555, which the runtime (as `node`) must be able to write into
-# (`.server-dist` rebuilds, server cache).
+# (`.server-dist` rebuilds, server cache). `themeCss` rebuilds tailwind.min.css
+# only when an element ships a tailwind.preset.js (deployment theme).
 RUN --mount=type=cache,target=/root/.npm \
-    npm "$NPM_INSTALL_MODE" && npm run minify \
+    npm "$NPM_INSTALL_MODE" && npm run minify && npx grunt themeCss \
     && rm -rf .git \
     && chmod -R u+rwX /app
 

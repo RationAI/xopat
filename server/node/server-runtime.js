@@ -10,6 +10,7 @@ const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
 const {getServerLogging} = require("./logging");
 const roles = require("./roles");
+const { runInDeployment } = require("./deployment-scope");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
@@ -388,9 +389,10 @@ class XopatServerRuntime {
                     serverBuildDirName: this.serverBuildDirName,
                 });
             }
-            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {} };
+            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {},
+                deployment: core?.DEPLOYMENT?.id || "base" };
             ctx.log = this.logging ? this.logging.log(`server-route${match.prefix.replace(/\//g, ":")}`) : this.logger;
-            await match.handler(ctx, urlObj, match.prefix);
+            await runInDeployment(ctx.deployment, () => match.handler(ctx, urlObj, match.prefix));
         } catch (e) {
             this.routeLog.error(`${urlObj.pathname} failed`, e);
             if (!res.headersSent) { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Server route error"); }
@@ -494,6 +496,11 @@ class XopatServerRuntime {
     var out = {};
     if (global.XOPAT_CSRF_TOKEN) out["X-XOPAT-CSRF"] = global.XOPAT_CSRF_TOKEN;
     if (global.XOPAT_SESSION_ID) out["X-XOPAT-Session"] = global.XOPAT_SESSION_ID;
+    // Named deployment this page was served under, so the server resolves RPC
+    // config (core.server.secure) against the same one.
+    var deployment = global.APPLICATION_CONTEXT && global.APPLICATION_CONTEXT.env
+      && global.APPLICATION_CONTEXT.env.deployment;
+    if (deployment && typeof deployment.id === "string") out["X-XOPAT-Deployment"] = deployment.id;
     return out;
   }
 
@@ -1073,6 +1080,10 @@ class XopatServerRuntime {
                 res,
                 core,
                 secure: core?.CORE?.server?.secure || {},
+                // Resolved named deployment (X-XOPAT-Deployment); `secure` above
+                // is already that deployment's. Core's: elements get isolation from
+                // XOPAT_SERVER itself and have no reason to read it.
+                deployment: core?.DEPLOYMENT?.id || "base",
                 session,
                 user: authResult.user,
                 // Never-null-when-known caller identity; see #principalOf. Use
@@ -1110,7 +1121,7 @@ class XopatServerRuntime {
             }
 
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
 
@@ -1264,7 +1275,7 @@ class XopatServerRuntime {
 
         try {
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
             clearTimeout(timeout);
