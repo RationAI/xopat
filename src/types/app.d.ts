@@ -321,6 +321,12 @@ interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
+    /**
+     * Backgrounds this visualization belongs to: background `id`s or the data
+     * ids they show. Omitted = offered for every background. Only narrows the
+     * viewer's visualization selector; it does not block opening.
+     */
+    backgrounds?: string[];
     [key: string]: any;
 }
 

@@ -58,7 +58,12 @@ const coreThemes = [
 ];
 
 module.exports = {
-    presets: loadedPresets.map(({ preset }) => ({ theme: preset?.theme || {} })),
+    // An explicit `presets` (even []) REPLACES Tailwind's default config, which
+    // drops every core utility (`@apply w-full` fails). Keep the default first.
+    presets: [
+        require("tailwindcss/defaultConfig"),
+        ...loadedPresets.map(({ preset }) => ({ theme: preset?.theme || {} })),
+    ],
     // WARNING: compiling styles for the entire app can take a few minutes
     // `ts` is in here for the same reason the watcher watches it
     // (Gruntfile twinc.watch): a class that exists only in a .ts source was

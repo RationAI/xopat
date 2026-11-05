@@ -625,7 +625,14 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
 
     // Quick-zoom row: the collapsed panel's reason to exist. Built after the
     // chrome above so it lands between the SYNC group and the slide label.
-    addQuickZoomChrome(scalebar, viewer, header, syncGroup);
+    const quickZoom = addQuickZoomChrome(scalebar, viewer, header, syncGroup);
+
+    // Slot for `USER_INTERFACE.ViewerControls` (e.g. slide-info's prev/next
+    // arrows); the service owns its content. In neither collapsibles nor
+    // collapsedOnly: the controls stay visible in both panel states.
+    const controlsSlot = document.createElement("div");
+    header.insertBefore(controlsSlot, quickZoom.nextSibling);
+    scalebar._ui.unmountControls = window.USER_INTERFACE?.ViewerControls?.mount(controlsSlot, viewer);
 
     scalebar._applyCollapsed = () => {
         const c = !!scalebar._ui.collapsed;

@@ -1306,6 +1306,15 @@ export class ViewerOpenPipeline {
                     isNewViewer: !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1,
                 };
 
+                // The seeded `background` / `visualization` objects describe the
+                // seeded slots. A handler may only re-point an index (e.g. to an
+                // overlay it just appended) — writing the seeded object back to the
+                // new slot would clobber that entry with the old one.
+                const seedBackgroundIndex = backgroundIndex;
+                const seedVisualizationIndex = visualizationIndex;
+                const seedBackground = event.background;
+                const seedVisualization = event.visualization;
+
                 await viewerManager.raiseEventAwaiting("before-open", event)
                     .catch((e: any) => console.warn("Exception in 'before-open' event handler: ", e));
 
@@ -1338,10 +1347,12 @@ export class ViewerOpenPipeline {
                     ? [...event.dataIndexes]
                     : collectViewerDataIndexes(backgroundIndex, visualizationIndex);
 
-                if (Number.isInteger(backgroundIndex) && event.background && !Array.isArray(event.background)) {
+                if (Number.isInteger(backgroundIndex) && event.background && !Array.isArray(event.background)
+                    && (backgroundIndex === seedBackgroundIndex || event.background !== seedBackground)) {
                     config.background[backgroundIndex as number] = BackgroundConfig.from(event.background as BackgroundItem | BackgroundConfig, true, false);
                 }
-                if (Number.isInteger(visualizationIndex) && event.visualization) {
+                if (Number.isInteger(visualizationIndex) && event.visualization
+                    && (visualizationIndex === seedVisualizationIndex || event.visualization !== seedVisualization)) {
                     config.visualizations[visualizationIndex as number] = event.visualization;
                 }
                 if (Array.isArray(event.data)) {

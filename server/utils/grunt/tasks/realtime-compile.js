@@ -41,22 +41,26 @@ const nodeLogger = {
 
 async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs, minify, inputOverride }) {
     const inputToUse = inputOverride || inputCSS;
+    // Quote only when a shell parses the command line (Windows). Without a shell
+    // the quotes reach tailwind verbatim and become part of the path, which then
+    // "does not exist".
+    const useShell = process.platform === "win32";
+    const q = (p) => useShell ? `"${toPosix(p)}"` : toPosix(p);
     const args = [
-        "-c", `"${toPosix(configFile)}"`,
-        "-i", `"${toPosix(inputToUse)}"`,
-        "-o", `"${toPosix(outFile)}"`
+        "-c", q(configFile),
+        "-i", q(inputToUse),
+        "-o", q(outFile)
     ];
 
     if (contentGlobs && contentGlobs.length) {
         // Content globs also need to be quoted if they contain spaces
-        const quotedGlobs = contentGlobs.map(g => `"${toPosix(g)}"`).join(",");
-        args.push("--content", quotedGlobs);
+        args.push("--content", contentGlobs.map(q).join(","));
     }
     if (!minify) args.push("--no-minify");
 
     grunt.log.writeln(`[twinc-merge] npx tailwindcss ${args.join(" ")}`);
     await new Promise((resolve, reject) => {
-        const child = spawn("npx", ["tailwindcss", ...args], { stdio: "inherit", shell: process.platform === "win32" });
+        const child = spawn("npx", ["tailwindcss", ...args], { stdio: "inherit", shell: useShell });
         child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`tailwindcss exited ${code}`))));
     });
 }
@@ -352,7 +356,11 @@ const twincMerge = function (grunt) {
                     if (pathsEqual(itemPath, root)) break;
 
                     const pkgPath = path.join(itemPath, "package.json");
-                    if (fs.existsSync(pkgPath)) {
+                    // Only an element (package.json + include.json) is a build unit.
+                    // A nested package - e.g. a vendored submodule such as
+                    // modules/empation-api/EmpationAPI - is source of its parent
+                    // element; its own scripts need deps that are never installed.
+                    if (fs.existsSync(pkgPath) && fs.existsSync(path.join(itemPath, "include.json"))) {
                         if (!processedDirs.has(itemPath)) {
                             try {
                                 processedDirs.add(itemPath);

@@ -22,6 +22,9 @@
   ],
   "slideSwitching": true,
   "slideBrowser": true,
+  // Prev/next arrows in each viewer's magnification strip (needs slideSwitching).
+  // Static only: override per deployment via ENV plugins["slide-info"].slideArrows.
+  "slideArrows": true,
   "io": {
     "defaultBindings": {
       "kv:visited": ["local-storage"]
@@ -30,10 +33,12 @@
   // Which deployments this plugin's tests apply to. It is `permaLoad` only in
   // the default deployment, so running them against `secure`/`production`
   // (which enable no plugins) would assert on something that was never loaded.
+  // `synthetic` also loads it (base/core) and is the only project with a
+  // rendered slide, which the scalebar-strip arrows need.
   // See test/harness/discover.mjs.
   "tests": {
     "dir": "test",
-    "envs": ["default"],
+    "envs": ["default", "synthetic"],
     "requires": { "browser": true, "server": true }
   }
 }

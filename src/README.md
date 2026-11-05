@@ -216,6 +216,7 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
     - **`fixed`** — if `false`, user can change the shader type; default `true`.
     - **`params`** — shader-specific defaults; invalid entries fall back silently.
 - **`name`** — goal label.
+- **`backgrounds`** — background `id`s (or the data ids they show) this goal belongs to. A viewer's goal selector lists only goals that apply to its background, so overlays built for one slide (e.g. job masks) are not offered on another. Omitted = offered everywhere. Forks made by editing a shared goal are bound to the editing background.
 
 > Which visualization a viewer slot renders is not stored here — it is the per-background `visualizationIndex` binding above.
 
@@ -318,7 +319,7 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
     - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
     - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
-    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`.
+    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`. The magnification strip hosts the `USER_INTERFACE.ViewerControls` slot (`ui/services/viewerControls.mjs`) — register per-viewport buttons there, not on the scalebar.
     - `app/tutorial/` — the interactive tutorial overlay behind `USER_INTERFACE.Tutorials` = `APPLICATION_CONTEXT.tutorials` (see [`TUTORIALS.md`](TUTORIALS.md)).
     - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
     - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).

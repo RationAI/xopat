@@ -80,6 +80,7 @@ export class UiCatalog {
         this.registerProvider(this._appBarProvider());
         this.registerProvider(this._fullscreenProvider());
         this.registerProvider(this._viewerTabProvider());
+        this.registerProvider(this._viewerControlProvider());
         this.registerProvider(this._dockProvider());
         this.registerProvider(this._toolbarProvider());
         this.registerProvider(this._actionProvider());
@@ -503,6 +504,33 @@ export class UiCatalog {
                 }));
             },
             subscribe: (notify) => USER_INTERFACE?.AppBar?.View?.onChange?.(notify) || (() => {}),
+        };
+    }
+
+    /** Per-viewport chrome buttons (`USER_INTERFACE.ViewerControls`). @private */
+    _viewerControlProvider() {
+        const controls = () => window.UI?.Services?.ViewerControls;
+        const viewerOf = (ctx) => ctx?.viewer || window.VIEWER_MANAGER?.active;
+        return {
+            id: "viewer-control",
+            list: (ctx) => {
+                const viewer = viewerOf(ctx);
+                const service = controls();
+                if (!viewer || !service) return [];
+                return service.list().map(entry => ({
+                    id: `viewer-control:${entry.id}`,
+                    kind: "action",
+                    label: textOf(entry.label, entry.id),
+                    hint: textOf(entry.hint) || undefined,
+                    shortcut: textOf(entry.kbd) || undefined,
+                    viewerScoped: true,
+                    state: service.isVisible(entry, viewer) ? {} : { hidden: true },
+                    invoke: (c) => service.invoke(entry.id, viewerOf(c)),
+                    anchor: (c) => viewerOf(c)?.container
+                        ?.querySelector(`[data-viewer-control="${CSS.escape(entry.id)}"]`) || null,
+                }));
+            },
+            subscribe: (notify) => controls()?.onChange(notify) || (() => {}),
         };
     }
 

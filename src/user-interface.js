@@ -432,6 +432,12 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
 
         MobileBottomBar: UI.Services.MobileBottomBar, //alias
 
+        /**
+         * Per-viewport icon buttons in the viewer chrome (scalebar strip),
+         * see ui/services/viewerControls.mjs.
+         */
+        ViewerControls: UI.Services.ViewerControls, //alias
+
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
             get context() {

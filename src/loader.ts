@@ -322,6 +322,27 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return SCRIPT_INJECTIONS.has(key);
     }
 
+    /**
+     * Are all of the element's files actually on this page? `loaded` is a registry flag and
+     * can outlive the page that set it (the `__xopat_session__` snapshot restores it), so a
+     * dependency walk must not take it on trust: a module reported loaded whose files never
+     * arrived leaves its dependents constructing against an undefined global.
+     */
+    function elementFilesPresent(record: XOpatElementRecord, folder: string): boolean {
+        const list = record.prodIncludes ?? record.includes ?? [];
+        return list.every((entry: any) => {
+            const src = typeof entry === "string" ? `${folder}${record.directory}/${entry}` : entry?.src;
+            if (!src) return true;
+            const key = scriptKey(src);
+            if (scriptAlreadyPresent(key)) return true;
+            // Server-rendered sections not yet indexed (see indexDocumentScripts).
+            return Array.from(document.scripts).some(node => {
+                const nodeSrc = node.getAttribute("src");
+                return !!nodeSrc && scriptKey(nodeSrc) === key;
+            });
+        });
+    }
+
     // One listener for the whole loader instead of clobbering `window.onerror` per script.
     // `error` events for a top-level throw carry the script URL in `filename`, which is what
     // lets a failure be attributed to the element that actually owns it.
@@ -1196,7 +1217,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         if (pending) return pending;
         // A quarantined module is not retried: `cleanUpModule` already removed its handlers
         // and dropped its singleton, and re-running a known-broken file only repeats that.
-        if (module.loaded || module.error) return Promise.resolve();
+        if (module.error) return Promise.resolve();
+        if (module.loaded && elementFilesPresent(module, MODULES_FOLDER)) return Promise.resolve();
+        console.error("[load-debug] loadModuleOnce injecting", id, { flaggedLoaded: !!module.loaded }); // TODO remove XOPAT-LOAD-DEBUG-7f3a
         if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
 
         let settle: () => void, fail: (e: any) => void;
@@ -1218,6 +1241,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }, MODULES_FOLDER, { id: module.id, kind: "module" });
             });
         })().then(settle!, fail!).finally(() => {
+            console.error("[load-debug] loadModuleOnce settled", id); // TODO remove XOPAT-LOAD-DEBUG-7f3a
             MODULE_LOAD_STACK.delete(id);
             delete (module as any).__loading;
             // The module's own bootstrap first: a singleton sweep below may reach into it.
