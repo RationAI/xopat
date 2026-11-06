@@ -48,8 +48,10 @@ export const navigationMethods = {
                 }
             }
 
-            if (preset)      this.updatePresetWith(preset.presetID,      'objectFactory', factory);
-            if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+            // setPresetFactory, not updatePresetWith: picking a shape must work
+            // with enablePresetModify off — it is a tool choice, not a class edit.
+            if (preset)      this.setPresetFactory(preset.presetID,      factory);
+            if (otherPreset) this.setPresetFactory(otherPreset.presetID, factory);
         }
 
         if (sameMode) {
