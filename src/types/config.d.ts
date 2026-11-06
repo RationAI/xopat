@@ -320,6 +320,13 @@ type XOpatSetup = {
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     /**
+     * First-pass sampling of tiles drawn below their texture resolution.
+     * `"default"` (single tap) suits brightfield; `"max"` keeps the per-channel
+     * maximum over the texel footprint so sparse bright features (fluorescence)
+     * do not vanish when zoomed out. Forwarded to every FlexRenderer drawer.
+     */
+    webGlMinificationFilter?: "default" | "max" | null;
+    /**
      * How many viewer cells may hold their own WebGL context instead of sharing
      * one. A private context removes the per-frame `readPixels` + `putImageData`
      * transfer a shared context needs; cells past the budget fall back to the

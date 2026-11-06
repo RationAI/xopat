@@ -5076,6 +5076,7 @@ form.submit();
                 webGLPreferredVersion: preferredWebGlVersion,
                 // "auto" lets a float slide upgrade the first-pass target; see config.json.
                 precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
+                minificationFilter: APPLICATION_CONTEXT.getOption("webGlMinificationFilter"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // A private context when the budget allows, the shared one otherwise.

@@ -88,6 +88,7 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         // Same first-pass precision as the main viewer, or an isolated/playground render
         // of a float slide would not match what the user sees; see config.json.
         precision: APP?.getOption?.("webGlPrecision"),
+        minificationFilter: APP?.getOption?.("webGlMinificationFilter"),
         backgroundColor: options.backgroundColor ?? APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
         // Use the same shared WebGL context as the main viewer/navigator/standalone drawers

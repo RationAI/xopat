@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
 //! Built on 2026-11-06
-//! Git commit: --a1ceed2
+//! Git commit: --a1ceed2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -1091,6 +1091,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
      * @property {WebGLTexture[]} texture           [TEXTURE_2D]
      * @property {Float32Array} textureCoords
      * @property {Float32Array} transformMatrix
+     * @property {"default"|"max"} [minificationFilter] per-tile override; unset inherits {@link FlexRenderer#getMinificationFilter}
      * //todo provide also opacity per tile?
      */
 
@@ -1402,6 +1403,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
      *      which is why the default is off and enabling `auto` is a deployment decision.
      *
      * @property {boolean} [renderDiagnostics=true] if true, first-pass diagnostic regions are rendered when provided
+     * @property {string} [minificationFilter="default"] `default` or `max`; see {@link FlexRenderer#setMinificationFilter}
      *
      * @property {string} [backgroundColor="#00000000"] #RGB or #RGBA hex, default undefined - transparent
      * @property {number[]} [presentationClearColor=[1,1,1,1]] RGBA in [0,1] the presentation
@@ -1480,6 +1482,8 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             this._warningCounts = {};
 
             this._renderDiagnostics = options.renderDiagnostics !== false;
+
+            this._minificationFilter = options.minificationFilter === "max" ? "max" : "default";
 
             this._background = options.backgroundColor || "#00000000";
 
@@ -2584,6 +2588,44 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          */
         getRenderDiagnostics() {
             return this._renderDiagnostics !== false;
+        }
+
+        /**
+         * Set how the first pass samples tiles drawn smaller than their texture resolution.
+         *
+         * `default` takes a single tap. `max` takes the per-channel maximum over the screen
+         * pixel's texel footprint (up to 4x4 taps), so small bright features on a dark
+         * background do not vanish when zoomed out. Only minified tiles pay the extra taps.
+         * The value is a uniform, so changing it neither rebuilds programs nor re-uploads tiles.
+         *
+         * @param {"default"|"max"} mode
+         * @param {object} [options={}]
+         * @param {boolean} [options.redraw=true] request a redraw after changing the setting
+         * @return {"default"|"max"} Current minification filter.
+         */
+        setMinificationFilter(mode, options = {}) {
+            const current = mode === "max" ? "max" : "default";
+
+            if (this._minificationFilter === current) {
+                return current;
+            }
+
+            this._minificationFilter = current;
+
+            if (options.redraw !== false) {
+                this._requestRedraw();
+            }
+
+            return current;
+        }
+
+        /**
+         * Return the first-pass minification filter.
+         *
+         * @return {"default"|"max"}
+         */
+        getMinificationFilter() {
+            return this._minificationFilter === "max" ? "max" : "default";
         }
 
         /**
@@ -28801,6 +28843,10 @@ uniform int u_tileLayer;
 // float layer behaves exactly as before, while float data passes through untouched.
 uniform float u_clampColorOutput;
 
+// 1 when tiles drawn below their texture resolution should keep the max over the texel footprint
+// (renderer minificationFilter "max"), so sparse bright features survive zooming out.
+uniform int u_minifyMax;
+
 ${this.atlas.getFragmentShaderDefinition()}
 
 // Every branch of main() below assigns both of these, including the pure-clipping path that has
@@ -28815,6 +28861,30 @@ float fr_segment_distance(vec2 p, vec2 a, vec2 b) {
     float denom = max(dot(ba, ba), 0.000001);
     float h = clamp(dot(pa, ba) / denom, 0.0, 1.0);
     return length(pa - ba * h);
+}
+
+vec4 fr_sample_tile(sampler2DArray tex, vec2 uv, float layer) {
+    // Derivatives before any non-uniform branch.
+    vec2 duv = fwidth(uv);
+    vec4 color = texture(tex, vec3(uv, layer));
+    if (u_minifyMax == 0) {
+        return color;
+    }
+    vec2 footprint = duv * vec2(textureSize(tex, 0).xy);
+    int n = int(clamp(ceil(max(footprint.x, footprint.y)), 1.0, 4.0));
+    if (n <= 1) {
+        return color;
+    }
+    vec2 stepUv = duv / float(n);
+    vec2 base = uv - 0.5 * duv + 0.5 * stepUv;
+    for (int y = 0; y < 4; y++) {
+        if (y >= n) break;
+        for (int x = 0; x < 4; x++) {
+            if (x >= n) break;
+            color = max(color, texture(tex, vec3(base + stepUv * vec2(float(x), float(y)), layer)));
+        }
+    }
+    return color;
 }
 
 bool fr_diagnostic_pixel(vec2 p) {
@@ -28848,7 +28918,7 @@ void main() {
             if (i == instance_id) {
                  switch (i) {
     ${ this.printN(x =>
-                    `case ${x}: outputColor = texture(u_textures[${x}], vec3(v_texture_coords, float(u_tileLayer))); break;`,
+                    `case ${x}: outputColor = fr_sample_tile(u_textures[${x}], v_texture_coords, float(u_tileLayer)); break;`,
                 this._maxTextures, "                ")}
                  }
                  break;
@@ -28931,6 +29001,7 @@ void main() {
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
         this._tileLayerLoc = gl.getUniformLocation(program, "u_tileLayer");
         this._clampColorOutputLoc = gl.getUniformLocation(program, "u_clampColorOutput");
+        this._minifyMaxLoc = gl.getUniformLocation(program, "u_minifyMax");
 
         // Alias names to avoid confusion
         this._positionsBuffer = gl.getAttribLocation(program, "a_payload0");
@@ -29047,6 +29118,11 @@ void main() {
             this.created(0, 0);
         }
 
+        // A tile's own minificationFilter wins; unset inherits the renderer value.
+        const renderer = this.context.renderer;
+        const rendererMinifyMax = !!(renderer.getMinificationFilter && renderer.getMinificationFilter() === "max");
+        const tileMinifyMax = tile => (tile.minificationFilter ? tile.minificationFilter === "max" : rendererMinifyMax);
+
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
 
@@ -29161,16 +29237,20 @@ void main() {
                 while (currentIndex < tileCount) {
                     const maxBatchSize = Math.min(this._maxTextures, tileCount - currentIndex);
 
-                    // The [0,1] clamp is a per-draw uniform, so a batch must be homogeneous in
-                    // source kind. Tiles of one source always are, so this normally never splits.
+                    // The [0,1] clamp and the minification filter are per-draw uniforms, so a batch
+                    // must be homogeneous in both. Tiles of one source always are, so this normally
+                    // splits only at source boundaries.
                     const batchNormalized = rasterTiles[currentIndex].normalized !== false;
+                    const batchMinifyMax = tileMinifyMax(rasterTiles[currentIndex]);
                     let batchSize = 1;
                     while (batchSize < maxBatchSize &&
-                        (rasterTiles[currentIndex + batchSize].normalized !== false) === batchNormalized) {
+                        (rasterTiles[currentIndex + batchSize].normalized !== false) === batchNormalized &&
+                        tileMinifyMax(rasterTiles[currentIndex + batchSize]) === batchMinifyMax) {
                         batchSize++;
                     }
 
                     gl.uniform1f(this._clampColorOutputLoc, batchNormalized ? 1.0 : 0.0);
+                    gl.uniform1i(this._minifyMaxLoc, batchMinifyMax ? 1 : 0);
 
                     for (let i = 0; i < batchSize; i++) {
                         const tile = rasterTiles[currentIndex + i];
@@ -32727,6 +32807,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 }
 
                 if (tiledImage.getOpacity() > 0 && tilesToDraw.length > 0) {
+                    const minificationFilter = this._resolveTiledImageMinificationFilter(tiledImage);
                     // TODO support placeholder?
                     // if (tiledImage.placeholderFillStyle && tiledImage._hasOpaqueTile === false) {
                     //     this._drawPlaceholder(tiledImage);
@@ -32760,6 +32841,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                                 texture: tileInfo.texture,
                                 position: tileInfo.position,
                                 normalized: tileInfo.normalized !== false,
+                                minificationFilter,
                                 tile: tile
                             });
                         } else if (tileInfo.vectors) {
@@ -33178,6 +33260,62 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this.setInternalCacheNeedsRefresh();
                 this.viewer.requestInvalidate(false);
             }
+        }
+
+        /**
+         * Set how tiles drawn below their texture resolution are sampled; mirrored to the navigator.
+         * @param {"default"|"max"} mode `max` keeps small bright features visible when zoomed out,
+         *     see {@link OpenSeadragon.FlexRenderer#setMinificationFilter}
+         */
+        setMinificationFilter(mode){
+            if (this._isTornDown()) {
+                return;
+            }
+            const navDrawer = this._getNavigatorDrawer();
+            if (navDrawer && navDrawer.renderer) {
+                navDrawer.renderer.setMinificationFilter(mode);
+            }
+            this.renderer.setMinificationFilter(mode);
+        }
+
+        /**
+         * Override the minification filter for a single tiledImage, e.g. `max` for a fluorescence
+         * overlay over a brightfield background that keeps `default`. A uniform per draw, so no
+         * cache refresh is needed. The navigator drawer resolves the same override through its
+         * counterpart tiled image.
+         *
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @param {"default"|"max"|null|undefined} mode null/undefined → inherit the renderer value
+         */
+        setTiledImageMinificationFilter(tiledImage, mode){
+            if (!tiledImage || this._isTornDown()) {
+                return;
+            }
+            const normalized = mode === "max" || mode === "default" ? mode : undefined;
+            if (tiledImage.__flexMinificationFilter === normalized) {
+                return;
+            }
+            tiledImage.__flexMinificationFilter = normalized;
+            this._safeForceRedraw();
+            if (this._getNavigatorDrawer()) {
+                this._safeForceRedraw(this.viewer.navigator);
+            }
+        }
+
+        /**
+         * Effective per-tiledImage minification filter, or undefined to inherit the renderer value.
+         *
+         * @private
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @returns {"default"|"max"|undefined}
+         */
+        _resolveTiledImageMinificationFilter(tiledImage){
+            const own = tiledImage.__flexMinificationFilter;
+            if (own !== undefined || !this._isNavigatorDrawer) {
+                return own;
+            }
+            const parent = this._findParentTiledImage(tiledImage);
+            return parent ? parent.__flexMinificationFilter : undefined;
         }
 
         /**
@@ -46322,7 +46460,7 @@ function resolveTileTemplate(template, dataUrl) {
 
 //! flex-renderer 0.0.2
 //! Built on 2026-11-06
-//! Git commit: --a1ceed2
+//! Git commit: --a1ceed2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -46978,7 +47116,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
 //! Built on 2026-11-06
-//! Git commit: --a1ceed2
+//! Git commit: --a1ceed2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -47687,7 +47825,7 @@ function computeAABB(f) {
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
 //! Built on 2026-11-06
-//! Git commit: --a1ceed2
+//! Git commit: --a1ceed2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

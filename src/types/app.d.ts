@@ -45,6 +45,11 @@ interface DataOverride {
      */
     imageSmoothingEnabled?: boolean;
     /**
+     * Per-data override of `setup.webGlMinificationFilter`: `"max"` for sparse bright data
+     * (fluorescence) over a brightfield background that keeps `"default"`. Unset inherits.
+     */
+    minificationFilter?: "default" | "max";
+    /**
      * How many pixels of the stack's REFERENCE image (its background) ONE pixel
      * of this image covers. `2` means half-resolution; `512` means each pixel is
      * one 512-px prediction square.

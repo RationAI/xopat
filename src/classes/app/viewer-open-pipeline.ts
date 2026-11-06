@@ -1226,6 +1226,14 @@ export class ViewerOpenPipeline {
                 }
             }
 
+            const minificationFilter = (dataSpec as any)?.minificationFilter;
+            if (minificationFilter === "max" || minificationFilter === "default") {
+                const drawer = item?.viewer?.drawer;
+                if (drawer && typeof drawer.setTiledImageMinificationFilter === "function") {
+                    drawer.setTiledImageMinificationFilter(item, minificationFilter);
+                }
+            }
+
             applyPixelScale(item, index, ctx);
         };
 
