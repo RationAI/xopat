@@ -29,28 +29,13 @@ descriptor straight through, so a descriptor like
 
 lands on the slide correctly through any ordinary URL-template protocol.
 
-MVT is the exception, and the reason is geometry. `MVTTileSource.configure`
-derives the world as `width = height = 2^maxLevel * tileSize` — square, because
-web-map tiling is square. A slide is not: the demo's is 105185 x 221772, an
-aspect of 1:2.108. OpenSeadragon normalizes every tiled image to viewport width
-1, so:
+MVT geometry no longer needs help either: since the 2026-11-06 flex-renderer
+build `MVTTileSource.configure` honours a declared `width`/`height` (the demo
+slide is 105185 x 221772, not square), and this source reuses that `configure`
+for everything it reads from the descriptor. What it adds is the one thing
+TileJSON cannot say — which tiles exist (see *Sparse pyramids* below).
 
-- aligning the square world 1:1 with the slide covers only its **top 47%** —
-  there are no tiles below;
-- rescaling so the square covers the slide's height instead puts the vector layer
-  at **2.108x** the slide's scale, which looks plausible and is completely wrong.
-
-No choice of `tileSize` or `maxzoom` fixes it, and there is no session-authorable
-placement to compensate with.
-
-A factory protocol sidesteps it entirely. `AbstractMVTTileSource` passes its
-options straight to `super()`, so constructing the source with an explicit
-`width`/`height` bypasses `configure()` and its square derivation. The tiles are
-generated on that same non-square grid by
-`test/harness/data/derive.mjs`, so alignment is exact at every
-level.
-
-The request for TileJSON to be able to describe a non-square world is filed in
+A generic `tileIndex` option on the library's MVT source is requested in
 [`UPSTREAM.md`](../../UPSTREAM.md). **This module goes away when it lands.**
 
 ## Configuration
@@ -80,7 +65,7 @@ The descriptor is TileJSON plus two fields TileJSON cannot carry:
 
 | field | meaning |
 |---|---|
-| `width`, `height` | the world in slide pixels — **required**, and the reason for this module |
+| `width`, `height` | the world in slide pixels — **required**; without them the library falls back to a square world |
 | `tiles[0]` | tile template, resolved relative to the descriptor URL |
 | `tileSize` | 512 by default |
 | `extent` | tile-internal coordinate extent, 4096 by default |
@@ -88,8 +73,8 @@ The descriptor is TileJSON plus two fields TileJSON cannot carry:
 | `style` | flex-renderer layer style map |
 | `tileIndex` | which tiles exist, for a sparse pyramid — see below |
 
-`scheme: "tms"` is **refused**: `getTileUrl` flips rows against `1 << z`, which
-only holds for a square world. Use `xyz` (what the generator emits).
+`scheme` may be `xyz` (what the generator emits) or `tms`; the TMS row flip uses
+the level's real row count.
 
 ### Sparse pyramids
 
