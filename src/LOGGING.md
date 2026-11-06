@@ -30,8 +30,14 @@ by the crash-export page. That hook still exists — errors happen before any
 bundle is parsed, and it is the only thing that can see them — but it is now a
 *pre-boot* capture that hands over: when the application context is built, the
 broker drains it, routes `console.*` into its `console` channel, and replaces
-`console.appTrace` with a bounded view over the ring. The export page keeps
-reading `console.appTrace` unchanged.
+`console.appTrace` with a bounded view over the ring (all levels, for
+devtools and the test harness).
+
+The session export (`UTILITIES.export()`) reads the ring directly with
+`getEntries({minLevel: "warn"})` and HTML-escapes the text: the exported file
+is handed to other people and runs its own `<script>`, so it carries warnings
+and errors only — not every `console.log`, which routinely names slide paths —
+and log text (tile-server bodies, error messages) can never become markup.
 
 **Adoption never swallows console output.** A `console.log` is an explicit
 request to print — from app code and from a developer typing into devtools
@@ -39,7 +45,7 @@ alike — so the original method is always called first, with the original
 arguments (objects stay expandable in devtools, no `[console]` prefix, no
 stringification). The `console` channel level decides only what reaches the ring
 and the forwarder; it defaults to `info` so `console.log` lines land in the
-crash export. Only `logging.console: false` stops the printing.
+ring (the session export still includes only `warn`+). Only `logging.console: false` stops the printing.
 
 ## Channels
 
@@ -225,6 +231,22 @@ await APPLICATION_CONTEXT.logging.flush();
 `stats().counters` is where a silently-failing forwarder shows up
 (`forwardDropped`, `forwardFailures`), and `ring.dropped` says how much the
 buffer has aged out.
+
+## Reacting to records
+
+```js
+const off = APPLICATION_CONTEXT.logging.onRecord(record => { /* {id, ts, level, channel, message, fields?} */ });
+off();   // unsubscribe
+```
+
+A listener sees every record that passed the level and `sensitive` gates — the
+same set the ring holds, including adopted `console.*` output on the `console`
+channel. Records emitted *while* listeners run are not re-dispatched (a listener
+that logs cannot loop), and a throwing listener is swallowed. Use it to surface
+diagnostics a feature does not own — core uses it for the few flex-renderer
+failures that still reach only the console, counting them into the same toast
+as the library's `UIControls.setReporter` reports
+(`viewer-visualization-runtime.ts`, `UPSTREAM.md`).
 
 ## Rules
 

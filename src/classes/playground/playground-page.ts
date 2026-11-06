@@ -322,6 +322,22 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         // viewer is currently displaying.
         openSourceMirror(viewerHandle.viewer, init, namespace, () => { shaderRowsEnabled = true; });
 
+        // The playground viewer never runs the open-pipeline's state binding
+        // (viewer-state-binding-controller), which is what fills the header
+        // select for real viewers — without this it only offers [no overlays].
+        // The list holds just the visualization under edit: switching to
+        // another one is structural and refused by onShaderChange above.
+        const editedVisualization = pickActiveVisualization(init);
+        if (editedVisualization) {
+            try {
+                menuInstance?.getShadersTab?.()?.updateVisualizationList?.(
+                    [{ name: editedVisualization.name }], 0
+                );
+            } catch (e) {
+                console.warn("[PlaygroundPage] failed to populate visualization select", e);
+            }
+        }
+
         // Edit watcher: any 'cache-applied' / shader UI mutation should mark dirty.
         // FlexRenderer raises 'render' on every redraw; we instead listen for a
         // small set of explicit edit signals to avoid spamming dirty=true.

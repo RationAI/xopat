@@ -643,7 +643,7 @@ function initXOpatLayers() {
      * list is the single source of truth both it and the guard below read, so they cannot
      * drift apart.
      */
-    UTILITIES.NON_SWITCHABLE_SHADER_TYPES = ["group", "interaction-debug", "time-series", "texture"];
+    UTILITIES.NON_SWITCHABLE_SHADER_TYPES = ["group", "interaction-debug", "time-series", "texture", "modular"];
 
     UTILITIES.changeVisualizationLayer = function (layerId, type, viewer = window.VIEWER) {
         let currentType;

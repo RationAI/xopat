@@ -606,6 +606,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -724,6 +729,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };

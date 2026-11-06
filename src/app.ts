@@ -146,6 +146,53 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         };
     }
 
+    // flex-renderer shader controls: DaisyUI classes per input role, sized for the
+    // narrow side menu, and the control chrome text routed through i18next. The
+    // class literals must stay in this (scanned) file - src/libs is excluded from
+    // the Tailwind content scan. The icon trigger is a small square; its preview
+    // glyph is shrunk to fit in src/assets/style.css (`.er-control--icon`).
+    const flexControls = (window.OpenSeadragon as any)?.FlexRenderer?.UIControls;
+    if (flexControls && typeof flexControls.setInputClassDefaults === "function") {
+        flexControls.setInputClassDefaults({
+            number: "input input-bordered input-xs w-full",
+            "image-number": "input input-bordered input-xs w-full",
+            range: "range range-xs",
+            bool: "checkbox checkbox-xs checkbox-primary",
+            select: "select select-bordered select-xs w-full",
+            colormap: "select select-bordered select-xs w-full",
+            textarea: "textarea textarea-bordered textarea-xs w-full",
+            "image-file": "file-input file-input-bordered file-input-xs w-full",
+            button: "btn btn-xs btn-outline w-full",
+            "image-upload": "btn btn-xs btn-outline w-full",
+            "icon-trigger": "btn btn-square btn-sm btn-outline",
+            "icon-query": "input input-bordered input-xs w-full",
+        });
+        // The renderer's Phosphor icon sets draw from the 'Phosphor' (regular)
+        // webfont, which xOpat does not ship - only Phosphor Light is loaded
+        // (src/libs/phoshor-icons). Codepoints are shared across weights, so point
+        // the sets at the font that exists; otherwise the canvas falls back to a
+        // system font and the picker shows empty/tofu glyphs.
+        const iconLibrary = flexControls.IconLibrary;
+        if (iconLibrary && typeof iconLibrary.registerSet === "function") {
+            for (const setName of ["ph-regular-common", "ph-brands-common"]) {
+                if (iconLibrary.getSetNames().includes(setName)) {
+                    iconLibrary.registerSet(setName, {
+                        ...iconLibrary.getSet(setName),
+                        fontFamily: "'Phosphor-Light'",
+                    });
+                }
+            }
+        }
+        // Called at render time, after i18next is up. A key xOpat does not define
+        // comes back as the full dotted key; returning undefined then keeps the
+        // library's English default instead of printing the key.
+        flexControls.setTranslator((key: string, _fallback: string, vars: Record<string, unknown>) => {
+            const k = `main.shaders.controls.${key}`;
+            const text = $.t(k, vars);
+            return text === k ? undefined : text;
+        });
+    }
+
     //Perform initialization based on provided data
     const defaultSetup = Object.freeze(ENV.setup);
     const viewerSecureMode = // For safety test string too
@@ -463,6 +510,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // warning — and left authoring tools and tests to re-implement the check,
     // i.e. to pin a second opinion that drifts from the deciding one.
     APPLICATION_CONTEXT.visualizationRuntime = visualizationRuntime;
+    visualizationRuntime.watchRendererDiagnostics();
+    // Control/layer fallbacks (rejected saved value, invalid palette, failed control or
+    // layer) come through the library's reporter instead of its console output.
+    const flexUiControls = (window.OpenSeadragon as any)?.FlexRenderer?.UIControls;
+    if (flexUiControls && typeof flexUiControls.setReporter === "function") {
+        flexUiControls.setReporter((level: string, code: string, details: Record<string, any>) =>
+            visualizationRuntime.reportRendererDiagnostic(level, code, details));
+    }
     const viewerStateBindings = new ViewerStateBindingController(APPLICATION_CONTEXT);
     const viewerOpenPipeline = new ViewerOpenPipeline({
         appContext: APPLICATION_CONTEXT,
@@ -503,6 +558,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         opts = {}
     ) {
         return viewerOpenPipeline.updateViewerSelection(viewerIndex, selection, opts);
+    };
+
+    APPLICATION_CONTEXT.closeViewer = async function (viewer: OpenSeadragon.Viewer, opts = {}) {
+        return viewerOpenPipeline.closeViewer(viewer, opts);
     };
 
     (APPLICATION_CONTEXT as any).setVirtualizationMode = async function (
@@ -992,6 +1051,27 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 Dialogs.show($.t('sync.sessionCleared'), 1500, Dialogs.MSG_INFO);
             },
         });
+    }
+
+    // Close a viewport from its own chrome — closing used to need a plugin
+    // (slide-info's switcher). Only offered while there is a grid to shrink.
+    {
+        const controls = USER_INTERFACE.ViewerControls;
+        controls.register("core.closeViewer", {
+            label: $.t('main.scalebar.closeViewer'),
+            icon: "ph-x",
+            // Last in the strip, after any owner's controls.
+            order: 1000,
+            visible: () => (VIEWER_MANAGER.viewers?.length || 0) > 1,
+            onClick: ({ viewer }: { viewer: OpenSeadragon.Viewer }) => {
+                APPLICATION_CONTEXT.closeViewer(viewer).catch((e: any) =>
+                    console.warn("closeViewer failed", e));
+            },
+        });
+        // `visible` reads the viewer count; slots already mounted must re-ask.
+        // `viewer-destroy` fires before the viewer leaves `viewers`.
+        VIEWER_MANAGER.addHandler("viewer-create", () => controls.refresh());
+        VIEWER_MANAGER.addHandler("viewer-destroy", () => queueMicrotask(() => controls.refresh()));
     }
 
     // See src/TUTORIALS.md for the selector cookbook used below. Per-viewer

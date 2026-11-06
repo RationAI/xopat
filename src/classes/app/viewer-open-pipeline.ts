@@ -155,6 +155,42 @@ export class ViewerOpenPipeline {
     }
 
     /**
+     * Close one viewport of a multi-viewport grid: drop its slot from the
+     * selection, tear its cell down, and reopen the rest. The last remaining
+     * viewport is never closed here — an empty grid is a different state
+     * (`openViewerWith(..., null)`), not a close.
+     * @returns false when there was nothing to close
+     */
+    async closeViewer(viewer: OpenSeadragon.Viewer, opts: OpenViewerWithOptions = {}) {
+        const viewerManager: any = this.deps.viewerManager;
+        const viewers: any[] = viewerManager.viewers || [];
+        const slot = viewers.indexOf(viewer);
+        if (slot < 0 || viewers.length < 2) return false;
+
+        const activeBackground = ViewerSelectionState.normalizeSelectionValue(
+            this.deps.appContext.getOption("activeBackgroundIndex", undefined, true, true)
+        ) || [];
+        if (slot < activeBackground.length) activeBackground.splice(slot, 1);
+
+        // Eager cell removal, before the reopen: the reopen's own viewer-count
+        // reconciliation does not know WHICH cell went away — this one did.
+        viewerManager.delete(slot);
+
+        const result = await this.openViewerWith(
+            undefined,
+            undefined,
+            undefined,
+            activeBackground.length ? activeBackground : null,
+            undefined,
+            opts
+        );
+        const remaining: any[] = viewerManager.viewers || [];
+        const next = remaining[Math.min(slot, remaining.length - 1)];
+        if (next) viewerManager.setActive?.(next);
+        return result;
+    }
+
+    /**
      * Switch the render mode of a virtualized parent background between
      * `none` / `sidebyside` / `overlaid`. Runtime-switchable: the decomposition
      * is stored once on the parent; this only recomputes the selection and
@@ -2212,12 +2248,8 @@ export class ViewerOpenPipeline {
                     // `deleteShaders()` + recreate (flex-renderer.js ~10128),
                     // so a preceding `overrideConfigureAll(undefined)` to
                     // "reset on visualization change" just builds per-item
-                    // internal configs that are immediately discarded — and
-                    // trips a library bug in the external→internal transition
-                    // (the navigator drawer's `tiledImageCreated` dereferences
-                    // a parent tiledImage's already-deleted `__shaderConfig`).
-                    // Drop the redundant pre-reset; the apply call handles
-                    // the swap.
+                    // internal configs that are immediately discarded. Drop the
+                    // redundant pre-reset; the apply call handles the swap.
 
                     // Step 1: apply cached shader state to the un-prefixed
                     // renderOutput. `applyStoredVisualizationSnapshot` keys
@@ -2487,7 +2519,7 @@ export class ViewerOpenPipeline {
             clearTimeout(loadTooLongTimeout);
             console.error("Failed to open viewer items", e);
             USER_INTERFACE.Loading.show(false);
-            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERROR);
+            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERR);
             if (strictVisualization) {
                 throw e;
             }

@@ -90,38 +90,23 @@ module.exports = {
         '!./ui/index.js',
         '!./src/libs/**',
     ],
-    // The `.er-control*` skin at the end of src/assets/tailwind-spec.css targets
-    // markup emitted by src/libs/flex-renderer/flex-renderer.js, which puts no
-    // DaisyUI class on its own inputs (see UPSTREAM.md, "flex-renderer - basic
-    // UI controls carry no DaisyUI classes"). Tailwind tree-shakes custom
-    // `@layer components` CSS by class name, and today the only thing keeping
-    // that skin alive is the content scan finding these strings in the library
-    // source. Two ways that breaks silently: the '!./src/libs/**' TODO above
-    // gets uncommented, or the library switches a control to the generic
-    // renderInput() helper, whose class is a template literal. Pin them.
-    // `er-control__body--colormap` is ALREADY template-built (renderControl
-    // ~:6175) and exists nowhere the scanner can see it.
+    // The `.er-control*` layout at the end of src/assets/tailwind-spec.css
+    // targets markup emitted by src/libs/flex-renderer/flex-renderer.js, which
+    // the content scan excludes ('!./src/libs/**' above). Tailwind tree-shakes
+    // custom `@layer components` CSS by class name, so every class used there
+    // as a selector is pinned here - several are template-built by the library
+    // (`er-control--${type}`, `er-control__input--${type}`) and would not be
+    // found even if src/libs were scanned. The DaisyUI classes the library puts
+    // on the inputs come from src/app.ts (setInputClassDefaults), a scanned file.
     safelist: [
         'er-control__title',
         'er-control__body',
-        // `er-control--<type>` is template-built the same way (renderControl
-        // ~:6175), so the scanner never sees it either. Only the variants the
-        // skin actually targets need pinning.
         'er-control--bool',
-        'er-control__body--colormap',
         'er-control__input',
-        'er-control__input--select',
-        'er-control__input--colormap',
         'er-control__input--bool',
-        'er-control__input--number',
-        'er-control__input--image-number',
-        'er-control__input--textarea',
         'er-control__input--color',
         'er-control__display--colormap',
         'er-control__display--custom-colormap',
-        'er-control__button--action',
-        'er-control__button--image-upload',
-        'er-control__input--image-file',
         'er-control__hint--image',
         'er-control__row--image-number',
         'er-control__widget--image',

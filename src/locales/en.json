@@ -97,6 +97,7 @@
       "viewerFilesNotConfigured": "Viewer does not show all files - some were not properly configured!",
       "visualizationShaderSkipped": "Some visualization layers cannot be displayed in this deployment and were skipped.",
       "visualizationValidationIssues": "Some visualization layers are invalid and were not displayed.",
+      "visualizationRendererWarnings": "The visualization reported {{count}} problem(s) while rendering — some layers may not look as configured (e.g. default colors instead of the configured palette). If a layer shows a broom icon, clearing its saved values may help; the session export lists the details.",
       "visualizationParamsIgnored": "Some visualization settings are not recognised by their shader. The layers are still rendered, but those settings may have no effect — see the console for details.",
       "visualizationIndexMissing": "The requested visualization (#{{index}}) does not exist; the image is shown without overlays.",
       "slide": {
@@ -197,7 +198,8 @@
         "slideLabel": "Slide label (hover to enlarge)",
         "slideLabelAlt": "Slide label",
         "noLabel": "no label",
-        "noLabelTitle": "No slide label available"
+        "noLabelTitle": "No slide label available",
+        "closeViewer": "Close this viewport"
       },
       "shaders": {
         "title": "Layers",
@@ -245,11 +247,29 @@
         "cacheStale": "",
         "cacheTitle": "Layer visuals are cached",
         "cacheInfo": "The layer remembers parameter values set before.",
+        "cacheSaved": "Parameter values saved with this session override the layer defaults. Clear them if the layer looks wrong.",
         "noVisualization": "[no overlays]",
         "select": "Select shader",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
+        },
+        "controls": {
+          "image": {
+            "hint": "The atlas starts empty. Upload an image to create a new atlas entry.",
+            "selected": "Selected:",
+            "upload": "Upload image",
+            "noFile": "No file selected"
+          },
+          "icon": {
+            "pickerTitle": "Icon picker",
+            "close": "Close",
+            "searchPlaceholder": "Search icons, aliases, glyphs",
+            "color": "Icon color",
+            "tintColor": "Tint color (applied over original colors)",
+            "tintBadge": "tint",
+            "unknown": "Unknown icon"
+          }
         }
       },
       "bar": {

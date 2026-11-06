@@ -100,10 +100,9 @@ export function invalidateVisualizationSchemaCache(): void {
  * The renderer-published JSON Schema, with a last-known-good cache.
  *
  * `compileConfigSchemaModel` validates the library's OWN bundled examples against the
- * schema it just generated and throws the whole document away when they disagree — the
- * schema is fine, the examples are decorative. Recorded in UPSTREAM.md; until the
- * library warns instead of throwing, fall back to the previous good document. Rethrows
- * when there is no cache to fall back to.
+ * schema it just generated. Since the 2026-11-06 build it warns and drops a mismatching
+ * example instead of throwing (unless called with `{strict: true}`); the cache stays as a
+ * guard for any other compile failure. Rethrows when there is no cache to fall back to.
  */
 export function compileVisualizationConfigSchema(): Record<string, any> {
     try {

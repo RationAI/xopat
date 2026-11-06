@@ -3404,11 +3404,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             try {
                 const outcome: IOResult[] = [];
                 const form = await UTILITIES.getForm("", undefined, false, outcome);
+                // Warnings and errors only: the ring also holds every adopted
+                // `console.log`, which routinely names slide paths — a file the
+                // user hands to someone else must not carry that by default.
+                // Escaped because log text is attacker-influenced (tile-server
+                // bodies, error messages) and this file runs its own <script>.
+                const logging = (APPLICATION_CONTEXT as any).logging;
+                const trace: string = logging?.getEntries
+                    ? logging.getEntries({ minLevel: "warn", limit: 2000 })
+                        .map((r: any) => `${r.level.toUpperCase().padEnd(5)} ${r.ts} [${r.channel}] ${r.message}\n`).join("")
+                    : ((console as any).appTrace || []).join("");
                 const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
-<body><!--Todo errors might fail to be stringified - cyclic structures!-->
-<div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
+<body>
+<div>Errors (if any): <pre>${escapeHtml(trace)}</pre></div>
 ${form}
 </body></html>`;
 
@@ -5063,15 +5073,15 @@ form.submit();
 
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
-                webGlPreferredVersion: preferredWebGlVersion,
+                webGLPreferredVersion: preferredWebGlVersion,
                 // "auto" lets a float slide upgrade the first-pass target; see config.json.
                 precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // A private context when the budget allows, the shared one otherwise.
                 // Private means the presentation canvas IS the WebGL canvas, so the
-                // per-frame readPixels + putImageData transfer that shared contexts
-                // require does not happen at all. See flex-renderer-context.ts.
+                // per-frame copy to a 2D canvas that shared contexts require does not
+                // happen at all. See flex-renderer-context.ts.
                 sharedContextKey: acquireFlexContextKey(cellId),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {

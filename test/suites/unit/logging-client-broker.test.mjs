@@ -706,3 +706,33 @@ test("an attachment's own LINE obeys maxRecordBytes, and keeps its pointer @unit
         "...and the ring still holds the untrimmed descriptor the crash export reads",
     ).toBeGreaterThan(2_000);
 });
+
+// ---- listeners -----------------------------------------------------------------
+
+test("onRecord sees gated records only, and unsubscribes @unit", () => {
+    const { broker } = makeBroker({ level: "warn" });
+    const seen = [];
+    const off = broker.onRecord(record => seen.push(record));
+    const log = broker.log("test");
+
+    log.info("below the level");
+    log.warn("kept");
+    expect(seen.map(r => r.message)).toEqual(["kept"]);
+    expect(seen[0].channel).toBe("test");
+
+    off();
+    log.warn("after unsubscribe");
+    expect(seen.length).toBe(1);
+});
+
+test("a listener that logs or throws cannot loop or break the caller @unit", () => {
+    const { broker } = makeBroker({ level: "warn" });
+    const log = broker.log("test");
+    let calls = 0;
+    broker.onRecord(() => { calls++; log.warn("from inside a listener"); });
+    broker.onRecord(() => { throw new Error("listener fault"); });
+
+    expect(log.warn("outer")).not.toBe(null);
+    expect(calls, "the re-entrant record is buffered but not re-dispatched").toBe(1);
+    expect(broker.getEntries().map(r => r.message)).toEqual(["outer", "from inside a listener"]);
+});

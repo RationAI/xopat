@@ -10,7 +10,7 @@ const { div, span, select, option, br, ul, li, a } = van.tags;
 // option, so ShaderLayer suppresses its type selector entirely and shows a static label
 // instead (see _buildRenderTypeSelector), and UTILITIES.changeVisualizationLayer refuses
 // the switch outright. Source of truth is UTILITIES so both ends cannot drift apart.
-const fallbackDisabledShaders = ["group", "interaction-debug", "time-series", "texture"];
+const fallbackDisabledShaders = ["group", "interaction-debug", "time-series", "texture", "modular"];
 const getDisabledShaders = () => window.UTILITIES?.NON_SWITCHABLE_SHADER_TYPES || fallbackDisabledShaders;
 /**
  * ShaderSideMenu (DaisyUI)

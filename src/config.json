@@ -476,9 +476,9 @@
         // also has a navigator renderer.
         "webGlPrecision": "unorm8",
         // How many viewer cells may hold their OWN WebGL context. A private context
-        // makes the presentation canvas the WebGL canvas, so the per-frame
-        // readPixels + putImageData transfer a shared context needs disappears
-        // (measured at 18% of wall clock in a profiled session). Counted in cells,
+        // makes the presentation canvas the WebGL canvas, so the per-frame copy a
+        // shared context needs (a GPU blit, readPixels only as fallback) and its
+        // busy-skipped frames disappear. Counted in cells,
         // not renderers: a cell costs two contexts because OpenSeadragon gives the
         // navigator the same drawer options. Cells past the budget fall back to the
         // one shared context, which is what keeps hosts spawning many viewers
