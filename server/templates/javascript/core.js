@@ -390,6 +390,10 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     }
 
     let CORE, ENV = {};
+    // `core.server` before any overlay: the merge below mutates ENV.core in
+    // place, and boot's auth-context check must judge every deployment
+    // against the base it is merged onto at runtime, not the default's view.
+    let baseServer = {};
     let deployment = { id: BASE_DEPLOYMENT, requested: null, fellBack: false, problems: [] };
     try {
 
@@ -410,6 +414,10 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         let envCore = ENV["core"];
         if (!isType(envCore, "object")) {
             ENV["core"] = {};
+        }
+
+        if (isType(ENV["core"]["server"], "object")) {
+            baseServer = JSON.parse(JSON.stringify(ENV["core"]["server"]));
         }
 
         // Named deployment overlay (session-selected, see ./deployments.js).
@@ -518,7 +526,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     // the core object, which is handed to element code as `ctx.core`. Core's own
     // boot reads them through `deploymentDefsOf`.
     const { deployments, defaultDeployment, ...envView } = ENV || {};
-    DEPLOYMENT_DEFS.set(core, { deployments, defaultDeployment });
+    DEPLOYMENT_DEFS.set(core, { deployments, defaultDeployment, baseServer });
     core.ENV = envView;
 
     return core;

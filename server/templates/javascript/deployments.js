@@ -293,8 +293,13 @@ function selectBoundDeployment(ENV, requested, bound) {
     if (!hasNamedDeployments(ENV)) return { ok: true, requested: echo, id: resolveDeployment(ENV, echo).id };
     const entered = Array.isArray(bound) ? bound.filter(x => typeof x === "string") : [];
     if (!echo) {
-        const last = entered[entered.length - 1];
-        if (last) return { ok: true, requested: last, id: resolveDeployment(ENV, last).id };
+        // Most recent entry the env still defines: one removed by an env edit
+        // would otherwise resolve to the default, which this session may never
+        // have entered. Only stale entries left = as if it entered nothing.
+        for (let i = entered.length - 1; i >= 0; i--) {
+            const id = resolveDeployment(ENV, entered[i]).id;
+            if (id === entered[i]) return { ok: true, requested: id, id };
+        }
         return { ok: true, requested: null, id: resolveDeployment(ENV, null).id };
     }
     const id = resolveDeployment(ENV, echo).id;

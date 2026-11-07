@@ -423,6 +423,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this._hydratedSlots.delete(slot);
     for (const id of Array.from(this._crudSeen)) if (id.startsWith(`${slot}::`)) this._crudSeen.delete(id);
     this._draftCache().delete(this.draftKey(slot));
+    this.cache.delete(this.draftKey(slot)); // legacy unscoped draft must not resurrect a wiped slot
     if (slot === this._slotKey) {
       this._answers = {};
       this._showErrors.clear();
@@ -2735,8 +2736,17 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _loadSlotDraft(slot: string): QuestionnaireAnswers {
     if (this._isExported) return {};
     try {
-      const raw = this._draftCache().get(this.draftKey(slot));
-      if (raw === undefined || raw === null || raw === "") return {};
+      const key = this.draftKey(slot);
+      let raw = this._draftCache().get(key);
+      if (raw === undefined || raw === null || raw === "") {
+        // One-shot migration of an unscoped draft (shipped in 3.1.2). Before scoping, every
+        // deployment on the origin already shared this key, so adopting it here
+        // grants nothing new; validateAnswers below drops what this schema lacks.
+        raw = this.cache.get(key);
+        if (raw === undefined || raw === null || raw === "") return {};
+        this._draftCache().set(key, raw);
+        this.cache.delete(key);
+      }
       const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
       const { answers, issues } = validateAnswers(this._schema, parsed, this._answerLimits());
       if (issues.length) console.warn(`[questionaire] dropped stale draft answers in slot ${slot}:`, issues);

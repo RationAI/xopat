@@ -420,8 +420,10 @@ const resolveDeploymentId = (requested) => resolveDeployment(DEPLOYMENT_DEFS, re
             deployments: defs.deployments,
             defaultDeployment: defs.defaultDeployment,
         };
-        // Validation needs the base `core.server` too (auth-context conflicts).
-        const envForChecks = { ...(core?.ENV || {}), ...DEPLOYMENT_DEFS };
+        // Validation needs the base `core.server` too (auth-context conflicts) —
+        // the PRE-overlay one: `core.ENV` already carries the default
+        // deployment, which would hide a deployment that inherits the base.
+        const envForChecks = { core: { server: defs.baseServer || {} }, ...DEPLOYMENT_DEFS };
         for (const problem of listDeploymentProblems(envForChecks)) logger.error?.(`[deployments] ${problem}`);
         // A context id configured differently by two deployments hands one
         // deployment's login to another's verifier (login state is shared per

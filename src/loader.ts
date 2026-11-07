@@ -1219,7 +1219,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         // and dropped its singleton, and re-running a known-broken file only repeats that.
         if (module.error) return Promise.resolve();
         if (module.loaded && elementFilesPresent(module, MODULES_FOLDER)) return Promise.resolve();
-        console.error("[load-debug] loadModuleOnce injecting", id, { flaggedLoaded: !!module.loaded }); // TODO remove XOPAT-LOAD-DEBUG-7f3a
         if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
 
         let settle: () => void, fail: (e: any) => void;
@@ -1241,7 +1240,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }, MODULES_FOLDER, { id: module.id, kind: "module" });
             });
         })().then(settle!, fail!).finally(() => {
-            console.error("[load-debug] loadModuleOnce settled", id); // TODO remove XOPAT-LOAD-DEBUG-7f3a
             MODULE_LOAD_STACK.delete(id);
             delete (module as any).__loading;
             // The module's own bootstrap first: a singleton sweep below may reach into it.

@@ -22,7 +22,7 @@ const require_ = createRequire(import.meta.url);
 const { resolveDeployment, listDeploymentProblems, listAuthContextConflicts,
     selectBoundDeployment, bindSessionDeployment, sanitizeOverlay } =
     require_(path.join(REPO, "server/templates/javascript/deployments.js"));
-const { getCore } = require_(path.join(REPO, "server/templates/javascript/core.js"));
+const { getCore, deploymentDefsOf } = require_(path.join(REPO, "server/templates/javascript/core.js"));
 const { composeDeployments } = await import("../../../server/utils/node/env-compose.mjs");
 
 globalThis.window = globalThis.window ?? globalThis;
@@ -111,6 +111,23 @@ test("getCore merges the served deployment and ships only the echo @unit", () =>
     expect(fallback.CORE.deployment).toEqual({ id: "standalone", requested: "nope", fellBack: true });
 });
 
+test("boot judges auth contexts against the pre-overlay base, not the default's view @unit", () => {
+    // Base = IdP Y; the default deployment 'a' overrides to X; 'b' inherits Y at
+    // runtime. The served core's ENV already carries 'a', so checking against it
+    // would see X everywhere and boot a split identity provider.
+    const env = ENV();
+    env.core.server = { auth: { jwt: { issuer: "https://y" } } };
+    env.defaultDeployment = "a";
+    env.deployments = { a: { core: { server: { auth: { jwt: { issuer: "https://x" } } } } }, b: { core: {} } };
+    const c = core(env, null);
+    const defs = deploymentDefsOf(c);
+    expect(defs.baseServer).toEqual({ auth: { jwt: { issuer: "https://y" } } });
+    const merged = { core: { server: c.CORE_AUTH ? { auth: c.CORE_AUTH } : {} }, ...defs };
+    expect(listAuthContextConflicts(merged)).toEqual([]);   // the bug: hidden
+    const checked = { core: { server: defs.baseServer }, deployments: defs.deployments, defaultDeployment: defs.defaultDeployment };
+    expect(listAuthContextConflicts(checked).length).toBe(1);
+});
+
 test("the deployment key separates named deployments, base keys are unchanged @unit", () => {
     const env = { client: { domain: "http://x/", path: "/" } };
     const base = resolveDeploymentKey(env);
@@ -144,6 +161,9 @@ test("@security a session is confined to the deployments it entered @unit", () =
     // No name (an OAuth callback): the most recently entered one.
     expect(selectBoundDeployment(ENV, null, ["a", "b"])).toEqual({ ok: true, requested: "b", id: "b" });
     expect(selectBoundDeployment(ENV, null, []).id).toBe("a");
+    // A deployment removed from the env is skipped, not resolved to the default.
+    expect(selectBoundDeployment(ENV, null, ["b", "gone"])).toEqual({ ok: true, requested: "b", id: "b" });
+    expect(selectBoundDeployment(ENV, null, ["gone"]).id).toBe("a");
     // Without named deployments there is nothing to bind.
     expect(selectBoundDeployment({}, "b", []).ok).toBe(true);
 });

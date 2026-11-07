@@ -1,6 +1,37 @@
 import { BackgroundConfig } from "../background-config";
 import { validateVisualizations } from "./visualization-validation";
 
+/**
+ * Remove `<` / `>` from the display text of shader controls (`title`, option labels).
+ *
+ * flex-renderer interpolates these unescaped into HTML that xOpat mounts via
+ * innerHTML (`UIControls.renderTitle`, the select `<option>` labels — see
+ * UPSTREAM.md), and they arrive from session / POST_DATA / peer bundles (§7).
+ * Both sinks are element-text context, where only `<` can open markup, so dropping
+ * the angle brackets is sufficient. Stripping (not entity-escaping) is idempotent:
+ * live-config-sync writes the renderer's config back into the session, and an
+ * escaped title would gain one more `&amp;` on every reopen. Mutates `params`
+ * (callers pass their own deep copy). Remove once the library escapes.
+ */
+function stripControlMarkup(params: Record<string, any>, depth = 0): void {
+    if (depth > 6) return;
+    const strip = (value: any) => typeof value === "string" ? value.replace(/[<>]/g, "") : value;
+    for (const key of Object.keys(params)) {
+        const value = params[key];
+        if (key === "title") {
+            params[key] = strip(value);
+        } else if (key === "options" && Array.isArray(value)) {
+            params[key] = value.map((opt: any) => opt && typeof opt === "object" && "label" in opt
+                ? { ...opt, label: strip(opt.label) }
+                : strip(opt));
+        } else if (key === "options" && value && typeof value === "object") {
+            for (const optKey of Object.keys(value)) value[optKey] = strip(value[optKey]);
+        } else if (value && typeof value === "object" && !Array.isArray(value)) {
+            stripControlMarkup(value, depth + 1);
+        }
+    }
+}
+
 export class ViewerVisualizationRuntime {
     constructor(private readonly appContext: ApplicationContext) {}
 
@@ -263,6 +294,9 @@ export class ViewerVisualizationRuntime {
 
                     if (typeof layer.name !== "string" || !layer.name) {
                         layer.name = shaderKey || layer.type;
+                    }
+                    if (layer.params && typeof layer.params === "object") {
+                        stripControlMarkup(layer.params);
                     }
 
                     if (layer.dataReferences !== undefined) {

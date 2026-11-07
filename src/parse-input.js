@@ -358,6 +358,10 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
             }
 
             if (cacheWantsOtherDeployment(data)) {
+                // An explicitly requested deployment (`?deployment=`, header)
+                // outranks leftover state: skip without evicting — the entry is
+                // still that deployment's own, fresh session.
+                if (servedDeployment.requested) return null;
                 const {__envKey, __deployment, ...fields} = data;
                 if (fields.visualization) delete fields.visualization.__age;
                 console.info(`[xopat] cached session belongs to deployment '${__deployment}'; re-submitting`);

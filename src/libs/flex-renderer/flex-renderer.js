@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-11-06
-//! Git commit: --a1ceed2-dirty
+//! Built on 2026-11-07
+//! Git commit: --5ac4fd5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -4887,16 +4887,39 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
         }
 
         static sanitizeKey(key) {
+            // idPattern rejects a trailing '_': GLSL names append '_<suffix>' to ids and uids
+            // (and group children chain their parent's uid), which would form the reserved '__'.
+            // Non-string keys (numeric IDs) pass the pattern and are returned as before.
             if (!$.FlexRenderer.idPattern.test(key)) {
                 key = key.replace(/[^0-9a-zA-Z_]/g, '');
                 key = key.replace(/_+/g, '_');
                 key = key.replace(/^_+/, '');
+                key = key.replace(/_+$/, '');
 
                 if (!key) {
                     throw new Error("Invalid key: sanitization removed all parts!");
                 }
             }
             return key;
+        }
+
+        /**
+         * Throw when two distinct keys sanitize to the same key (e.g. 'a' and 'a_'), which would
+         * otherwise make one shader silently replace the other.
+         * @param {Array<string>} keys
+         * @param {string} [context="FlexRenderer"] prefix for the error message
+         * @throws {Error} on the first collision found
+         */
+        static assertUniqueSanitizedKeys(keys, context = "FlexRenderer") {
+            const seen = new Map();
+            for (const key of keys || []) {
+                const sanitized = String($.FlexRenderer.sanitizeKey(key));
+                const other = seen.get(sanitized);
+                if (other !== undefined && other !== key) {
+                    throw new Error(`${context}: shader ids '${other}' and '${key}' both map to '${sanitized}'. Rename one of them.`);
+                }
+                seen.set(sanitized, key);
+            }
         }
 
         static _buildSelfTestColorData(width, height, rgba) {
@@ -5628,12 +5651,13 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
 
     // STATIC PROPERTIES
     /**
-     * ID pattern allowed for FlexRenderer. ID's are used in GLSL to distinguish uniquely between individual ShaderLayer's generated code parts
+     * ID pattern allowed for FlexRenderer. ID's are used in GLSL to distinguish uniquely between individual ShaderLayer's generated code parts.
+     * No leading or trailing '_' and no '__': generated names append '_<suffix>' to IDs, and GLSL reserves '__'.
      * @property
      * @type {RegExp}
      * @memberof FlexRenderer
      */
-    FlexRenderer.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
+    FlexRenderer.idPattern = /^(?!_)(?!.*__)(?!.*_$)[0-9a-zA-Z_]*$/;
 
     FlexRenderer.__runtimeSupportCache = null;
 
@@ -9080,7 +9104,7 @@ ${code}
      */
     function suggestGraphKey(key) {
         let out = String(key || "").replace(/[^0-9a-zA-Z_]/g, "");
-        out = out.replace(/_+/g, "_").replace(/^_+/, "");
+        out = out.replace(/_+/g, "_").replace(/^_+/, "").replace(/_+$/, "");
         return out || "node";
     }
 
@@ -20158,11 +20182,35 @@ $.FlexRenderer.UIControls = class {
         return css && String(css).trim() ? ` style="${css}"` : "";
     }
 
+    /**
+     * True when a control's title may be inserted as markup. Needs both the host-level
+     * opt-in UIControls.allowHtmlTitles (never read from shader config, so untrusted config
+     * cannot enable it) and a strict boolean `params.titleHtml === true` on the control.
+     * @param {object} params
+     * @return {boolean}
+     */
+    static isHtmlTitle(params) {
+        return $.FlexRenderer.UIControls.allowHtmlTitles === true && !!params && params.titleHtml === true;
+    }
+
+    /**
+     * Title argument for renderControl()/renderTitle() from control params. Titles are text and
+     * get escaped; see isHtmlTitle() for when a title is inserted as markup (e.g. an icon).
+     * @param {object} params
+     * @return {string|{html: string}|undefined}
+     */
+    static titleFrom(params) {
+        const title = params && params.title;
+        return title && this.isHtmlTitle(params) ? { html: String(title) } : title;
+    }
+
     static renderTitle(title, type) {
         if (!title) {
             return "";
         }
-        return `<span class="er-control__title er-control__title--${type}">${title}</span>`;
+        const content = typeof title === "object" && typeof title.html === "string" ?
+            title.html : this.escapeHtml(title);
+        return `<span class="er-control__title er-control__title--${type}">${content}</span>`;
     }
 
     static renderControl(type, title, bodyHtml, classes = "", columns = undefined, extraAttrs = "") {
@@ -20208,6 +20256,13 @@ $.FlexRenderer.UIControls._inputClassDefaults = {
 $.FlexRenderer.UIControls._translator = null;
 
 // Definitions of possible controls' types, simple functionalities:
+/**
+ * Host opt-in for `titleHtml: true` control titles (see UIControls.isHtmlTitle). Off by default:
+ * enable only when every shader configuration the page renders is trusted.
+ * @type {boolean}
+ */
+$.FlexRenderer.UIControls.allowHtmlTitles = false;
+
 $.FlexRenderer.UIControls._items = {
     number: {
         defaults: function() {
@@ -20219,7 +20274,7 @@ $.FlexRenderer.UIControls._items = {
             const input = UI.renderInput("input", "number", uniqueId,
                 ` type="number" min="${params.min}" max="${params.max}" step="${params.step}"`,
                 css, UI.resolveInputClasses("number", options && options.inputClasses));
-            return UI.renderControl("number", params.title, input, classes, params.title ? 2 : 1);
+            return UI.renderControl("number", UI.titleFrom(params), input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -20260,7 +20315,7 @@ $.FlexRenderer.UIControls._items = {
             const input = UI.renderInput("input", "range", uniqueId,
                 ` type="range" min="${params.min}" max="${params.max}" step="${params.step}"`,
                 css, UI.resolveInputClasses("range", options && options.inputClasses));
-            return UI.renderControl("range", params.title, input, classes, params.title ? 2 : 1);
+            return UI.renderControl("range", UI.titleFrom(params), input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -20300,7 +20355,7 @@ $.FlexRenderer.UIControls._items = {
             const UI = $.FlexRenderer.UIControls;
             const input = UI.renderInput("input", "color", uniqueId, ` type="color"`,
                 css, UI.resolveInputClasses("color", options && options.inputClasses));
-            return UI.renderControl("color", params.title, input, classes, params.title ? 2 : 1);
+            return UI.renderControl("color", UI.titleFrom(params), input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform3fv";
@@ -20349,7 +20404,7 @@ $.FlexRenderer.UIControls._items = {
             const input = UI.renderInput("input", "bool", uniqueId,
                 ` type="checkbox"${checked} onchange="this.value=this.checked; return true;"`,
                 css, UI.resolveInputClasses("bool", options && options.inputClasses));
-            return UI.renderControl("bool", params.title, input, classes, params.title ? 2 : 1);
+            return UI.renderControl("bool", UI.titleFrom(params), input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -20423,7 +20478,7 @@ $.FlexRenderer.UIControls._items = {
 
             const input = UI.renderInput("select", "select", uniqueId, "", css,
                 UI.resolveInputClasses("select", renderOptions && renderOptions.inputClasses)) + `${optionHtml}</select>`;
-            return UI.renderControl("select", params.title, input, classes, params.title ? 2 : 1);
+            return UI.renderControl("select", UI.titleFrom(params), input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -21316,9 +21371,8 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
             return "";
         }
 
-        const titleHtml = this._c1.params.title
-            ? `<span class="er-control__title er-control__title--slider-with-input">${this._c1.params.title}</span>`
-            : "";
+        const UI = $.FlexRenderer.UIControls;
+        const titleHtml = UI.renderTitle(UI.titleFrom(this._c1.params), "slider-with-input");
 
         const rangeHtml = $.FlexRenderer.UIControls.getUiElement("range").html(
             this._c1.id,
@@ -21873,13 +21927,13 @@ return osd_atlas_texture(textureId, vec2(u, 0.5)).rgb;
         const UI = $.FlexRenderer.UIControls;
         if (!this.params.interactive) {
             const display = `<span id="${this.id}" class="er-control__display er-control__display--colormap"${UI.styleAttr(css)}>${UI.escapeHtml(this.load(this.params.default))}</span>`;
-            return UI.renderControl("colormap", this.params.title, display, classes, this.layoutColumns);
+            return UI.renderControl("colormap", UI.titleFrom(this.params), display, classes, this.layoutColumns);
         }
 
         const input = UI.renderInput("select", "colormap", this.id, "", css,
             UI.resolveInputClasses("colormap", options && options.inputClasses)) +
             `</select><span class="er-control__colormap-preview" aria-hidden="true"></span>`;
-        return UI.renderControl("colormap", this.params.title, input, classes, this.layoutColumns);
+        return UI.renderControl("colormap", UI.titleFrom(this.params), input, classes, this.layoutColumns);
     }
 
     define() {
@@ -22131,11 +22185,11 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
         const UI = $.FlexRenderer.UIControls;
         if (!this.params.interactive) {
             const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${UI.styleAttr(css)}>&emsp;</span>`;
-            return UI.renderControl("custom-colormap", this.params.title, display, classes, this.layoutColumns);
+            return UI.renderControl("custom-colormap", UI.titleFrom(this.params), display, classes, this.layoutColumns);
         }
 
         const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${UI.styleAttr(css)}></span>`;
-        return UI.renderControl("custom-colormap", this.params.title, display, classes, this.layoutColumns);
+        return UI.renderControl("custom-colormap", UI.titleFrom(this.params), display, classes, this.layoutColumns);
     }
 
     get supports() {
@@ -22654,7 +22708,7 @@ return masked * bigger / actualLength;
             return "";
         }
         const slider = `<div id="${this.id}" class="er-control__widget er-control__widget--advanced-slider"${$.FlexRenderer.UIControls.styleAttr(`height: 9px; display: inline-block;${css}`)}></div>`;
-        return $.FlexRenderer.UIControls.renderControl("advanced-slider", this.params.title, slider, classes, this.layoutColumns);
+        return $.FlexRenderer.UIControls.renderControl("advanced-slider", $.FlexRenderer.UIControls.titleFrom(this.params), slider, classes, this.layoutColumns);
     }
 
     define() {
@@ -22783,7 +22837,7 @@ $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.ICo
             `${disabled} placeholder="${UI.escapeHtml(this.params.placeholder)}"`,
             `width: 100%; display: block; resize: vertical; ${css}`,
             UI.resolveInputClasses("textarea", options && options.inputClasses)) + `</textarea>`;
-        return UI.renderControl("text-area", this.params.title, textarea, classes, this.layoutColumns);
+        return UI.renderControl("text-area", UI.titleFrom(this.params), textarea, classes, this.layoutColumns);
     }
 
     define() {
@@ -22890,7 +22944,7 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
         const disabled = this.params.interactive ? "" : " disabled";
         const cls = UI.joinClasses("er-control__button", "er-control__button--action",
             UI.resolveInputClasses("button", options && options.inputClasses));
-        const button = `<button id="${this.id}" type="button" class="${cls}"${UI.styleAttr(css)}${disabled}>${UI.escapeHtml(this.params.title)}</button>`;
+        const button = `<button id="${this.id}" type="button" class="${cls}"${UI.styleAttr(css)}${disabled}>${UI.isHtmlTitle(this.params) ? String(this.params.title) : UI.escapeHtml(this.params.title)}</button>`;
         return UI.renderControl("button", "", button, classes, this.layoutColumns);
     }
 
@@ -23125,7 +23179,7 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.IAtlasTextureCont
             `<button id="${this.id}_button" type="button" class="${buttonCls}"${disabled}>${esc(this.t("image.upload", "Upload Image"))}</button>`,
             `</div>`
         ].join("");
-        return UI.renderControl("image", this.params.title, body, classes, this.layoutColumns);
+        return UI.renderControl("image", UI.titleFrom(this.params), body, classes, this.layoutColumns);
     }
 
     get supports() {
@@ -24316,7 +24370,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
         ].join("");
         // Title and trigger share one row; the control root anchors the popup so it
         // spans the full control width instead of only the narrow body column.
-        return UI.renderControl("icon", this.params.title, body, classes, this.layoutColumns, `style="position: relative;"`);
+        return UI.renderControl("icon", UI.titleFrom(this.params), body, classes, this.layoutColumns, `style="position: relative;"`);
     }
 
     get layoutColumns() {
@@ -30344,6 +30398,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             // todo reset also when reordering tiled images!
             // or we could change order only
 
+            if (shaders) {
+                // Fail before touching any state: e.g. 'a' and 'a_' would both become shader 'a'.
+                $.FlexRenderer.assertUniqueSanitizedKeys(Object.keys(shaders), "FlexDrawer.overrideConfigureAll");
+            }
+
             const navDrawer = this._getNavigatorDrawer();
             if (navDrawer) {
                 navDrawer.overrideConfigureAll(shaders, shaderOrder, options);
@@ -30394,7 +30453,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @return {ShaderLayerConfig|*|undefined}
          */
         getOverriddenShaderConfig(key) {
-            const shaderLayer = this.renderer.getAllShaders()[key];
+            // Shaders are stored under their sanitized key (see createShaderLayer).
+            let sanitized;
+            try {
+                sanitized = $.FlexRenderer.sanitizeKey(key);
+            } catch (e) {
+                return undefined; // no shader can be stored under a key that sanitizes to nothing
+            }
+            const shaderLayer = this.renderer.getAllShaders()[sanitized];
             return shaderLayer ? shaderLayer.getConfig() : undefined;
         }
 
@@ -30406,7 +30472,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @return {ShaderLayerConfig} shader config used, a copy if options.copyShaderConfig is true, otherwise a modified argument
          */
         configureTiledImage(tiledImage, shader) {
-            if (this.options.copyShaderConfig) {
+            // The navigator mirror receives the parent's (already copied) config and must share it,
+            // like every other navigator mirror path; a second copy would leave the navigator on a
+            // stale type/params/cache after the parent's config changes and rebuild() runs.
+            if (this.options.copyShaderConfig && !this._isNavigatorDrawer) {
                 shader = $.extend(true, {}, shader);
             }
 
@@ -30505,13 +30574,13 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (!config && this._isNavigatorDrawer) {
                 // Navigator items load after the parent's, so a configureTiledImage() on the parent
                 // usually finds no navigator counterpart to mirror into. Inherit the parent's whole
-                // config (type, params, cache), not just its ID.
+                // config (type, params, cache), not just its ID. The object is shared, like every
+                // other navigator mirror path, so later changes (cache, exports) stay in one place;
+                // its `tiledImages` getter is the parent's (non-configurable, kept below).
                 const parentTiledImage = this._findParentTiledImage(tiledImage);
                 const parentConfig = parentTiledImage && parentTiledImage.__shaderConfig;
                 if (parentConfig) {
-                    config = tiledImage.__shaderConfig = $.extend(true, {}, parentConfig);
-                    // the copy holds the parent's world index as a plain value; redefined below
-                    delete config.tiledImages;
+                    config = tiledImage.__shaderConfig = parentConfig;
                 }
             }
             if (!config) {
@@ -30614,7 +30683,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return this._requestRebuild();
         }
 
-        _applyShaderConfigMutationRequest(request = {}, syncNavigator = true) {
+        /**
+         * @param {object} request
+         * @param {boolean} [syncNavigator=true]
+         * @param {ShaderLayerConfig|null} [mirroredConfig=null] config the main drawer already
+         *   mutated; the navigator usually shares it and must not apply the mutation twice
+         * @private
+         */
+        _applyShaderConfigMutationRequest(request = {}, syncNavigator = true, mirroredConfig = null) {
             const {
                 shaderId,
                 mutation,
@@ -30635,10 +30711,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             const config = shader.getConfig();
-            if (typeof mutation === "function") {
-                mutation(config, shader);
-            } else if (mutation && typeof mutation === "object") {
-                Object.assign(config, mutation);
+            if (config !== mirroredConfig) {
+                if (typeof mutation === "function") {
+                    mutation(config, shader);
+                } else if (mutation && typeof mutation === "object") {
+                    Object.assign(config, mutation);
+                }
             }
 
             if (refreshShader) {
@@ -30663,7 +30741,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (syncNavigator && !request.drawerLocalWorldIndex) {
                 const navDrawer = this._getNavigatorDrawer();
                 if (navDrawer) {
-                    navDrawer._applyShaderConfigMutationRequest(request, false);
+                    navDrawer._applyShaderConfigMutationRequest(request, false, config);
                 }
             }
 
@@ -30721,8 +30799,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 navDrawer.overrideConfigureAll(shaders, this.renderer.getShaderLayerOrder().slice());
             } else {
                 // A skipped configureTiledImage() mirror (navigator drawer did not exist yet): re-apply
-                // the parent config. Note this shares the parent's config object, like the live mirror
-                // in configureTiledImage(), whereas tiledImageCreated() deep-copies it.
+                // the parent config, shared like every other navigator mirror path.
                 const world = this.viewer.world;
                 for (let i = 0; i < world.getItemCount(); i++) {
                     const tiledImage = world.getItemAt(i);
@@ -30731,6 +30808,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         navDrawer.configureTiledImage(navTiledImage, tiledImage.__shaderConfig);
                     }
                 }
+            }
+
+            // setMinificationFilter() skips the navigator while its drawer is missing.
+            if (navDrawer.renderer) {
+                navDrawer.renderer.setMinificationFilter(this.renderer.getMinificationFilter(), { redraw: false });
             }
 
             this._syncNavigatorShaderState();
@@ -35882,6 +35964,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         };
 
         runtime.overrideConfigureAll = async function(shaders, shaderOrder = undefined) {
+            if (shaders) {
+                // Fail before deleting anything: e.g. 'a' and 'a_' would both become shader 'a'.
+                $.FlexRenderer.assertUniqueSanitizedKeys(Object.keys(shaders), "FlexRenderer standalone overrideConfigureAll");
+            }
             this.renderer.deleteShaders();
             this.renderer.__firstPassResult = null;
             if (!shaders) {
@@ -37836,6 +37922,8 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
                 this.shaderLayers = {};
 
                 const shaderLayerConfigs = this.__shaderConfig["shaders"] || {};
+                // Children sharing a sanitized id (e.g. 'a' and 'a_') would emit the same GLSL names.
+                $.FlexRenderer.assertUniqueSanitizedKeys(Object.keys(shaderLayerConfigs), `group '${this.id}'`);
 
                 for (let id in shaderLayerConfigs) {
                     let config = shaderLayerConfigs[id];
@@ -46459,8 +46547,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-11-06
-//! Git commit: --a1ceed2-dirty
+//! Built on 2026-11-07
+//! Git commit: --5ac4fd5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -47115,8 +47203,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-11-06
-//! Git commit: --a1ceed2-dirty
+//! Built on 2026-11-07
+//! Git commit: --5ac4fd5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -47824,8 +47912,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-11-06
-//! Git commit: --a1ceed2-dirty
+//! Built on 2026-11-07
+//! Git commit: --5ac4fd5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

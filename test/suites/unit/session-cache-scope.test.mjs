@@ -235,3 +235,43 @@ test("bypassCacheLoadTime suppresses the cold restore only @unit", () => {
     parseConfiguration(post, { t: (x) => x }, false, ENV);
     expect(window.localStorage.size).toBe(1);
 });
+
+/** Stub `document` recording self-POSTs instead of navigating. */
+function recordSelfPosts() {
+    const posts = [];
+    window.document = {
+        body: { appendChild() {} },
+        createElement: () => {
+            const fields = {};
+            return {
+                style: {},
+                appendChild(node) { fields[node.name] = node.value; },
+                submit() { posts.push(fields); },
+            };
+        },
+    };
+    return posts;
+}
+
+test("an explicitly requested deployment outranks another deployment's cached session @unit", () => {
+    const stored = JSON.stringify({ ...JSON.parse(storedSession("env-a~dp-a")), __deployment: "a" });
+    const ENV_B = envWith("env-b", { deployment: { id: "b", requested: "b" } });
+    withDeploymentKey(ENV_B);
+
+    // Cold load of `/?deployment=b`: stays in `b`, entry kept for deployment `a`.
+    window.localStorage = makeStore({ xoSessionCache: stored });
+    window.sessionStorage = makeStore();
+    let posts = recordSelfPosts();
+    const out = parseConfiguration({}, { t: (x) => x }, true, ENV_B);
+    expect(posts).toHaveLength(0);
+    expect(out.visualization?.__fromLocalStorage).toBeFalsy();
+    expect(window.localStorage.size).toBe(1);
+
+    // Plain `/` (nothing requested): the cold restore still re-submits to `a`.
+    const ENV_DEFAULT = envWith("env-b", { deployment: { id: "b", requested: null } });
+    withDeploymentKey(ENV_DEFAULT);
+    posts = recordSelfPosts();
+    parseConfiguration({}, { t: (x) => x }, true, ENV_DEFAULT);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].deployment).toBe("a");
+});

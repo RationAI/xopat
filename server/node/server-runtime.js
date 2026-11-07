@@ -398,7 +398,14 @@ class XopatServerRuntime {
     }
 
     /** Dispatch a matched server route. Returns true if handled. */
-    async dispatchServerRoute(req, res, core, session, urlObj) {
+    dispatchServerRoute(req, res, core, session, urlObj) {
+        // Whole dispatch in the deployment's scope, so the failure log below is
+        // stamped with it too (see handleRpc).
+        return runInDeployment(core?.DEPLOYMENT?.id,
+            () => this.#dispatchServerRouteInDeployment(req, res, core, session, urlObj));
+    }
+
+    async #dispatchServerRouteInDeployment(req, res, core, session, urlObj) {
         const match = this.matchServerRoute(urlObj.pathname);
         if (!match) return false;
         // A route belongs to the element that registered it, and answers only in
@@ -824,7 +831,17 @@ class XopatServerRuntime {
 `;
     }
 
-    async handleRpc(req, res, core, session, urlObj) {
+    /**
+     * The whole request runs in its deployment's scope, not just the handler:
+     * core's own records about it (refusals, failures, gate waits) are stamped
+     * from that scope, and a per-deployment log reader must see them.
+     */
+    handleRpc(req, res, core, session, urlObj) {
+        return runInDeployment(core?.DEPLOYMENT?.id,
+            () => this.#handleRpcInDeployment(req, res, core, session, urlObj));
+    }
+
+    async #handleRpcInDeployment(req, res, core, session, urlObj) {
         const parts = urlObj.pathname.split("/").filter(Boolean);
         const [, kindRaw, idRaw, methodRaw] = parts;
 

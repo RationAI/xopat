@@ -4,7 +4,7 @@
 // token minted from a validated assertion.
 //
 // Config: server.secure.modules["saml-auth"].contexts.<ctx> — see README.md.
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Static imports, so these three are INLINED into the bundle.
 //
@@ -226,11 +226,10 @@ export interface SpUrls { callbackUrl: string; logoutCallbackUrl: string }
  */
 export async function spFor(ctx: any, contextId: string, urls: SpUrls): Promise<SamlSp> {
     const cfg = getContextConfig(ctx, contextId);
-    // The config digest is part of the key: named deployments
-    // (server/templates/javascript/deployments.js) share this process, and an
-    // SP built from one deployment's IdP material must never serve another's.
-    const cfgDigest = createHash("sha256").update(JSON.stringify(cfg ?? null)).digest("hex").slice(0, 16);
-    const key = `${normalizeContextId(contextId)}\n${urls.callbackUrl}\n${cfgDigest}`;
+    // No config in the key: core partitions `spCache` per named deployment
+    // (server/STORAGE.md "Named deployments"), so one deployment's SP never
+    // serves another's, and a deployment's config is fixed until restart.
+    const key = `${normalizeContextId(contextId)}\n${urls.callbackUrl}`;
     const cached = spCache.get(key);
     if (cached) return cached;
 
