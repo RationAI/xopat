@@ -11,8 +11,10 @@
 //   - `xoSessionCache`      (src/parse-input.js)
 //   - `__xopat_session__`   (src/app.ts + application-lifecycle-controller.ts)
 //   - the `_plugins` autoload cookie (src/loader.ts + the same controller)
-// It does NOT scope `kv:*` (AppCache/AppCookies/plugin caches). Those stay
-// keyed by `<ownerUid>::<key>` only.
+//   - the persistent IO outbox (src/classes/io/io-resource.ts)
+//   - `kv:*` values read through `IOKVHandle.deploymentScoped()` (consents,
+//     option preferences, drafts, …)
+// Plain `kv:*` handles stay keyed by `<ownerUid>::<key>` only.
 //
 // Loaded from `src/store.ts` so it lands in `dist/store.js`, the FIRST app
 // script on the page (`src/config.json` → `js.src.loader`). That is what lets
@@ -85,12 +87,15 @@ export function resolveDeploymentKey(
     // One env file serving several deployments must not share caches between
     // them, even under a pinned key — each one is a different configuration.
     const deploymentId = typeof env.deployment?.id === "string" ? env.deployment.id : "base";
-    const suffix = deploymentId === "base" ? "" : `.dp-${deploymentId}`;
+    // `~` is outside what `sanitize` lets through, so a pinned key can never
+    // spell another deployment's suffix (`x.dp-a` pinned on the base used to
+    // equal `x` pinned on deployment `a`). Ids are `[a-z0-9_-]` by the server.
+    const suffix = deploymentId === "base" ? "" : `~dp-${deploymentId}`;
 
     // Operator override. `sessionCacheKey` is the historical spelling, kept
     // working for deployments that already set it.
     const explicit = client.cacheKey ?? client.sessionCacheKey ?? env.setup?.sessionCacheKey;
-    if (typeof explicit === "string" && explicit) return sanitize(explicit + suffix);
+    if (typeof explicit === "string" && explicit) return sanitize(explicit) + suffix;
 
     return "v3-" + fnv1a(stableStringify({
         domain: client.domain || "",

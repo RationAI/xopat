@@ -99,3 +99,31 @@ test("storage isolates per deployment and base keeps its physical namespace @uni
     expect(owners).toContain("test/records/");
     expect(owners).toContain("test/records.dp-a/");
 });
+
+test("@security '.dp-' is reserved in cache names @unit", () => {
+    expect(() => cache().create({ name: "x.dp-a", maxEntries: 2 })).toThrow(/reserved/);
+});
+
+test("an eviction callback runs in the deployment whose partition evicted @unit", () => {
+    const seen = [];
+    const c = cache().create({ name: `evict.${Date.now()}`, maxEntries: 1, onEvict: () => seen.push(currentDeployment()) });
+    runInDeployment("a", () => { c.set("k1", 1); c.set("k2", 2); });   // LRU evicts k1 in partition a
+    expect(seen).toEqual(["a"]);
+});
+
+test("@security a ctx-free config read never borrows another deployment's config @unit", () => {
+    const { setServerConfigSnapshot, getStaticItemConfig } = core("server-helpers.js");
+    const getStaticModuleConfig = (id) => getStaticItemConfig("module", id);
+    const snap = (id, value, requested = id) => ({
+        CORE: { server: { secure: { modules: { m: { v: value } } } }, deployment: { id, requested, fellBack: false } },
+        DEPLOYMENT: { id, requested, fellBack: false },
+    });
+    setServerConfigSnapshot(snap("a", "A", null), { asDefault: true });
+    // A request naming another deployment must not move the default.
+    setServerConfigSnapshot(snap("b", "B"));
+    expect(runInDeployment("a", () => getStaticModuleConfig("m").v)).toBe("A");
+    expect(runInDeployment("b", () => getStaticModuleConfig("m").v)).toBe("B");
+    // Not published: unconfigured, never the default's.
+    expect(runInDeployment("c", () => getStaticModuleConfig("m").v)).toBeUndefined();
+    setDefaultDeployment("base");
+});

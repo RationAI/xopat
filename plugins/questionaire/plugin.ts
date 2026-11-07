@@ -422,7 +422,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
     this._dirtyFields.delete(slot);
     this._hydratedSlots.delete(slot);
     for (const id of Array.from(this._crudSeen)) if (id.startsWith(`${slot}::`)) this._crudSeen.delete(id);
-    this.cache.delete(this.draftKey(slot));
+    this._draftCache().delete(this.draftKey(slot));
     if (slot === this._slotKey) {
       this._answers = {};
       this._showErrors.clear();
@@ -2709,10 +2709,19 @@ export class QuestionnairePlugin extends XOpatPlugin {
     return `draft.${slot}`;
   }
 
+  /**
+   * Drafts are answers (possibly clinical), so they stay in the deployment they
+   * were written under — browser storage is shared by every deployment on the
+   * origin, and another one may show a different questionnaire for the same slot.
+   */
+  private _draftCache(): any {
+    return this.cache.deploymentScoped();
+  }
+
   private _saveSlotDraft(slot: string, answers: QuestionnaireAnswers): void {
     if (this._isExported) return;
     try {
-      this.cache.set(this.draftKey(slot), JSON.stringify(answers || {}));
+      this._draftCache().set(this.draftKey(slot), JSON.stringify(answers || {}));
     } catch (e) {
       console.warn("[questionaire] failed to save draft:", e);
     }
@@ -2726,7 +2735,7 @@ export class QuestionnairePlugin extends XOpatPlugin {
   private _loadSlotDraft(slot: string): QuestionnaireAnswers {
     if (this._isExported) return {};
     try {
-      const raw = this.cache.get(this.draftKey(slot));
+      const raw = this._draftCache().get(this.draftKey(slot));
       if (raw === undefined || raw === null || raw === "") return {};
       const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
       const { answers, issues } = validateAnswers(this._schema, parsed, this._answerLimits());

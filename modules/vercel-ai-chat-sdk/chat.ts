@@ -810,6 +810,16 @@ class ChatModule extends XOpatModuleSingleton {
     // ── Remembered consent (local, expiring) ────────────────────────────────
     // Persisted to this.cache (localStorage, owner-scoped) — never to the session bundle.
 
+    /**
+     * Where remembered consent and the remembered provider live: this.cache,
+     * confined to the served deployment. Another deployment on the same origin
+     * may route to a different provider (on-prem vs. cloud) — a consent to send
+     * patient data given here must not apply there.
+     */
+    _decisionCache(): any {
+        return this.cache?.deploymentScoped?.();
+    }
+
     _consentRememberEnabled(): boolean {
         return this.getStaticMeta?.('rememberConsent', true) !== false;
     }
@@ -824,12 +834,12 @@ class ChatModule extends XOpatModuleSingleton {
     _readCachedConsent(): { mode: ScriptConsentMode; customGrants: Record<string, boolean>; expiresAt: number } | null {
         if (!this._consentRememberEnabled()) return null;
         try {
-            const raw = this.cache?.get?.(ChatModule.CONSENT_CACHE_KEY);
+            const raw = this._decisionCache()?.get?.(ChatModule.CONSENT_CACHE_KEY);
             if (!raw || typeof raw !== 'string') return null;
             const parsed = JSON.parse(raw);
             const expiresAt = Number(parsed?.expiresAt);
             if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-                this.cache?.delete?.(ChatModule.CONSENT_CACHE_KEY);
+                this._decisionCache()?.delete?.(ChatModule.CONSENT_CACHE_KEY);
                 return null;
             }
             return {
@@ -847,7 +857,7 @@ class ChatModule extends XOpatModuleSingleton {
         if (!this._consentRememberEnabled()) return;
         try {
             const expiresAt = Date.now() + this._consentTtlMs();
-            this.cache?.set?.(ChatModule.CONSENT_CACHE_KEY, JSON.stringify({
+            this._decisionCache()?.set?.(ChatModule.CONSENT_CACHE_KEY, JSON.stringify({
                 mode: this._scriptConsentMode,
                 customGrants: this._customGrants,
                 expiresAt,
@@ -887,7 +897,7 @@ class ChatModule extends XOpatModuleSingleton {
 
     getRememberedProviderId(): string | null {
         try {
-            const id = this.cache?.get?.(ChatModule.PROVIDER_CACHE_KEY);
+            const id = this._decisionCache()?.get?.(ChatModule.PROVIDER_CACHE_KEY);
             return (typeof id === 'string' && id) ? id : null;
         } catch (_) {
             return null;
@@ -896,7 +906,7 @@ class ChatModule extends XOpatModuleSingleton {
 
     rememberProviderId(id: string | null | undefined): void {
         if (!id) return;
-        try { this.cache?.set?.(ChatModule.PROVIDER_CACHE_KEY, String(id)); } catch (_) { /* best-effort */ }
+        try { this._decisionCache()?.set?.(ChatModule.PROVIDER_CACHE_KEY, String(id)); } catch (_) { /* best-effort */ }
     }
 
     /**

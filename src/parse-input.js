@@ -298,6 +298,11 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
         // that deployment, after which the key matches. Only an entry naming a
         // deployment the server already refused is judged by the key alone.
         const cacheWantsOtherDeployment = (data) => !!data && wantsOtherDeployment(data.__deployment);
+        // The 30-minute restore window, readable before the entry is parsed.
+        const cacheIsFresh = (data) => {
+            const age = data?.visualization?.__age;
+            return !!age && Date.now() - age < 1800e3;
+        };
 
         /**
          * Evict a stored session from the store it came from — and only that one.
@@ -344,10 +349,22 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 return null;
             }
 
+            // Before the cross-deployment re-submit, not after: an entry of any
+            // age written by another deployment's tab used to switch this one
+            // over to it.
+            if (enforceAge && !cacheIsFresh(data)) {
+                dropSessionCache("older than 30 minutes", storage);
+                return null;
+            }
+
             if (cacheWantsOtherDeployment(data)) {
                 const {__envKey, __deployment, ...fields} = data;
                 if (fields.visualization) delete fields.visualization.__age;
                 console.info(`[xopat] cached session belongs to deployment '${__deployment}'; re-submitting`);
+                // Name it explicitly: the session's own `deployment` field may be
+                // absent (picked by `?deployment=` / the default), and without it
+                // the server serves THIS deployment with the other one's data.
+                fields.deployment = __deployment;
                 selfPost(fields, new URL(window.location.href));
                 redirecting = true;
                 return null;
@@ -366,10 +383,6 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 return null;
             }
 
-            if (enforceAge && !(viz.__age && Date.now() - viz.__age < 1800e3)) {
-                dropSessionCache("older than 30 minutes", storage);
-                return null;
-            }
 
             delete viz.__age;
             const restored = _parse(viz);
@@ -421,6 +434,10 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 dropSessionCache(
                     `belongs to a different deployment configuration (${data?.__envKey ?? "unscoped"} != ${envKey})`,
                     storage);
+            } else if (cacheWantsOtherDeployment(data) && !cacheIsFresh(data)) {
+                // Kept only so a cold boot can re-submit it — past the restore
+                // window it never will, and it is another deployment's data.
+                dropSessionCache(`another deployment's session ('${data.__deployment}') older than 30 minutes`, storage);
             }
         };
 

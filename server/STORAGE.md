@@ -32,9 +32,18 @@ when the handle was opened at module load.
   rather than a deployment (a replay guard, a login handoff), because login state
   is shared per auth context id.
 - `getStaticModuleConfig(id)` / `getStaticPluginConfig(id)`: the running deployment's
-  config.
+  config. Core publishes every deployment's at boot; a deployment never reads
+  another's (not even the default's) as a fallback.
 
-With no request in scope (boot, timers) the running deployment is the default one.
+`.dp-` is reserved: a namespace or cache name containing it is refused, since it
+would alias another deployment's partition.
+
+With no request in scope (module load, `register()`, timers) the running
+deployment is the default one, fixed at boot from `defaultDeployment`; a request
+never moves it. Core also enters the request's deployment for RPC and proxy auth
+verifiers, and runs a partitioned handle's `onEvict` in the deployment that
+evicted. Do not capture config or a destructured handle method at module top
+level: it is bound to the default deployment for the life of the process.
 A `XOPAT_SERVER.onSessionEvicted` listener runs in the deployment it subscribed from.
 Changing an env from no `deployments` to a named `defaultDeployment` therefore leaves
 the data under `base`.

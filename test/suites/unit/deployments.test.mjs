@@ -19,7 +19,8 @@ import { fileURLToPath } from "node:url";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const require_ = createRequire(import.meta.url);
-const { resolveDeployment, listDeploymentProblems, listAuthContextConflicts } =
+const { resolveDeployment, listDeploymentProblems, listAuthContextConflicts,
+    selectBoundDeployment, bindSessionDeployment, sanitizeOverlay } =
     require_(path.join(REPO, "server/templates/javascript/deployments.js"));
 const { getCore } = require_(path.join(REPO, "server/templates/javascript/core.js"));
 const { composeDeployments } = await import("../../../server/utils/node/env-compose.mjs");
@@ -116,10 +117,60 @@ test("the deployment key separates named deployments, base keys are unchanged @u
     expect(resolveDeploymentKey({ ...env, deployment: { id: "base" } })).toBe(base);
     const a = resolveDeploymentKey({ ...env, deployment: { id: "dicom" } });
     expect(a).not.toBe(base);
-    expect(a).toMatch(/^[A-Za-z0-9._-]+$/);
+    // Cookie-token safe; `~` only ever comes from the deployment suffix.
+    expect(a).toMatch(/^[A-Za-z0-9._~-]+$/);
     // A pinned key still separates them.
     const pinned = { client: { ...env.client, cacheKey: "prod" } };
-    expect(resolveDeploymentKey({ ...pinned, deployment: { id: "dicom" } })).toBe("prod.dp-dicom");
+    expect(resolveDeploymentKey({ ...pinned, deployment: { id: "dicom" } })).toBe("prod~dp-dicom");
+});
+
+test("@security a pinned key cannot spell another deployment's key @unit", () => {
+    const env = { client: { domain: "http://x/", path: "/" } };
+    const spoof = resolveDeploymentKey({ client: { ...env.client, cacheKey: "x~dp-a" } });
+    const real = resolveDeploymentKey({ client: { ...env.client, cacheKey: "x" }, deployment: { id: "a" } });
+    expect(spoof).not.toBe(real);
+});
+
+test("@security a session is confined to the deployments it entered @unit", () => {
+    const ENV = { deployments: { a: { core: {} }, b: { core: {} } }, defaultDeployment: "a" };
+    // Naming one the session never entered is refused, whatever the session holds.
+    expect(selectBoundDeployment(ENV, "b", ["a"]).ok).toBe(false);
+    expect(selectBoundDeployment(ENV, "b", undefined).ok).toBe(false);
+    // Entered: allowed.
+    expect(selectBoundDeployment(ENV, "b", ["a", "b"])).toEqual({ ok: true, requested: "b", id: "b" });
+    // An unknown name resolves to the default and is judged as the default.
+    expect(selectBoundDeployment(ENV, "nope", ["a"]).ok).toBe(true);
+    expect(selectBoundDeployment(ENV, "nope", ["b"]).ok).toBe(false);
+    // No name (an OAuth callback): the most recently entered one.
+    expect(selectBoundDeployment(ENV, null, ["a", "b"])).toEqual({ ok: true, requested: "b", id: "b" });
+    expect(selectBoundDeployment(ENV, null, []).id).toBe("a");
+    // Without named deployments there is nothing to bind.
+    expect(selectBoundDeployment({}, "b", []).ok).toBe(true);
+});
+
+test("binding a session records each deployment once, most recent last @unit", () => {
+    const session = {};
+    expect(bindSessionDeployment(session, "a")).toBe(true);
+    expect(bindSessionDeployment(session, "b")).toBe(true);
+    expect(bindSessionDeployment(session, "b")).toBe(false);
+    expect(bindSessionDeployment(session, "a")).toBe(true);
+    expect(session.deployments).toEqual(["b", "a"]);
+});
+
+test("@security an overlay cannot carry boot-only secure config @unit", () => {
+    const { overlay, problems } = sanitizeOverlay("x", {
+        core: { server: { secure: { storage: { a: 1 }, proxies: { p: {} } } } },
+    });
+    expect(overlay.core.server.secure).toEqual({ proxies: { p: {} } });
+    expect(problems.length).toBe(1);
+});
+
+test("@security plugin login contexts take part in the one-IdP check @unit", () => {
+    const ENV = {
+        core: { server: { secure: { plugins: { p: { contexts: { c: { issuer: "A" } } } } } } },
+        deployments: { b: { core: { server: { secure: { plugins: { p: { contexts: { c: { issuer: "B" } } } } } } } } },
+    };
+    expect(listAuthContextConflicts(ENV).length).toBe(1);
 });
 
 test("the composer expands $layers into a deployment and keeps inline keys on top @unit", () => {

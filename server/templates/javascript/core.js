@@ -3,6 +3,12 @@ const {isUiBundleFresh, isCoreBundleFresh} = require("./utils");
 const {applyDeployment, BASE_DEPLOYMENT} = require("./deployments");
 
 // secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
+/** core → `{deployments, defaultDeployment}` of the env it was built from. */
+const DEPLOYMENT_DEFS = new WeakMap();
+
+/** The env's named-deployment definitions behind a built core (server boot only). */
+module.exports.deploymentDefsOf = (core) => DEPLOYMENT_DEFS.get(core) || {};
+
 module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
 
     function parseBool(x) {
@@ -508,7 +514,12 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     CORE["deployment"] = { id: deployment.id, requested: deployment.requested, fellBack: deployment.fellBack };
     core.DEPLOYMENT = CORE["deployment"];
     core.CORE = CORE;
-    core.ENV = ENV;
+    // Every deployment's definitions — resolved secrets included — stay out of
+    // the core object, which is handed to element code as `ctx.core`. Core's own
+    // boot reads them through `deploymentDefsOf`.
+    const { deployments, defaultDeployment, ...envView } = ENV || {};
+    DEPLOYMENT_DEFS.set(core, { deployments, defaultDeployment });
+    core.ENV = envView;
 
     return core;
 }

@@ -345,22 +345,39 @@ an id and can never inject configuration.
   request). The rest of `core.server` — storage, logging, compression,
   security/embedding headers, `staticRoots`, `media` — is read once per process
   and cannot vary per request; the server ignores it with an error log and
-  `up:check` refuses it.
+  `up:check` refuses it. The same holds for `core.server.secure.storage`, which
+  boot reads once.
 - **One auth context id = one identity provider, everywhere.** All deployments
   share the origin's session cookie, and server-side login state (oidc-server,
   SAML tokens) is stored per context id. Sharing a context id between
   deployments therefore means single sign-on: log in once, both accept it. For
   separate logins give each deployment its own context id. Configuring the same
-  id differently (`rpcVerifiers.<id>` together with `core.server.auth`, or
-  `secure.modules.<m>.contexts.<id>`) is an error: logged at boot, refused by
-  `up:check`. Proxy narrowing at login is per deployment
+  id differently (`rpcVerifiers.<id>` together with `core.server.auth`,
+  `core.server.auth` alone, or `secure.modules.<m>.contexts.<id>` /
+  `secure.plugins.<p>.contexts.<id>`) is an error: the server refuses to start,
+  and `up:check` refuses the env. Proxy narrowing at login is per deployment
   (`setSessionAllowedProxies(session, aliases, ctx.deployment)`). Element state
   and storage are isolated per deployment by core, including per-user data such as
   chat sessions and stored API keys (`server/STORAGE.md` → *Named deployments*).
 - **Selection.** The viewer POST's session field `"deployment": "<id>"` (or a
   top-level `deployment` form field), else `?deployment=<id>`. Requests the
-  viewer issues itself (RPC, `/proxy/`) carry `X-XOPAT-Deployment`, stamped by
-  `HttpClient` and the RPC runtime, so server modules see the same deployment.
+  viewer issues itself (RPC, `/proxy/`, module routes) carry `X-XOPAT-Deployment`,
+  stamped by `HttpClient` and the RPC runtime, so server modules see the same
+  deployment.
+- **A deployment is entered by loading its page, and the session is bound to
+  it.** Serving a viewer page records the deployment on the server session
+  (`session.deployments`). A viewer-issued request may only run in a deployment
+  its session entered — one naming another is refused with 403
+  `DEPLOYMENT_NOT_BOUND`, so a header cannot lend a caller another deployment's
+  roles, enabled elements, proxies or secure config. A request naming none (an
+  OAuth/SAML callback) runs in the most recently entered one. Sessions from
+  before this rule carry no binding: reloading the viewer binds them. Entering
+  is not itself gated — anyone who may load a deployment's page may use it; a
+  deployment that must be private needs its own login (auth context) or its own
+  origin. Mirrored in PHP (`$_SESSION['xopat_deployments']`).
+- **Elements enabled per deployment.** RPC methods and module-registered routes
+  (`/auth/saml/*`, `/auth/oidc-server/*`, …) answer only where their element is
+  enabled; a deployment that ships no plugins exposes none.
   `ctx.secure` / `getSecure*Config(ctx)` are already its config, and
   `XOPAT_SERVER.getStaticModuleConfig(id)` reads it without a ctx. `ctx.deployment`
   names it for core; elements have no reason to read it.
@@ -372,14 +389,24 @@ an id and can never inject configuration.
 - **Links and caches.** An exported or shared session carries the served
   `deployment`. A hash link or a cold restore from storage that names another
   deployment is re-submitted once as a POST so the server can serve it; the
-  `requested` echo stops it looping on a name the server refused. The
-  deployment cache key gets a `.dp-<id>` suffix for named deployments (base keys
-  are unchanged), so their browser state stays apart.
+  `requested` echo stops it looping on a name the server refused, and a cached
+  session older than the 30-minute restore window is dropped instead of
+  re-submitted. The deployment cache key gets a `~dp-<id>` suffix for named
+  deployments (base keys are unchanged), so their browser state stays apart.
+- **Browser storage is one origin.** Deployments sharing an origin share one
+  browser security principal: any script any of them loads can read all of the
+  origin's storage. Core keeps decisions and data from *following* the user
+  across deployments — consents, remembered providers, option preferences,
+  drafts, viewport/shader snapshots and pending IO writes are scoped by the
+  deployment key — but that is not isolation from hostile code. For hard
+  isolation give each deployment its own origin (subdomain).
 - **Composing.** `$layers` takes any `npm run up` selector (fragments, presets,
   files). Each deployment is composed on its own with full conflict detection,
   its inline keys go on top. Boot-only `core.server` config those layers need
   (a data fragment's `staticRoots`) is hoisted to the base, since it is
-  process-wide anyway: arrays union, a disagreement is a conflict. `$layers`
+  process-wide anyway: arrays union, a disagreement is a conflict. Hoisting
+  `staticRoots`, `media`, `security` or `logging` widens it to every deployment,
+  and the composer says so as a `deployment-widened` warning. `$layers`
   needs the composer — a raw env file served without `npm run up` ignores it.
   Implementation: `server/templates/javascript/deployments.js` (mirrored in
   `server/php/inc/core.php`), `composeDeployments` in
@@ -412,10 +439,14 @@ new env never shipped auto-load from the previous one's cookie.
   themes, UI flags, viewport defaults — never participate.
 
 What the key scopes: the boot session caches (`xoSessionCache`,
-`__xopat_session__`) and the plugin-autoload cookie (`_plugins.<key>`). It does
-**not** scope `kv:*` storage (`AppCache`, `AppCookies`, per-plugin caches),
-which stays keyed by owner only. Implementation:
-`src/classes/app/deployment-key.ts`.
+`__xopat_session__`), the plugin-autoload cookie (`_plugins.<key>`), the
+persistent IO outbox (an op is replayed only under the deployment that made it),
+and every `kv:*` value read through a `deploymentScoped()` handle — option
+preferences (`getOption`/`setOption`), chat and scripting consents, the
+remembered chat provider, questionnaire drafts, the viewport cache and shader
+snapshots. Plain `kv:*` handles (layout, keymap, other cosmetic preferences) stay
+keyed by owner only. Implementation: `src/classes/app/deployment-key.ts`,
+`IOKVHandle.deploymentScoped()`.
 
 **The key does not see per-element config.** It fingerprints `core.client` (domain,
 path, protocols, …) plus the *ids* of the shipped plugins and modules — not their

@@ -499,7 +499,7 @@ export function composeDeployments(env, opts = {}) {
                 presetEnv[k] = v;
             }
             unresolvableVars.push(...expanded.unresolvableVars);
-            hoistBootServerConfig(env, id, result.env, conflicts);
+            hoistBootServerConfig(env, id, result.env, conflicts, warnings);
             // Fragments are whole-ENV shaped; a deployment only takes the parts
             // it may carry, the validator below reports the rest.
             defs[id] = mergeDeep(result.env, inline);
@@ -508,6 +508,9 @@ export function composeDeployments(env, opts = {}) {
     for (const message of listDeploymentProblems(env)) conflicts.push({ kind: "deployment", message });
     return { conflicts, warnings, defaults, presetEnv, unresolvableVars };
 }
+
+/** Boot-only `core.server` keys that change what the process exposes. */
+const EXPOSURE_BOOT_KEYS = ["staticRoots", "media", "security", "logging"];
 
 /**
  * Fragments a deployment pulls in may carry boot-only server config — a data
@@ -518,7 +521,7 @@ export function composeDeployments(env, opts = {}) {
  * inline `core.server.<key>` stays an error, because writing it there states a
  * per-deployment intent the server cannot honour.
  */
-function hoistBootServerConfig(env, id, composed, conflicts) {
+function hoistBootServerConfig(env, id, composed, conflicts, warnings = []) {
     const server = composed?.core?.server;
     if (!isPlainObject(server)) return;
     for (const key of Object.keys(server)) {
@@ -528,6 +531,13 @@ function hoistBootServerConfig(env, id, composed, conflicts) {
         env.core ??= {};
         env.core.server ??= {};
         const current = env.core.server[key];
+        // What one deployment needs served or allowed, every deployment now
+        // serves or allows. Say so: it is a widening, not a per-deployment grant.
+        if (EXPOSURE_BOOT_KEYS.includes(key) && !deepEqual(current, value)) {
+            warnings.push({ kind: "deployment-widened", message:
+                `deployments.${id} layers set core.server.${key}; boot config is process-wide, so it now `
+                + "applies to every deployment of this env." });
+        }
         if (current === undefined) {
             env.core.server[key] = clone(value);
         } else if (Array.isArray(current) && Array.isArray(value)) {

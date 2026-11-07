@@ -24,12 +24,21 @@ export class ViewerStateBindingController {
     constructor(private readonly appContext: ApplicationContext) {}
 
     /**
+     * Keys are slide references, so the map stays in the deployment that wrote
+     * it — browser storage is shared by every deployment on the origin.
+     */
+    private viewportStore() {
+        const cache: any = this.appContext.AppCache;
+        return cache?.deploymentScoped?.() ?? cache;
+    }
+
+    /**
      * Read the viewport map, dropping entries that aged out.
      * Anything unparseable degrades to an empty map — this is a convenience
      * cache and must never be able to break a viewer open.
      */
     private readViewportCache(): Record<string, { viewport: any; t: number }> {
-        const raw = this.appContext.AppCache.get(VIEWPORT_CACHE_KEY, null);
+        const raw = this.viewportStore().get(VIEWPORT_CACHE_KEY, null);
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
         const now = Date.now();
         const out: Record<string, { viewport: any; t: number }> = {};
@@ -52,7 +61,7 @@ export class ViewerStateBindingController {
                 .slice(VIEWPORT_CACHE_LIMIT)
                 .forEach(k => { delete map[k]; });
         }
-        this.appContext.AppCache.set(VIEWPORT_CACHE_KEY, map);
+        this.viewportStore().set(VIEWPORT_CACHE_KEY, map);
     }
 
     /**

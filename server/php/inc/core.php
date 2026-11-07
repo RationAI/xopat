@@ -79,18 +79,50 @@ function xopat_is_deployment_id($id) {
         && preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $id) === 1;
 }
 
-/** The (untrusted) deployment name the request asks for, or null. */
+/**
+ * The (untrusted) deployment name the request asks for, or null.
+ *
+ * A viewer-issued request (the proxy) names it in `X-XOPAT-Deployment` only —
+ * proxy.php turns a JSON request body into `$_POST`, so reading the body here
+ * would let a proxied payload pick the deployment. Mirrors Node
+ * `requestedDeploymentOf` / `requestedDeploymentOfPost`.
+ */
 function xopat_requested_deployment() {
-    $session = $_POST["visualization"] ?? ($_POST["visualisation"] ?? null);
-    if (is_string($session)) $session = json_decode($session, true);
-    if (is_object($session)) $session = (array)$session;
-    $name = is_array($session) ? ($session["deployment"] ?? null) : null;
-    if (!is_string($name) || $name === "") $name = $_POST["deployment"] ?? null;
+    $name = null;
+    if (!defined('XOPAT_VIEWER_ISSUED_REQUEST')) {
+        $session = $_POST["visualization"] ?? ($_POST["visualisation"] ?? null);
+        if (is_string($session)) $session = json_decode($session, true);
+        if (is_object($session)) $session = (array)$session;
+        $name = is_array($session) ? ($session["deployment"] ?? null) : null;
+        if (!is_string($name) || $name === "") $name = $_POST["deployment"] ?? null;
+    }
     if (!is_string($name) || $name === "") $name = $_SERVER["HTTP_X_XOPAT_DEPLOYMENT"] ?? null;
     if (!is_string($name) || $name === "") $name = $_GET["deployment"] ?? null;
     if (!is_string($name)) return null;
     $name = substr(trim($name), 0, 64);
     return $name === "" ? null : $name;
+}
+
+/**
+ * Whether a viewer-issued request may run in deployment `$id`: only one this
+ * session entered by loading its page (`xopat_bind_session_deployment`). Mirrors
+ * Node `selectBoundDeployment` — a header must not lend one deployment's caller
+ * another's proxies or secure config.
+ */
+function xopat_session_may_use_deployment($id, $hasNamedDeployments) {
+    if (!$hasNamedDeployments) return true;
+    $bound = $_SESSION['xopat_deployments'] ?? [];
+    return is_array($bound) && in_array($id, $bound, true);
+}
+
+/** Record that this session entered deployment `$id` (a page of it was served). */
+function xopat_bind_session_deployment($id) {
+    if (session_status() !== PHP_SESSION_ACTIVE || !is_string($id)) return;
+    $bound = $_SESSION['xopat_deployments'] ?? [];
+    if (!is_array($bound)) $bound = [];
+    $bound = array_values(array_filter($bound, function ($x) use ($id) { return $x !== $id; }));
+    $bound[] = $id;
+    $_SESSION['xopat_deployments'] = array_slice($bound, -64);
 }
 
 /**
@@ -286,6 +318,7 @@ global $ENV;
 
 $parse_exception = null;
 $__deployment = ["id" => XOPAT_BASE_DEPLOYMENT, "requested" => null, "fellBack" => false];
+$__hasNamedDeployments = false;
 try {
     $ENV = [];
     $env = getenv('XOPAT_ENV');
@@ -301,6 +334,7 @@ try {
     }
 
     if (!is_array($ENV["core"])) $ENV["core"] = [];
+    $__hasNamedDeployments = isset($ENV["deployments"]) && is_array($ENV["deployments"]) && count($ENV["deployments"]) > 0;
     $__deployment = xopat_apply_deployment($ENV, xopat_requested_deployment());
     $CORE = array_merge_recursive_distinct($CORE, $ENV["core"]);
 
@@ -321,6 +355,9 @@ if (!$client || !isset($CORE["client"][$client])) {
 $CORE["client"] = $C;
 // Client-visible served deployment; definitions never ship (see core.js).
 $CORE["deployment"] = $__deployment;
+// A page load enters its deployment; a viewer-issued request is confined to the
+// deployments its session entered (checked in proxy.php).
+if (!defined('XOPAT_VIEWER_ISSUED_REQUEST')) xopat_bind_session_deployment($__deployment["id"]);
 
 // Coerce the production flag to a real boolean at the client-flatten boundary,
 // so every downstream check is correct even if it arrived as a string (e.g.

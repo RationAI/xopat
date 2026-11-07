@@ -186,11 +186,13 @@ const CONFIG_SNAPSHOT_KEY = "__XOPAT_SERVER_CONFIG_SNAPSHOT__";
  * Publish the composed server config. Called by core on every core build.
  *
  * Kept per named deployment (`server/templates/javascript/deployments.js`):
- * `core.server.secure` may differ between them. A build that was not asked for
- * a specific deployment — or whose request fell back — resolved the default,
- * and that is what a ctx-free read without an explicit deployment sees.
+ * `core.server.secure` may differ between them. The default deployment is fixed
+ * by core at boot (`asDefault`), or — before that — by a build that resolved the
+ * default because it named none. A request naming a deployment never moves it:
+ * otherwise the first request after a restart decided which deployment's config
+ * every ctx-free reader (verifiers, timers, module load) would see.
  */
-function setServerConfigSnapshot(core) {
+function setServerConfigSnapshot(core, { asDefault = false } = {}) {
   const secure = core?.CORE?.server?.secure || core?.CORE_SECURE || {};
   const deployment = core?.DEPLOYMENT || core?.CORE?.deployment || { id: "base" };
   const store = globalThis[CONFIG_SNAPSHOT_KEY] || { byDeployment: {}, defaultId: null };
@@ -203,19 +205,25 @@ function setServerConfigSnapshot(core) {
       ? core.objectMergeRecursiveDistinct.bind(core)
       : undefined,
   };
-  if (!deployment.requested || deployment.fellBack || !store.defaultId) store.defaultId = deployment.id;
+  if (asDefault) store.defaultFixed = true;
+  if (asDefault || (!store.defaultFixed && (!deployment.requested || deployment.fellBack))) {
+    store.defaultId = deployment.id;
+  }
   globalThis[CONFIG_SNAPSHOT_KEY] = store;
-  setDefaultDeployment(store.defaultId);
+  if (store.defaultId) setDefaultDeployment(store.defaultId);
 }
 
 /**
  * A synthetic ctx over the published snapshot, or `null` before the first build.
- * Without `deploymentId` (or for one not built yet) the default deployment's.
+ * Without `deploymentId` the default deployment's. Never another deployment's:
+ * a deployment with no snapshot reads as unconfigured rather than borrowing the
+ * default's secure config (core publishes every deployment at boot, so this is
+ * only reachable before boot finished).
  */
 function snapshotCtx(kind, itemId, deploymentId) {
   const store = globalThis[CONFIG_SNAPSHOT_KEY];
   if (!store) return null;
-  const core = (deploymentId && store.byDeployment[deploymentId]) || store.byDeployment[store.defaultId];
+  const core = deploymentId ? store.byDeployment[deploymentId] : store.byDeployment[store.defaultId];
   if (!core) return null;
   return { core, kind, itemId, secure: core.CORE.server.secure };
 }

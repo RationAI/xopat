@@ -1708,7 +1708,9 @@ export class ScriptingManager<
         if (this._actionConsentKvHandle !== undefined) return this._actionConsentKvHandle;
         try {
             const io = (globalThis as any).APPLICATION_CONTEXT?.io;
-            this._actionConsentKvHandle = io?.kv?.('core', 'kv:cache') ?? null;
+            // Deployment-scoped: a "don't ask again" given in one deployment of
+            // this origin must not silence the prompt in another.
+            this._actionConsentKvHandle = io?.kv?.('core', 'kv:cache')?.deploymentScoped?.() ?? null;
         } catch (_) {
             this._actionConsentKvHandle = null;
         }

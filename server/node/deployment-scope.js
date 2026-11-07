@@ -77,6 +77,15 @@ function partitioned(open) {
     });
 }
 
+/**
+ * An eviction callback fires from the shared sweeper, outside any request — run
+ * it in the deployment whose partition evicted, so what it touches is that
+ * deployment's.
+ */
+function inDeployment(id, fn) {
+    return typeof fn === "function" ? (...args) => runInDeployment(id, () => fn(...args)) : fn;
+}
+
 /** Suffix of a partitioned name. `base` keeps the plain name, so its data never moves. */
 function partitionSuffix(id) {
     return id === BASE_DEPLOYMENT ? "" : `.dp-${id}`;
@@ -85,7 +94,8 @@ function partitionSuffix(id) {
 /** `XOPAT_SERVER.storage`: each deployment gets its own namespaces. */
 function partitionStorage(storage) {
     const shape = (name) => (ownerUid, namespace, options) => partitioned(
-        (id) => storage[name](ownerUid, namespace, { ...options, partition: partitionSuffix(id) }));
+        (id) => storage[name](ownerUid, namespace,
+            { ...options, partition: partitionSuffix(id), onEvict: inDeployment(id, options?.onEvict) }));
     return { ...storage, kv: shape("kv"), log: shape("log"), blob: shape("blob") };
 }
 
@@ -99,9 +109,18 @@ function partitionStorage(storage) {
 function partitionCache(cache) {
     return {
         ...cache,
-        create: ({ crossDeployment, ...options }) => (crossDeployment
-            ? cache.create(options)
-            : partitioned((id) => cache.create({ ...options, name: `${options.name}${partitionSuffix(id)}` }))),
+        create: ({ crossDeployment, ...options }) => {
+            if (String(options.name ?? "").includes(".dp-")) {
+                throw new Error(`Invalid cache name ${JSON.stringify(options.name)} ('.dp-' is reserved)`);
+            }
+            return crossDeployment
+                ? cache.create(options)
+                : partitioned((id) => cache.create({
+                    ...options,
+                    name: `${options.name}${partitionSuffix(id)}`,
+                    onEvict: inDeployment(id, options.onEvict),
+                }));
+        },
     };
 }
 

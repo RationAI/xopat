@@ -39,6 +39,10 @@ const DEPLOYMENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const BASE_DEPLOYMENT = "base";
 const OVERLAY_ROOT_KEYS = ["core", "plugins", "modules"];
 const OVERLAY_SERVER_KEYS = ["secure", "auth"];
+// Parts of `core.server.secure` that server boot reads once and that decide
+// process behaviour (server/node/index.js). `examples` is boot-read too, but
+// only feeds the startup banner, so data fragments may keep declaring it.
+const OVERLAY_BOOT_SECURE_KEYS = ["storage"];
 // "", "core" and "default" spell the one main auth context (server/node/auth.js).
 const MAIN_AUTH_CONTEXT_ALIASES = ["", "core", "default"];
 
@@ -96,6 +100,18 @@ function sanitizeOverlay(id, overlay) {
                 if (OVERLAY_SERVER_KEYS.includes(key)) kept[key] = server[key];
                 else problems.push(`deployments.${id}.core.server.${key} is process-wide boot config and cannot vary per deployment — ignored`);
             }
+            // `secure` is read per request, except these parts, which boot reads
+            // once. Kept, they applied process-wide when set on the default
+            // deployment and silently did nothing on any other.
+            if (isPlainObject(kept.secure)) {
+                const secure = Object.assign({}, kept.secure);
+                for (const key of OVERLAY_BOOT_SECURE_KEYS) {
+                    if (!(key in secure)) continue;
+                    delete secure[key];
+                    problems.push(`deployments.${id}.core.server.secure.${key} is process-wide boot config and cannot vary per deployment — ignored`);
+                }
+                kept.secure = secure;
+            }
             core.server = kept;
         }
         out.core = core;
@@ -134,11 +150,20 @@ function authContextsOf(server) {
         const canonical = MAIN_AUTH_CONTEXT_ALIASES.includes(id) ? "core" : id;
         out.set(`rpcVerifiers:${canonical}`, stableJson({ entry: verifiers[id], auth: server && server.auth }));
     }
-    const modules = isPlainObject(secure.modules) ? secure.modules : {};
-    for (const moduleId of Object.keys(modules)) {
-        const contexts = modules[moduleId] && modules[moduleId].contexts;
-        if (!isPlainObject(contexts)) continue;
-        for (const id of Object.keys(contexts)) out.set(`${moduleId}:${id}`, stableJson(contexts[id]));
+    // The main context's identity provider when no verifier map restates it.
+    if (!Object.keys(verifiers).length && isPlainObject(server && server.auth)) {
+        out.set("auth:core", stableJson(server.auth));
+    }
+    // Server-side login brokers keep per-context state on the session, whether
+    // they ship as a module or a plugin.
+    for (const kind of ["modules", "plugins"]) {
+        const items = isPlainObject(secure[kind]) ? secure[kind] : {};
+        for (const itemId of Object.keys(items)) {
+            const contexts = items[itemId] && items[itemId].contexts;
+            if (!isPlainObject(contexts)) continue;
+            const where = kind === "modules" ? itemId : `plugin:${itemId}`;
+            for (const id of Object.keys(contexts)) out.set(`${where}:${id}`, stableJson(contexts[id]));
+        }
     }
     return out;
 }
@@ -235,6 +260,66 @@ function resolveDeployment(ENV, requested) {
 }
 
 /**
+ * Whether the ENV defines any named deployment. Without one there is nothing to
+ * bind and every request runs in the base.
+ */
+function hasNamedDeployments(ENV) {
+    const defs = isPlainObject(ENV) && isPlainObject(ENV.deployments) ? ENV.deployments : {};
+    return Object.keys(defs).some(id => isDeploymentId(id) && isPlainObject(defs[id]));
+}
+
+/**
+ * Decide which deployment a request the viewer issues (RPC, proxy, module
+ * route) may run in, given the deployments its session was bound to by a page
+ * load. A deployment is entered by loading its page; everything after that is
+ * confined to what the session has entered, so a header naming another
+ * deployment cannot borrow its roles, elements, proxies or secure config.
+ *
+ * - no named deployments: anything goes (there is only the base);
+ * - a request naming a deployment: allowed only when the session is bound to
+ *   the RESOLVED id (an unknown name resolves to the default and is judged as such);
+ * - a request naming none (an OAuth callback, a navigation): the session's most
+ *   recently entered deployment, else the default — which must itself be bound
+ *   unless the session has entered nothing yet.
+ *
+ * @param {object} ENV parsed env (or `{deployments, defaultDeployment}`)
+ * @param {*} requested untrusted request-supplied name
+ * @param {string[]|undefined} bound ids the session entered, most recent last
+ * @return {{ok: boolean, requested: string|null, id: string}}
+ *   `requested` is the name to build the core with; `id` the resolved deployment
+ */
+function selectBoundDeployment(ENV, requested, bound) {
+    const echo = normalizeRequestedDeployment(requested);
+    if (!hasNamedDeployments(ENV)) return { ok: true, requested: echo, id: resolveDeployment(ENV, echo).id };
+    const entered = Array.isArray(bound) ? bound.filter(x => typeof x === "string") : [];
+    if (!echo) {
+        const last = entered[entered.length - 1];
+        if (last) return { ok: true, requested: last, id: resolveDeployment(ENV, last).id };
+        return { ok: true, requested: null, id: resolveDeployment(ENV, null).id };
+    }
+    const id = resolveDeployment(ENV, echo).id;
+    return { ok: entered.includes(id), requested: echo, id };
+}
+
+/**
+ * Record that a session entered a deployment (a page of it was served).
+ * Most recent last; bounded by the env's own deployment set.
+ *
+ * @return {boolean} whether the list changed
+ */
+function bindSessionDeployment(session, id) {
+    if (!session || typeof id !== "string") return false;
+    const list = Array.isArray(session.deployments) ? session.deployments.filter(x => x !== id) : [];
+    const changed = !Array.isArray(session.deployments)
+        || session.deployments[session.deployments.length - 1] !== id;
+    list.push(id);
+    // A defined id set is bounded by the env, but a stored session may outlive
+    // an env edit; never let it grow without bound.
+    session.deployments = list.slice(-64);
+    return changed;
+}
+
+/**
  * Resolve and merge the active deployment into ENV (in place).
  *
  * @param {object} ENV parsed env file; `core`/`plugins`/`modules` are merged into
@@ -268,4 +353,7 @@ module.exports = {
     listAuthContextConflicts,
     resolveDeployment,
     applyDeployment,
+    hasNamedDeployments,
+    selectBoundDeployment,
+    bindSessionDeployment,
 };

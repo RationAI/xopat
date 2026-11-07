@@ -15,9 +15,10 @@ const i18n = require('../../src/libs/i18next.min');
 
 
 const utils = require('./utils');
-const { getCore } = require("../templates/javascript/core");
+const { getCore, deploymentDefsOf } = require("../templates/javascript/core");
 const {
     normalizeRequestedDeployment, resolveDeployment, listDeploymentProblems,
+    selectBoundDeployment, bindSessionDeployment, listAuthContextConflicts,
 } = require("../templates/javascript/deployments");
 const { currentDeployment, runInDeployment } = require("./deployment-scope");
 const { buildExampleEntries } = require("./examples");
@@ -314,6 +315,9 @@ const UNVERSIONED_CODE_RE = /\.(?:m?js|cjs|css|json|wasm|html?)$/i;
  */
 let PUBLISHED_EXAMPLES = {};
 
+/** Fatal at boot — see the `bootStorageConfig` deployment block. */
+let AUTH_CONTEXT_CONFLICTS = [];
+
 /** `{deployments, defaultDeployment}` of the env, read at boot. See `resolveDeploymentId`. */
 let DEPLOYMENT_DEFS = {};
 /** Resolved deployment id for an (untrusted) requested name — cache keying only. */
@@ -411,11 +415,18 @@ const resolveDeploymentId = (requested) => resolveDeployment(DEPLOYMENT_DEFS, re
         // Named deployments: the set is read here only to key the production
         // core cache by the resolved id (dev re-reads the env every request and
         // never caches). Problems are reported once instead of per request.
+        const defs = deploymentDefsOf(core);
         DEPLOYMENT_DEFS = {
-            deployments: core?.ENV?.deployments,
-            defaultDeployment: core?.ENV?.defaultDeployment,
+            deployments: defs.deployments,
+            defaultDeployment: defs.defaultDeployment,
         };
-        for (const problem of listDeploymentProblems(core?.ENV)) logger.error?.(`[deployments] ${problem}`);
+        // Validation needs the base `core.server` too (auth-context conflicts).
+        const envForChecks = { ...(core?.ENV || {}), ...DEPLOYMENT_DEFS };
+        for (const problem of listDeploymentProblems(envForChecks)) logger.error?.(`[deployments] ${problem}`);
+        // A context id configured differently by two deployments hands one
+        // deployment's login to another's verifier (login state is shared per
+        // context id across the origin). `up:check` refuses it; so does boot.
+        AUTH_CONTEXT_CONFLICTS = listAuthContextConflicts(envForChecks);
         const ids = Object.keys(DEPLOYMENT_DEFS.deployments || {});
         if (ids.length) logger.info?.(`[deployments] defined: ${ids.join(", ")}; default: ${core?.DEPLOYMENT?.id}`);
     } catch (e) {
@@ -423,6 +434,12 @@ const resolveDeploymentId = (requested) => resolveDeployment(DEPLOYMENT_DEFS, re
         setStorageConfig({});
     }
 })();
+
+if (AUTH_CONTEXT_CONFLICTS.length) {
+    // Already logged as `[deployments]` problems above.
+    logger.error?.("[deployments] refusing to start: conflicting auth contexts would share login state between deployments.");
+    process.exit(1);
+}
 
 const { storage: SERVER_STORAGE, cache: SERVER_CACHE } = getServerStorage({ cacheDir: CACHE_DIR, logger });
 
@@ -849,6 +866,37 @@ function requestedDeploymentOf(req, url) {
     return param || null;
 }
 
+/**
+ * The deployment a viewer-issued request (RPC, proxy, module route) may run in,
+ * judged against the deployments its session entered by a page load. Writes a
+ * 403 and returns `null` when the request names one the session never entered —
+ * a header must not lend one deployment's caller another deployment's roles,
+ * elements, proxies or secure config. Otherwise returns the name to build the
+ * core with (see `selectBoundDeployment`).
+ */
+function boundDeploymentOrRefuse(req, res, urlObj, session) {
+    const choice = selectBoundDeployment(DEPLOYMENT_DEFS, requestedDeploymentOf(req, urlObj), session?.deployments);
+    if (choice.ok) return { requested: choice.requested };
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        error: "This session has not opened the requested deployment. Reload the viewer for that deployment.",
+        code: "DEPLOYMENT_NOT_BOUND",
+    }));
+    return null;
+}
+
+/**
+ * Bind the session to the deployment whose page is being served, and persist it
+ * before the page goes out — the page's first RPC must already see it, and the
+ * deferred write-back only lands after `finish`.
+ */
+async function bindViewerDeployment(session, core) {
+    const id = core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id;
+    if (!session || !id || !bindSessionDeployment(session, id)) return;
+    const stored = (await sessionStore.get(session.id)) || {};
+    await sessionStore.set(session.id, { ...stored, deployments: session.deployments });
+}
+
 const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly, requestedDeployment=undefined) => {
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
     let raw = req.url || "/";
@@ -893,6 +941,9 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serve
     if (withPlugins) {
         loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
         if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+        // PLUGINS/MODULES now say what this deployment enables — an empty map
+        // means "none", which is what the runtime's enablement gate must know.
+        core.ELEMENTS_LOADED = true;
         // Publish the composed (author ⊕ deployer) config so module state that is
         // built lazily — outside any request — can read its own block without a
         // ctx (XOPAT_SERVER.getStaticModuleConfig). Published after loadPlugins,
@@ -959,13 +1010,15 @@ function normalizeSchemePluginRecords(plugins) {
 // crash the moment the production guard below stops short-circuiting.
 let _i18nBakeCacheRef = null;
 function _i18nBakeCache() {
-    return _i18nBakeCacheRef ??= SERVER_CACHE.create({ name: "core:i18n-bake", maxEntries: 32 });
+    // languages × named deployments; both bounded by the env.
+    return _i18nBakeCacheRef ??= SERVER_CACHE.create({ name: "core:i18n-bake", maxEntries: 128 });
 }
 
 function getI18NData(language, core = undefined) {
     const production = !!core?.CORE?.client?.production;
-    if (production && _i18nBakeCache().has(language)) return _i18nBakeCache().get(language);
-    const requestedLanguage = language;
+    // Per deployment: the baked element bundles are that deployment's elements.
+    const bakeKey = `${core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id || "base"}:${language}`;
+    if (production && _i18nBakeCache().has(bakeKey)) return _i18nBakeCache().get(bakeKey);
 
     const localeFile = `${constants.ABSPATH}/src/locales/${language}.json`;
     if (!fs.existsSync(localeFile)) {
@@ -1016,7 +1069,7 @@ function getI18NData(language, core = undefined) {
         resources,
         lng: language,
     };
-    if (production) _i18nBakeCache().set(requestedLanguage, result);
+    if (production) _i18nBakeCache().set(bakeKey, result);
     return result;
 }
 
@@ -1029,13 +1082,15 @@ function getI18NData(language, core = undefined) {
 // in src/classes/scripting/README.md). Keys are app-relative paths — exactly
 // what a client URL is after stripping APPLICATION_CONTEXT.url. Anything at a
 // custom path just misses the registry and falls back to the cached fetch.
-// Computed once per process; restart to invalidate (like _productionCoreCache).
+// Computed once per process and named deployment (each enables its own
+// elements); restart to invalidate (like _productionCoreCache).
 const DTS_BAKE_MAX_BYTES = 256 * 1024;
-let _dtsRegistryCache = null;
+const _dtsRegistryCache = new Map();
 
 function getBakedDtsRegistry(core) {
     if (!core?.CORE?.client?.production) return null;
-    if (_dtsRegistryCache) return _dtsRegistryCache;
+    const deploymentId = core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id || "base";
+    if (_dtsRegistryCache.has(deploymentId)) return _dtsRegistryCache.get(deploymentId);
 
     const registry = {};
     const addFile = (absPath, relPath) => {
@@ -1076,7 +1131,7 @@ function getBakedDtsRegistry(core) {
     bakeElementDts(core.MODULES, "modules");
     bakeElementDts(core.PLUGINS, "plugins");
 
-    _dtsRegistryCache = registry;
+    _dtsRegistryCache.set(deploymentId, registry);
     return registry;
 }
 
@@ -1558,9 +1613,9 @@ function sameOrigin(a, b) {
     }
 }
 
-async function responseProxy(req, res, requestUrl, session) {
+async function responseProxy(req, res, requestUrl, session, requestedDeployment) {
     // 1. todo parse just core for now, no need to load plugins
-    const core = initViewerCoreAndPlugins(req, res, true);
+    const core = initViewerCoreAndPlugins(req, res, true, false, requestedDeployment);
     if (!core) return;
 
     // 2. Extract alias from /proxy/alias/v1/...
@@ -1837,6 +1892,7 @@ async function responseViewer(req, res, session) {
     }
     const core = initViewerCoreAndPlugins(req, res, false, true, requestedDeploymentOfPost(postData));
     if (!core) return;
+    await bindViewerDeployment(session, core);
 
     const replacer = function(match, p1) {
         try {
@@ -2163,9 +2219,11 @@ const server = http.createServer(async (req, res) => {
             // (deployer tier); loading plugins additionally fills the author
             // tier — and in production the scan comes from the core cache
             // instead of re-walking the plugin directories per RPC call.
-            const core = initViewerCoreAndPlugins(req, res, true, true);
-            if (!core) return;
             const session = await getSession(req, res);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            const core = initViewerCoreAndPlugins(req, res, true, true, bound.requested);
+            if (!core) return;
             // `return await`, not a bare `return`: a bare return resolves AFTER the
             // try block exits, so the catch below never observes a rejection and it
             // surfaces as an unhandled rejection instead of a 500.
@@ -2187,7 +2245,13 @@ const server = http.createServer(async (req, res) => {
                 return res.end('Forbidden: invalid CSRF token');
             }
 
-            return await responseProxy(req, res, urlObj, session);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            // The proxy runs element verifiers (verifyProxyAuth): inside the
+            // deployment the request was admitted to, like RPC handlers.
+            const proxyDeployment = resolveDeploymentId(bound.requested);
+            return await runInDeployment(proxyDeployment,
+                () => responseProxy(req, res, urlObj, session, bound.requested));
         }
         // --- end new proxy route ---
 
@@ -2195,9 +2259,12 @@ const server = http.createServer(async (req, res) => {
         // login/callback). Modules register a prefix→handler at boot via the
         // server-extension serverApi. Core stays auth-agnostic. See src/AUTH.md. ---
         if (serverRuntime.matchServerRoute(urlObj.pathname)) {
-            const core = initViewerCoreAndPlugins(req, res, true);
-            if (!core) return;
             const session = await getSession(req, res);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            // withPlugins: the route answers only where its owning element is enabled.
+            const core = initViewerCoreAndPlugins(req, res, true, true, bound.requested);
+            if (!core) return;
             return void await serverRuntime.dispatchServerRoute(req, res, core, session, urlObj);
         }
         // --- end module server routes ---
@@ -2323,7 +2390,36 @@ function startListening() {
 let EXTENSIONS_READY = false;
 let EXTENSIONS_ERROR = null;
 
+/**
+ * Publish every deployment's server-config snapshot before any element code
+ * runs, and fix the default. Without it a deployment's ctx-free config read
+ * (`XOPAT_SERVER.getStaticModuleConfig`) had nothing to resolve until that
+ * deployment's first plugin-loading request, and `register()` ran as `base`
+ * even when the env names a `defaultDeployment`.
+ */
+function publishDeploymentSnapshots() {
+    const ids = [null, ...Object.keys(DEPLOYMENT_DEFS.deployments || {})];
+    for (const id of ids) {
+        try {
+            const core = getCore(constants.ABSPATH, PROJECT_PATH,
+                fs.existsSync,
+                p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }),
+                key => process.env[key],
+                false,
+                { version: STARTUP_VERSION, deployment: id },
+            );
+            if (core.exception) throw core.exception;
+            loadPlugins(core, fs.existsSync, p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }), i18n);
+            if (core.exception) throw core.exception;
+            setServerConfigSnapshot(core, { asDefault: id === null });
+        } catch (e) {
+            logger.error?.(`[deployments] could not publish the config snapshot of '${id ?? "default"}':`, e?.message || e);
+        }
+    }
+}
+
 Promise.resolve()
+    .then(() => publishDeploymentSnapshots())
     .then(() => serverRuntime.loadServerExtensions())
     // Anonymous principals are derived from the browser session, so anything a
     // module stores under `sess:<id>` must die with it. Publish the hook rather

@@ -196,19 +196,23 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (self.config.params[name] !== undefined) {
                 return normalize(self.config.params[name]);
             }
-            if (cache && self.AppCache && !SESSION_SCOPED_OPTIONS.has(name)) {
-                let cached = self.AppCache.get(name);
+            // Per deployment: an option cached here overrides the deployment's own
+            // ENV.setup default, so a value chosen in one deployment of this
+            // origin must not override another's (theme, locale, debug flags...).
+            const optionCache = self.AppCache?.deploymentScoped?.() ?? self.AppCache;
+            if (cache && optionCache && !SESSION_SCOPED_OPTIONS.has(name)) {
+                let cached = optionCache.get(name);
                 if (parse && typeof cached === "string") {
                     const trimmed = cached.trim();
                     if (trimmed === "" || trimmed === "undefined") {
-                        self.AppCache.delete(name);
+                        optionCache.delete(name);
                         return undefined;
                     }
                     try {
                         return JSON.parse(trimmed);
                     } catch (e) {
                         console.warn("Failed to parse option cached value - erasing", cached);
-                        self.AppCache.delete(name);
+                        optionCache.delete(name);
                         cached = undefined;
                     }
                 }
@@ -231,8 +235,10 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (!self.config.defaultParams.hasOwnProperty(name)) {
                 console.warn(`Trying to set non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
             }
+            // See getOption: the user-preference layer is per deployment.
+            const optionCache = self.AppCache?.deploymentScoped?.() ?? self.AppCache;
             if (value === undefined) {
-                self.AppCache.delete(name);
+                optionCache.delete(name);
                 delete self.config.params[name];
                 return;
             }
@@ -246,9 +252,9 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (SESSION_SCOPED_OPTIONS.has(name)) {
                 // Session-structure option: never persist, and scrub any
                 // stale value an older build may have cached.
-                if (self.AppCache) self.AppCache.delete(name);
-            } else if (cache && self.AppCache) {
-                self.AppCache.set(name, value);
+                if (optionCache) optionCache.delete(name);
+            } else if (cache && optionCache) {
+                optionCache.set(name, value);
             }
             if (value === "false") value = false;
             else if (value === "true") value = true;
