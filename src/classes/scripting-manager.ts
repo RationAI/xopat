@@ -1885,7 +1885,6 @@ export class ScriptingManager<
                 new XOpatViewerScriptApi("viewer"),
                 new XOpatVisualizationScriptApi("visualization"),
                 new XOpatPatientScriptApi("patient"),
-                new XOpatAdjustmentsScriptApi("adjustments"),
                 new XOpatUiScriptApi("ui"),
             ];
 
