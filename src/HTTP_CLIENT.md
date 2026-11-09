@@ -158,6 +158,10 @@ Where:
 
 - `path` (string)  
   Path relative to `baseURL` (if set). For proxy mode, this is the path after `/proxy/<alias>/`.
+  A relative path must stay under `baseURL`: one whose dot segments (`..`, `%2e%2e`) resolve
+  outside it throws instead of carrying this client's credentials to another route or proxy alias.
+  `HTTPError` messages show the URL without query string, fragment or userinfo; read
+  `error.response.url` for the exact one.
 
 - `options` (object)
 

@@ -79,6 +79,17 @@ test("a caller Content-Type still wins @unit", async () => {
     expect(contentType(calls[1].init)).toBe("application/merge-patch+json");
 });
 
+test("a caller Content-Type in any casing replaces ours instead of joining it @unit", async () => {
+    const { client, calls } = await recordingClient();
+    await client.request("x", { method: "POST", body: { a: 1 }, headers: { "content-type": "application/merge-patch+json" } });
+    const s = await client.stream("x", { body: { a: 1 }, headers: { "CONTENT-TYPE": "application/x-ndjson" } });
+    s.cancel?.();
+
+    // Exactly one value after `Headers` normalization — no "application/json, …" join.
+    expect(new Headers(calls[0].init.headers).get("content-type")).toBe("application/merge-patch+json");
+    expect(new Headers(calls[1].init.headers).get("content-type")).toBe("application/x-ndjson");
+});
+
 test("stream() encodes bodies the same way @unit", async () => {
     const { client, calls } = await recordingClient();
     const form = new FormData();
