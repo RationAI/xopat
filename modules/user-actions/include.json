@@ -1,0 +1,44 @@
+{
+    "id": "user-actions",
+    "name": "%meta.name%",
+    "author": "RationAI",
+    "version": "1.0.0",
+    "description": "%meta.description%",
+    "icon": "ph-lightning",
+    "categories": ["Productivity"],
+    "keywords": ["actions", "shortcuts", "automation", "macros", "scripting"],
+    "stability": "experimental",
+    // Results render through the shared markdown renderer (sanitized).
+    "requires": ["markdown"],
+    "requiredConfig": [],
+    // UI gating only (the scripting sandbox still enforces core.scripting.run on every run).
+    "capabilities": [
+        { "id": "user-actions.run", "default": "allow", "label": "%capabilities.run%" },
+        { "id": "user-actions.author", "default": "allow", "label": "%capabilities.author%" }
+    ],
+    "io": {
+        "capabilities": [],
+        // User actions are the user's own: persisted locally by default. An operator may
+        // rebind kv:actions (ENV client.io.bindings["module.user-actions"]) to a server driver.
+        "defaultBindings": {
+            "kv:actions": ["local-storage"]
+        }
+    },
+    /*
+     * Deployment-provided actions (trusted, read-only for users). Same schema as user actions;
+     * `label`/`description` may be a language map and `script` an array of lines. Override in
+     * ENV: modules["user-actions"].actions. See README.md.
+     */
+    "actions": [],
+    // Let users create/edit/import their own actions (and assistants propose them).
+    "allowUserActions": true,
+    // Expose the `actions` scripting namespace to assistants (requires allowUserActions).
+    "allowAssistantAuthoring": true,
+    // Max saved user actions, script size (bytes) and run time cap (ms). An action's own
+    // `timeoutMs` defaults to 10 min and is clamped to this cap.
+    "maxActions": 50,
+    "maxScriptBytes": 32768,
+    "maxTimeoutMs": 1800000,
+    // Surfaces actions may be mounted on.
+    "surfaces": ["quick", "tools", "context-menu", "viewer-control", "shortcut"]
+}
