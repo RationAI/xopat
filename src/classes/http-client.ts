@@ -182,6 +182,34 @@ function xopatSessionHeaders(): Record<string, string> {
 }
 
 /**
+ * Turn a caller's `body` into what `fetch` sends, and the `Content-Type` that
+ * goes with it.
+ *
+ * Bodies `fetch` already encodes itself — `FormData`, `Blob`/`File`,
+ * `URLSearchParams`, `ArrayBuffer` and typed-array views — pass through
+ * untouched and carry NO content type: the browser sets it, and for `FormData`
+ * only the browser knows the multipart boundary. JSON-encoding them instead
+ * sends `"{}"` (a `FormData` has no enumerable fields), and the JSON content type
+ * makes a cross-origin call non-simple, so an upstream without CORS answers the
+ * preflight `OPTIONS` with 405 and the request never happens. That is how the
+ * `remote` speech-to-text driver failed against a self-hosted Whisper server.
+ *
+ * Strings keep their historical `application/json`; everything else is
+ * `JSON.stringify`-ed. A caller-supplied `Content-Type` header still wins.
+ */
+function encodeBody(body: unknown): { body: BodyInit; contentType?: string } {
+    if (typeof body === "string") return { body, contentType: "application/json" };
+    if ((typeof FormData !== "undefined" && body instanceof FormData)
+        || (typeof Blob !== "undefined" && body instanceof Blob)
+        || (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams)
+        || body instanceof ArrayBuffer
+        || ArrayBuffer.isView(body)) {
+        return { body: body as BodyInit };
+    }
+    return { body: JSON.stringify(body), contentType: "application/json" };
+}
+
+/**
  * HTTP client built on top of `XOpatRemoteEndpoint`:
  * - pluggable auth (JWT by default) with context-aware secrets        (← base)
  * - automatic auth headers via handlers                                 (← base)
@@ -427,6 +455,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
 
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
+        const encoded = hasBody ? encodeBody(body) : undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
 
         // The credentials this attempt is carrying, recorded as the headers are built.
@@ -437,7 +466,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const getBaseHeaders = async (headerSignal?: AbortSignal) => {
             sentSecrets = {};
             return {
-                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(encoded?.contentType ? { "Content-Type": encoded.contentType } : {}),
                 ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
                 ...headers,
                 ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
@@ -487,7 +516,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
             headers: currentHeaders,
             signal: effectiveSignal,
             ...(!crossOrigin && this.usingProxy ? { credentials: "same-origin" } : {}),
-            ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
+            ...(encoded ? { body: encoded.body } : {}),
         });
 
         let attempt = 0;
@@ -781,13 +810,14 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
 
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
+        const encoded = hasBody ? encodeBody(body) : undefined;
         const res = await this.fetchRaw(path, {
             method,
             headers: {
-                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(encoded?.contentType ? { "Content-Type": encoded.contentType } : {}),
                 ...headers,
             },
-            ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
+            ...(encoded ? { body: encoded.body } : {}),
             signal: ownController.signal,
         });
 

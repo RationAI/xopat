@@ -164,7 +164,10 @@ Where:
   {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", // default "GET"
   headers: { ... },      // extra headers
-  body: any,             // will be JSON.stringify’d if object
+  body: any,             // object/string → sent as JSON (application/json);
+                         // FormData, Blob/File, URLSearchParams, ArrayBuffer, typed arrays → sent as-is,
+                         // no Content-Type set (browser picks it, e.g. multipart boundary).
+                         // A caller-supplied Content-Type header always wins.
   query: { ... },        // optional query string object — appended via URLSearchParams; arrays become repeated keys
   expect: "json" | "text" | "auto", // default "auto" — drives response parsing
   }
