@@ -13,6 +13,10 @@ Always resolve it from the calling scripting context.**
 > across scripts — an opt-in, same-context relaxation. Either way, resolve everything from the
 > calling `ScriptingContext`: namespaces are context-agnostic and a reused worker must not
 > leak one script's selection into the next. See `src/SCRIPTING.md` for the execution model.
+>
+> A host that runs a script for a trigger passes its data as `executeScript(script, { input })`;
+> the script reads the deep-frozen global `input` (`src/SCRIPTING.md` → *Invocation data*).
+> `input` is a reserved worker global, so no namespace can take that name.
 
 ---
 

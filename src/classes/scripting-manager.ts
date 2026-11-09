@@ -11,6 +11,7 @@ import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
+import { XOpatAdjustmentsScriptApi } from "./scripting/adjustments-api";
 import { XOpatUiScriptApi } from "./scripting/ui-api";
 
 
@@ -34,6 +35,7 @@ const WORKER_STARTUP_TIMEOUT_MS = 15_000;
 
 const WORKER_RESERVED_GLOBALS = [
     "progress",
+    "input",
     "onmessage",
     "postMessage",
     "close",
@@ -106,6 +108,16 @@ function isScriptingDebugEnabled(): boolean {
         _scriptingDebugCache = false;
     }
     return _scriptingDebugCache;
+}
+
+/**
+ * Role gate `core.scripting.run` (src/USER_ROLES.md). One check for both sides of
+ * scripting: running a script, and advertising the API a script would be written
+ * against. Open when no user/role system is present.
+ */
+function canRunScripts(): boolean {
+    const user = (window as any).XOpatUser?.instance?.();
+    return !user || user.can("core.scripting.run") !== false;
 }
 
 function scriptingDebugLog(label: string, data?: unknown): void {
@@ -419,6 +431,9 @@ function buildGenericWorkerBootstrap(): string {
 // Privileged references captured before hardening; unreachable from user scripts.
 const _AsyncFn = (async function () {}).constructor;
 const _postToMain = self.postMessage.bind(self);
+const _defineProperty = Object.defineProperty;
+const _freeze = Object.freeze;
+const _isFrozen = Object.isFrozen;
 
 let _securePort = null;
 const _pendingCalls = new Map();
@@ -514,6 +529,26 @@ const _buildStubs = (manifest) => {
     }
 };
 
+// Caller-supplied invocation data ('input'). It arrives structured-cloned, so the
+// script owns a private copy; freezing it keeps the value stable for the whole run.
+const _deepFreeze = (value) => {
+    if (value === null || typeof value !== "object" || _isFrozen(value)) return value;
+    _freeze(value);
+    const keys = Object.keys(value);
+    for (let i = 0; i < keys.length; i++) _deepFreeze(value[keys[i]]);
+    return value;
+};
+
+const _installInput = (value) => {
+    // Installed on EVERY run (undefined when none was given) so a reused worker never
+    // shows a script the previous run's input. configurable so the next run replaces it.
+    try {
+        _defineProperty(self, "input", { value: _deepFreeze(value), writable: false, configurable: true });
+    } catch (err) {
+        console.warn("[scripting-worker] cannot install input", err);
+    }
+};
+
 const _harden = () => {
     if (_hardened) return;
     _hardened = true;
@@ -597,6 +632,8 @@ const _runHandler = (e) => {
         // is still available.
         _buildStubs(data.namespaces);
     }
+
+    _installInput(data.input);
 
     const execId = data.execId;
     _currentExecId = execId;
@@ -1311,7 +1348,8 @@ export class ScriptingContext<
         workerId: string,
         script: string,
         execId: string,
-        onProgress?: (value: unknown) => void
+        onProgress?: (value: unknown) => void,
+        input?: unknown
     ): Promise<unknown> {
         return new Promise((resolve, reject) => {
             const timeoutId = setTimeout(() => {
@@ -1337,6 +1375,7 @@ export class ScriptingContext<
                 // run and skips ones already installed (see _buildStubs). First run
                 // additionally transfers the secure port below.
                 namespaces: buildNamespaceManifestForWorker(this.manager.namespaces),
+                input,
             };
 
             try {
@@ -1367,13 +1406,14 @@ export class ScriptingContext<
         workerId: string,
         script: string,
         execId: string,
-        onProgress?: (value: unknown) => void
+        onProgress?: (value: unknown) => void,
+        input?: unknown
     ): Promise<unknown> {
         if (!record.reusable) {
-            return this._dispatchRun(record, workerId, script, execId, onProgress);
+            return this._dispatchRun(record, workerId, script, execId, onProgress, input);
         }
         const prior = record.busyTail || Promise.resolve();
-        const runOnce = () => this._dispatchRun(record, workerId, script, execId, onProgress);
+        const runOnce = () => this._dispatchRun(record, workerId, script, execId, onProgress, input);
         const result = prior.then(runOnce, runOnce);
         record.busyTail = result.then(() => undefined, () => undefined);
         return result;
@@ -1433,11 +1473,9 @@ export class ScriptingContext<
         // rather than resolving empty so a caller cannot mistake a refusal for
         // a script that legitimately returned nothing.
         // Inert unless an operator denies the id — see src/USER_ROLES.md.
-        const User = (window as any).XOpatUser;
-        const user = User?.instance?.();
-        if (user && !user.can("core.scripting.run")) {
+        if (!canRunScripts()) {
             throw new Error($.t("user.roles.refused", {
-                capability: User.capabilityLabel("core.scripting.run"),
+                capability: (window as any).XOpatUser.capabilityLabel("core.scripting.run"),
             }));
         }
         // Namespace ingest may still be running (boot no longer awaits it);
@@ -1475,7 +1513,7 @@ export class ScriptingContext<
             }
         }
 
-        return this._enqueueRun(record, workerId, transformed, execId, options.onProgress);
+        return this._enqueueRun(record, workerId, transformed, execId, options.onProgress, options.input);
     }
 
     /**
@@ -1507,7 +1545,7 @@ export class ScriptingContext<
             }
         }
         // Kick the run; swallow the result (fire-and-forget). Rejections are logged.
-        void this._enqueueRun(record, workerId, maybeAutoReturnTrailingIife(script), createExecId())
+        void this._enqueueRun(record, workerId, maybeAutoReturnTrailingIife(script), createExecId(), undefined, options.input)
             .catch((e) => scriptingDebugLog("CREATE_WORKER_RUN_ERROR", { contextId: this._id, workerId, error: e }));
         return record.worker;
     }
@@ -1848,6 +1886,7 @@ export class ScriptingManager<
                 new XOpatViewerScriptApi("viewer"),
                 new XOpatVisualizationScriptApi("visualization"),
                 new XOpatPatientScriptApi("patient"),
+                new XOpatAdjustmentsScriptApi("adjustments"),
                 new XOpatUiScriptApi("ui"),
             ];
 
@@ -2765,6 +2804,11 @@ export class ScriptingManager<
     }
 
     getAllowedApiManifest(allowedNamespaces?: string[]): AllowedScriptApiManifest {
+        // A user who may not run scripts gets no API to write scripts against.
+        // Advertising it anyway makes an assistant plan scripts that are refused,
+        // then improvise around the refusal (it read the capability label "Run
+        // scripts" as a UI feature and sent the user looking for it).
+        if (!canRunScripts()) return { namespaces: [] };
         const cacheable = !allowedNamespaces;
         const { map: availability, key: availabilityKey } = this._computeApiAvailability();
         if (cacheable

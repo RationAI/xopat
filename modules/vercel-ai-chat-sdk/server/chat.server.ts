@@ -1098,6 +1098,8 @@ Output rules:
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
 - Never invent namespaces or methods.
+- Every number, name or status you report must appear in a [script-result] of this conversation. If the data you need was not returned yet, run a script that returns it first; never fill a table, count or "it now works" claim from expectation. Never show an illustrative example result formatted like a real one.
+- Before reporting, check the result answers the user's question as asked (e.g. the subset they asked for; a readable name the data itself offers, such as a class/preset name, rather than its numeric internal id). If it does not, fix the script and run it again instead of explaining the gap. Anonymized handles (\`viewer-N\`, \`xopat:masked-…\`) are the intended identifiers — use them as they are (the application shows the user each \`viewer-N\` as its slide name). Never try to resolve or work around them.
 - The script must be using plain JavaScript + the allowed scripting API only. Do NOT use TypeScript syntax.
 - Do not wrap explanations inside the code block.
 - If you need to both explain and execute, put the explanation outside the code block and keep the executable block as the only fenced block.

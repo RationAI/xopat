@@ -471,10 +471,25 @@ input.selectable-image-row-context:checked + div {
     line-height: 1;
 }
 
+/* Navigator header actions that are secondary (quick background adjustment):
+ * revealed on navigator hover / keyboard focus, and kept visible while their
+ * panel is open (`btn-active`), so the toggle that closes it never vanishes. */
+.navigator-hover-action {
+    opacity: 0;
+    transition: opacity 0.12s ease-in-out;
+}
+
+.navigator-panel:hover .navigator-hover-action,
+.navigator-panel:focus-within .navigator-hover-action,
+.navigator-hover-action.btn-active {
+    opacity: 1;
+}
+
 @media (hover: none) {
     /* No hover on touch: a control that only appears on hover is a control
      * that does not exist there. */
-    .shader-reorder {
+    .shader-reorder,
+    .navigator-hover-action {
         opacity: 1;
     }
 }

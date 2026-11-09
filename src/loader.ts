@@ -4291,9 +4291,9 @@ form.submit();
     // pipeline, inspector controllers, ...) gets the browser's native
     // "Leave site?" prompt for free. Modern browsers ignore custom
     // messages; both setters are still required for the prompt to show.
-    // Embeddings that drive the viewer programmatically (e.g. notebooks)
-    // can suppress the prompt entirely with params.bypassCloseConfirmation —
-    // in that case we skip registering the listener altogether.
+    // Off by default: bypassCloseConfirmation defaults to true (src/config.json,
+    // ENV XOPAT_BYPASS_CLOSE_CONFIRMATION). Deployments opt in by setting it
+    // false; when bypassed we skip registering the listener altogether.
     if (!APPLICATION_CONTEXT.getOption('bypassCloseConfirmation')) {
         window.addEventListener('beforeunload', (event) => {
             if (!APPLICATION_CONTEXT.__cache.dirty) return;

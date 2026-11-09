@@ -36,7 +36,7 @@
       "theme": "auto",
       "disablePluginsUi": "<% XOPAT_DISABLE_PLUGINS_UI:-false %>",
       "scrollRequiresCtrl": "<% XOPAT_SCROLL_REQUIRES_CTRL:-false %>",
-      "bypassCloseConfirmation": "<% XOPAT_BYPASS_CLOSE_CONFIRMATION:-false %>"
+      "bypassCloseConfirmation": "<% XOPAT_BYPASS_CLOSE_CONFIRMATION:-true %>"
     },
     /* No gating by default: an empty `definitions` means every capability
        falls back to its plugin default. `roles/*` fragments replace this. */

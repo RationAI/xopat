@@ -429,7 +429,7 @@
         "kineticPanMinSpeed": 300,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
-        "bypassCloseConfirmation": false,
+        "bypassCloseConfirmation": true,
         // can disable cookies support
         "bypassCookies": false,
         // can disable cache data loading

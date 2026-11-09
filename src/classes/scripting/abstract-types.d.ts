@@ -163,6 +163,13 @@ export type ExecuteScriptOptions = {
      * later aborted or times out, report the last payload instead of nothing.
      */
     onProgress?: (value: unknown) => void;
+    /**
+     * Invocation data for the script, exposed inside the worker as the read-only,
+     * deep-frozen global `input` (undefined when omitted). Must be structured-cloneable;
+     * the script receives a copy. Use this to hand a script its trigger context (a viewer
+     * id, a clicked position, a selection) instead of splicing data into script text.
+     */
+    input?: unknown;
 };
 
 /**
@@ -244,6 +251,8 @@ export type RunWorkerMessage = {
     apiTimeout: number;
     /** Present on the first run only; code-free namespace description. */
     namespaces?: WorkerNamespaceManifest;
+    /** Structured-cloned `ExecuteScriptOptions.input`, installed as the worker global `input`. */
+    input?: unknown;
 };
 
 export type ApiMethodDoc<T extends AnyFn> = {

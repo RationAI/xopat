@@ -123,9 +123,30 @@ Execution now draws from a **pre-warmed pool of pristine, one-shot workers**:
 > up per-method changes (the chat does) compare `manager.manifestGeneration` and
 > recycle the worker (terminate + lazy re-acquire) when it moved.
 
+## Invocation data (`input`)
+
+A caller that runs a stored script on behalf of a trigger (a button, a context-menu click)
+passes the trigger's data as **`executeScript(script, { input })`**. The script reads it as the
+read-only global **`input`**:
+
+```js
+// executeScript(script, { input: { trigger: "context-menu", position: { x: 812, y: 4410 } } })
+const { x, y } = input.position;
+```
+
+- `input` is structured-cloned into the worker and **deep-frozen**: the script gets its own
+  copy, and writing to it throws (strict mode). Mutations never reach the caller.
+- It is installed on **every** run — `undefined` when omitted — so a reused worker never shows
+  a script the previous run's input.
+- A script may still declare its own `const input = …`; the local binding shadows the global.
+- `input` is a reserved worker global: no namespace may be registered under that name.
+
+Never splice caller data into script text instead (string concatenation of JSON into code is
+how injection starts). `modules/user-actions` is the reference consumer.
+
 ## Partial results from long-running scripts
 
-A script realm exposes one global besides the namespaces: **`progress(value)`** (synchronous,
+A script realm exposes two globals besides the namespaces: `input` (above) and **`progress(value)`** (synchronous,
 not a promise). It publishes an intermediate payload for the current run:
 
 ```js

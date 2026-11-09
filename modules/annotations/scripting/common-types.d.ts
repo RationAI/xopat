@@ -17,10 +17,14 @@ export type AnnotationRecord = Record<string, unknown> & {
     id?: string;
     incrementId?: number;
     internalID?: number;
+    /** Annotation kind as the user drew it ("point", "rect", "polygon", ...). Filter by kind with THIS field. */
     factoryID?: string;
+    /** Low-level rendering shape (a point is an "ellipse"). Not the annotation kind — use factoryID. */
     type?: string;
+    /** The class: look up its name in getPresets() (preset.meta.category.value). */
     presetID?: string;
     layerID?: string;
+    /** Free per-annotation value, usually empty. Not the class — the class is presetID. */
     label?: string | number;
     color?: string;
     author?: string | { id?: string; name?: string } | null;

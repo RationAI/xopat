@@ -1577,7 +1577,7 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const consentsWrap = div({ class: "max-h-[15rem] overflow-x-auto" });
+        const consentsWrap = div({ class: "max-h-[15rem] overflow-y-auto" });
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
             const wrapper = div({ class: "flex flex-row gap-1 mt-2" });
 
@@ -1600,12 +1600,35 @@ export class ChatPanel extends BaseComponent {
                     span({ class: "badge badge-xs badge-warning" }, _t('sensitiveBadge')))
                 : span(value.title);
 
+            // Namespace descriptions are written for the model and run to a paragraph;
+            // the checklist shows one line and expands on demand.
+            const description = String(value.description || "");
+            // Line clamp, not `white-space: nowrap`: a nowrap line's intrinsic width is the whole
+            // paragraph, which widened the modal and cut every other row at its right edge.
+            const collapsed = "display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden;";
+            const descEl = div({ class: "text-[11px] text-base-content/70", style: collapsed }) as HTMLElement;
+            descEl.textContent = description;
+            let toggle: HTMLElement | null = null;
+            if (description.length > 90) {
+                let expanded = false;
+                toggle = a({
+                    href: "#",
+                    class: "link link-hover text-[11px] self-start",
+                    onclick: (e: Event) => {
+                        // Inside the <label>: do not toggle the checkbox.
+                        e.preventDefault();
+                        e.stopPropagation();
+                        expanded = !expanded;
+                        descEl.setAttribute("style", expanded ? "" : collapsed);
+                        toggle!.textContent = expanded ? _t('showLess') : _t('showDetails');
+                    },
+                }, _t('showDetails')) as HTMLElement;
+            }
+
             wrapper.appendChild(label({
-                style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
+                style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-width: 0;",
                 for: "chat-namespace-consent-" + namespace,
-            }, titleRow, value.description
-                ? span({ class: "text-[11px] text-base-content/70" }, value.description)
-                : span()));
+            }, titleRow, description ? descEl : span(), toggle || span()));
 
             consentsWrap.appendChild(wrapper);
         });
@@ -4560,7 +4583,7 @@ export class ChatPanel extends BaseComponent {
     _streamPreviewProse(raw: string): string {
         // Same tag set the extractor accepts (shared/script-text.ts), so the preview never shows
         // code the runtime is about to take.
-        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)[\s\S]*?(?:```|$)/gi, "");
+        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)(?![\w-])[\s\S]*?(?:```|$)/gi, "");
         text = this._stripAssistantReasoning(text);
         return String(this.chat?.presentTextForUser?.(text) ?? text).trim();
     }
