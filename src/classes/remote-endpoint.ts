@@ -140,6 +140,8 @@ export class XOpatRemoteEndpoint {
 
     /** Origin parsed from `baseURL`, used for cross-origin auth-stripping. `null` when baseURL itself is not an absolute URL we can parse. */
     private _baseOrigin: string | null = null;
+    /** Normalized pathname of `baseURL` without a trailing slash (`""` for the root); relative paths must stay under it. `null` when unparseable. */
+    private _basePath: string | null = null;
     /** One-shot warning suppression keyed by foreign origin. */
     private _warnedForeignOrigins: Set<string> = new Set();
     /** One-shot "required but no secret" warning suppression, keyed by context. */
@@ -204,9 +206,12 @@ export class XOpatRemoteEndpoint {
             const absoluteBase = /^https?:\/\//i.test(this.baseURL)
                 ? this.baseURL
                 : new URL(this.baseURL, (typeof window !== "undefined" && window.location?.href) || "http://localhost/").href;
-            this._baseOrigin = new URL(absoluteBase).origin;
+            const parsedBase = new URL(absoluteBase);
+            this._baseOrigin = parsedBase.origin;
+            this._basePath = parsedBase.pathname.replace(/\/+$/, "");
         } catch (_) {
             this._baseOrigin = null;
+            this._basePath = null;
         }
 
         this.secretStore = XOpatUser.instance();
@@ -264,11 +269,39 @@ export class XOpatRemoteEndpoint {
      */
     get authContextId(): string | undefined { return this.auth.contextId; }
 
-    /** Resolve a path (relative or absolute) against `this.baseURL`. */
+    /**
+     * Resolve a path (relative or absolute) against `this.baseURL`.
+     *
+     * A relative path must stay UNDER `baseURL`. The join is textual and `fetch`
+     * normalizes dot segments afterwards, so `/proxy/a/` + `../b/x` would be sent
+     * as `/proxy/b/x` — still same-origin, so it would carry this endpoint's
+     * credentials and session headers to a different proxy alias (or another API
+     * on the upstream). `encodeURIComponent("..")` is still `..`, so encoding a
+     * caller-supplied id does not prevent it. Throws instead of escaping.
+     */
     resolveUrl(path: string): string {
-        return /^https?:\/\//i.test(path)
-            ? path
-            : `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
+        if (/^https?:\/\//i.test(path)) return path;
+        const joined = `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
+        // Fast path: no dot segment can exist without a `.`/`%2e` right after a
+        // separator (`\` counts: special-scheme URLs treat it as `/`).
+        if (!/(^|[\/\\])(\.|%2e)/i.test(path)) return joined;
+        this._assertUnderBase(joined, path);
+        return joined;
+    }
+
+    /** Throw unless `joined` (once normalized) still lies under `baseURL`'s path. */
+    private _assertUnderBase(joined: string, path: string): void {
+        if (this._basePath === null) return;
+        let pathname: string;
+        try {
+            const origin = (typeof window !== "undefined" && window.location?.href) || "http://localhost/";
+            pathname = new URL(joined, origin).pathname;
+        } catch (_) {
+            throw new Error(`XOpatRemoteEndpoint: refusing unparseable path '${path}'.`);
+        }
+        const base = this._basePath;
+        if (pathname === base || pathname.startsWith(`${base}/`)) return;
+        throw new Error(`XOpatRemoteEndpoint: refusing path '${path}' that resolves outside baseURL (${this.baseURL}).`);
     }
 
     /**

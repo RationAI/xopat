@@ -158,13 +158,20 @@ Where:
 
 - `path` (string)  
   Path relative to `baseURL` (if set). For proxy mode, this is the path after `/proxy/<alias>/`.
+  A relative path must stay under `baseURL`: one whose dot segments (`..`, `%2e%2e`) resolve
+  outside it throws instead of carrying this client's credentials to another route or proxy alias.
+  `HTTPError` messages show the URL without query string, fragment or userinfo; read
+  `error.response.url` for the exact one.
 
 - `options` (object)
 
   {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", // default "GET"
   headers: { ... },      // extra headers
-  body: any,             // will be JSON.stringify’d if object
+  body: any,             // object/string → sent as JSON (application/json);
+                         // FormData, Blob/File, URLSearchParams, ArrayBuffer, typed arrays → sent as-is,
+                         // no Content-Type set (browser picks it, e.g. multipart boundary).
+                         // A caller-supplied Content-Type header always wins.
   query: { ... },        // optional query string object — appended via URLSearchParams; arrays become repeated keys
   expect: "json" | "text" | "auto", // default "auto" — drives response parsing
   }
