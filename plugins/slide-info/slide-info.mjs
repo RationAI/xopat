@@ -20,6 +20,8 @@ addPlugin('slide-info', class extends XOpatPlugin {
 
         this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
         this.slideBrowser = this.getOptionOrConfiguration('slideBrowser', 'slideBrowser', true);
+        // Deployment-controlled (include.json / ENV plugins.slide-info), not session-overridable.
+        this.slideArrows = this.getStaticMeta('slideArrows', true);
 
         this.infoMenuBuilder.buildViewerMenu(async viewer => {
             // Await the locale before touching `this.t`: a viewer can open
@@ -390,6 +392,51 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     /**
+     * Prev/next arrows as `USER_INTERFACE.ViewerControls`, rendered in every
+     * viewer's chrome. Each click carries its own viewer, so it switches that
+     * viewport only.
+     * @private
+     */
+    _registerSlideArrows() {
+        const controls = USER_INTERFACE?.ViewerControls;
+        if (!this.slideSwitching || !this.slideArrows || !controls) return;
+
+        const shortcuts = APPLICATION_CONTEXT?.shortcuts;
+        const kbdOf = (shortcutId) => {
+            const combo = shortcuts?.getBinding?.(shortcutId)?.combos?.[0];
+            return combo ? shortcuts.comboDisplayParts(combo).join("+") : undefined;
+        };
+        // Nothing to step through: a single slide and no custom hierarchy.
+        const visible = () => this.hasCustomBrowser
+            || (APPLICATION_CONTEXT.config.background?.length || 0) > 1;
+
+        const register = () => {
+            controls.register("slide-info.prevSlide", {
+                label: this.t('keymap.prevSlide'),
+                hint: this.t('keymap.prevSlideDesc'),
+                icon: "ph-caret-left",
+                kbd: kbdOf("slide-info.nav.prevSlide"),
+                order: 10,
+                visible,
+                onClick: ({ viewer }) => this._navigateSlide(false, viewer),
+            });
+            controls.register("slide-info.nextSlide", {
+                label: this.t('keymap.nextSlide'),
+                hint: this.t('keymap.nextSlideDesc'),
+                icon: "ph-caret-right",
+                kbd: kbdOf("slide-info.nav.nextSlide"),
+                order: 11,
+                visible,
+                onClick: ({ viewer }) => this._navigateSlide(true, viewer),
+            });
+        };
+        register();
+        // Tooltips show the live combo; a remap must not leave them stale.
+        shortcuts?.addHandler?.("binding-changed", register);
+        shortcuts?.addHandler?.("bindings-reset", register);
+    }
+
+    /**
      * Prev/next dispatcher. Prefers hierarchy-aware navigation via the slide
      * switcher (siblings within the currently-browsed level); falls back to a
      * linear walk of the flat catalog when the browser is disabled.
@@ -740,6 +787,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
         }
         // Register after locale load so the Keymap panel shows resolved titles.
         this._registerShortcuts();
+        this._registerSlideArrows();
     }
 
     /**
@@ -783,6 +831,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
         }
         this.menu.refresh(config);
         this.hasCustomBrowser = !!config;
+        USER_INTERFACE.ViewerControls?.refresh();
     }
 
     /**
@@ -792,6 +841,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
     setWillInitCustomBrowser() {
         this.menu.refresh({});
         this.hasCustomBrowser = true;
+        USER_INTERFACE.ViewerControls?.refresh();
     }
 
     /**
@@ -816,13 +866,6 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     _createControlButtons(viewer) {
-        // todo consider supporting switching between slides, need to work reasonably with multiple viewers
-        // const active = APPLICATION_CONTEXT.config.background.length <= 1 ? {"active": "disabled"} : undefined;
-        // USER_INTERFACE.addViewerHtml(
-        //     van.tags.div({class: "absolute bottom-0 left-[50%] flex flex-row", id: "slide-info-control-bar-"+viewer.id, style: "transform: translate(-50%, 0);"},
-        //         new UI.Button({onClick: this.changeSlide.bind(this, false), extraClasses: active}, '❮❮').create(),
-        //         this._customControlButtons,
-        //         new UI.Button({onClick: this.changeSlide.bind(this, true), extraClasses: active}, '❯❯').create()
-        //     ), this.id, viewer.id);
+        // Prev/next slide arrows are USER_INTERFACE.ViewerControls, see _registerSlideArrows.
     }
 });

@@ -39,6 +39,7 @@
 
 import type { IOPipeline } from "./io-pipeline";
 import { OutboxStore, type PersistedOutboxEntry } from "./outbox-store";
+import { deploymentKey } from "../app/deployment-key";
 
 export interface IOResourceCreateOptions {
     ownerUid: string;
@@ -268,7 +269,12 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
 
         let entries: PersistedOutboxEntry[] = [];
         try {
-            entries = await store.listForResource(this.ownerUid, this.name);
+            // Only this deployment's ops. Another deployment's — or an unstamped
+            // one — would dispatch, guard-free, into THIS deployment's sinks.
+            // They stay put for their own deployment and age out with the prune.
+            const own = deploymentKey();
+            entries = (await store.listForResource(this.ownerUid, this.name))
+                .filter(e => !!own && e.deploymentKey === own);
         } catch (e) {
             console.warn(`[IO] resource "${this.name}" listForResource failed:`, e);
         }
@@ -393,6 +399,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                     attemptCount: 0,
                     rollbackOnAsyncRefuse: !!entry.options.rollbackOnAsyncRefuse,
                     metaJson: this._safeStringify(entry.ctx.meta),
+                    deploymentKey: deploymentKey(),
                 };
                 await store.add(persisted);
                 this._persistedCount++;

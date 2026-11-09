@@ -87,6 +87,8 @@ and skipped entirely. Since the event is fired before the viewer initialization,
 it is not fired on the actual instance, but on the manager instead. The viewer reference is
 passed as the ``viewer`` property. Mutating `background`, `visualization`, or entries inside `data` updates the real session state that is used to open
 that viewer. You should touch only parts of the session that relate to the viewer, marked by ``backgroundIndex``, ``visualizationIndex``, and ``dataIndexes``.
+Re-pointing ``backgroundIndex`` / ``visualizationIndex`` (e.g. at an overlay the handler appended to ``config.visualizations``) is enough on its own:
+the seeded ``background`` / ``visualization`` objects are written back only to their original slot, unless the handler replaced the object. Set ``visualizationIndex = null`` to open without a visualization.
 
 #### async `after-open` | e: {}
 This event is fired once all viewers are opened and set up. There is no data since

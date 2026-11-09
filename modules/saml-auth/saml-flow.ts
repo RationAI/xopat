@@ -42,7 +42,7 @@ interface BoundedCacheLike<V> {
     readonly size: number;
 }
 
-function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): BoundedCacheLike<V> {
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number; crossDeployment?: boolean }): BoundedCacheLike<V> {
     const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
     if (typeof create === "function") return create({ name, ...options });
     console.warn(`[${MODULE_ID}] XOPAT_SERVER.cache unavailable — '${name}' is unbounded.`);
@@ -226,6 +226,9 @@ export interface SpUrls { callbackUrl: string; logoutCallbackUrl: string }
  */
 export async function spFor(ctx: any, contextId: string, urls: SpUrls): Promise<SamlSp> {
     const cfg = getContextConfig(ctx, contextId);
+    // No config in the key: core partitions `spCache` per named deployment
+    // (server/STORAGE.md "Named deployments"), so one deployment's SP never
+    // serves another's, and a deployment's config is fixed until restart.
     const key = `${normalizeContextId(contextId)}\n${urls.callbackUrl}`;
     const cached = spCache.get(key);
     if (cached) return cached;
@@ -340,7 +343,7 @@ export function verifyRelayState(cfg: any, relay: string | null | undefined): Re
 // grown past 5000 and only removed already-expired entries, so a burst of live
 // assertions pushed it past the threshold and kept it there — the "cap" was a
 // sweep trigger, never a bound.
-const seenAssertions = boundedCache<number>("saml:seen-assertions", { maxEntries: 5000 });
+const seenAssertions = boundedCache<number>("saml:seen-assertions", { maxEntries: 5000, crossDeployment: true });
 
 export function assertAssertionUnseen(assertionId: string | null | undefined, ttlMs: number): void {
     if (!assertionId) throw new Error("Assertion has no ID — refusing (cannot detect replay).");
@@ -380,7 +383,7 @@ export function assertionIdOf(profile: any): string | null {
 const HANDOFF_TTL_MS = 60_000;
 // TTL + cap are the cache's job; parking a result no longer walks the whole map.
 const handoff = boundedCache<{ payload: any; exp: number }>(
-    "saml:acs-handoff", { maxEntries: 1000, ttlMs: HANDOFF_TTL_MS });
+    "saml:acs-handoff", { maxEntries: 1000, ttlMs: HANDOFF_TTL_MS, crossDeployment: true });
 
 export function parkResult(payload: any): string {
     const code = b64url(randomBytes(24));

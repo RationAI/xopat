@@ -29,6 +29,7 @@
 !/modules/sanitize-html
 !/modules/snapshots
 !/modules/speech-to-text
+!/modules/user-actions
 !/modules/vega
 !/modules/vega-secure
 !/modules/vercel-ai-chat-sdk

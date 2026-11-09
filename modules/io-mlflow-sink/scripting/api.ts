@@ -114,6 +114,9 @@ export function registerMlflowSinkScriptingApi(): void {
     class XOpatMlflowSinkScriptApi extends ScriptApiBase {
         static ScriptApiMetadata = {
             dtypesSource: { kind: "text", value: MLFLOW_SINK_DTS },
+            assistant: {
+                intentPatterns: [/mlflow|experiment|metric/i],
+            },
         };
 
         constructor(namespace: string) {

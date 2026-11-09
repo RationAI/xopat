@@ -15,7 +15,12 @@ const i18n = require('../../src/libs/i18next.min');
 
 
 const utils = require('./utils');
-const { getCore } = require("../templates/javascript/core");
+const { getCore, deploymentDefsOf } = require("../templates/javascript/core");
+const {
+    normalizeRequestedDeployment, resolveDeployment, listDeploymentProblems,
+    selectBoundDeployment, bindSessionDeployment, listAuthContextConflicts,
+} = require("../templates/javascript/deployments");
+const { currentDeployment, runInDeployment } = require("./deployment-scope");
 const { buildExampleEntries } = require("./examples");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
@@ -298,6 +303,8 @@ let EXPOSE_SCHEME_ROUTES = DEV_MODE;
  * never hidden. `0` means revalidate every time (`no-cache`).
  */
 let STATIC_MAX_AGE = 3600;
+/** Assets that are code: never reused across releases without revalidating. */
+const UNVERSIONED_CODE_RE = /\.(?:m?js|cjs|css|json|wasm|html?)$/i;
 
 /**
  * `core.server.secure.examples` — sessions this deployment publishes as
@@ -307,6 +314,14 @@ let STATIC_MAX_AGE = 3600;
  * `server/node/examples.js`.
  */
 let PUBLISHED_EXAMPLES = {};
+
+/** Fatal at boot — see the `bootStorageConfig` deployment block. */
+let AUTH_CONTEXT_CONFLICTS = [];
+
+/** `{deployments, defaultDeployment}` of the env, read at boot. See `resolveDeploymentId`. */
+let DEPLOYMENT_DEFS = {};
+/** Resolved deployment id for an (untrusted) requested name — cache keying only. */
+const resolveDeploymentId = (requested) => resolveDeployment(DEPLOYMENT_DEFS, requested).id;
 
 (function bootStorageConfig() {
     try {
@@ -396,11 +411,37 @@ let PUBLISHED_EXAMPLES = {};
 
         const examples = core?.CORE?.server?.secure?.examples || core?.CORE_SECURE?.examples;
         if (examples && typeof examples === "object") PUBLISHED_EXAMPLES = examples;
+
+        // Named deployments: the set is read here only to key the production
+        // core cache by the resolved id (dev re-reads the env every request and
+        // never caches). Problems are reported once instead of per request.
+        const defs = deploymentDefsOf(core);
+        DEPLOYMENT_DEFS = {
+            deployments: defs.deployments,
+            defaultDeployment: defs.defaultDeployment,
+        };
+        // Validation needs the base `core.server` too (auth-context conflicts) —
+        // the PRE-overlay one: `core.ENV` already carries the default
+        // deployment, which would hide a deployment that inherits the base.
+        const envForChecks = { core: { server: defs.baseServer || {} }, ...DEPLOYMENT_DEFS };
+        for (const problem of listDeploymentProblems(envForChecks)) logger.error?.(`[deployments] ${problem}`);
+        // A context id configured differently by two deployments hands one
+        // deployment's login to another's verifier (login state is shared per
+        // context id across the origin). `up:check` refuses it; so does boot.
+        AUTH_CONTEXT_CONFLICTS = listAuthContextConflicts(envForChecks);
+        const ids = Object.keys(DEPLOYMENT_DEFS.deployments || {});
+        if (ids.length) logger.info?.(`[deployments] defined: ${ids.join(", ")}; default: ${core?.DEPLOYMENT?.id}`);
     } catch (e) {
         logger.warn?.('[storage] could not pre-read storage config; using defaults:', e?.message || e);
         setStorageConfig({});
     }
 })();
+
+if (AUTH_CONTEXT_CONFLICTS.length) {
+    // Already logged as `[deployments]` problems above.
+    logger.error?.("[deployments] refusing to start: conflicting auth contexts would share login state between deployments.");
+    process.exit(1);
+}
 
 const { storage: SERVER_STORAGE, cache: SERVER_CACHE } = getServerStorage({ cacheDir: CACHE_DIR, logger });
 
@@ -435,8 +476,11 @@ const SESSION_MAX_ENTRIES = Math.max(100, Number(process.env.XOPAT_SESSION_MAX) 
 const sessionEvictionListeners = new Set();
 
 function onSessionEvicted(listener) {
-    sessionEvictionListeners.add(listener);
-    return () => sessionEvictionListeners.delete(listener);
+    // Eviction has no request, so the owner's deployment is the one it subscribed from.
+    const deployment = currentDeployment();
+    const bound = (id) => runInDeployment(deployment, () => listener(id));
+    sessionEvictionListeners.add(bound);
+    return () => sessionEvictionListeners.delete(bound);
 }
 
 function notifySessionEvicted(id) {
@@ -783,7 +827,9 @@ function normalizeLanguage(raw) {
 // change from silently becoming a leak again.
 const _productionCoreCache = SERVER_CACHE.create({
     name: "core:production-core",
-    maxEntries: 32,
+    // modes × languages × named deployments (keyed by resolved id, so bounded
+    // by the env, never by request input).
+    maxEntries: 128,
 });
 
 /**
@@ -792,35 +838,96 @@ const _productionCoreCache = SERVER_CACHE.create({
  * it, and printers track `_coreBundleEmitted` per page render. PLUGINS/MODULES
  * stay shared — request handlers treat them as read-only.
  */
-function _perRequestCoreView(master) {
+function _perRequestCoreView(master, requestedDeployment) {
     const view = Object.create(master);
     view._coreBundleEmitted = false;
     view.CORE = JSON.parse(JSON.stringify(master.CORE));
+    // The cache is keyed by the RESOLVED deployment, so several requested names
+    // (an unknown one, none at all) share an entry. Re-stamp the echo for this
+    // request — the client's mismatch re-POST loop guard reads it.
+    const served = view.CORE.deployment;
+    if (served) {
+        served.requested = requestedDeployment || null;
+        served.fellBack = !!requestedDeployment && requestedDeployment !== served.id;
+        view.DEPLOYMENT = served;
+    }
     return view;
 }
 
-const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly) => {
+/**
+ * The named deployment a request asks for (`server/templates/javascript/deployments.js`).
+ * Untrusted and only a name: the resolver accepts ids the operator defined and
+ * falls back otherwise. Page loads name it in the session (passed explicitly by
+ * `responseViewer`) or `?deployment=`; requests the viewer itself issues (RPC,
+ * proxy) carry `X-XOPAT-Deployment`, stamped by HttpClient.
+ */
+function requestedDeploymentOf(req, url) {
+    const header = req.headers['x-xopat-deployment'];
+    if (typeof header === "string" && header) return header;
+    const param = url?.searchParams?.get('deployment');
+    return param || null;
+}
+
+/**
+ * The deployment a viewer-issued request (RPC, proxy, module route) may run in,
+ * judged against the deployments its session entered by a page load. Writes a
+ * 403 and returns `null` when the request names one the session never entered —
+ * a header must not lend one deployment's caller another deployment's roles,
+ * elements, proxies or secure config. Otherwise returns the name to build the
+ * core with (see `selectBoundDeployment`).
+ */
+function boundDeploymentOrRefuse(req, res, urlObj, session) {
+    const choice = selectBoundDeployment(DEPLOYMENT_DEFS, requestedDeploymentOf(req, urlObj), session?.deployments);
+    if (choice.ok) return { requested: choice.requested };
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        error: "This session has not opened the requested deployment. Reload the viewer for that deployment.",
+        code: "DEPLOYMENT_NOT_BOUND",
+    }));
+    return null;
+}
+
+/**
+ * Bind the session to the deployment whose page is being served, and persist it
+ * before the page goes out — the page's first RPC must already see it, and the
+ * deferred write-back only lands after `finish`.
+ */
+async function bindViewerDeployment(session, core) {
+    const id = core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id;
+    if (!session || !id || !bindSessionDeployment(session, id)) return;
+    const stored = (await sessionStore.get(session.id)) || {};
+    await sessionStore.set(session.id, { ...stored, deployments: session.deployments });
+}
+
+const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serverOnly, requestedDeployment=undefined) => {
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
+    let raw = req.url || "/";
+    if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
+    // use 'http', we don't care about the protocol
+    let url = null;
+    try { url = new URL(raw, `http://${req.headers.host}`); } catch (_) { /* malformed host: no params */ }
+
     let language = null;
-    if (!serverOnly) {
-        let raw = req.url || "/";
-        if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
-        // use 'http', we don't care about the protocol
-        const url = new URL(raw, `http://${req.headers.host}`);
+    if (!serverOnly && url) {
         // TODO: support req.headers['accept-language'] - somma separated list, setup.locale should support multiple fallbacks
         language = normalizeLanguage(url.searchParams.get('lang'));
     }
 
-    const cacheKey = `${serverOnly ? "s" : "c"}:${withPlugins ? "p" : "-"}:${language || ""}`;
+    const requested = normalizeRequestedDeployment(requestedDeployment ?? requestedDeploymentOf(req, url));
+    // Resolve the name against the env before keying the cache: an unknown name
+    // must share the default's entry, or arbitrary names grow it.
+    const deploymentId = resolveDeploymentId(requested);
+
+    const cacheKey = `${serverOnly ? "s" : "c"}:${withPlugins ? "p" : "-"}:${language || ""}:${deploymentId}`;
     const cached = _productionCoreCache.get(cacheKey);
-    if (cached) return _perRequestCoreView(cached);
+    if (cached) return _perRequestCoreView(cached, requested);
 
     const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key],
         !serverOnly, // secure only when not on server
-        { version: STARTUP_VERSION }
+        { version: STARTUP_VERSION, deployment: requested }
     );
 
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
@@ -836,6 +943,9 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serve
     if (withPlugins) {
         loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
         if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+        // PLUGINS/MODULES now say what this deployment enables — an empty map
+        // means "none", which is what the runtime's enablement gate must know.
+        core.ELEMENTS_LOADED = true;
         // Publish the composed (author ⊕ deployer) config so module state that is
         // built lazily — outside any request — can read its own block without a
         // ctx (XOPAT_SERVER.getStaticModuleConfig). Published after loadPlugins,
@@ -845,7 +955,7 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false, withPlugins=!serve
 
     if (core.CORE?.client?.production === true && !core.exception) {
         _productionCoreCache.set(cacheKey, core);
-        return _perRequestCoreView(core);
+        return _perRequestCoreView(core, requested);
     }
 
     return core;
@@ -902,13 +1012,15 @@ function normalizeSchemePluginRecords(plugins) {
 // crash the moment the production guard below stops short-circuiting.
 let _i18nBakeCacheRef = null;
 function _i18nBakeCache() {
-    return _i18nBakeCacheRef ??= SERVER_CACHE.create({ name: "core:i18n-bake", maxEntries: 32 });
+    // languages × named deployments; both bounded by the env.
+    return _i18nBakeCacheRef ??= SERVER_CACHE.create({ name: "core:i18n-bake", maxEntries: 128 });
 }
 
 function getI18NData(language, core = undefined) {
     const production = !!core?.CORE?.client?.production;
-    if (production && _i18nBakeCache().has(language)) return _i18nBakeCache().get(language);
-    const requestedLanguage = language;
+    // Per deployment: the baked element bundles are that deployment's elements.
+    const bakeKey = `${core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id || "base"}:${language}`;
+    if (production && _i18nBakeCache().has(bakeKey)) return _i18nBakeCache().get(bakeKey);
 
     const localeFile = `${constants.ABSPATH}/src/locales/${language}.json`;
     if (!fs.existsSync(localeFile)) {
@@ -959,7 +1071,7 @@ function getI18NData(language, core = undefined) {
         resources,
         lng: language,
     };
-    if (production) _i18nBakeCache().set(requestedLanguage, result);
+    if (production) _i18nBakeCache().set(bakeKey, result);
     return result;
 }
 
@@ -972,13 +1084,15 @@ function getI18NData(language, core = undefined) {
 // in src/classes/scripting/README.md). Keys are app-relative paths — exactly
 // what a client URL is after stripping APPLICATION_CONTEXT.url. Anything at a
 // custom path just misses the registry and falls back to the cached fetch.
-// Computed once per process; restart to invalidate (like _productionCoreCache).
+// Computed once per process and named deployment (each enables its own
+// elements); restart to invalidate (like _productionCoreCache).
 const DTS_BAKE_MAX_BYTES = 256 * 1024;
-let _dtsRegistryCache = null;
+const _dtsRegistryCache = new Map();
 
 function getBakedDtsRegistry(core) {
     if (!core?.CORE?.client?.production) return null;
-    if (_dtsRegistryCache) return _dtsRegistryCache;
+    const deploymentId = core?.DEPLOYMENT?.id || core?.CORE?.deployment?.id || "base";
+    if (_dtsRegistryCache.has(deploymentId)) return _dtsRegistryCache.get(deploymentId);
 
     const registry = {};
     const addFile = (absPath, relPath) => {
@@ -1019,7 +1133,7 @@ function getBakedDtsRegistry(core) {
     bakeElementDts(core.MODULES, "modules");
     bakeElementDts(core.PLUGINS, "plugins");
 
-    _dtsRegistryCache = registry;
+    _dtsRegistryCache.set(deploymentId, registry);
     return registry;
 }
 
@@ -1369,10 +1483,13 @@ async function responseStaticFile(req, res, target, urlObj) {
         headers["Cache-Control"] = "no-cache";
     } else if (version) {
         headers["Cache-Control"] = "public, max-age=31536000, immutable";
-    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE) {
+    } else if (target.media || DEV_MODE || !STATIC_MAX_AGE || UNVERSIONED_CODE_RE.test(target.path)) {
         // Media: `no-store` would forbid keeping the partial responses a tile
         // decoder re-reads constantly. Dev: an edit must show on the next load.
-        // Either way revalidation against the ETag keeps it a cheap 304.
+        // Unversioned CODE (a sub-module reached by a relative `import` from a
+        // `?v=` entry): a max-age would let a new release's entry run against
+        // the previous release's sub-modules until the cache expired. Either
+        // way revalidation against the ETag keeps it a cheap 304.
         headers["Cache-Control"] = "no-cache";
     } else {
         headers["Cache-Control"] = `public, max-age=${STATIC_MAX_AGE}, stale-while-revalidate=86400`;
@@ -1498,9 +1615,9 @@ function sameOrigin(a, b) {
     }
 }
 
-async function responseProxy(req, res, requestUrl, session) {
+async function responseProxy(req, res, requestUrl, session, requestedDeployment) {
     // 1. todo parse just core for now, no need to load plugins
-    const core = initViewerCoreAndPlugins(req, res, true);
+    const core = initViewerCoreAndPlugins(req, res, true, false, requestedDeployment);
     if (!core) return;
 
     // 2. Extract alias from /proxy/alias/v1/...
@@ -1529,7 +1646,7 @@ async function responseProxy(req, res, requestUrl, session) {
     // unknown-alias answer: which aliases exist is not a restricted session's
     // business. Unrestricted by default — see proxyAliasAllowedForSession.
     if (!proxyConfig || typeof proxyConfig.baseUrl !== "string"
-        || !proxyAliasAllowedForSession(session, alias)) {
+        || !proxyAliasAllowedForSession(session, alias, core.DEPLOYMENT?.id)) {
         // Do not echo the alias — it is request input, and this response is the
         // one place it would be reflected back.
         res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -1705,6 +1822,23 @@ async function responseProxy(req, res, requestUrl, session) {
     }
 }
 
+/**
+ * The deployment a viewer POST names: the session's own `deployment` field, else
+ * a top-level `deployment` form field. `undefined` lets the request fall through
+ * to `?deployment=` / the header. The session may arrive as a JSON string
+ * (form posts) — it is parsed here only to read one field.
+ */
+function requestedDeploymentOfPost(postData) {
+    let session = postData?.visualization ?? postData?.visualisation;
+    if (typeof session === "string") {
+        try { session = JSON.parse(session); } catch (_) { session = null; }
+    }
+    const fromSession = session && typeof session === "object" ? session.deployment : undefined;
+    if (typeof fromSession === "string" && fromSession) return fromSession;
+    if (typeof postData?.deployment === "string" && postData.deployment) return postData.deployment;
+    return undefined;
+}
+
 async function responseViewer(req, res, session) {
     // Parse the request url
     let rawData = req.method === 'POST' ? await rawReqToString(req) : undefined;
@@ -1758,8 +1892,9 @@ async function responseViewer(req, res, session) {
         logger.warn(e);
         postData = {};
     }
-    const core = initViewerCoreAndPlugins(req, res);
+    const core = initViewerCoreAndPlugins(req, res, false, true, requestedDeploymentOfPost(postData));
     if (!core) return;
+    await bindViewerDeployment(session, core);
 
     const replacer = function(match, p1) {
         try {
@@ -1790,7 +1925,7 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
 </script>
-`;
+${core.requireBrandingCss()}`;
 
             case "app": {
                 const dtsRegistry = getBakedDtsRegistry(core);
@@ -2086,9 +2221,11 @@ const server = http.createServer(async (req, res) => {
             // (deployer tier); loading plugins additionally fills the author
             // tier — and in production the scan comes from the core cache
             // instead of re-walking the plugin directories per RPC call.
-            const core = initViewerCoreAndPlugins(req, res, true, true);
-            if (!core) return;
             const session = await getSession(req, res);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            const core = initViewerCoreAndPlugins(req, res, true, true, bound.requested);
+            if (!core) return;
             // `return await`, not a bare `return`: a bare return resolves AFTER the
             // try block exits, so the catch below never observes a rejection and it
             // surfaces as an unhandled rejection instead of a 500.
@@ -2110,7 +2247,13 @@ const server = http.createServer(async (req, res) => {
                 return res.end('Forbidden: invalid CSRF token');
             }
 
-            return await responseProxy(req, res, urlObj, session);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            // The proxy runs element verifiers (verifyProxyAuth): inside the
+            // deployment the request was admitted to, like RPC handlers.
+            const proxyDeployment = resolveDeploymentId(bound.requested);
+            return await runInDeployment(proxyDeployment,
+                () => responseProxy(req, res, urlObj, session, bound.requested));
         }
         // --- end new proxy route ---
 
@@ -2118,9 +2261,12 @@ const server = http.createServer(async (req, res) => {
         // login/callback). Modules register a prefix→handler at boot via the
         // server-extension serverApi. Core stays auth-agnostic. See src/AUTH.md. ---
         if (serverRuntime.matchServerRoute(urlObj.pathname)) {
-            const core = initViewerCoreAndPlugins(req, res, true);
-            if (!core) return;
             const session = await getSession(req, res);
+            const bound = boundDeploymentOrRefuse(req, res, urlObj, session);
+            if (!bound) return;
+            // withPlugins: the route answers only where its owning element is enabled.
+            const core = initViewerCoreAndPlugins(req, res, true, true, bound.requested);
+            if (!core) return;
             return void await serverRuntime.dispatchServerRoute(req, res, core, session, urlObj);
         }
         // --- end module server routes ---
@@ -2246,7 +2392,36 @@ function startListening() {
 let EXTENSIONS_READY = false;
 let EXTENSIONS_ERROR = null;
 
+/**
+ * Publish every deployment's server-config snapshot before any element code
+ * runs, and fix the default. Without it a deployment's ctx-free config read
+ * (`XOPAT_SERVER.getStaticModuleConfig`) had nothing to resolve until that
+ * deployment's first plugin-loading request, and `register()` ran as `base`
+ * even when the env names a `defaultDeployment`.
+ */
+function publishDeploymentSnapshots() {
+    const ids = [null, ...Object.keys(DEPLOYMENT_DEFS.deployments || {})];
+    for (const id of ids) {
+        try {
+            const core = getCore(constants.ABSPATH, PROJECT_PATH,
+                fs.existsSync,
+                p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }),
+                key => process.env[key],
+                false,
+                { version: STARTUP_VERSION, deployment: id },
+            );
+            if (core.exception) throw core.exception;
+            loadPlugins(core, fs.existsSync, p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }), i18n);
+            if (core.exception) throw core.exception;
+            setServerConfigSnapshot(core, { asDefault: id === null });
+        } catch (e) {
+            logger.error?.(`[deployments] could not publish the config snapshot of '${id ?? "default"}':`, e?.message || e);
+        }
+    }
+}
+
 Promise.resolve()
+    .then(() => publishDeploymentSnapshots())
     .then(() => serverRuntime.loadServerExtensions())
     // Anonymous principals are derived from the browser session, so anything a
     // module stores under `sess:<id>` must die with it. Publish the hook rather

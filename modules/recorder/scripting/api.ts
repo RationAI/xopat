@@ -428,6 +428,9 @@ export function registerRecorderScriptingApi(): void {
     class XOpatRecorderScriptApi extends ScriptApiBase {
         static ScriptApiMetadata = {
             dtypesSource: { kind: "text", value: RECORDER_DTS },
+            assistant: {
+                intentPatterns: [/record(ing|er|ed)?|\btour\b|walk[- ]?through|narrat|voice[- ]?over|presentation|guided|playback|slide ?show|storyboard/i],
+            },
         };
 
         constructor(namespace: string) {

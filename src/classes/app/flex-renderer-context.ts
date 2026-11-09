@@ -10,20 +10,19 @@
  * to be one literal in one place: two spellings silently produce two contexts while every
  * comment claims otherwise (they did, `"xopat-flex-renderer"` vs `"xopat-flex-rendererS"`).
  *
- * The cost of sharing is not small. A shared context's WebGL canvas is off-DOM, so the
- * renderer allocates a separate 2D presentation canvas and moves the frame across with
- * `gl.readPixels` + a CPU row-flip + `putImageData` — a synchronous GPU->CPU stall, every
- * frame, sized by the viewport. A profiled session spent 18% of its wall clock there
- * (~14 GB of readback over 22 seconds at 2141x1892). With a private context the
- * presentation canvas *is* the WebGL canvas and the transfer does not exist at all.
- * Sharing also makes concurrent renderers skip frames (`sharedContextBusyPolicy`
- * defaults to `"warn-skip"`).
+ * Sharing still costs something. A shared context's WebGL canvas is off-DOM, so the
+ * renderer allocates a separate 2D presentation canvas and copies every frame across.
+ * Since the 2026-11-06 flex-renderer build that copy stays on the GPU (`blitFramebuffer`
+ * + `drawImage`, `presentationTransfer: "auto"`); the old `gl.readPixels` + CPU row-flip
+ * route — once 18% of a profiled session's wall clock — is only the fallback when the
+ * blit probe fails or the drawing buffer is clamped. `renderer.presentationTransferMode`
+ * says which ran. Sharing also makes concurrent renderers skip frames
+ * (`sharedContextBusyPolicy` defaults to `"warn-skip"`). With a private context the
+ * presentation canvas *is* the WebGL canvas and none of that exists.
  *
  * So: hand out private contexts while there is budget, and fall back to the shared key
  * beyond it. A deployment that opens one or two viewers — the overwhelming majority —
  * pays nothing; one that opens twenty still works.
- *
- * See also `UPSTREAM.md`: the shared path should not need a readback either.
  */
 
 /** The one shared WebGL context key, used by everything that has no private slot. */

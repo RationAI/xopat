@@ -410,6 +410,14 @@ interface IOKVHandle {
     get<T = any>(key: string, defaultValue?: T): T | string | boolean | null | Promise<T | string | boolean | null>;
     set(key: string, value: any): void | Promise<void>;
     delete(key: string): void | Promise<void>;
+
+    /**
+     * The same namespace with keys confined to the served deployment
+     * (`src/classes/app/deployment-key.ts`). Browser storage is origin-wide and
+     * one origin may serve many deployments: use this for anything carrying a
+     * decision or data (consents, remembered providers, drafts, slide ids).
+     */
+    deploymentScoped(): IOKVHandle;
 }
 
 /**

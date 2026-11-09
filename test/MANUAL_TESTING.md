@@ -57,6 +57,32 @@ Verify:
   that never changes colour means level selection is stuck.
 - The navigator thumbnail matches the main view.
 
+### `multi-deployment` — one server, session-selected deployments
+
+```bash
+npm run fixtures:synthetic
+npm run up:dev -- multi-deployment
+# http://localhost:9000/?slides=synthetic.dzi
+# http://localhost:9000/?deployment=webtiff
+# http://localhost:9000/?deployment=nope&slides=synthetic.dzi
+```
+
+The base env serves the synthetic slide; `webtiff` / `geotiff` are named
+deployments composed from the shipped `data/*` fragments
+(`env/README.md` → *Multiple deployments in one env*).
+
+Verify:
+- `APPLICATION_CONTEXT.env.deployment` in the console reads `{id: "base", …}`
+  for the first URL and `{id: "webtiff", …}` for the second; the second's
+  default protocol is `tiff`.
+- The unknown name opens the synthetic slide (fallback, not an error page) and
+  shows one warning toast naming the deployment it fell back to.
+- Export the session or copy the address-bar link under `webtiff`, open it in a
+  fresh tab at the bare URL: it re-submits once and lands on `webtiff` again.
+  With an unknown name it does not loop.
+- In the network panel, `/__rpc/` and `/proxy/` requests carry
+  `X-XOPAT-Deployment`.
+
 ### `dicom-idc` — public DICOMweb, no credentials
 
 ```bash

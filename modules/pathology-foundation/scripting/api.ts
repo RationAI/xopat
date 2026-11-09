@@ -2,6 +2,7 @@
 
 // Same-module import (the AGENTS.md ban is on crossing the plugin/module/core boundary).
 import { forPresentation } from "../lib/presentation";
+import { PATHOLOGY_ASSISTANT_HINTS } from "./assistant";
 
 /**
  * Pathology foundation-model scripting namespace (`pathology`).
@@ -1277,6 +1278,7 @@ export function registerPathologyScriptingApi(): void {
     class XOpatPathologyScriptApi extends ScriptApiBase {
         static ScriptApiMetadata = {
             dtypesSource: { kind: "text", value: PATHOLOGY_DTS },
+            assistant: PATHOLOGY_ASSISTANT_HINTS,
         };
 
         constructor(namespace: string) {

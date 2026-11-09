@@ -1561,9 +1561,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (!intent.label) {
             intent.label = document.createElement("div");
             intent.label.className = "badge shadow";
+            // width/height: the label is a direct child of the grid cell, and
+            // `.stretch-grid__item > *` stretches every child to fill it.
             intent.label.style.cssText =
                 "position:absolute; top:12px; left:50%; transform:translateX(-50%);" +
-                "z-index:50; pointer-events:none; white-space:nowrap;";
+                "width:auto; height:auto; z-index:50; pointer-events:none; white-space:nowrap;";
             el.appendChild(intent.label);
         }
         intent.label.classList.toggle("badge-warning", replace);

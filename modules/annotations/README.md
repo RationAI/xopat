@@ -174,6 +174,27 @@ opinion". Policies compose in registration order; throwing is treated as no opin
 so a broken policy cannot lock the whole canvas. It runs per annotation per
 visibility evaluation — keep it cheap and side-effect free.
 
+#### Styling annotations by state
+
+Fill, stroke and opacity are derived from the preset and the common visuals, so a
+value written on the object is lost on the next selection change. To style
+annotations by a state only you know, state the rule:
+
+```js
+const dispose = annotations.registerVisualPolicy(this.id, object =>
+    object.processing ? { modeOutline: true, opacity: 1, dashPattern: [4, 3] } : undefined);
+// the state of one object changed:
+fabric.updateSingleAnnotationVisuals(object);
+// the state of many changed:
+annotations.reapplyVisuals();
+```
+
+The policy returns a **partial** override of the common visuals (`modeOutline`,
+`stroke`, `opacity`, `originalStrokeWidth`), or nothing for "no opinion".
+`dashPattern` holds dash lengths in multiples of the stroke width, so it looks the
+same at every zoom. Policies compose in registration order, and throwing is treated
+as no opinion. The result is not exported, so derive it again after an import.
+
 #### `private` is a different question
 
 `private` is about **who else may see** the annotation, which only a storage

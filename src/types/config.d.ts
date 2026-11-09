@@ -320,6 +320,13 @@ type XOpatSetup = {
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     /**
+     * First-pass sampling of tiles drawn below their texture resolution.
+     * `"default"` (single tap) suits brightfield; `"max"` keeps the per-channel
+     * maximum over the texel footprint so sparse bright features (fluorescence)
+     * do not vanish when zoomed out. Forwarded to every FlexRenderer drawer.
+     */
+    webGlMinificationFilter?: "default" | "max" | null;
+    /**
      * How many viewer cells may hold their own WebGL context instead of sharing
      * one. A private context removes the per-frame `readPixels` + `putImageData`
      * transfer a shared context needs; cells past the budget fall back to the
@@ -351,6 +358,18 @@ type XOpatSetup = {
         maskIcon?: string | null;
         maskIconColor?: string | null;
         logo?: string | null;
+        /**
+         * DaisyUI theme names used for the light / dark mode instead of
+         * `xOpat-light` / `xOpat-dark`. The themes themselves come from an
+         * element's `tailwind.preset.js` (see ui/README.md "Theming").
+         * Names must be plain identifiers (`[A-Za-z0-9_-]`).
+         */
+        themes?: { light?: string | null; dark?: string | null } | null;
+        /**
+         * Stylesheets emitted in the page head AFTER the core CSS, in order.
+         * Page-root-relative paths or absolute http(s) URLs.
+         */
+        css?: string[] | null;
     } | null;
     /**
      * Fast-access icon-only actions pinned into the top app bar, referenced by
@@ -494,12 +513,24 @@ type XOpatServerConfig = {
  */
 type XOpatPluginSelectionMode = "all" | "whitelist" | "available";
 
+type XOpatServedDeployment = {
+    id: string;
+    requested: string | null;
+    fellBack: boolean;
+};
+
 type XOpatCoreConfig = {
     name: string;
     version: string;
     gateway: string;
     active_client: string;
     client: XOpatClientConfig | Record<string, XOpatClientConfig>;
+    /**
+     * Served named deployment (server-stamped, read-only). See env/README.md
+     * "Multiple deployments". `id` is "base" when the env defines none or the
+     * base ENV is the default; `requested` echoes the request's (untrusted) name.
+     */
+    deployment?: XOpatServedDeployment;
     setup: XOpatSetup;
     server: XOpatServerConfig;
     monaco: string;
@@ -624,6 +655,11 @@ interface XOpatSessionConfig {
     background?: BackgroundItem[];
     visualizations?: VisualizationItem[];
     plugins?: Record<string, unknown>;
+    /**
+     * Named deployment to open this session under — an id the operator defined
+     * in the env `deployments` map. Unknown or absent: the deployment default.
+     */
+    deployment?: string;
 }
 
 /**

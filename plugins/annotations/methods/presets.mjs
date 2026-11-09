@@ -435,26 +435,35 @@ export const presetMethods = {
         empty.classList.toggle('hidden', hasAny);
     },
 
-    updatePresetWith(id, propName, value) {
-        if (!this.enablePresetModify) return;
+    /**
+     * Bind a preset to a drawing shape.
+     *
+     * Not gated on enablePresetModify: choosing a shape picks a drawing tool,
+     * it does not edit the class — the factory is written directly and never
+     * goes through crud:preset, so the lock has nothing to protect here.
+     */
+    setPresetFactory(id, factoryId) {
         const preset = this.context.presets.get(id);
         if (!preset) return;
 
-        if (propName === 'objectFactory') {
-            // objectFactory stores a factory instance, not the id string —
-            // keep this path inline and raise preset-update manually so
-            // the IO pipeline still sees the change.
-            const next = this.context.getAnnotationObjectFactory(value);
-            if (next && next !== preset.objectFactory) {
-                preset.objectFactory = next;
-                this.context.raiseEvent('preset-update', { preset });
-            }
-        } else {
-            // PresetManager.updatePreset writes the property and raises
-            // preset-update only when something actually changed.
-            this.context.presets.updatePreset(id, { [propName]: value });
+        // objectFactory stores a factory instance, not the id string — raise
+        // preset-update manually so the IO pipeline still sees the change.
+        const next = this.context.getAnnotationObjectFactory(factoryId);
+        if (next && next !== preset.objectFactory) {
+            preset.objectFactory = next;
+            this.context.raiseEvent('preset-update', { preset });
         }
+        this.updatePresetEvent();
+    },
 
+    updatePresetWith(id, propName, value) {
+        if (!this.enablePresetModify) return;
+        if (propName === 'objectFactory') return this.setPresetFactory(id, value);
+        if (!this.context.presets.get(id)) return;
+
+        // PresetManager.updatePreset writes the property and raises
+        // preset-update only when something actually changed.
+        this.context.presets.updatePreset(id, { [propName]: value });
         this.updatePresetEvent();
     },
 

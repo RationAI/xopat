@@ -23,6 +23,15 @@ Closing a viewport (single close or "Close all") never removes the slide from th
 ``config.background`` catalog — the slide stays listed in the switcher as
 available and can be reopened; only its viewport is torn down.
 
+### Prev/next slide
+``Shift+[`` / ``Shift+]`` (remappable in the Keymap panel) and the ❮ ❯ arrows in each
+viewer's magnification strip switch that viewport to the previous/next slide (within the
+browsed hierarchy level when the slide browser is on). The arrows are hidden when there
+is only one slide. Static options (``include.json`` or ENV ``plugins["slide-info"]``):
+
+- ``slideSwitching`` (default ``true``) — enables shortcuts and arrows.
+- ``slideArrows`` (default ``true``) — show the arrows; deployment-only, not settable from a session.
+
 ## Slide Information
 Moreover, any Slide Information is displayed from the provided metadata getter of the background
 tileSource object. Supported is any value, the parser tries to guess a suitable UI representation

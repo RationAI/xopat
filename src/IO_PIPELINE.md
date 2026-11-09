@@ -1176,7 +1176,7 @@ A `kv` capability bound to **multiple drivers** mirror-writes to all of them on 
 
 User keys pass through `IO_PIPELINE.sanitizeKey(s)` — anything outside `[A-Za-z0-9._-]` is replaced with `_`. On shared drivers the result is then prefixed with `<ownerUid>::` to avoid cross-owner collisions. Owners with `shared: false` drivers see the raw sanitized key.
 
-Owner is the **only** namespace axis. KV keys are deliberately *not* scoped by the deployment cache key (`src/classes/app/deployment-key.ts`) — that key scopes the boot session caches and the plugin-autoload cookie only. Two deployments on one origin therefore share `AppCache` / `AppCookies` entries; a deployment that must not share them binds `kv:*` to the `memory` driver in `ENV.client.io.bindings.core`.
+Owner is the default namespace axis. A plain handle's keys are *not* scoped by the deployment cache key (`src/classes/app/deployment-key.ts`), so two deployments on one origin share cosmetic `AppCache` / `AppCookies` entries (layout, keymap). Anything that carries a decision or data — a consent, a remembered provider, an option preference, a draft, slide identifiers — goes through `handle.deploymentScoped()` (or `XOpatStorage.Cache#deploymentScoped()`), which adds the deployment key as a second axis (`<ownerUid>::dp-<key>::<key>`). The persistent outbox is stamped the same way and replays only under the deployment that wrote it. This keeps state from following the user between deployments; it is not isolation from hostile same-origin code — that needs separate origins.
 
 ### Value encoding
 

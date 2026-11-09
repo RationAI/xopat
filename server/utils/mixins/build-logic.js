@@ -306,6 +306,7 @@ async function buildAllServerEntries(items, logger) {
 
             try {
                 fs.mkdirSync(path.dirname(outFile), { recursive: true });
+                const snapshot = serverLoader.beginArtifactBuild(sourceFile, outFile);
                 const result = await esbuild.build(serverLoader.serverBuildOptions({
                     file: sourceFile,
                     outfile: outFile,
@@ -318,6 +319,7 @@ async function buildAllServerEntries(items, logger) {
                     entryFile: sourceFile,
                     buildKey,
                     inputs: serverLoader.collectBuildInputs(result.metafile, outFile),
+                    snapshot,
                 });
                 built++;
                 logger.log(`${logPrefix} built ${rel}`);
@@ -345,6 +347,7 @@ async function buildAllServerEntries(items, logger) {
             fresh++;
         } else {
             fs.mkdirSync(path.dirname(rolesOut), { recursive: true });
+            const rolesSnapshot = serverLoader.beginArtifactBuild(rolesSrc, rolesOut);
             // `bundle: false` on purpose: the source is deliberately
             // dependency-free, and bundling would hide a future stray import
             // instead of surfacing it.
@@ -358,6 +361,7 @@ async function buildAllServerEntries(items, logger) {
                 entryFile: rolesSrc,
                 buildKey,
                 inputs: serverLoader.collectBuildInputs(rolesResult.metafile, rolesOut),
+                snapshot: rolesSnapshot,
             });
             built++;
             logger.log(`[server-build] core: built src/dist/user-roles-core.cjs`);

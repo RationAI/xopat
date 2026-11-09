@@ -84,13 +84,11 @@ export const globalPluginWindowMethods = {
             osdPosition: { x: 0, y: 0 },
             pixelPosition: { x: 0, y: 0 },
             active: object,
-            // Named so a provider can tailor what it offers here. The annotations
-            // provider drops the privacy toggle for this source: privacy hangs off
-            // the annotation itself in this window. Asking the provider beats
-            // filtering its answer — the flyout path returns ONE nested
-            // "Annotation" parent, so a title filter over the top level matched
-            // nothing, and on the flat path it left the entry's group header
-            // behind as an inert row with nothing under it.
+            // Named so a provider can tailor what it offers here. Asking the
+            // provider beats filtering its answer — the flyout path returns ONE
+            // nested "Annotation" parent, so a title filter over the top level
+            // matched nothing, and on the flat path it left the entry's group
+            // header behind as an inert row with nothing under it.
             source: 'annotation-more',
         };
 

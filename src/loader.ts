@@ -322,6 +322,27 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return SCRIPT_INJECTIONS.has(key);
     }
 
+    /**
+     * Are all of the element's files actually on this page? `loaded` is a registry flag and
+     * can outlive the page that set it (the `__xopat_session__` snapshot restores it), so a
+     * dependency walk must not take it on trust: a module reported loaded whose files never
+     * arrived leaves its dependents constructing against an undefined global.
+     */
+    function elementFilesPresent(record: XOpatElementRecord, folder: string): boolean {
+        const list = record.prodIncludes ?? record.includes ?? [];
+        return list.every((entry: any) => {
+            const src = typeof entry === "string" ? `${folder}${record.directory}/${entry}` : entry?.src;
+            if (!src) return true;
+            const key = scriptKey(src);
+            if (scriptAlreadyPresent(key)) return true;
+            // Server-rendered sections not yet indexed (see indexDocumentScripts).
+            return Array.from(document.scripts).some(node => {
+                const nodeSrc = node.getAttribute("src");
+                return !!nodeSrc && scriptKey(nodeSrc) === key;
+            });
+        });
+    }
+
     // One listener for the whole loader instead of clobbering `window.onerror` per script.
     // `error` events for a top-level throw carry the script URL in `filename`, which is what
     // lets a failure be attributed to the element that actually owns it.
@@ -1196,7 +1217,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         if (pending) return pending;
         // A quarantined module is not retried: `cleanUpModule` already removed its handlers
         // and dropped its singleton, and re-running a known-broken file only repeats that.
-        if (module.loaded || module.error) return Promise.resolve();
+        if (module.error) return Promise.resolve();
+        if (module.loaded && elementFilesPresent(module, MODULES_FOLDER)) return Promise.resolve();
         if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
 
         let settle: () => void, fail: (e: any) => void;
@@ -3380,11 +3402,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             try {
                 const outcome: IOResult[] = [];
                 const form = await UTILITIES.getForm("", undefined, false, outcome);
+                // Warnings and errors only: the ring also holds every adopted
+                // `console.log`, which routinely names slide paths — a file the
+                // user hands to someone else must not carry that by default.
+                // Escaped because log text is attacker-influenced (tile-server
+                // bodies, error messages) and this file runs its own <script>.
+                const logging = (APPLICATION_CONTEXT as any).logging;
+                const trace: string = logging?.getEntries
+                    ? logging.getEntries({ minLevel: "warn", limit: 2000 })
+                        .map((r: any) => `${r.level.toUpperCase().padEnd(5)} ${r.ts} [${r.channel}] ${r.message}\n`).join("")
+                    : ((console as any).appTrace || []).join("");
                 const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
-<body><!--Todo errors might fail to be stringified - cyclic structures!-->
-<div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
+<body>
+<div>Errors (if any): <pre>${escapeHtml(trace)}</pre></div>
 ${form}
 </body></html>`;
 
@@ -3895,6 +3927,14 @@ ${form}
             // allowlist and would drop an unknown key with a warning.
             data.__envKey = window.XOPAT_DEPLOYMENT_KEY || undefined;
 
+            // The named deployment this session actually ran under, so a shared
+            // link / export reopens the same one (server/templates/javascript/deployments.js).
+            // The served id, not the requested one: after a fallback the session
+            // describes what was really loaded.
+            const deploymentId = (APPLICATION_CONTEXT.env as any)?.deployment?.id;
+            if (typeof deploymentId === "string" && deploymentId !== "base") data.deployment = deploymentId;
+            else delete data.deployment;
+
             // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
             if (viewers.length <= 1) {
@@ -4251,9 +4291,9 @@ form.submit();
     // pipeline, inspector controllers, ...) gets the browser's native
     // "Leave site?" prompt for free. Modern browsers ignore custom
     // messages; both setters are still required for the prompt to show.
-    // Embeddings that drive the viewer programmatically (e.g. notebooks)
-    // can suppress the prompt entirely with params.bypassCloseConfirmation —
-    // in that case we skip registering the listener altogether.
+    // Off by default: bypassCloseConfirmation defaults to true (src/config.json,
+    // ENV XOPAT_BYPASS_CLOSE_CONFIRMATION). Deployments opt in by setting it
+    // false; when bypassed we skip registering the listener altogether.
     if (!APPLICATION_CONTEXT.getOption('bypassCloseConfirmation')) {
         window.addEventListener('beforeunload', (event) => {
             if (!APPLICATION_CONTEXT.__cache.dirty) return;
@@ -5031,15 +5071,16 @@ form.submit();
 
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
-                webGlPreferredVersion: preferredWebGlVersion,
+                webGLPreferredVersion: preferredWebGlVersion,
                 // "auto" lets a float slide upgrade the first-pass target; see config.json.
                 precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
+                minificationFilter: APPLICATION_CONTEXT.getOption("webGlMinificationFilter"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // A private context when the budget allows, the shared one otherwise.
                 // Private means the presentation canvas IS the WebGL canvas, so the
-                // per-frame readPixels + putImageData transfer that shared contexts
-                // require does not happen at all. See flex-renderer-context.ts.
+                // per-frame copy to a 2D canvas that shared contexts require does not
+                // happen at all. See flex-renderer-context.ts.
                 sharedContextKey: acquireFlexContextKey(cellId),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {

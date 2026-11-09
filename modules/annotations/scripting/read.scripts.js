@@ -11,7 +11,13 @@ ScriptingManager.registerExternalApi(
             dtypesSource: {
                 kind: "url",
                 value: APPLICATION_CONTEXT.url + "modules/annotations/scripting/common-types.d.ts"
-            }
+            },
+            assistant: {
+                intentPatterns: [/annotat|measure|outlin|marking|comment/i],
+                examples: [
+                    "To report annotations: `const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, kind: a.factoryID, presetID: a.presetID }));` — the kind (point, rect, polygon, ...) is `factoryID`, not `type`; the class is the preset (`getPresets()` → `meta.category.value`).",
+                ],
+            },
         };
 
         constructor(namespace) {

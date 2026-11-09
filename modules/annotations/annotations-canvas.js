@@ -3742,8 +3742,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         if (!factory) return false;
 
-        const visuals = {...this.module.presets.commonAnnotationVisuals};
+        const visuals = this.module.resolveAnnotationVisuals(object);
         factory.updateRendering(object, preset, visuals, visuals, this.canvas);
+        if (visuals.dashPattern || object.dashPattern) object.applyDashPattern(visuals.dashPattern);
         factory.renderPresetText(object);
 
         const isSelected = this.isAnnotationSelected(object, selection);

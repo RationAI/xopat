@@ -192,7 +192,9 @@ function closerCandidates(text: string, from: number): CloserCandidate[] {
 }
 
 function findFenceWithTags(text: string, tags: string[]): FenceMatch | undefined {
-    const opener = new RegExp("```[ \\t]*(" + tags.join("|") + ")[ \\t]*\\r?\\n?", "i");
+    // `(?![\w-])`: the tag must end there — without it ```json matched as `js` with body "on\n{...",
+    // so an example JSON block in prose was executed as a script.
+    const opener = new RegExp("```[ \\t]*(" + tags.join("|") + ")(?![\\w-])[ \\t]*\\r?\\n?", "i");
     const match = opener.exec(text);
     if (!match) return undefined;
 

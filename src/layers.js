@@ -1,7 +1,14 @@
 function initXOpatLayers() {
+    // A local snapshot overrides the session's shader settings, so it stays in
+    // the deployment that wrote it (browser storage is origin-wide).
+    function layerSnapshotStore() {
+        const cache = APPLICATION_CONTEXT.AppCache;
+        return cache?.deploymentScoped?.() ?? cache;
+    }
+
     function parseStore(key) {
         try {
-            return JSON.parse(APPLICATION_CONTEXT.AppCache.get(key, "{}"));
+            return JSON.parse(layerSnapshotStore().get(key, "{}"));
         } catch (e) {
             return {};
         }
@@ -335,7 +342,7 @@ function initXOpatLayers() {
             }
         });
 
-        APPLICATION_CONTEXT.AppCache.set(cacheKey, JSON.stringify(currentCache));
+        layerSnapshotStore().set(cacheKey, JSON.stringify(currentCache));
     };
 
     /**
@@ -643,7 +650,7 @@ function initXOpatLayers() {
      * list is the single source of truth both it and the guard below read, so they cannot
      * drift apart.
      */
-    UTILITIES.NON_SWITCHABLE_SHADER_TYPES = ["group", "interaction-debug", "time-series", "texture"];
+    UTILITIES.NON_SWITCHABLE_SHADER_TYPES = ["group", "interaction-debug", "time-series", "texture", "modular"];
 
     UTILITIES.changeVisualizationLayer = function (layerId, type, viewer = window.VIEWER) {
         let currentType;

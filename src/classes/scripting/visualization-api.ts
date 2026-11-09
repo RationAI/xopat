@@ -16,6 +16,7 @@ import type {
 
 import { XOpatScriptingApi } from "./abstract-api";
 import { fetchDtsCached } from "./dts-fetch";
+import { VISUALIZATION_ASSISTANT_HINTS } from "./visualization-api.assistant";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
 import {
     compileVisualizationConfigSchema,
@@ -177,7 +178,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         dtypesSource: {
             kind: "resolve",
             value: () => fetchDtsCached(APPLICATION_CONTEXT.url + "src/classes/scripting/visualization-api.scripts.d.ts")
-        }
+        },
+        assistant: VISUALIZATION_ASSISTANT_HINTS,
     };
 
     /**

@@ -23,6 +23,7 @@ const { div, span, select, option, button, input, label } = van.tags;
  *        type: string,
  *        params: { use_mode?: "show"|"clip"|"blend", use_blend?:string, ... },
  *        filters?: Record<string,{name:string,value:number}>
+ *        cache?: object,
  *        _cacheApplied?: "hit"|"miss"|"stale"|string
  *    }
  *  - availableShaders: Array<{type:string,name:string}>
@@ -51,6 +52,7 @@ export class ShaderLayer extends BaseComponent {
         // unified collapse state: legacy group configs may still carry _uiGroupOpen
         this.collapsed = this.cfg._uiCollapsed
             ?? (this.hasChildren ? !(this.cfg._uiGroupOpen ?? true) : false);
+        this._collapsedBeforeHide = this.cfg._uiCollapsedBeforeHide;
         this.fixed = !!this.cfg.fixed;
         // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
         this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
@@ -62,12 +64,16 @@ export class ShaderLayer extends BaseComponent {
         // todo dirty attachment to the config, but it's the only way to persist the state for now
         //    (underscore props do not export at least)
         this.blendOpen = this.cfg._uiBlendOpen ?? false;  // advanced / blending section
-        this.cacheOpen = this.cfg._uiCacheOpen ?? false;  // cache submenu
+        // cache dropdown is transient (closes on outside click), so it is not persisted
+        this.cacheOpen = false;
+        this._cacheOutsideHandler = (e) => {
+            if (!this._cacheDropdownWrap?.contains(e.target)) this._setCacheOpen(false);
+        };
         this.type = this.cfg.type;
         this.title = this.cfg.name;
         this.shortTitle = this._shortenMiddle(this.title, 32);
         this.filters = options.availableFilters || {};
-        this.cacheApplied = this.cfg._cacheApplied;
+        this.cacheApplied = ShaderLayer.resolveCacheStatus(this.cfg);
         this.childrenContainerId = this.id + "-children";
         this.bodyContainerId = this.id + "-body";
         this.collapseContainerId = this.id + "-collapse";
@@ -165,9 +171,16 @@ export class ShaderLayer extends BaseComponent {
         // is not on screen. It no longer *locks* them away: the header still
         // expands (see _isCollapsed). Only the visible→hidden *transition* does
         // this, so an update() on an already-hidden layer cannot keep undoing an
-        // expand the user just performed.
+        // expand the user just performed. The pre-hide state is remembered and
+        // restored on unhide, unless the user toggled collapse in between
+        // (_setCollapsed clears the memory).
         if (wasVisible && !this.visible) {
+            const before = this.collapsed;
             this._setCollapsed(true);
+            this._collapsedBeforeHide = before;
+            this.cfg._uiCollapsedBeforeHide = before;   // persist across re-render
+        } else if (!wasVisible && this.visible && typeof this._collapsedBeforeHide === "boolean") {
+            this._setCollapsed(this._collapsedBeforeHide);
         } else {
             this._applyCollapsed();
         }
@@ -263,6 +276,7 @@ export class ShaderLayer extends BaseComponent {
         return div(
             { class: "flex items-center gap-1 non-draggable" },
             pill,
+            this._buildCacheDropdown(),
             chevronBtn
         );
     }
@@ -292,6 +306,8 @@ export class ShaderLayer extends BaseComponent {
     _setCollapsed(collapsed) {
         this.collapsed = !!collapsed;
         this.cfg._uiCollapsed = this.collapsed;   // persist
+        this._collapsedBeforeHide = undefined;
+        delete this.cfg._uiCollapsedBeforeHide;
         if (this.hasChildren) {
             this.cfg._uiGroupOpen = !this.collapsed;  // keep legacy flag in sync
         }
@@ -347,8 +363,7 @@ export class ShaderLayer extends BaseComponent {
                     class:
                         "text-xs text-accent/90 italic ml-7 -mt-1 mb-1"
                 },
-                $.t("main.shaders.clipHint") ||
-                "Layer is used as a clip mask over layers below."
+                $.t("main.shaders.clipHint")
             )
             : null;
 
@@ -373,7 +388,9 @@ export class ShaderLayer extends BaseComponent {
         );
 
         return div(
-            { class: "shader-part__header flex flex-col truncate max-w-full select-none" },
+            // No `truncate` (overflow: hidden) here — it would clip the cache
+            // dropdown; the title span truncates itself.
+            { class: "shader-part__header flex flex-col min-w-0 max-w-full select-none" },
             this._headerRow,
             clipHint
         );
@@ -492,11 +509,7 @@ export class ShaderLayer extends BaseComponent {
                     class:
                         "flex flex-row items-center justify-between text-xs text-base-content/70 mb-1"
                 },
-                div(
-                    { class: "flex items-center gap-1" },
-                    span($.t("main.shaders.blendingTitle")),
-                    this._buildCacheIcon()
-                ),
+                span($.t("main.shaders.blendingTitle")),
                 span(
                     { class: "italic" },
                     this._isModeShow()
@@ -521,8 +534,7 @@ export class ShaderLayer extends BaseComponent {
                     },
                     ...blendOptions
                 )
-            ),
-            this._buildCachePopup()
+            )
         );
     }
 
@@ -605,18 +617,58 @@ export class ShaderLayer extends BaseComponent {
 
     // ---- cache icon + submenu
 
-    _toggleCachePopup() {
-        this.cacheOpen = !this.cacheOpen;
-        this.cfg._uiCacheOpen = this.cacheOpen;  // persist
-
-        const el = document.getElementById(this.id + "-cache-popup");
-        if (el) {
-            el.classList.toggle("hidden", !this.cacheOpen);
+    _setCacheOpen(open) {
+        this.cacheOpen = !!open;
+        if (!this._cacheDropdownWrap) return;
+        this._cacheDropdownWrap.classList.toggle("dropdown-open", this.cacheOpen);
+        if (this.cacheOpen) {
+            document.addEventListener("click", this._cacheOutsideHandler, { capture: true });
+        } else {
+            document.removeEventListener("click", this._cacheOutsideHandler, { capture: true });
+            // DaisyUI also opens `.dropdown` on :focus-within — drop focus or it stays shown.
+            if (this._cacheDropdownWrap.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
         }
     }
 
-    _buildCacheIcon() {
+    /**
+     * Cache status that decides whether the layer offers "clear cache".
+     * `_cacheApplied` names where an override came from (local snapshot, live session),
+     * but it is instance state and never serialized — a cache that arrives inside the
+     * session itself (URL hash, exported file) carries no provenance. Any non-empty cache
+     * must stay clearable: a stale value can silently override the authored params.
+     * @param {object} cfg shader config
+     * @return {string|undefined}
+     */
+    static resolveCacheStatus(cfg) {
+        if (cfg?._cacheApplied) return cfg._cacheApplied;
+        return ShaderLayer.hasCachedValues(cfg?.cache) ? "saved" : undefined;
+    }
+
+    /**
+     * Whether a cache root holds any value. The renderer keeps one bucket per shader type
+     * (`{[type]: {[name]: value}}`) and creates the current type's bucket on first access, so
+     * an empty bucket is not a saved value; a flat 3.x cache (`{[name]: value}`) still counts.
+     * @param {object} cache
+     * @return {boolean}
+     */
+    static hasCachedValues(cache) {
+        if (!cache || typeof cache !== "object") return false;
+        return Object.values(cache).some(value =>
+            value && typeof value === "object" && !Array.isArray(value)
+                ? Object.keys(value).length > 0
+                : value !== undefined);
+    }
+
+    /**
+     * Header-row cache indicator: an icon that opens a dropdown directly below it
+     * (same DaisyUI dropdown pattern as the shader menu's cache-snapshot bookmark).
+     * Lives in the header so a cache override is visible without expanding the layer.
+     */
+    _buildCacheDropdown() {
         if (!this.cacheApplied) {
+            this._cacheDropdownWrap = null;
             return null;
         }
 
@@ -629,69 +681,61 @@ export class ShaderLayer extends BaseComponent {
             miss: "text-error bg-error/10"
         }[this.cacheApplied] || "text-info bg-info/10";
 
-        const icon = new PhIcon({ name: "ph-broom" });
-        return button(
-            {
-                type: "button",
-                class:
-                    `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5 btn-warning`,
-                title: $.t("main.shaders.cacheInfo"),
-                onclick: () => this._toggleCachePopup()
-            },
-            icon.create()
-        );
-    }
-
-    _buildCachePopup() {
-        if (!this.cacheApplied) return undefined;
-
         const statusLabelMap = {
             hit: $.t("main.shaders.cacheHit"),
             miss: $.t("main.shaders.cacheMiss"),
-            stale: $.t("main.shaders.cacheStale")
+            stale: $.t("main.shaders.cacheStale"),
+            saved: $.t("main.shaders.cacheSaved")
         };
+
+        const trigger = button(
+            {
+                type: "button",
+                class: `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5`,
+                title: $.t("main.shaders.cacheInfo"),
+                onclick: () => this._setCacheOpen(!this.cacheOpen)
+            },
+            new PhIcon({ name: "ph-broom" }).create()
+        );
 
         const clearBtn = new Button({
             size: Button.SIZE.TINY,
             type: Button.TYPE.SECONDARY,
             onClick: () => {
+                this._setCacheOpen(false);
                 this.cb.onClearCache?.();
-                if (this.cacheOpen) {
-                    this._toggleCachePopup();
-                }
             }
         }, new PhIcon({ name: "ph-broom" }), span($.t("main.shaders.cacheClear")));
 
-        const closeButton = new Button({
-            size: Button.SIZE.TINY,
-            type: Button.TYPE.GHOST,
-            onClick: () => {
-                this._toggleCachePopup();
-            }
-        }, new PhIcon({ name: "ph-x" }), span($.t("common.Close")));
-
-        return div(
+        // Padding/width inline: the shipped tailwind.min.css is the purged build.
+        const content = div(
             {
-                id: this.id + "-cache-popup",
-                class:
-                    "absolute left-2 right-2 bottom-2 z-20 p-2 rounded bg-base-200 shadow-lg border border-base-300 text-xs " +
-                    (this.cacheOpen ? "" : "hidden")
+                class: "dropdown-content shadow bg-base-100 rounded-box border border-base-300 z-20 text-xs",
+                style: "min-width: 12rem; padding: 0.5rem;"
             },
             div(
                 { class: "flex items-center justify-between mb-1" },
                 span({ class: "font-semibold" }, $.t("main.shaders.cacheTitle")),
-                span(
-                    { class: "text-[0.7rem] uppercase tracking-wide" },
-                    this.cacheApplied
-                )
+                span({ class: "text-[0.7rem] uppercase tracking-wide" }, this.cacheApplied)
             ),
             span(
-                { class: "block mb-2" },
-                statusLabelMap[this.cacheApplied] ||
-                $.t("main.shaders.cacheInfo")
+                { class: "block mb-2 whitespace-normal" },
+                statusLabelMap[this.cacheApplied] || $.t("main.shaders.cacheInfo")
             ),
-            div({ class: "flex flex-row justify-between" }, closeButton.create(), clearBtn.create())
+            div({ class: "flex flex-row justify-end" }, clearBtn.create())
         );
+
+        // Clicks/keys inside must not reach the header row, which toggles collapse.
+        this._cacheDropdownWrap = div(
+            {
+                class: "dropdown dropdown-end non-draggable",
+                onclick: (e) => e.stopPropagation(),
+                onkeydown: (e) => e.stopPropagation()
+            },
+            trigger,
+            content
+        );
+        return this._cacheDropdownWrap;
     }
 
     _buildMainControls() {
@@ -799,8 +843,9 @@ export class ShaderLayer extends BaseComponent {
         this.mode = shaderConfig?.params?.use_mode || "show";
         this.blendMode = shaderConfig?.params?.use_blend || this.blendMode;
         this.type = shaderConfig?.type || this.type;
-        this.cacheApplied = shaderConfig?._cacheApplied;
+        this.cacheApplied = ShaderLayer.resolveCacheStatus(shaderConfig);
         this.collapsed = shaderConfig?._uiCollapsed ?? this.collapsed;
+        this._collapsedBeforeHide = shaderConfig?._uiCollapsedBeforeHide ?? this._collapsedBeforeHide;
 
         // Only when an option actually carries this type — otherwise the select would land on
         // an unrelated shader (see _buildRenderTypeSelector).

@@ -5,6 +5,12 @@ lives in [`modules/empaia-workbench`](../../modules/empaia-workbench/README.md);
 this plugin is the panel. For the manual test matrix — which tutorial app
 exercises what, and what to look for on screen — see [`TESTING.md`](TESTING.md).
 
+> **Separate AigoPath variant.** AigoPath ships its own plugin with the same id
+> `empaia-app-ui` (its repo's `plugins/empaia-app-ui`). It talks to its own
+> backend through `modules/aigopath-workbench`, without the Workbench client
+> API, and has its own UI. It is not meant to replace this one; both are
+> maintained for their own deployment.
+
 Two surfaces, split by how often they are used:
 
 - **Plugins → EMPAIA Analysis** (`AppBar.Plugins.setMenu`) — set-up: the

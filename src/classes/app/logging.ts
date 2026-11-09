@@ -288,6 +288,8 @@ export class ClientLogging {
     private _flushing = false;
     private _originalConsole: Record<string, (...args: any[]) => void> = {};
     private _consoleAdopted = false;
+    private _listeners = new Set<(record: ClientLogRecord) => void>();
+    private _notifying = false;
     private _stats = {
         emitted: 0, suppressed: 0, sensitiveSuppressed: 0, forwarded: 0, forwardDropped: 0, forwardFailures: 0,
         attachmentsQueued: 0, attachmentsForwarded: 0, attachmentsDropped: 0, attachmentsOversized: 0,
@@ -495,7 +497,26 @@ export class ClientLogging {
         this._ring.push(record);
         if (mirror) this._writeConsole(record);
         this._enqueueForward(record, payload);
+        this._notify(record);
         return record;
+    }
+
+    /**
+     * Listeners see every record that passed the level/sensitive gates, after it
+     * is buffered. Re-entrant records (a listener that logs, or whose toast logs)
+     * are not re-dispatched — that would be an infinite loop one console.warn away
+     * — and a throwing listener never breaks logging for the caller.
+     */
+    private _notify(record: ClientLogRecord): void {
+        if (this._notifying || this._listeners.size === 0) return;
+        this._notifying = true;
+        try {
+            for (const listener of this._listeners) {
+                try { listener(record); } catch (e) { /* a listener must not break logging */ }
+            }
+        } finally {
+            this._notifying = false;
+        }
     }
 
     private _writeConsole(record: ClientLogRecord): void {
@@ -928,8 +949,8 @@ export class ClientLogging {
      * is the only capture that can. What it must not do is keep growing for the
      * life of the session, or stay a separate mechanism once a real broker
      * exists — so this drains what it captured, routes `console.*` into the
-     * `console` channel, and re-points `console.appTrace` at a BOUNDED view for
-     * the crash-export page, which keeps reading it unchanged.
+     * `console` channel, and re-points `console.appTrace` at a BOUNDED view so
+     * existing readers keep working unchanged.
      */
     adoptConsole(target: any = console): void {
         if (this._consoleAdopted) return;
@@ -967,9 +988,10 @@ export class ClientLogging {
         // up behind it is the unbounded array this replaces.
         target.__appTraceOwned = true;
 
-        // The export page joins this array into a <pre>. Keeping it a real array
-        // of strings — bounded by the ring — is what makes this a replacement
-        // rather than a breaking change (`src/loader.ts`).
+        // Third-party readers (feedback forms, the test harness) join this array.
+        // Keeping it a real array of strings — bounded by the ring — is what makes
+        // this a replacement rather than a breaking change. The session export
+        // reads the ring itself (`getEntries`, warn+, escaped — `src/loader.ts`).
         Object.defineProperty(target, "appTrace", {
             configurable: true,
             get: () => this._ring.entries.map(r => `${r.level.toUpperCase().padEnd(5)} ${r.ts} [${r.channel}] ${r.message}\n`),
@@ -1009,6 +1031,17 @@ export class ClientLogging {
         if (channel) out = out.filter(entry => entry.channel === channel || entry.channel.startsWith(`${channel}:`));
         if (search) out = out.filter(entry => entry.message.toLowerCase().includes(search) || entry.channel.includes(search));
         return out.slice(-limit);
+    }
+
+    /**
+     * Observe records as they are emitted (same gates as the ring). Meant for
+     * features that react to diagnostics they do not own — e.g. surfacing a vendored
+     * library's console warnings to the user. Returns the unsubscribe function.
+     */
+    onRecord(listener: (record: ClientLogRecord) => void): () => void {
+        if (typeof listener !== "function") return () => {};
+        this._listeners.add(listener);
+        return () => { this._listeners.delete(listener); };
     }
 
     stats(): Record<string, any> {

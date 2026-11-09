@@ -528,6 +528,34 @@ export class MainLayout extends BaseComponent {
         return this._menu?._focused;
     }
 
+    /**
+     * Snapshot of the dock's tabs, for `AppBar.Catalog`.
+     * @returns {Array<{id: string, title: string, visible: boolean, focused: boolean, buttonId?: string}>}
+     */
+    listTabs() {
+        const dockVisible = this.isDockVisible();
+        return this._getMenuTabs().map(tab => ({
+            id: tab.id,
+            title: typeof tab.title === "string" ? tab.title : tab.id,
+            visible: this._isTabVisible(tab),
+            focused: dockVisible && this._menu?._focused === tab.id,
+            buttonId: tab.headerButton?.id,
+        }));
+    }
+
+    /**
+     * Snapshot of the registered toolbars, for `AppBar.Catalog`.
+     * @returns {Array<{id: string, title: string, visible: boolean, toolbar: object}>}
+     */
+    listToolbars() {
+        return this._getRegisteredToolbars().map(toolbar => ({
+            id: toolbar.id,
+            title: toolbar.getEmbeddedMeta?.()?.title || toolbar.id,
+            visible: toolbar.isRequestedVisible?.() ?? true,
+            toolbar,
+        }));
+    }
+
     isOpened() {
         const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
         if (narrow) {
@@ -889,7 +917,9 @@ export class MainLayout extends BaseComponent {
                     icon: docked ? "ph-push-pin" : "ph-push-pin-slash",
                     label: $.t('main.menu.dockPinned'),
                     selected: docked,
-                    onClick: () => this.setDockMode(docked ? "overlay" : "docked"),
+                    // Block body on purpose: setDockMode returns `true`, and a
+                    // Dropdown item whose onClick returns `true` keeps the menu open.
+                    onClick: () => { this.setDockMode(docked ? "overlay" : "docked"); },
                 }];
             },
         });

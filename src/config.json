@@ -298,6 +298,7 @@
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
      *   webGlPrecision: ?string,
+     *   webGlMinificationFilter: ?string,
      *   webGlPrivateContextBudget: ?number,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
@@ -428,7 +429,7 @@
         "kineticPanMinSpeed": 300,
         "permaLoadPlugins": true,
         // suppress the browser's "Leave site?" prompt when there are unsaved changes
-        "bypassCloseConfirmation": false,
+        "bypassCloseConfirmation": true,
         // can disable cookies support
         "bypassCookies": false,
         // can disable cache data loading
@@ -475,10 +476,18 @@
         // because the offscreen color array doubles in size, per renderer, and every viewer
         // also has a navigator renderer.
         "webGlPrecision": "unorm8",
+        // How the renderer samples tiles drawn smaller than their resolution: "default" | "max".
+        // "max" keeps the per-channel maximum over each screen pixel's texel footprint, so
+        // sparse bright features (fluorescence spots on a dark background) survive zooming
+        // out. Pays off with OSD's default minPixelRatio 0.5, which loads tiles up to 2x finer
+        // than the screen. Off by default: on brightfield (H&E) the bright background wins and
+        // dark nuclei wash out, and minified tiles pay up to 16 taps instead of one.
+        // A data item can override it with its own "minificationFilter".
+        "webGlMinificationFilter": "default",
         // How many viewer cells may hold their OWN WebGL context. A private context
-        // makes the presentation canvas the WebGL canvas, so the per-frame
-        // readPixels + putImageData transfer a shared context needs disappears
-        // (measured at 18% of wall clock in a profiled session). Counted in cells,
+        // makes the presentation canvas the WebGL canvas, so the per-frame copy a
+        // shared context needs (a GPU blit, readPixels only as fallback) and its
+        // busy-skipped frames disappear. Counted in cells,
         // not renderers: a cell costs two contexts because OpenSeadragon gives the
         // navigator the same drawer options. Cells past the budget fall back to the
         // one shared context, which is what keeps hosts spawning many viewers

@@ -24,6 +24,7 @@
 
 const util = require("node:util");
 const crypto = require("node:crypto");
+const { currentDeployment } = require("./deployment-scope");
 
 const LEVELS = Object.freeze({ trace: 10, debug: 20, info: 30, warn: 40, error: 50, silent: 99 });
 const LEVEL_NAMES = Object.freeze(Object.keys(LEVELS));
@@ -208,6 +209,7 @@ class LogRingBuffer {
         const minLevel = query.minLevel !== undefined ? normalizeLevel(query.minLevel, null) : null;
 
         let filtered = this.entries.filter(entry => entry.id > afterId);
+        if (typeof query.deployment === "string") filtered = filtered.filter(entry => entry.deployment === query.deployment);
         if (levels && levels.size) filtered = filtered.filter(entry => levels.has(entry.level));
         if (minLevel !== null) filtered = filtered.filter(entry => normalizeLevel(entry.level, 0) >= minLevel);
         if (channels && channels.size) {
@@ -931,6 +933,9 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
             channel,
             message: formatMessage(messageArgs, cfg.redact, cfg.extraKeyRe, sensitive),
             pid,
+            // Named deployment the emitting code ran in, so a log reader can be
+            // confined to its own (server/templates/javascript/deployments.js).
+            deployment: currentDeployment(),
         };
         if (fields) record.fields = fields;
         if (bound?.requestId) record.requestId = bound.requestId;
@@ -1139,6 +1144,10 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                 : (ctx?.user?.id ? `user:${ctx.user.id}` : null);
             if (principal && principals.includes(principal)) return true;
             if (principal && ctx?.user?.id && principals.includes(String(ctx.user.id))) return true;
+            // `<contextId>:user:<sub>` pins the identity provider: a `sub` is only
+            // unique within one, and deployments may log in through different ones.
+            const contextId = ctx?.user?.contextId;
+            if (principal && contextId && principals.includes(`${contextId}:${principal}`)) return true;
 
             for (const [claim, expected] of Object.entries(claims)) {
                 const actual = ctx?.user?.[claim];
@@ -1150,6 +1159,10 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
             return false;
         },
         getEntries: (query) => ring.getEntries(query),
+        /** Whether `logging.access` lets an allowed reader see every deployment's records. */
+        readsAllDeployments() {
+            return resolveConfig().access?.allDeployments === true;
+        },
         /**
          * Push every stream destination now instead of at its next tick.
          *

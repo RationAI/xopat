@@ -255,6 +255,20 @@ module.exports = function(grunt) {
             "--minify"]);
         done();
     });
+    // Image builds call this after `minify`: the committed tailwind.min.css
+    // carries only the core themes, so a deployment that ships an element
+    // `tailwind.preset.js` (or sets XOPAT_TW_PRESET) needs the clean build.
+    // Without presets it is a no-op, so stock images pay nothing.
+    grunt.registerTask('themeCss', function() {
+        const { findPresetFiles } = require("./server/utils/node/tailwind-presets");
+        const presets = findPresetFiles(__dirname);
+        if (!presets.length) {
+            grunt.log.writeln("[themeCss] No tailwind presets, keeping the shipped tailwind.min.css.");
+            return;
+        }
+        grunt.log.writeln(`[themeCss] Rebuilding CSS for ${presets.length} preset(s).`);
+        grunt.task.run('css');
+    });
     grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {
         const done = this.async();
         const cleanItem = async (acc, data) => {

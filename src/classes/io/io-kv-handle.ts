@@ -10,6 +10,7 @@
 // `IOPipeline` is the only thing that imports this file.
 
 import type { IOPipeline } from "./io-pipeline";
+import { deploymentKey } from "../app/deployment-key";
 
 /**
  * Marker for a JSON-encoded value. `` cannot appear in a cookie value
@@ -35,7 +36,12 @@ interface KVHandleOptions {
     xoType: "core" | "plugin" | "module";
     capabilityId: string;
     drivers: IOKVDriver[];
+    /** See `deploymentScoped()`. Never contains `::`. */
+    keyScope?: string;
 }
+
+/** Joins a key scope to a sanitized key; `sanitizeKey` never produces it. */
+const SCOPE_SEPARATOR = "::";
 
 abstract class BaseKVHandle {
     readonly ownerUid: string;
@@ -44,14 +50,47 @@ abstract class BaseKVHandle {
     protected readonly ownerId: string;
     protected readonly xoType: "core" | "plugin" | "module";
     protected readonly drivers: IOKVDriver[];
+    protected readonly keyScope: string;
+    private readonly options: KVHandleOptions;
 
     constructor(o: KVHandleOptions) {
+        this.options = o;
         this.pipeline = o.pipeline;
         this.ownerUid = o.ownerUid;
         this.ownerId = o.ownerId;
         this.xoType = o.xoType;
         this.capabilityId = o.capabilityId;
         this.drivers = o.drivers;
+        this.keyScope = o.keyScope || "";
+    }
+
+    /**
+     * The same namespace, with keys confined to the deployment this page was
+     * served under (`classes/app/deployment-key.ts`).
+     *
+     * Browser storage is origin-wide and one origin serves many deployments.
+     * Anything that carries a decision or data — a consent, a remembered
+     * provider, a draft, slide identifiers — must not follow the user into
+     * another deployment, which may send data elsewhere. Cosmetic preferences
+     * (layout, keymap) are fine shared; use the plain handle for those.
+     */
+    deploymentScoped(): this {
+        // No key yet degrades to one shared "unknown" scope, never to the
+        // unscoped namespace.
+        // Injective encoding (not `sanitizeKey`, which folds characters together):
+        // two deployment keys must never share a scope.
+        const encoded = (deploymentKey() || "~").replace(/[^A-Za-z0-9.-]/g,
+            c => `_${c.charCodeAt(0).toString(16)}`);
+        const keyScope = `dp-${encoded}`;
+        const Ctor = this.constructor as new (o: KVHandleOptions) => this;
+        return new Ctor({ ...this.options, keyScope });
+    }
+
+    /** The user key of a driver key stripped of the owner prefix, or null when not this handle's. */
+    protected ownKey(rest: string): string | null {
+        if (!this.keyScope) return rest.includes(SCOPE_SEPARATOR) ? null : rest;
+        const prefix = `${this.keyScope}${SCOPE_SEPARATOR}`;
+        return rest.startsWith(prefix) ? rest.slice(prefix.length) : null;
     }
 
     protected makeContext(direction: IODirection): IOContext {
@@ -73,8 +112,19 @@ abstract class BaseKVHandle {
      */
     protected driverKey(driver: IOKVDriver, userKey: string): string {
         const sanitized = this.pipeline.sanitizeKey(userKey);
-        if (driver.shared !== false) return `${this.ownerUid}::${sanitized}`;
-        return sanitized;
+        const scoped = this.keyScope ? `${this.keyScope}${SCOPE_SEPARATOR}${sanitized}` : sanitized;
+        if (driver.shared !== false) return `${this.ownerUid}::${scoped}`;
+        return scoped;
+    }
+
+    /** The user key behind a raw driver key, or null when it is not this handle's (owner and scope). */
+    protected ownsRawKey(driver: IOKVDriver, raw: string): string | null {
+        if (driver.shared !== false) {
+            const prefix = `${this.ownerUid}::`;
+            if (!raw.startsWith(prefix)) return null;
+            return this.ownKey(raw.slice(prefix.length));
+        }
+        return this.ownKey(raw);
     }
 
     /** Coerce stringified booleans (matches legacy XOpatStorage.Cache.get). */
@@ -158,15 +208,15 @@ export class SyncKVHandle extends BaseKVHandle implements IOKVHandle {
     clear(): void {
         const ctx = this.makeContext("kv-clear");
         for (const d of this.drivers) {
-            // For shared drivers we cannot blanket-clear (would wipe other
-            // owners). Walk our own keys and remove them individually.
-            if (d.shared !== false) {
-                const prefix = `${this.ownerUid}::`;
+            // For shared drivers (or a scoped handle) we cannot blanket-clear
+            // (would wipe other owners / scopes). Walk our own keys and remove
+            // them individually.
+            if (d.shared !== false || this.keyScope) {
                 const len = (d.length as number) | 0;
                 const ours: string[] = [];
                 for (let i = 0; i < len; i++) {
                     const k = d.key(i, this.ctxFor(d, ctx)) as string | null;
-                    if (k && k.startsWith(prefix)) ours.push(k);
+                    if (k && this.ownsRawKey(d, k) !== null) ours.push(k);
                 }
                 for (const k of ours) d.removeItem(k, this.ctxFor(d, ctx));
             } else {
@@ -183,12 +233,8 @@ export class SyncKVHandle extends BaseKVHandle implements IOKVHandle {
             for (let i = 0; i < len; i++) {
                 const raw = d.key(i, this.ctxFor(d, ctx)) as string | null;
                 if (!raw) continue;
-                if (d.shared !== false) {
-                    const prefix = `${this.ownerUid}::`;
-                    if (raw.startsWith(prefix)) out.add(raw.slice(prefix.length));
-                } else {
-                    out.add(raw);
-                }
+                const own = this.ownsRawKey(d, raw);
+                if (own !== null) out.add(own);
             }
         }
         return Array.from(out);
@@ -243,13 +289,12 @@ export class AsyncKVHandle extends BaseKVHandle implements IOKVHandle {
     async clear(): Promise<void> {
         const ctx = this.makeContext("kv-clear");
         for (const d of this.drivers) {
-            if (d.shared !== false) {
-                const prefix = `${this.ownerUid}::`;
+            if (d.shared !== false || this.keyScope) {
                 const len = (await Promise.resolve(d.length as number | Promise<number>)) as number;
                 const ours: string[] = [];
                 for (let i = 0; i < len; i++) {
                     const k = await Promise.resolve(d.key(i, this.ctxFor(d, ctx))) as string | null;
-                    if (k && k.startsWith(prefix)) ours.push(k);
+                    if (k && this.ownsRawKey(d, k) !== null) ours.push(k);
                 }
                 for (const k of ours) await Promise.resolve(d.removeItem(k, this.ctxFor(d, ctx)));
             } else {
@@ -266,12 +311,8 @@ export class AsyncKVHandle extends BaseKVHandle implements IOKVHandle {
             for (let i = 0; i < len; i++) {
                 const raw = await Promise.resolve(d.key(i, this.ctxFor(d, ctx))) as string | null;
                 if (!raw) continue;
-                if (d.shared !== false) {
-                    const prefix = `${this.ownerUid}::`;
-                    if (raw.startsWith(prefix)) out.add(raw.slice(prefix.length));
-                } else {
-                    out.add(raw);
-                }
+                const own = this.ownsRawKey(d, raw);
+                if (own !== null) out.add(own);
             }
         }
         return Array.from(out);

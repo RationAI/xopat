@@ -10,6 +10,7 @@ const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
 const {getServerLogging} = require("./logging");
 const roles = require("./roles");
+const { runInDeployment } = require("./deployment-scope");
 const {
     registerRpcAuthVerifier, registerProxyAuthVerifier, normalizePrincipalUser,
     resolveVerifierContext, getVerifierEntries, csrfTokenMatches,
@@ -355,28 +356,66 @@ class XopatServerRuntime {
         this.scan();
     }
 
+    /**
+     * Is a plugin/module off in the deployment this core was built for?
+     *
+     * The registry is built by walking the filesystem, so it lists every
+     * plugin/module on disk regardless of configuration. An operator who writes
+     * `enabled: false` reasonably reads that as "off" — honour the merged config.
+     *
+     * ABSENCE counts as disabled too, not just an explicit `false`:
+     * `pluginSelectionMode: "whitelist"` / `"available"` excludes an item by
+     * leaving it OUT of the map entirely (server/templates/javascript/plugins.js
+     * `shouldInclude`).
+     *
+     * A core built without the element scan (`core.ELEMENTS_LOADED` unset) cannot
+     * answer, and is refused rather than read as "everything on": that is how a
+     * deployment shipping zero plugins exposed every plugin's RPCs on disk.
+     */
+    #itemDisabledIn(core, kind, id) {
+        if (!core?.ELEMENTS_LOADED) return true;
+        const configured = (kind === "plugin" ? core.PLUGINS : core.MODULES) || {};
+        const entry = Object.prototype.hasOwnProperty.call(configured, id) ? configured[id] : undefined;
+        return !entry || entry.enabled === false;
+    }
+
     /** Register a raw HTTP route prefix → handler(ctx, urlObj, prefix). */
-    registerServerRoute(prefix, handler) {
+    registerServerRoute(prefix, handler, owner) {
         if (!prefix || typeof handler !== "function") return;
         const p = prefix.startsWith("/") ? prefix : "/" + prefix;
-        this._serverRoutes.set(p, handler);
+        this._serverRoutes.set(p, { handler, owner: owner || null });
         this.routeLog.info(`registered ${p}`);
     }
 
     /** Find a registered route matching a pathname (exact or prefix/…). */
     matchServerRoute(pathname) {
-        for (const [prefix, handler] of this._serverRoutes) {
+        for (const [prefix, route] of this._serverRoutes) {
             if (pathname === prefix || pathname.startsWith(prefix.endsWith("/") ? prefix : prefix + "/")) {
-                return { prefix, handler };
+                return { prefix, handler: route.handler, owner: route.owner };
             }
         }
         return null;
     }
 
     /** Dispatch a matched server route. Returns true if handled. */
-    async dispatchServerRoute(req, res, core, session, urlObj) {
+    dispatchServerRoute(req, res, core, session, urlObj) {
+        // Whole dispatch in the deployment's scope, so the failure log below is
+        // stamped with it too (see handleRpc).
+        return runInDeployment(core?.DEPLOYMENT?.id,
+            () => this.#dispatchServerRouteInDeployment(req, res, core, session, urlObj));
+    }
+
+    async #dispatchServerRouteInDeployment(req, res, core, session, urlObj) {
         const match = this.matchServerRoute(urlObj.pathname);
         if (!match) return false;
+        // A route belongs to the element that registered it, and answers only in
+        // deployments that enable that element — `/auth/saml/*` must not log
+        // anyone in where saml is off.
+        if (match.owner && this.#itemDisabledIn(core, match.owner.kind, match.owner.id)) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not found");
+            return true;
+        }
         try {
             // Helpers are installed once at boot (loadServerExtensions); only
             // rebuild them here as a fallback if the global was never set up.
@@ -388,9 +427,10 @@ class XopatServerRuntime {
                     serverBuildDirName: this.serverBuildDirName,
                 });
             }
-            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {} };
+            const ctx = { req, res, core, session, secure: core?.CORE?.server?.secure || {},
+                deployment: core?.DEPLOYMENT?.id || "base" };
             ctx.log = this.logging ? this.logging.log(`server-route${match.prefix.replace(/\//g, ":")}`) : this.logger;
-            await match.handler(ctx, urlObj, match.prefix);
+            await runInDeployment(ctx.deployment, () => match.handler(ctx, urlObj, match.prefix));
         } catch (e) {
             this.routeLog.error(`${urlObj.pathname} failed`, e);
             if (!res.headersSent) { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Server route error"); }
@@ -494,6 +534,11 @@ class XopatServerRuntime {
     var out = {};
     if (global.XOPAT_CSRF_TOKEN) out["X-XOPAT-CSRF"] = global.XOPAT_CSRF_TOKEN;
     if (global.XOPAT_SESSION_ID) out["X-XOPAT-Session"] = global.XOPAT_SESSION_ID;
+    // Named deployment this page was served under, so the server resolves RPC
+    // config (core.server.secure) against the same one.
+    var deployment = global.APPLICATION_CONTEXT && global.APPLICATION_CONTEXT.env
+      && global.APPLICATION_CONTEXT.env.deployment;
+    if (deployment && typeof deployment.id === "string") out["X-XOPAT-Deployment"] = deployment.id;
     return out;
   }
 
@@ -786,7 +831,17 @@ class XopatServerRuntime {
 `;
     }
 
-    async handleRpc(req, res, core, session, urlObj) {
+    /**
+     * The whole request runs in its deployment's scope, not just the handler:
+     * core's own records about it (refusals, failures, gate waits) are stamped
+     * from that scope, and a per-deployment log reader must see them.
+     */
+    handleRpc(req, res, core, session, urlObj) {
+        return runInDeployment(core?.DEPLOYMENT?.id,
+            () => this.#handleRpcInDeployment(req, res, core, session, urlObj));
+    }
+
+    async #handleRpcInDeployment(req, res, core, session, urlObj) {
         const parts = urlObj.pathname.split("/").filter(Boolean);
         const [, kindRaw, idRaw, methodRaw] = parts;
 
@@ -826,28 +881,8 @@ class XopatServerRuntime {
                 });
             }
 
-            // The registry is built by walking the filesystem, so it lists every
-            // plugin/module on disk regardless of configuration. An operator who
-            // writes `enabled: false` reasonably reads that as "off" — but the
-            // item's whole RPC surface stayed callable. Honour the merged config
-            // here, where it is available.
-            //
-            // ABSENCE counts as disabled too, not just an explicit `false`.
-            // `pluginSelectionMode: "whitelist"` / `"available"` excludes an item
-            // by leaving it OUT of the map entirely (see
-            // server/templates/javascript/plugins.js `shouldInclude`), so the
-            // `configured[id] && …` shape meant the one mode whose entire purpose
-            // is "ship less than what is on disk" removed the plugin from the UI
-            // while leaving its RPCs open to anyone who knew the id.
-            const configured = (kind === "plugin" ? core?.PLUGINS : core?.MODULES) || {};
-            const configuredKnown = Object.keys(configured).length > 0;
-            const entry = Object.prototype.hasOwnProperty.call(configured, id) ? configured[id] : undefined;
-            // An empty map means "this core build did not load plugins/modules"
-            // (serverOnly without withPlugins), NOT "everything is disabled" —
-            // inferring disablement from it would 404 every RPC on that path.
-            const disabled = entry
-                ? entry.enabled === false
-                : configuredKnown;
+            // See `#itemDisabledIn`.
+            const disabled = this.#itemDisabledIn(core, kind, id);
             if (disabled) {
                 return this.#writeJson(res, 404, {
                     error: `${kind} '${id}' is disabled in this deployment`,
@@ -942,14 +977,16 @@ class XopatServerRuntime {
             });
         }
 
-        const authResult = await this.#verifyRpcRequest(
+        // Verifiers are element code (oidc, saml…) and keep partitioned caches:
+        // run them in the request's deployment, not the process default.
+        const authResult = await runInDeployment(core?.DEPLOYMENT?.id, () => this.#verifyRpcRequest(
             req,
             res,
             core,
             session,
             policy,
             { kind, item, method, contextId: readBodyField(body, "contextId") }
-        );
+        ));
         if (!authResult.ok) return;
 
         // Capability gate. Deliberately AFTER authentication — a capability is a
@@ -1001,7 +1038,7 @@ class XopatServerRuntime {
         const stream = policy.streaming ? this.#openStream(res, methodKey, timings.heartbeatMs) : null;
 
         const circuit = policy.circuitBreaker
-            ? this.#checkCircuit(policy.circuitBreaker, methodKey)
+            ? this.#checkCircuit(policy.circuitBreaker, methodKey, core?.DEPLOYMENT?.id)
             : null;
         if (circuit && circuit.open) {
             const payload = {
@@ -1073,6 +1110,10 @@ class XopatServerRuntime {
                 res,
                 core,
                 secure: core?.CORE?.server?.secure || {},
+                // Resolved named deployment (X-XOPAT-Deployment); `secure` above
+                // is already that deployment's. Core's: elements get isolation from
+                // XOPAT_SERVER itself and have no reason to read it.
+                deployment: core?.DEPLOYMENT?.id || "base",
                 session,
                 user: authResult.user,
                 // Never-null-when-known caller identity; see #principalOf. Use
@@ -1110,12 +1151,12 @@ class XopatServerRuntime {
             }
 
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
 
             clearTimeout(timeout);
-            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
+            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true, core?.DEPLOYMENT?.id);
             return this.#writeJson(res, 200, {
                 ok: true,
                 result: result === undefined ? null : result
@@ -1127,7 +1168,7 @@ class XopatServerRuntime {
             // A disconnect-induced abort says nothing about upstream health — only
             // real failures (and timeouts) count against the breaker.
             if (policy.circuitBreaker && !(aborted && disconnected)) {
-                this.#recordCircuit(policy.circuitBreaker, methodKey, false);
+                this.#recordCircuit(policy.circuitBreaker, methodKey, false, core?.DEPLOYMENT?.id);
             }
             this.rpcLog.error(`${kind}/${item.id}/${method} failed`, error);
             if (disconnected) return; // nobody to answer
@@ -1264,18 +1305,18 @@ class XopatServerRuntime {
 
         try {
             const result = await settleWithinAbortGrace(
-                Promise.resolve().then(() => target.fn(ctx, ...args)),
+                Promise.resolve().then(() => runInDeployment(ctx.deployment, () => target.fn(ctx, ...args))),
                 controller.signal,
             );
             clearTimeout(timeout);
-            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true);
+            if (policy.circuitBreaker) this.#recordCircuit(policy.circuitBreaker, methodKey, true, ctx.deployment);
             writeLine({ done: true, ok: true, result: result === undefined ? null : result });
         } catch (error) {
             clearTimeout(timeout);
             const aborted = controller.signal.aborted;
             const disconnected = res.destroyed || res.writableEnded;
             if (policy.circuitBreaker && !(aborted && disconnected)) {
-                this.#recordCircuit(policy.circuitBreaker, methodKey, false);
+                this.#recordCircuit(policy.circuitBreaker, methodKey, false, ctx.deployment);
             }
             this.rpcLog.error(`${kind}/${itemId}/${method} stream failed`, error);
             // Same disclosure discipline as #writeJson: message + code + status only.
@@ -1377,8 +1418,16 @@ class XopatServerRuntime {
      * single remaining strike, so one more failure re-opens it immediately while
      * one success resets it fully.
      */
-    #checkCircuit(cbPolicy, methodKey) {
-        const key = cbPolicy.key || methodKey;
+    /**
+     * Breakers are per named deployment: each has its own `secure` config and so
+     * possibly its own upstream, and B's failing upstream must not open A's circuit.
+     */
+    #circuitKey(cbPolicy, methodKey, deployment) {
+        return `${deployment || "base"}|${cbPolicy.key || methodKey}`;
+    }
+
+    #checkCircuit(cbPolicy, methodKey, deployment) {
+        const key = this.#circuitKey(cbPolicy, methodKey, deployment);
         const entry = this._rpcBreakers.get(key);
         if (!entry) return { key, open: false };
         if (entry.openUntil) {
@@ -1394,8 +1443,8 @@ class XopatServerRuntime {
         return { key, open: false };
     }
 
-    #recordCircuit(cbPolicy, methodKey, success) {
-        const key = cbPolicy.key || methodKey;
+    #recordCircuit(cbPolicy, methodKey, success, deployment) {
+        const key = this.#circuitKey(cbPolicy, methodKey, deployment);
         if (success) {
             this._rpcBreakers.delete(key);
             return;
@@ -1533,7 +1582,12 @@ class XopatServerRuntime {
 
     #readLogs(ctx, payload = {}) {
         this.#assertLogReadAllowed(ctx);
-        const snapshot = this.logging.getEntries(payload || {});
+        const query = { ...(payload || {}) };
+        delete query.deployment;    // never caller-chosen
+        // Outside dev mode a reader sees the deployment it was admitted to,
+        // unless the operator opted the allowlist into all of them.
+        if (!this.devMode && !this.logging.readsAllDeployments()) query.deployment = ctx?.deployment || "base";
+        const snapshot = this.logging.getEntries(query);
         return {
             devMode: this.devMode,
             scope: "server/core/getLogs",
@@ -2107,18 +2161,18 @@ class XopatServerRuntime {
             logger: this.logger,
             serverBuildDirName: this.serverBuildDirName,
         });
-        const serverApi = Object.assign({}, globalThis.XOPAT_SERVER, {
-            registerRpcAuthVerifier,
-            registerProxyAuthVerifier,
-            registerServerRoute: (prefix, handler) => this.registerServerRoute(prefix, handler),
-        });
-
         for (const kind of ["module", "plugin"]) {
             const items = this.registry[kind] || {};
             for (const id of Object.keys(items)) {
                 const item = items[id];
                 const file = (item.files || []).find(f => REGISTER_FILE_RE.test(f));
                 if (!file) continue;
+                // Per item, so a route knows which element's enablement gates it.
+                const serverApi = Object.assign({}, globalThis.XOPAT_SERVER, {
+                    registerRpcAuthVerifier,
+                    registerProxyAuthVerifier,
+                    registerServerRoute: (prefix, handler) => this.registerServerRoute(prefix, handler, { kind, id }),
+                });
                 try {
                     const mod = await this.#loadModuleFile(file);
                     const register = mod.register || (mod.default && mod.default.register) || mod.default;

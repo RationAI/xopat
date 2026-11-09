@@ -1,0 +1,7 @@
+/**
+ * The synthetic deployment plus the user-actions module and its demo actions
+ * (env/parts/flags/user-actions-demo.json — one copy for `npm run up` and tests).
+ */
+{
+  "$base": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off", "flags/user-actions-demo"]
+}

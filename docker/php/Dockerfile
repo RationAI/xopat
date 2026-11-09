@@ -49,8 +49,9 @@ COPY . /tmp/xopat
 # production min artifacts (index.min.js / index.min.mjs / index.workspace.min.js
 # / src/dist/xopat-core.min.js / ui/index.min.js) that viewer-standalone copies.
 # They are only *served* when the deployment sets client.production: true, so the
-# viewer-dev image built from this stage is unaffected.
-RUN cd /tmp/xopat && npm ci && npm run minify
+# viewer-dev image built from this stage is unaffected. `themeCss` rebuilds
+# tailwind.min.css only when an element ships a tailwind.preset.js.
+RUN cd /tmp/xopat && npm ci && npm run minify && npx grunt themeCss
 
 ##################
 # VIEWER: DEV  ###

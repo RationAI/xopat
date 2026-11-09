@@ -471,10 +471,25 @@ input.selectable-image-row-context:checked + div {
     line-height: 1;
 }
 
+/* Navigator header actions that are secondary (quick background adjustment):
+ * revealed on navigator hover / keyboard focus, and kept visible while their
+ * panel is open (`btn-active`), so the toggle that closes it never vanishes. */
+.navigator-hover-action {
+    opacity: 0;
+    transition: opacity 0.12s ease-in-out;
+}
+
+.navigator-panel:hover .navigator-hover-action,
+.navigator-panel:focus-within .navigator-hover-action,
+.navigator-hover-action.btn-active {
+    opacity: 1;
+}
+
 @media (hover: none) {
     /* No hover on touch: a control that only appears on hover is a control
      * that does not exist there. */
-    .shader-reorder {
+    .shader-reorder,
+    .navigator-hover-action {
         opacity: 1;
     }
 }
@@ -496,6 +511,33 @@ input.selectable-image-row-context:checked + div {
 .shader-controls-row--renderer > .er-control {
     width: 100%;
     max-width: 100%;
+}
+
+/* Icon control: the library renders it single-column (label above a large
+ * trigger). In the side menu lay it out like the other rows — label left,
+ * a small square trigger right — so an IconMap with N classes does not cost
+ * N tall blocks. The picker popup anchors to the whole control (not just the
+ * narrow body column) so it keeps the full menu width. */
+.shader-controls-row--renderer > .er-control--icon {
+    position: relative;
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr);
+}
+
+.shader-controls-row--renderer > .er-control--icon > .er-control__body {
+    grid-column: 2;
+}
+
+.er-control--icon .er-control__widget--icon {
+    position: static;
+}
+
+/* The preview glyph/canvas carries an inline size (params.previewSize,
+ * default 27px) that overflows the small trigger. */
+.er-control__preview--icon > * {
+    width: 1.125rem !important;
+    height: 1.125rem !important;
+    font-size: 1.125rem !important;
+    line-height: 1 !important;
 }
 
 /* One row of controls */
@@ -823,7 +865,7 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
 }
 
 /* The library hard-codes `height: 9px` inline on the widget
- * (AdvancedSlider.toHtml ~:8338), which is thinner than the 18px
+ * (AdvancedSlider.toHtml ~:22365), which is thinner than the 18px
  * `.noUi-horizontal` the handle offsets were written for. Nudge the
  * handle back onto the centre line of the thinner track. The 19px
  * geometry comes from `.noUi-horizontal .noUi-handle`
@@ -833,11 +875,38 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
     top: -5px;
 }
 
-/* NOTE: the salmon connect bars are NOT overridden. `oklch(var(--er))`
- * is written as an INLINE style by AdvancedSlider._updateConnectStyles
- * (~:8232) and the toggleMask mouseup handler (~:8154), and it encodes
- * STATE ("this interval is visible"), not theme. A blanket
- * `background: ... !important` here would erase the masked-vs-unmasked
- * distinction and make the widget unusable. Recolouring it is a one-line
- * library change - filed in UPSTREAM.md ("flex-renderer - basic UI
- * controls carry no DaisyUI classes", item 3). */
+/* Mask state. AdvancedSlider toggles `er-slider__connect--active` on a
+ * connect bar whose interval is visible (_updateConnectStyles and the
+ * click-to-toggle handler, ~:22134 / ~:22260); a masked interval keeps the
+ * neutral `.noUi-connect` colour from nouislider.css. The library ships no
+ * colour for it - the state is the host's to theme. Lives here, not in
+ * tailwind-spec.css, for the same purge reason as the noUi rules above. */
+.noUi-connect.er-slider__connect--active {
+    background: var(--fallback-p, oklch(var(--p) / 1));
+}
+
+/* --- flex-renderer ColorMap palette ----------------------------------
+ * ColorMap publishes the palette as the `--er-colormap` custom property on
+ * the control root (`.er-control`, ColorMap._paintGradient ~:21454) and
+ * leaves painting it to the host. The interactive control gets a sibling
+ * `.er-control__colormap-preview` strip under its <select>; the
+ * non-interactive one is a display chip carrying the same property.
+ * Neither class is in a scanned file, hence this plain stylesheet. */
+.er-control__colormap-preview {
+    display: block;
+    height: 0.375rem;
+    margin-top: 0.125rem;
+    border-radius: var(--rounded-badge, 0.25rem);
+    border: 1px solid oklch(var(--bc) / 0.2);
+    background-color: oklch(var(--b1));
+    background-image: var(--er-colormap, none);
+}
+
+.er-control__display--colormap,
+.er-control__display--custom-colormap {
+    background-color: oklch(var(--b1));
+    background-image: var(--er-colormap, none);
+    background-repeat: no-repeat;
+    background-position: left bottom;
+    background-size: 100% 0.375rem;
+}

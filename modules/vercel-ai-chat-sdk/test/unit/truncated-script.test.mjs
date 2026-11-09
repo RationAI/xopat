@@ -126,3 +126,12 @@ test("a complete tool-call payload is not flagged", () => {
     expect(recoverToolEnvelopeToScriptFence(envelope).truncated).toBe(false);
     expect(extractToolEnvelopeScripts(envelope)[0]?.truncated).toBe(false);
 });
+
+test("a ```json example in prose is not a script fence", { tag: ["@unit"] }, () => {
+    // Incident: the opener matched `js` inside `json`, so the runtime got "on\n{...}" and failed.
+    const prose = "It returns a map like:\n\n```json\n{\n  \"counts\": { \"tumor\": 12 }\n}\n```\n";
+    expect(findScriptFence(prose)).toBeUndefined();
+    const fence = findScriptFence("```js\nreturn 1;\n```");
+    expect(fence?.tag).toBe("js");
+    expect(fence?.body).toBe("return 1;");
+});

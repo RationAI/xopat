@@ -22,6 +22,13 @@ function handleProxyRequest($pathInfo) {
         exit("Forbidden: invalid CSRF token");
     }
 
+    // 1b. Deployment binding: only one this session entered by a page load.
+    if (!xopat_session_may_use_deployment($GLOBALS['__deployment']['id'] ?? 'base',
+            $GLOBALS['__hasNamedDeployments'] ?? false)) {
+        header("HTTP/1.1 403 Forbidden");
+        exit("Forbidden: this session has not opened the requested deployment");
+    }
+
     // 2. Resolve Alias (Prefix-Aware)
     $parts = explode('/', trim($pathInfo, '/'));
 

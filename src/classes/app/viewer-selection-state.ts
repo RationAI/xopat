@@ -68,6 +68,46 @@ export class ViewerSelectionState {
     }
 
     /**
+     * Whether a visualization is offered for a background. A visualization
+     * without `backgrounds` belongs to every background; otherwise one entry
+     * must equal the background's `id` or the data id the background shows.
+     */
+    static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
+        const targets = visualization?.backgrounds;
+        if (!Array.isArray(targets) || !targets.length) return true;
+        if (!background) return false;
+        const ref = background.dataReference;
+        const entry = typeof ref === "number" ? data[ref] : ref;
+        const dataId = typeof entry === "string" ? entry : entry?.dataID;
+        return targets.some((t: any) => t === background.id || (dataId !== undefined && t === dataId));
+    }
+
+    /**
+     * The visualizations a viewer's selector offers: those applying to its
+     * background, plus the selected one regardless. Entries keep their index
+     * in `config.visualizations`, which is what a selection stores.
+     */
+    static getViewerVisualizationChoices(
+        viewer: OpenSeadragon.Viewer,
+        appContext: ApplicationContext,
+        viewerManager: any = window.VIEWER_MANAGER
+    ): Array<{ index: number, name?: string }> {
+        const config: any = appContext.config;
+        const visualizations: any[] = Array.isArray(config.visualizations) ? config.visualizations : [];
+        const bgIdx = ViewerSelectionState.getViewerSelectionIndex(
+            viewer, "activeBackgroundIndex", appContext, viewerManager
+        );
+        const bg = Number.isInteger(bgIdx) ? config.background?.[bgIdx as number] : undefined;
+        const selected = ViewerSelectionState.getViewerVisualizationIndex(viewer, appContext, viewerManager);
+        const data = Array.isArray(config.data) ? config.data : [];
+        return visualizations
+            .map((visualization, index) => ({ visualization, index }))
+            .filter(({ visualization, index }) => index === selected
+                || ViewerSelectionState.visualizationAppliesTo(visualization, bg, data))
+            .map(({ visualization, index }) => ({ index, name: visualization?.name }));
+    }
+
+    /**
      * Snapshot variant — derive the visualization index from a captured
      * snapshot (history/session payload). Mirrors `getViewerVisualizationIndex`
      * but operates on a frozen `{background, activeBackgroundIndex}` shape.

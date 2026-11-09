@@ -762,7 +762,10 @@ export class Explorer extends BaseComponent {
         });
 
         // UL we’ll reuse; we’ll put spacers + visible items into it
-        const listEl = ul({ class: "menu p-1 gap-1" });
+        // `flex-nowrap`: DaisyUI's `.menu` wraps, and a wrapping column sizes
+        // each line to its widest row's max-content — so a long item name
+        // never truncates and pushes the row's trailing controls off-screen.
+        const listEl = ul({ class: "menu flex-nowrap p-1 gap-1" });
 
         // footer controls (prev/next) – unchanged behavior
         const pageState = van.state((currentPage || 0) + 1);
@@ -1069,7 +1072,10 @@ export class Explorer extends BaseComponent {
      */
     _renderVirtualList(levelIndex, parent, bucket, scrollRoot = null) {
         const lvl = this._getLevel(levelIndex);
-        const listEl = ul({ class: "menu p-1 gap-1" });
+        // `flex-nowrap`: DaisyUI's `.menu` wraps, and a wrapping column sizes
+        // each line to its widest row's max-content — so a long item name
+        // never truncates and pushes the row's trailing controls off-screen.
+        const listEl = ul({ class: "menu flex-nowrap p-1 gap-1" });
         const root = scrollRoot || null;   // null => browser viewport, still bounded
 
         // Virtual mode: no remembering required

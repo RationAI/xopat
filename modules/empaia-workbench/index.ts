@@ -347,11 +347,11 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * added, and its emitter replays the last value to a late subscriber — so
      * there is no handshake race to guard against here.
      *
-     * Note the library does not validate the sender's origin. See the README;
-     * that is the library's posture and we adopt it. The one check kept below
-     * is not a security policy but a precondition of `HttpClient`: a `wbsUrl`
-     * that does not parse would surface as an unrelated failure deep in the
-     * request path.
+     * Note the library does not validate the sender (see the README and
+     * UPSTREAM.md), so any frame holding a handle to this window can push a
+     * `wbsUrl`. The client built from it carries the workbench token, so the
+     * URL is held to an operator allowlist (`wbsOrigins`) — otherwise a
+     * sibling frame winning the handshake race receives the real token.
      */
     private _listenToWorkbench(): void {
         addScopeListener((scope: Scope) => {
@@ -360,8 +360,14 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             this._resolveIfSessionReady();
         });
 
+        // Deployment-trusted (getStaticMeta, never getOption — §7). With a server
+        // proxy alias the wbsUrl is never requested, so there is nothing to vet.
+        const allowedOrigins = this.getStaticMeta("proxy", null)
+            ? null
+            : resolveAllowedWbsOrigins(this.getStaticMeta("wbsOrigins", null));
+
         addWbsUrlListener((wbsUrl: WbsUrl) => {
-            const parsed = parseBackendUrl(wbsUrl?.url);
+            const parsed = parseBackendUrl(wbsUrl?.url, allowedOrigins);
             if (!parsed) return;
             this._wbsUrl = parsed;
             this._resolveIfSessionReady();
@@ -3499,15 +3505,39 @@ function slideDisplayName(slide: Slide): string {
 }
 
 /**
- * Normalize the backend URL the workbench hands us.
- *
- * Not a security check — VACI does not validate the sender and neither do we
- * (see the README). This is a precondition of the code that consumes the value:
- * it becomes an `HttpClient` `baseURL`, so a value that does not parse, or that
- * is not http(s), has to be rejected here or it resurfaces as a confusing
- * failure deep inside the request path. Returns undefined when unusable.
+ * Resolve the `wbsOrigins` static meta into a set of allowed origins, or null
+ * for "any" (explicit `"*"` opt-out). Unset defaults to the origin this app UI
+ * was served from — the Workbench serves app frontends from the Workbench
+ * Service itself (`/v3/frontends/<JWT>/`). `location.origin` is read from the
+ * URL, so it is the real host even on the sandbox's opaque document origin.
  */
-function parseBackendUrl(raw: unknown): string | undefined {
+function resolveAllowedWbsOrigins(configured: unknown): Set<string> | null {
+    const list = Array.isArray(configured) ? configured
+        : typeof configured === "string" ? [configured]
+        : [window.location.origin];
+    if (list.includes("*")) return null;
+    const origins = new Set<string>();
+    for (const entry of list) {
+        try {
+            origins.add(new URL(String(entry)).origin);
+        } catch {
+            console.warn(`[empaia-workbench] ignoring unparseable wbsOrigins entry ${entry}`);
+        }
+    }
+    return origins;
+}
+
+/**
+ * Normalize and vet the backend URL the workbench hands us.
+ *
+ * VACI does not validate the sender (see the README), so this is the one
+ * security check on the value: its origin must be in `allowedOrigins` (null =
+ * any), because the `HttpClient` built from it carries the workbench token.
+ * It must also parse and be http(s) — it becomes a `baseURL`, and a malformed
+ * value would resurface as a confusing failure deep inside the request path.
+ * Returns undefined when unusable.
+ */
+function parseBackendUrl(raw: unknown, allowedOrigins: Set<string> | null): string | undefined {
     const value = typeof raw === "string" ? raw.trim() : "";
     if (!value) {
         console.warn("[empaia-workbench] ignoring empty wbsUrl from the workbench.");
@@ -3522,6 +3552,12 @@ function parseBackendUrl(raw: unknown): string | undefined {
     }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         console.warn(`[empaia-workbench] ignoring wbsUrl with unsupported scheme ${parsed.protocol}`);
+        return undefined;
+    }
+    if (allowedOrigins && !allowedOrigins.has(parsed.origin)) {
+        // Ignored, not fatal: a forged value must not abort the handshake the
+        // genuine workbench is still completing.
+        console.warn(`[empaia-workbench] ignoring wbsUrl from disallowed origin ${parsed.origin} (see wbsOrigins).`);
         return undefined;
     }
     // Trailing slashes are stripped: every route is composed as `${base}/v3/...`

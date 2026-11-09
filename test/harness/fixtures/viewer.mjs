@@ -23,6 +23,8 @@
  * world and the image loader mostly drained.
  */
 
+import { assertBundlesFresh } from "../bundle-freshness.mjs";
+
 const jsonParam = (session) => encodeURIComponent(JSON.stringify(session));
 
 class XOpatPage {
@@ -213,6 +215,7 @@ const attachReproduction = async (xopat, testInfo) => {
 
 export const viewerFixtures = {
     xopat: async ({ page, xopatServer }, use, testInfo) => {
+        assertBundlesFresh();
         const xopat = new XOpatPage(page, xopatServer);
         await use(xopat);
 

@@ -216,6 +216,8 @@ declare global {
         configure(rawConfig: any): void;
         /** Buffered records, newest last. */
         getEntries(query?: { afterId?: number; limit?: number; minLevel?: string; channel?: string; search?: string }): any[];
+        /** Observe records as they are emitted (after the level gate). Returns the unsubscribe function. */
+        onRecord(listener: (record: { id: number; ts: string; level: string; channel: string; message: string; fields?: Record<string, any> }) => void): () => void;
         /** Push queued records to the server now (also runs on page hide). */
         flush(): Promise<void>;
         /** Push queued attachment bytes now (one file per request). */

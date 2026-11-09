@@ -45,6 +45,11 @@ interface DataOverride {
      */
     imageSmoothingEnabled?: boolean;
     /**
+     * Per-data override of `setup.webGlMinificationFilter`: `"max"` for sparse bright data
+     * (fluorescence) over a brightfield background that keeps `"default"`. Unset inherits.
+     */
+    minificationFilter?: "default" | "max";
+    /**
      * How many pixels of the stack's REFERENCE image (its background) ONE pixel
      * of this image covers. `2` means half-resolution; `512` means each pixel is
      * one 512-px prediction square.
@@ -321,6 +326,12 @@ interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
+    /**
+     * Backgrounds this visualization belongs to: background `id`s or the data
+     * ids they show. Omitted = offered for every background. Only narrows the
+     * viewer's visualization selector; it does not block opening.
+     */
+    backgrounds?: string[];
     [key: string]: any;
 }
 
@@ -600,6 +611,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -718,6 +734,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };

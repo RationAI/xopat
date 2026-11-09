@@ -193,6 +193,40 @@ export class FullscreenMenus {
         return this.menu.has(id);
     }
 
+    /**
+     * Snapshot of every registered panel and, for plugin panels, their sub-tabs
+     * (`setMenu`), for `AppBar.Catalog`.
+     * @returns {Array<{id: string, title: string, namespace: string, owner?: string, buttonId?: string,
+     *   tabs: Array<{id: string, title: string, buttonId?: string}>}>}
+     */
+    list() {
+        this._ensureInit();
+        const titleOf = (tab) => typeof tab?.title === "string" ? tab.title : tab?.id;
+        return Object.values(this.menu?.tabs || {}).map(tab => {
+            const sub = this._pluginMenus[tab.id];
+            return {
+                id: tab.id,
+                title: titleOf(tab),
+                namespace: tab.namespace,
+                owner: sub?.owner,
+                buttonId: tab.headerButton?.id,
+                tabs: sub ? Object.values(sub.menu.tabs || {}).map(t => ({
+                    id: t.id, title: titleOf(t), buttonId: t.headerButton?.id,
+                })) : [],
+            };
+        });
+    }
+
+    /** @returns {string|undefined} id of the panel on screen, undefined while closed. */
+    getFocusedId() {
+        return this.isVisible() ? this.menu?._focused : undefined;
+    }
+
+    /** @returns {string|undefined} focused sub-tab of a plugin panel. */
+    getFocusedSubmenuId(panelId) {
+        return this._pluginMenus[panelId]?.menu?._focused;
+    }
+
     focus(id) {
         this._ensureInit();
         const focused = this.menu.focus(id);
@@ -333,7 +367,7 @@ export class FullscreenMenus {
             body: () => mount
         }, FullscreenMenuPanel.NAMESPACE.PLUGINS);
 
-        const state = { mount, menu: submenu, id: key, chrome };
+        const state = { mount, menu: submenu, id: key, chrome, owner: ownerPluginId };
         this._pluginMenus[key] = state;
         return state;
     }
@@ -564,7 +598,7 @@ export class FullscreenMenus {
         );
 
         let theme = APPLICATION_CONTEXT.getOption("theme");
-        let themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
+        let themePretty = $.t(theme === "auto" ? 'settings.theme.auto' : theme === "light" ? 'settings.theme.light' : 'settings.theme.dark');
 
         const themeSelect = new Select(
             { id: "theme-select", onchange: function () { USER_INTERFACE.Tools.changeTheme(this.value); }, title: $.t('settings.theme.title') },

@@ -209,8 +209,8 @@ const PROXY_ALLOW_NONE = "NONE";
  * values is that something tried to restrict this session, and a restriction we
  * cannot read must not be read as "unrestricted".
  */
-function proxyAliasAllowedForSession(session, alias) {
-    const allowed = session?.allowedProxies;
+function proxyAliasAllowedForSession(session, alias, deploymentId) {
+    const allowed = allowedProxiesFor(session?.allowedProxies, deploymentId);
     if (allowed === undefined || allowed === null || allowed === PROXY_ALLOW_ALL) return true;
     if (allowed === PROXY_ALLOW_NONE) return false;
     if (Array.isArray(allowed)) return allowed.includes(alias);
@@ -218,22 +218,55 @@ function proxyAliasAllowedForSession(session, alias) {
 }
 
 /**
+ * Per-deployment shape of `allowedProxies`: `{all, byDeployment: {<id>: value}}`.
+ *
+ * One session cookie serves every named deployment on the origin
+ * (`server/templates/javascript/deployments.js`), and alias names are looked up
+ * against each deployment's OWN `proxies` — so a narrowing decided by a login
+ * under deployment A says nothing about B. `all` is a narrowing made without a
+ * deployment (legacy callers): it applies wherever no deployment-specific
+ * value exists. Marked by `byDeployment`, so any other object still denies.
+ */
+function isPerDeploymentAllowance(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+        && !!value.byDeployment && typeof value.byDeployment === "object" && !Array.isArray(value.byDeployment);
+}
+
+function allowedProxiesFor(allowed, deploymentId) {
+    if (!isPerDeploymentAllowance(allowed)) return allowed;
+    const id = deploymentId || "base";
+    return Object.prototype.hasOwnProperty.call(allowed.byDeployment, id) ? allowed.byDeployment[id] : allowed.all;
+}
+
+/**
  * Narrow (or widen) the aliases a session may reach. For auth modules to call on
- * a completed login — `XOPAT_SERVER.setSessionAllowedProxies(ctx.session, [...])`.
+ * a completed login — `XOPAT_SERVER.setSessionAllowedProxies(ctx.session, [...], ctx.deployment)`.
  *
  * Pass an array of aliases, `'ALL'`, or `'NONE'`. Mutates in place, which is what
- * the deferred write-back picks up; there is no session-set API.
+ * the deferred write-back picks up; there is no session-set API. With
+ * `deploymentId` the narrowing applies to that named deployment only; without
+ * it, to every deployment (replacing per-deployment values).
  */
-function setSessionAllowedProxies(session, aliases) {
+function setSessionAllowedProxies(session, aliases, deploymentId) {
     if (!session || typeof session !== "object") return;
+    let value;
     if (aliases === PROXY_ALLOW_ALL || aliases === PROXY_ALLOW_NONE) {
-        session.allowedProxies = aliases;
-        return;
-    }
-    if (!Array.isArray(aliases)) {
+        value = aliases;
+    } else if (Array.isArray(aliases)) {
+        value = aliases.filter(a => typeof a === "string" && a);
+    } else {
         throw new TypeError("setSessionAllowedProxies expects an array of aliases, 'ALL' or 'NONE'.");
     }
-    session.allowedProxies = aliases.filter(a => typeof a === "string" && a);
+    if (!deploymentId) {
+        session.allowedProxies = value;
+        return;
+    }
+    const current = session.allowedProxies;
+    const next = isPerDeploymentAllowance(current)
+        ? { all: current.all, byDeployment: { ...current.byDeployment } }
+        : { all: current, byDeployment: {} };
+    next.byDeployment[deploymentId] = value;
+    session.allowedProxies = next;
 }
 
 /** Does this alias inject operator secrets (API keys) into the upstream request? */

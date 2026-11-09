@@ -155,6 +155,42 @@ export class ViewerOpenPipeline {
     }
 
     /**
+     * Close one viewport of a multi-viewport grid: drop its slot from the
+     * selection, tear its cell down, and reopen the rest. The last remaining
+     * viewport is never closed here — an empty grid is a different state
+     * (`openViewerWith(..., null)`), not a close.
+     * @returns false when there was nothing to close
+     */
+    async closeViewer(viewer: OpenSeadragon.Viewer, opts: OpenViewerWithOptions = {}) {
+        const viewerManager: any = this.deps.viewerManager;
+        const viewers: any[] = viewerManager.viewers || [];
+        const slot = viewers.indexOf(viewer);
+        if (slot < 0 || viewers.length < 2) return false;
+
+        const activeBackground = ViewerSelectionState.normalizeSelectionValue(
+            this.deps.appContext.getOption("activeBackgroundIndex", undefined, true, true)
+        ) || [];
+        if (slot < activeBackground.length) activeBackground.splice(slot, 1);
+
+        // Eager cell removal, before the reopen: the reopen's own viewer-count
+        // reconciliation does not know WHICH cell went away — this one did.
+        viewerManager.delete(slot);
+
+        const result = await this.openViewerWith(
+            undefined,
+            undefined,
+            undefined,
+            activeBackground.length ? activeBackground : null,
+            undefined,
+            opts
+        );
+        const remaining: any[] = viewerManager.viewers || [];
+        const next = remaining[Math.min(slot, remaining.length - 1)];
+        if (next) viewerManager.setActive?.(next);
+        return result;
+    }
+
+    /**
      * Switch the render mode of a virtualized parent background between
      * `none` / `sidebyside` / `overlaid`. Runtime-switchable: the decomposition
      * is stored once on the parent; this only recomputes the selection and
@@ -657,23 +693,9 @@ export class ViewerOpenPipeline {
                         return layers;
                     }) : [],
                 } : null,
-                visualization: vizEntry ? {
-                    protocol: vizEntry.protocol,
-                    shaders: (() => {
-                        const layers: Array<{ id: string; type: any; dataReferences: any[]; path: string[]; }> = [];
-                        forEachVisualizationShader(vizEntry.shaders || {}, (shader, shaderId, path) => {
-                            layers.push({
-                                id: shader?.id || shaderId,
-                                type: shader?.type,
-                                dataReferences: Array.isArray(shader?.dataReferences)
-                                    ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
-                                    : [],
-                                path,
-                            });
-                        });
-                        return layers;
-                    })(),
-                } : null,
+                // Layers are deliberately absent: editing them is a surgical
+                // change, exactly like switching to another visualization index.
+                visualization: vizEntry ? { protocol: vizEntry.protocol } : null,
             });
         };
         const buildViewerRenderFingerprint = (snapshot: any, viewerIndex: number) => {
@@ -1204,6 +1226,14 @@ export class ViewerOpenPipeline {
                 }
             }
 
+            const minificationFilter = (dataSpec as any)?.minificationFilter;
+            if (minificationFilter === "max" || minificationFilter === "default") {
+                const drawer = item?.viewer?.drawer;
+                if (drawer && typeof drawer.setTiledImageMinificationFilter === "function") {
+                    drawer.setTiledImageMinificationFilter(item, minificationFilter);
+                }
+            }
+
             applyPixelScale(item, index, ctx);
         };
 
@@ -1320,6 +1350,15 @@ export class ViewerOpenPipeline {
                     isNewViewer: !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1,
                 };
 
+                // The seeded `background` / `visualization` objects describe the
+                // seeded slots. A handler may only re-point an index (e.g. to an
+                // overlay it just appended) — writing the seeded object back to the
+                // new slot would clobber that entry with the old one.
+                const seedBackgroundIndex = backgroundIndex;
+                const seedVisualizationIndex = visualizationIndex;
+                const seedBackground = event.background;
+                const seedVisualization = event.visualization;
+
                 await viewerManager.raiseEventAwaiting("before-open", event)
                     .catch((e: any) => console.warn("Exception in 'before-open' event handler: ", e));
 
@@ -1352,10 +1391,12 @@ export class ViewerOpenPipeline {
                     ? [...event.dataIndexes]
                     : collectViewerDataIndexes(backgroundIndex, visualizationIndex);
 
-                if (Number.isInteger(backgroundIndex) && event.background && !Array.isArray(event.background)) {
+                if (Number.isInteger(backgroundIndex) && event.background && !Array.isArray(event.background)
+                    && (backgroundIndex === seedBackgroundIndex || event.background !== seedBackground)) {
                     config.background[backgroundIndex as number] = BackgroundConfig.from(event.background as BackgroundItem | BackgroundConfig, true, false);
                 }
-                if (Number.isInteger(visualizationIndex) && event.visualization) {
+                if (Number.isInteger(visualizationIndex) && event.visualization
+                    && (visualizationIndex === seedVisualizationIndex || event.visualization !== seedVisualization)) {
                     config.visualizations[visualizationIndex as number] = event.visualization;
                 }
                 if (Array.isArray(event.data)) {
@@ -2215,12 +2256,8 @@ export class ViewerOpenPipeline {
                     // `deleteShaders()` + recreate (flex-renderer.js ~10128),
                     // so a preceding `overrideConfigureAll(undefined)` to
                     // "reset on visualization change" just builds per-item
-                    // internal configs that are immediately discarded — and
-                    // trips a library bug in the external→internal transition
-                    // (the navigator drawer's `tiledImageCreated` dereferences
-                    // a parent tiledImage's already-deleted `__shaderConfig`).
-                    // Drop the redundant pre-reset; the apply call handles
-                    // the swap.
+                    // internal configs that are immediately discarded. Drop the
+                    // redundant pre-reset; the apply call handles the swap.
 
                     // Step 1: apply cached shader state to the un-prefixed
                     // renderOutput. `applyStoredVisualizationSnapshot` keys
@@ -2490,7 +2527,7 @@ export class ViewerOpenPipeline {
             clearTimeout(loadTooLongTimeout);
             console.error("Failed to open viewer items", e);
             USER_INTERFACE.Loading.show(false);
-            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERROR);
+            Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_ERR);
             if (strictVisualization) {
                 throw e;
             }
