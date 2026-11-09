@@ -11,7 +11,6 @@ import { XOpatApplicationScriptApi } from "./scripting/app-api";
 import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
-import { XOpatAdjustmentsScriptApi } from "./scripting/adjustments-api";
 import { XOpatUiScriptApi } from "./scripting/ui-api";
 
 
