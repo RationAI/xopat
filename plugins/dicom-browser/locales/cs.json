@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "name": "Prohlížeč DICOM",
+    "description": "Procházejte úložiště DICOMweb z přepínače sklíček — pacienty, studie a série — a otevírejte z něj sklíčka. Přidává výchozí hodnoty při spuštění a automatické vyhledávání odvozených překryvů Segmentation / Parametric Map."
+  },
+  "browser": {
+    "patients": "Pacienti",
+    "studies": "Studie",
+    "images": "Snímky",
+    "noStudies": "Pro tohoto pacienta nejsou k dispozici žádné studie.",
+    "noPatients": "Nebyli nalezeni žádní pacienti (server možná nepodporuje výpis pacientů).",
+    "openMissingIds": "Snímek nelze otevřít: chybí identifikace studie!",
+    "searchHint": "Jméno, UID studie, acc:<number> nebo RRRRMMDD-RRRRMMDD",
+    "noMatches": "Výrazu „{{query}}“ nic neodpovídá.",
+    "listingFailed": "Seznam se nepodařilo načíst: {{error}}",
+    "chipAccession": "Acc# {{value}}",
+    "chipStudyId": "ID {{value}}",
+    "chipCounts": "{{series}} S | {{instances}} I",
+    "tooltipReferring": "Odesílající: {{value}}",
+    "tooltipPerforming": "Provádějící: {{value}}",
+    "tooltipBodyPart": "Část těla: {{value}}",
+    "tooltipRequested": "Požadováno: {{value}}",
+    "tooltipReason": "Důvod: {{value}}",
+    "tooltipComments": "Komentáře: {{value}}"
+  }
+}

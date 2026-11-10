@@ -1,0 +1,48 @@
+{
+  "keymap": {
+    "mode": {
+      "auto": "Navigace / výběr anotací",
+      "custom": "Ruční vytváření anotací",
+      "fft-add": "Štětec pro vytvoření / úpravu",
+      "fft-remove": "Štětec pro odebrání",
+      "fft-correct": "Nástroj pro opravy",
+      "fixed-area": "Anotace s pevnou plochou",
+      "magic-wand": "Kouzelná hůlka pro automatický výběr",
+      "viewport-segmentation": "Segmentace výřezu"
+    },
+    "quickDraw": {
+      "preset": "Rychlé kreslení s předvolbou",
+      "shape": "Rychlé kreslení: {{shape}}"
+    }
+  },
+  "autoSelect": {
+    "noData": "Nejsou k dispozici žádná data k anotování!",
+    "noPreset": "Pro anotování vyberte předvolbu!",
+    "noOverlays": "Nejsou k dispozici žádné překryvy k segmentaci!",
+    "noVisualizationLayer": "Není k dispozici žádná vizualizační vrstva k segmentaci. Nějakou zapněte nebo načtěte vizualizaci.",
+    "coversViewport": "Rozpoznaná oblast vyplňuje celý výřez, proto nebyla vybrána.",
+    "nothingHere": "Zde není co vybrat — v tomto místě nebyl rozpoznán žádný překryv.",
+    "snapshotFailed": "Nepodařilo se načíst překryv pro výběr. Zkuste mírně posunout pohled."
+  },
+  "modeOptions": {
+    "magicWand": {
+      "growth": "Růst",
+      "growthHint": "Jak daleko se výběr rozšíří od místa kliknutí (změníte kolečkem myši).",
+      "layer": "Detekovat z vrstvy"
+    }
+  },
+  "presets": {
+    "unknownFactory": "Předvolba používá neznámý tvar „{{factory}}“ — dokud nebude tvar k dispozici, zobrazuje se jako polygon.",
+    "inUseCannotDelete": "Tato předvolba patří existujícím anotacím: nelze ji odebrat.",
+    "classMetaName": "Třída",
+    "vocabularyRequiresClass": "Tato relace vyžaduje, aby každá třída pocházela ze seznamu poskytnutého serverem.",
+    "vocabularyUnknownClass": "„{{value}}“ není jednou z tříd, které tato relace přijímá, proto ji nebylo možné uložit."
+  },
+  "readOnly": {
+    "refused": "Tato anotace je jen pro čtení a nelze ji změnit ani odebrat.",
+    "badge": "Jen pro čtení"
+  },
+  "lock": {
+    "refused": "Tato anotace je zamčená. Pro změnu nebo odebrání ji odemkněte."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "name": "Klient EMPAIA Workbench",
+    "description": "Spouští xOpat jako uživatelské rozhraní dodavatelské aplikace EMPAIA Workbench v3: čte rozsah, token a URL backendu z klienta workbenche, otevírá sklíčka vyšetření, synchronizuje anotace s datovým API workbenche a řídí úlohy aplikace."
+  },
+  "error": {
+    "notEmbedded": "Klient EMPAIA Workbench není k dispozici: tento prohlížeč není vložen do workbenche.",
+    "notV3App": "Tato aplikace neposkytuje EMPAIA App Description v3 (chybí blok 'io'/'modes'). Podporovány jsou pouze aplikace pro workbench v3.",
+    "noSession": "Relace EMPAIA workbenche ještě není připravena.",
+    "handshakeTimeout": "Klient EMPAIA Workbench neposlal včas rozsah, token a URL backendu.",
+    "tokenUnrecoverable": "EMPAIA Workbench přestal této aplikaci vydávat přístupové tokeny, takže tato relace již workbench nemůže kontaktovat. Pro pokračování aplikaci zavřete a znovu ji otevřete z Workbenche.",
+    "batchNotReady": "Pro toto sklíčko není připraven žádný běh.",
+    "modeNotRunnable": "Tuto analýzu odsud nelze spustit."
+  },
+  "io": {
+    "notReady": "Relace EMPAIA workbenche není připravena — změny nebyly odeslány.",
+    "createFailed": "Anotaci se nepodařilo uložit do EMPAIA workbenche.",
+    "updateFailed": "Anotaci se nepodařilo aktualizovat v EMPAIA workbenchi.",
+    "deleteFailed": "Anotaci se nepodařilo smazat z EMPAIA workbenche.",
+    "readFailed": "Anotace se nepodařilo načíst z EMPAIA workbenche.",
+    "bundleFailed": "Anotace se nepodařilo nahrát do EMPAIA workbenche.",
+    "badBundle": "Data anotací nelze přečíst.",
+    "unrepresentable": "Anotace typu „{{type}}“ nemá v EMPAIA ekvivalent a nelze ji v tomto vyšetření uložit.",
+    "unrepresentableLocal": "Anotace typu „{{type}}“ nemají v EMPAIA ekvivalent: zůstávají pouze v tomto prohlížeči a po opětovném načtení se ztratí.",
+    "storageWriteFailed": "Data se nepodařilo uložit do úložiště aplikace EMPAIA.",
+    "storageReadFailed": "Data se nepodařilo načíst z úložiště aplikace EMPAIA."
+  },
+  "roi": {
+    "presetName": "Oblast zájmu",
+    "presetNameApp": "{{app}} ROI"
+  },
+  "presets": {
+    "classMetaName": "Třída EMPAIA",
+    "outputNameApp": "{{app}} {{output}}",
+    "outputName": "{{output}}",
+    "outputNameAppGeneric": "Výsledky {{app}}",
+    "outputNameGeneric": "Výsledky analýzy"
+  },
+  "overlay": {
+    "pixelmap": "Pixelová mapa",
+    "visualizationName": "Výsledky EMPAIA"
+  },
+  "slideInfo": {
+    "title": "Sklíčko EMPAIA",
+    "unavailable": "Sklíčko není k dispozici",
+    "dimensions": "Rozměry",
+    "tileSize": "Velikost dlaždice",
+    "levels": "Úrovně pyramidy",
+    "pixelSize": "Velikost pixelu",
+    "slideId": "ID sklíčka",
+    "format": "Formát",
+    "channels": "Kanály",
+    "bitDepth": "Bitová hloubka",
+    "focalPlanes": "Ohniskové roviny"
+  },
+  "pixelmapInfo": {
+    "title": "Pixelová mapa",
+    "type": "Typ",
+    "elementType": "Typ prvku",
+    "channels": "Kanály",
+    "tileSize": "Velikost dlaždice",
+    "valueRange": "Rozsah hodnot"
+  },
+  "ead": {
+    "blocked": {
+      "noApp": "Popis aplikace ještě nebyl načten.",
+      "platformRun": "Předzpracující analýzy spouští platforma při otevření vyšetření — jejich výsledky se zobrazují zde, ale není co spouštět.",
+      "nonContainerized": "Tato aplikace provádí tento krok ve vlastním rozhraní, proto jej z tohoto prohlížeče nelze spustit.",
+      "wsiCollection": "Tato aplikace analyzuje v jednom běhu více sklíček, což tento prohlížeč neumí.",
+      "nestedRoiCollection": "Tato aplikace seskupuje své oblasti zájmu do vnořených kolekcí, které tento prohlížeč nedokáže sestavit.",
+      "roiShape": "Tato aplikace požaduje tvar oblasti, který tento prohlížeč neumí nakreslit ({{type}}).",
+      "inputType": "Tato aplikace potřebuje vstup typu „{{type}}“ ({{key}}), který tento prohlížeč nedokáže dodat.",
+      "unreadableInput": "Aplikace deklaruje vstup ({{key}}), který tento prohlížeč nedokáže přečíst.",
+      "noWsi": "Tato aplikace pro tento krok nedeklaruje žádný vstup sklíčka.",
+      "singleAndMulti": "Tato aplikace kombinuje vstupy jednotlivých oblastí se vstupy kolekcí oblastí.",
+      "sameInputTypes": "Tato aplikace deklaruje několik vstupů stejného typu oblasti.",
+      "noSourceJob": "Tento krok staví na dřívější analýze a na tomto sklíčku zatím žádná nebyla dokončena.",
+      "noSourceJobPlatform": "Tento krok staví na výsledcích analýzy {{mode}}, kterou workbench spouští sám při otevření vyšetření. Na tomto sklíčku zatím neproběhla.",
+      "noSourceJobRun": "Nejprve na tomto sklíčku spusťte analýzu {{mode}} — tento krok staví na jejích výsledcích.",
+      "sourceJobPending": "Analýza {{mode}}, na které tento krok staví, je ve stavu: {{status}}. Tento krok lze spustit, jakmile skončí.",
+      "sourceJobFailed": "Analýza {{mode}}, na které tento krok staví, skončila stavem: {{status}}, takže nejsou výsledky, na kterých by šlo stavět. Její zprávy najdete v okně analýz."
+    },
+    "mode": {
+      "standalone": "samostatná",
+      "preprocessing": "předzpracování",
+      "postprocessing": "následné zpracování"
+    },
+    "status": {
+      "NONE": "nespuštěno",
+      "ASSEMBLY": "sestavuje se",
+      "READY": "připraveno ke spuštění",
+      "SCHEDULED": "naplánováno",
+      "RUNNING": "stále běží",
+      "COMPLETED": "dokončeno",
+      "FAILED": "selhalo",
+      "TIMEOUT": "vypršel časový limit",
+      "ERROR": "skončilo chybou",
+      "INCOMPLETE": "skončilo neúplně"
+    }
+  }
+}

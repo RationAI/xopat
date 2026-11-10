@@ -209,7 +209,7 @@
         "blendingExplain": "Toggle blending (default: mask)",
         "defaultBlending": "Custom blending (default: mask)",
         "maskEnable": "Enable mask",
-        "maskDisable": "Enable mask",
+        "maskDisable": "Disable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
         "notAvailable": "No visualization available.",
@@ -514,6 +514,51 @@
       "layerStencil": "Stencil",
       "noLayers": "No first-pass layers available for this frame."
     },
+    "adjustments": {
+      "panelTitle": "Data",
+      "title": "Adjustments",
+      "quickTitle": "Adjust background",
+      "unsupported": "Display adjustments need a newer renderer build (per-layer module pipeline). Sampling already works.",
+      "black": "Black point",
+      "white": "White point",
+      "gamma": "Gamma",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "saturation": "Saturation",
+      "hue": "Hue",
+      "temperature": "Temperature",
+      "tint": "Tint",
+      "invert": "Invert",
+      "histogram": "Histogram of the current view — click to refresh",
+      "auto": "Auto",
+      "autoHint": "Set black and white points from the visible data (0.5% / 99.5% percentiles)",
+      "reset": "Reset",
+      "resetHint": "Remove these adjustments",
+      "resetAllHint": "Remove the adjustments of every layer in this viewer",
+      "adjusted": "adjusted",
+      "noData": "Nothing is displayed in this viewer.",
+      "link": "Link viewers",
+      "linkHint": "Apply every adjustment to the matching layers of all viewers",
+      "copyToViewersHint": "Copy this viewer's adjustments to all other viewers",
+      "beforeAfter": "Before/after",
+      "beforeAfterHint": "Toggle the original look of this viewer (hold B on the canvas for a quick peek)",
+      "presets": "Presets",
+      "applyPreset": "Apply preset…",
+      "presetName": "Preset name",
+      "savePreset": "Save the current adjustments as a preset",
+      "sampling": "Sampling",
+      "samplingHint": "How this data is interpolated and how it looks when zoomed out",
+      "samplingMode": {
+        "auto": "Default",
+        "brightfield": "Brightfield",
+        "fluorescence": "Fluorescence (keep bright detail)",
+        "pixelated": "Pixelated (label maps)"
+      },
+      "role": {
+        "background": "Background",
+        "visualization": "Overlay"
+      }
+    },
     "keymap": {
       "title": "Keymap",
       "search": "Search shortcuts",
@@ -563,7 +608,9 @@
         "zDepthNext": "Next focal plane",
         "zDepthPrev": "Previous focal plane",
         "toggleJoystick": "Toggle joystick navigation",
-        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster."
+        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster.",
+        "adjustmentsBypass": "Before/after adjustments (hold)",
+        "adjustmentsBypassDesc": "Hold to see the focused viewer without its display adjustments (levels, brightness, saturation …)."
       }
     },
     "plugins": {

@@ -1,0 +1,149 @@
+{
+  "meta": {
+    "name": "Akce",
+    "description": "Uchovávejte skripty jako vlastní tlačítka, položky nabídek a klávesové zkratky — napsané vámi, vaším asistentem, nebo poskytnuté nasazením."
+  },
+  "capabilities": {
+    "run": "Spouštět uložené akce",
+    "author": "Vytvářet a měnit uložené akce"
+  },
+  "group": "Moje akce",
+  "tools": {
+    "section": "Akce",
+    "manage": "Spravovat akce…"
+  },
+  "contextMenu": {
+    "title": "Moje akce"
+  },
+  "shortcut": {
+    "title": "{{label}}",
+    "category": "Moje akce"
+  },
+  "surface": {
+    "quick": "Tlačítko v horní liště",
+    "tools": "Nabídka Nástroje",
+    "context-menu": "Nabídka pravého tlačítka",
+    "viewer-control": "Tlačítko prohlížeče",
+    "shortcut": "Klávesová zkratka"
+  },
+  "output": {
+    "auto": "Automaticky",
+    "toast": "Oznámení",
+    "window": "Okno",
+    "silent": "Nic",
+    "key": "Název",
+    "value": "Hodnota",
+    "truncated": "Zobrazeno {{shown}} z {{total}}."
+  },
+  "run": {
+    "busy": "„{{label}}“ stále běží.",
+    "failed": "„{{label}}“ selhala: {{error}}",
+    "done": "„{{label}}“ dokončena.",
+    "details": "Podrobnosti"
+  },
+  "panel": {
+    "title": "Akce",
+    "userTitle": "Moje akce",
+    "userHint": "Uložené skripty, které můžete spustit tlačítkem, z nabídky nebo klávesovou zkratkou. Požádejte asistenta, ať je vytvoří nebo opraví, nebo je napište sami.",
+    "deploymentTitle": "Poskytnuto tímto nasazením",
+    "noUser": "Zatím nemáte žádné akce.",
+    "noDeployment": "Toto nasazení neposkytuje žádné akce.",
+    "new": "Nová akce",
+    "import": "Importovat…",
+    "exportAll": "Exportovat vše",
+    "run": "Spustit",
+    "running": "Probíhá…",
+    "review": "Zkontrolovat",
+    "edit": "Upravit",
+    "duplicate": "Duplikovat",
+    "enable": "Povolit",
+    "disable": "Zakázat",
+    "export": "Exportovat",
+    "delete": "Smazat",
+    "badgeAssistant": "od asistenta",
+    "badgePending": "čeká na schválení",
+    "badgeDisabled": "zakázáno",
+    "badgeConflict": "zkratka obsazena",
+    "neverRun": "Zatím nespuštěno",
+    "lastRunOk": "Poslední spuštění {{when}}: OK",
+    "lastRunFailed": "Poslední spuštění {{when}} selhalo: {{error}}"
+  },
+  "editor": {
+    "titleNew": "Nová akce",
+    "titleEdit": "Upravit akci",
+    "id": "Identifikátor",
+    "idHint": "Malá písmena, číslice a pomlčky. Později jej nelze změnit.",
+    "label": "Popisek",
+    "description": "Popis",
+    "icon": "Ikona",
+    "iconHint": "Název ikony Phosphor, např. ph-chart-bar.",
+    "script": "Skript",
+    "scriptHint": "Stejný jazyk jako skripty asistenta. Vraťte hodnotu, která se má zobrazit; spouštěč je v globální proměnné `input`.",
+    "surfaces": "Zobrazit v",
+    "pinned": "připnout",
+    "onlySelection": "pouze s výběrem",
+    "output": "Zobrazit výsledek jako",
+    "save": "Uložit…",
+    "cancel": "Zrušit"
+  },
+  "approve": {
+    "title": "Uložit tuto akci?",
+    "titleRepair": "Použít změny v této akci?",
+    "warningAssistant": "Asistent chce tento skript uložit jako akci. Při každém použití poběží s vašimi oprávněními. Před schválením si jej přečtěte.",
+    "warningImport": "Tato akce pochází ze souboru. Při každém použití poběží s vašimi oprávněními. Před schválením si ji přečtěte.",
+    "warningUser": "Tento skript poběží s vašimi oprávněními při každém použití akce.",
+    "label": "Popisek",
+    "description": "Popis",
+    "surfaces": "Zobrazeno v",
+    "noSurfaces": "Pouze v panelu Akce",
+    "conflict": "Zkratku používá",
+    "namespaces": "Používá",
+    "unknownNamespaces": "Neznámé názvy, které skript volá: {{list}}. Může selhat.",
+    "script": "Skript",
+    "scriptDiff": "Změny skriptu (kliknutím na změnu ji odmítnete)",
+    "accept": "Schválit a uložit",
+    "decline": "Odmítnout"
+  },
+  "consent": {
+    "deleteTitle": "Smazat akci?",
+    "deleteDescription": "„{{label}}“ bude odstraněna ze všech míst, kde je zobrazena."
+  },
+  "import": {
+    "done": "Importováno akcí: {{imported}}, odmítnuto: {{rejected}}. Importované akce jsou zakázány, dokud je nezkontrolujete.",
+    "failed": "Soubor není platný export akcí."
+  },
+  "errors": {
+    "runDenied": "Nemáte oprávnění spouštět akce.",
+    "authorDenied": "Nemáte oprávnění měnit akce.",
+    "notRunnable": "Tato akce je zakázána nebo neschválena.",
+    "idChanged": "Identifikátor existující akce nelze změnit.",
+    "notObject": "není objekt",
+    "unknownField": "neznámé pole",
+    "badId": "použijte malá písmena, číslice a pomlčky (max. 48)",
+    "badLabel": "povinné",
+    "labelTooLong": "příliš dlouhé",
+    "badDescription": "musí být text",
+    "descriptionTooLong": "příliš dlouhé",
+    "badIcon": "použijte název ikony Phosphor, např. ph-chart-bar",
+    "badScript": "povinné",
+    "scriptTooLarge": "příliš velké",
+    "badPlacements": "neplatné",
+    "tooManyPlacements": "příliš mnoho",
+    "badPlacement": "neplatné",
+    "badSurface": "neznámé místo",
+    "surfaceDisabled": "v tomto nasazení není povoleno",
+    "duplicateSurface": "uvedeno dvakrát",
+    "badPinned": "neplatné",
+    "badWhen": "neplatné",
+    "badCombo": "použijte kombinaci jako Alt+KeyC",
+    "badOutput": "neplatné",
+    "badTimeout": "neplatné",
+    "badEnabled": "neplatné",
+    "badFlag": "neplatné",
+    "badOrigin": "neplatné",
+    "badNumber": "neplatné",
+    "reservedId": "používá akce nasazení",
+    "tooManyActions": "dosažen limit uložených akcí",
+    "syntax": "skript nelze zpracovat"
+  }
+}

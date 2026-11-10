@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "MedGemma",
+    "description": "Připojí vlastní hostovaný vizuální model MedGemma (kompatibilní s OpenAI, např. Ollama) k modulu pathology-foundation jako jeho analytický ovladač. Registruje vyhrazeného patologického poskytovatele (oddělený od jakéhokoli chatovacího agenta) a směruje nálezy z obrazu na text přes izolovanou vizuální inferenci chat SDK. Koncový bod a tajné údaje jsou pouze na straně serveru."
+  }
+}

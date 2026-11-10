@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "name": "IO úložiště MLflow",
+    "description": "Směruje data xOpat přes IO pipeline do experimentů a běhů MLflow. Správce jej může směrovat přes ENV.client.io.bindings; struktura záznamu se volí z pojmenovaných šablon nebo vlastního mapperu. Přihlašovací údaj k MLflow drží server pod aliasem proxy a nikdy se nedostane ke klientovi."
+  },
+  "template": {
+    "custom": "Vlastní mapper registrovaný za běhu."
+  },
+  "error": {
+    "auth": "MLflow odmítl přihlašovací údaj. Zkontrolujte platnost tokenu na straně serveru a řetězec ověřovačů autentizace proxy.",
+    "notFound": "Experiment nebo běh MLflow nebyl nalezen. Zkontrolujte šablonu experimentu a upstream URL proxy.",
+    "http": "MLflow není dostupný. Zkontrolujte, že je na serveru nakonfigurován alias proxy a že hostitel MLflow běží.",
+    "httpStatus": "MLflow požadavek odmítl (HTTP {{status}}). Zkontrolujte upstream URL aliasu proxy a log serveru MLflow.",
+    "experimentDenied": "Zápis do experimentu MLflow „{{experiment}}“ toto nasazení nepovoluje.",
+    "runDenied": "Zápis do běhu MLflow „{{run}}“ toto nasazení nepovoluje.",
+    "artifactDenied": "Cesta artefaktu MLflow „{{path}}“ leží mimo umístění, které toto nasazení povoluje.",
+    "mapperMissing": "Šablona záznamu MLflow s názvem „{{name}}“ neexistuje.",
+    "mapperThrew": "Šablona záznamu MLflow „{{name}}“ na tomto záznamu selhala.",
+    "mapperShape": "Šablona záznamu MLflow „{{name}}“ vytvořila nepoužitelný výsledek.",
+    "noArtifacts": "Tato šablona MLflow zapisuje artefakty, ale pro úložiště není nakonfigurován žádný adaptér artefaktů.",
+    "notConfigured": "Úložiště MLflow není nakonfigurováno (chybí alias proxy nebo základní URL).",
+    "targetMissing": "Úložiště MLflow je pro tuto relaci zapnuté, ale nebyl vybrán žádný použitelný experiment MLflow. Nastavte v relaci params.mlflowTarget.",
+    "targetUnbounded": "Toto nasazení umožňuje relacím zvolit experiment MLflow, ale neomezuje, které, proto se volba ignoruje. Požádejte správce o nastavení experimentAllow."
+  },
+  "consent": {
+    "description": "Skript chce změnit způsob, jakým se hodnocená data zapisují do MLflow.",
+    "confirm": "Použít",
+    "rejected": "Změnu struktury MLflow uživatel zrušil.",
+    "allowlistNote": "Experimenty a běhy mimo povolený seznam nasazení jsou i nadále odmítány.",
+    "setTemplate": {
+      "title": "Změnit strukturu záznamu MLflow",
+      "structure": "Nová struktura: {{name}} — {{description}}",
+      "scope": "Záznamy zapsané od této chvíle použijí nové uspořádání; již zapsané běhy zůstanou beze změny."
+    },
+    "registerMapper": {
+      "title": "Použít vlastní strukturu záznamu MLflow",
+      "detail": "Mapper dodaný skriptem s názvem „{{name}}“ bude utvářet každý záznam zapsaný do MLflow."
+    },
+    "setTarget": {
+      "title": "Změnit, kam se data v MLflow zapisují",
+      "experiment": "Experiment: {{experiment}}",
+      "run": "Běh: {{run}}",
+      "runFromTemplate": "Běh: určený strukturou záznamu"
+    }
+  }
+}

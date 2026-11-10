@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Anotace: Segment Anything",
+    "description": "Spouští inferenci masek Segment Anything v prohlížeči (nebo na nakonfigurovaném GPU serveru) jako anotační nástroj a zpřístupňuje ji jako lokální segmentační ovladač pro jmenný prostor patologických foundation modelů. Vyžaduje plugin Anotace."
+  }
+}
