@@ -39,7 +39,7 @@ export type MlflowSinkConfig = {
      * Placeholders, resolved by `IO_PIPELINE.formatPath` (the same set every
      * sink uses): {ownerId} {ownerUid} {xoType} {direction} {capabilityId}
      * {capabilityGroup} {viewerId} {backgroundId} {key} {resourceName}
-     * {itemId}. Substituted values are reduced to `[A-Za-z0-9._-]`.
+     * {itemId} {slideHash} {slideName}. Substituted values are reduced to `[A-Za-z0-9._-]`.
      *
      * Prefer {capabilityGroup} over {capabilityId} for anything that must
      * address the same run on both write and read — the latter differs
@@ -85,9 +85,9 @@ export type MlflowSinkConfig = {
 };
 
 /**
- * Where a session asks its data to land. Comes from `params.mlflowTarget` or
- * `setTarget()`, i.e. untrusted input: it only names a destination inside the
- * deployment's allowlists, never an endpoint.
+ * Where a session asks its data to land. Comes from `params.ioSinks.mlflow.target`
+ * (via `IO_PIPELINE.sessionSinkConfig`) or `setTarget()`, i.e. untrusted input: it
+ * only names a destination inside the deployment's allowlists, never an endpoint.
  */
 export type MlflowSessionTarget = {
     /**
@@ -103,6 +103,14 @@ export type MlflowSessionTarget = {
      * Absent: the template's run layout applies inside the chosen experiment.
      */
     run?: string;
+    /**
+     * Artifact path, placeholders as above (`"annotations/{slideHash}.json"`).
+     * Replaces the path of the ONE artifact a template writes (`bundle-artifact`);
+     * ignored by templates that write none; refused for a template writing
+     * several. Still bounded by `artifactPathPrefix`. Without a slide placeholder,
+     * every slide writes the same file.
+     */
+    artifact?: string;
 };
 
 /** MLflow caps experiment and run names well above this; longer input is a mistake, not a name. */
@@ -138,8 +146,10 @@ export function normalizeTarget(raw: unknown): MlflowSessionTarget | undefined {
     const experiment = name(r.experiment);
     if (!experiment) return undefined;
     if (r.run !== undefined && r.run !== null && !name(r.run)) return undefined;
+    if (r.artifact !== undefined && r.artifact !== null && !name(r.artifact)) return undefined;
     const run = name(r.run);
-    return run ? { experiment, run } : { experiment };
+    const artifact = name(r.artifact);
+    return { experiment, ...(run ? { run } : {}), ...(artifact ? { artifact } : {}) };
 }
 
 /** Tag MLflow sets on every named run; a session-selected run is found by it. */
@@ -357,7 +367,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
     };
 
     const NO_TARGET_REASON =
-        "the session selected no usable MLflow experiment (params.mlflowTarget missing under \"required\", invalid, or resolved to nothing)";
+        "the session selected no usable MLflow target (params.ioSinks.mlflow.target missing under \"required\", invalid, or resolved to nothing)";
     const missingTarget = (): IOResult => fail(NO_TARGET_REASON, "W_MLFLOW_NO_TARGET", t("error.targetMissing"));
     const UNBOUNDED_REASON =
         "sessionTarget is set but experimentAllow is not: a session target is ignored without an allowlist";
@@ -390,10 +400,13 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
 
         const experiment = resolveTargetName(raw.experiment, ctx);
         const run = raw.run !== undefined ? resolveTargetName(raw.run, ctx) : undefined;
+        const artifact = raw.artifact !== undefined ? resolveTargetName(raw.artifact, ctx) : undefined;
         // A target that resolves to nothing is a broken choice, never "no choice":
         // falling back to the template would write somewhere the user did not pick.
-        if (!experiment || (raw.run !== undefined && !run)) return { refusal: missingTarget() };
-        return { target: run ? { experiment, run } : { experiment } };
+        if (!experiment || (raw.run !== undefined && !run) || (raw.artifact !== undefined && !artifact)) {
+            return { refusal: missingTarget() };
+        }
+        return { target: { experiment, ...(run ? { run } : {}), ...(artifact ? { artifact } : {}) } };
     };
 
     const resolveMapping = (ctx: IOContext, item: unknown, o: MlflowSinkConfig)
@@ -442,6 +455,12 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                     name: target.run,
                     identifierTag: { key: RUN_NAME_TAG, value: target.run },
                 };
+            }
+            if (target.artifact && mapping.artifacts?.length) {
+                // Moving one of several files would leave the rest where the
+                // template put them -- a split the user never chose.
+                if (mapping.artifacts.length > 1) return { refusal: missingTarget() };
+                mapping.artifacts = [{ ...mapping.artifacts[0], path: target.artifact }];
             }
         }
         const denied = checkExperiment(o, mapping.experiment)

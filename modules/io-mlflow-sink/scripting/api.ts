@@ -108,7 +108,7 @@ export interface MlflowSinkScriptApi {
      * The experiment/run this session writes into, as set (placeholders
      * unresolved), or undefined (template-derived).
      */
-    getTarget(): { experiment: string; run?: string } | undefined;
+    getTarget(): { experiment: string; run?: string; artifact?: string } | undefined;
 
     /**
      * Select the experiment (and optionally the run, by name) this session writes
@@ -117,12 +117,15 @@ export interface MlflowSinkScriptApi {
      * allowlist; still checked against its allowlists.
      *
      * Names may use letters, digits, space and . _ - / : plus placeholders resolved
-     * per record: {backgroundId} {viewerId} {ownerId} {capabilityGroup} — e.g.
-     * { experiment: "xopat-cohort-A", run: "review-{backgroundId}" } gives one run per slide.
+     * per record: {slideHash} {slideName} {backgroundId} {viewerId} {ownerId} {capabilityGroup} — e.g.
+     * { experiment: "xopat-cohort-A", run: "review-{slideHash}" } gives one run per slide.
      * A fixed run (no placeholder) collects every slide; built-in structures then
      * prefix keys/artifact paths with the slide or viewer so nothing is overwritten.
+     * `artifact` sets the path of the one file a structure writes (bundle-artifact),
+     * e.g. "annotations/{slideHash}.json"; it still has to fit the deployment's
+     * artifact prefix, and without a slide placeholder every slide shares one file.
      */
-    setTarget(target: { experiment: string; run?: string }): Promise<{ experiment: string; run?: string }>;
+    setTarget(target: { experiment: string; run?: string; artifact?: string }): Promise<{ experiment: string; run?: string; artifact?: string }>;
 
     /** Forget the session's experiment/run choice. */
     clearTarget(): void;
@@ -257,13 +260,14 @@ export function registerMlflowSinkScriptingApi(): void {
                 normalized.run
                     ? t("consent.setTarget.run", { run: normalized.run })
                     : t("consent.setTarget.runFromTemplate"),
+                ...(normalized.artifact ? [t("consent.setTarget.artifact", { artifact: normalized.artifact })] : []),
                 t("consent.allowlistNote"),
                 // Advisory: a per-binding config may still honour it, so warn, don't refuse.
                 ...(sink.isTargetHonoured() ? [] : [t("consent.setTarget.notHonoured")]),
             ],
             // Keyed by destination and never remembered: approving one experiment
             // must not silently approve a later switch to another.
-            `mlflow:set-target:${normalized.experiment}::${normalized.run ?? ""}`, false);
+            `mlflow:set-target:${normalized.experiment}::${normalized.run ?? ""}::${normalized.artifact ?? ""}`, false);
             return sink.setTarget(normalized);
         }
 

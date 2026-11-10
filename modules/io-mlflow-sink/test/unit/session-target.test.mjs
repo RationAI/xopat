@@ -180,3 +180,37 @@ test("sink tells the mapper the run is shared only when the session fixed one @u
     await sink({ experiment: "xopat-a", run: "r" }).create(ctxFor(), {});
     expect(seen).toEqual([false, true]);
 });
+
+test("an artifact target moves the one file a template writes, bounded by the prefix @unit", async () => {
+    const calls = installFakeMlflow();
+    const sink = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"], template: "bundle-artifact",
+        artifacts: { type: "mlflow-artifacts" } },
+        { experiment: "xopat-cohort", run: "review", artifact: "annotations/{slideHash}.json" });
+    globalThis.IO_PIPELINE = { formatPath: (tmpl, ctx, o) => tmpl.replace("{slideHash}", "0123456789abcdef").replace(/\{(\w+)\}/g, (_, k) => String(ctx[k] ?? "")) };
+    try {
+        expect((await sink.writeBundle(ctxFor(), { objects: [] })).ok).toBe(true);
+        expect(calls.uploads.map(u => u.path)).toEqual(["annotations/0123456789abcdef.json"]);
+
+        const fenced = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"], template: "bundle-artifact",
+            artifacts: { type: "mlflow-artifacts" }, artifactPathPrefix: "xopat" },
+            { experiment: "xopat-cohort", artifact: "elsewhere/x.json" });
+        expect((await fenced.writeBundle(ctxFor(), {})).code).toBe("W_MLFLOW_ARTIFACT_DENIED");
+    } finally {
+        delete globalThis.IO_PIPELINE;
+    }
+});
+
+test("an artifact target is ignored by templates that write no file @unit", async () => {
+    const calls = installFakeMlflow();
+    const sink = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"] },
+        { experiment: "xopat-cohort", artifact: "annotations/x.json" });
+    expect((await sink.create(ctxFor(), score("s1"))).ok).toBe(true);
+    expect(calls.uploads).toEqual([]);
+    expect(calls.runs[0].experiment_id).toBe("exp:xopat-cohort");
+});
+
+test("normalizeTarget validates artifact like a name @unit", () => {
+    expect(normalizeTarget({ experiment: "e", artifact: "a/{slideHash}.json" }))
+        .toEqual({ experiment: "e", artifact: "a/{slideHash}.json" });
+    expect(normalizeTarget({ experiment: "e", artifact: "a\"b.json" })).toBeUndefined();
+});

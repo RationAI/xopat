@@ -19,7 +19,7 @@
     "mapperShape": "The MLflow record template \"{{name}}\" produced an unusable result.",
     "noArtifacts": "This MLflow template writes artifacts, but no artifacts adapter is configured for the sink.",
     "notConfigured": "MLflow storage is not configured (no proxy alias or base URL).",
-    "targetMissing": "MLflow storage is on for this session, but no usable MLflow experiment was selected. Set params.mlflowTarget in the session.",
+    "targetMissing": "MLflow storage is on for this session, but no usable MLflow experiment was selected. Set params.ioSinks.mlflow.target in the session.",
     "targetUnbounded": "This deployment lets sessions choose the MLflow experiment but does not limit which ones, so the choice is ignored. Ask the administrator to set experimentAllow."
   },
   "consent": {
@@ -41,6 +41,7 @@
       "experiment": "Experiment: {{experiment}}",
       "run": "Run: {{run}}",
       "runFromTemplate": "Run: chosen by the record structure",
+      "artifact": "File: {{artifact}}",
       "notHonoured": "Warning: this deployment's default storage settings ignore a session-chosen destination, so data may still go where the record structure decides."
     }
   }

@@ -29,6 +29,7 @@ export type GithubSinkConfig = {
      *   {ownerId} {ownerUid} {xoType} {direction}
      *   {capabilityId} {capabilityGroup}
      *   {viewerId} {backgroundId} {key} {resourceName} {itemId}
+     *   {slideHash} {slideName}
      *
      * `{viewerId}` resolves to "_global" for a global-scope dispatch,
      * `{backgroundId}` to "_any" when the owner is not slide-scoped.

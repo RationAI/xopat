@@ -36,10 +36,10 @@ class IOMlflowSink extends XOpatModuleSingleton {
     private _templateOverride?: string;
     /** Returned by registerSink; held for hot-reload / tests. */
     private _disposeSink?: () => void;
-    /** Session-selected destination. Seeded once from `params.mlflowTarget`. */
+    /** Session-selected destination. Seeded once from `params.ioSinks.mlflow.target`. */
     private _target?: MlflowSessionTarget;
     private _targetSeeded = false;
-    /** The session supplied `params.mlflowTarget` but it failed validation. */
+    /** The session supplied `params.ioSinks.mlflow.target` but it failed validation. */
     private _targetRejected = false;
     /** Held so `isTargetHonoured` can compose the deployment-default options. */
     private _pipeline?: any;
@@ -159,29 +159,28 @@ class IOMlflowSink extends XOpatModuleSingleton {
     /**
      * The destination this session selected, or `undefined`.
      *
-     * First call seeds it from the session's `params.mlflowTarget`
-     * (`{"experiment": "...", "run": "..."}`, object or JSON string). Whether the
-     * sink honours it is the operator's `sessionTarget` setting, not this getter's.
+     * First call seeds it from the session's `params.ioSinks.mlflow.target`
+     * (`{"experiment": "...", "run"?: "...", "artifact"?: "..."}`), which the IO
+     * pipeline hands out only when the operator marked the sink
+     * `sessionControllable`. Whether the sink then honours it is the operator's
+     * `sessionTarget` setting, not this getter's.
      */
     getTarget(): MlflowSessionTarget | undefined {
-        const app = (globalThis as any).APPLICATION_CONTEXT;
-        // Seed once, but not before the session is parsed: seeding earlier would
-        // lock in "no target" for the whole session.
-        if (!this._targetSeeded && app?.config) {
+        const pipeline = this._pipeline;
+        if (!this._targetSeeded && typeof pipeline?.sessionSinkConfig === "function") {
             this._targetSeeded = true;
             try {
-                // Session params reach modules only through the core option
-                // resolver (`mlflowTarget` is declared in src/config.json so the
-                // parser keeps it). Never read the raw session payload.
-                const raw = app.getOption("mlflowTarget");
+                // Session settings reach a sink only through the pipeline, which
+                // applies the operator's gate. Never read the raw session payload.
+                const raw = pipeline.sessionSinkConfig("mlflow")?.target;
                 if (raw != null) {
                     this._target = normalizeTarget(raw);
                     this._targetRejected = !this._target;
                     // The value may name a case or patient; say THAT it was rejected, not what it was.
-                    if (!this._target) log()?.warn("invalid params.mlflowTarget (expected {experiment, run?} with plain names); dispatches will be refused");
+                    if (!this._target) log()?.warn("invalid params.ioSinks.mlflow.target (expected {experiment, run?, artifact?} with plain names); dispatches will be refused");
                 }
             } catch (e) {
-                log()?.warn(e, "reading params.mlflowTarget failed");
+                log()?.warn(e, "reading params.ioSinks.mlflow.target failed");
             }
         }
         return this._target ? { ...this._target } : undefined;
@@ -230,7 +229,7 @@ class IOMlflowSink extends XOpatModuleSingleton {
     validateTarget(target: unknown): MlflowSessionTarget {
         const normalized = normalizeTarget(target);
         if (!normalized) {
-            throw new Error("setTarget: `experiment` is required and `run` optional; names may use only " +
+            throw new Error("setTarget: `experiment` is required, `run` and `artifact` optional; names may use only " +
                 "letters, digits, space and . _ - / : plus {placeholders}, at most 250 characters");
         }
         return normalized;

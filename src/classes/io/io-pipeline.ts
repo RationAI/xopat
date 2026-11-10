@@ -223,6 +223,21 @@ export function capabilityGroupOf(capabilityId: string): string {
     return capabilityId.replace(/-(export|import)$/, "");
 }
 
+/**
+ * A plain-data copy of untrusted session input: JSON round-trip, so functions,
+ * prototypes and shared references are gone and the caller cannot reach back
+ * into the session payload. `undefined` when the value is not a plain object or
+ * cannot be serialized (cycles, BigInt).
+ */
+function detachedJson(value: unknown): Record<string, unknown> | undefined {
+    try {
+        const copy = JSON.parse(JSON.stringify(value));
+        return copy && typeof copy === "object" && !Array.isArray(copy) ? copy : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 /** Tokens resolved from the slide behind `ctx.backgroundId`, not from the ctx itself. */
 const SLIDE_TOKENS = /\{slide(?:Hash|Name)\}/;
 
@@ -375,12 +390,14 @@ export interface IOPipelineOptions {
      *  session-derived (§7). */
     cookieAttributes?: CookieAttributes;
     /**
-     * Lazy getter for the session's per-sink on/off map (`params.ioSinks`).
+     * Lazy getter for the session's per-sink map (`params.ioSinks`): each entry
+     * is `true`/`false`, or an object `{enabled?, ...sinkSettings}`.
      *
      * Session-derived and therefore untrusted: it is honoured only for sinks the
-     * operator marked `sessionControllable` in `ENV.client.io.sinks`, and only
-     * real booleans are read out of it. Injected rather than read off a global so
-     * the seam is testable without an APPLICATION_CONTEXT.
+     * operator marked `sessionControllable` in `ENV.client.io.sinks`, only real
+     * booleans count as on/off, and the settings are handed to the sink opaque
+     * ({@link IOPipeline.sessionSinkConfig}). Injected rather than read off a
+     * global so the seam is testable without an APPLICATION_CONTEXT.
      */
     getSessionSinks?: () => unknown;
 }
@@ -464,6 +481,11 @@ export class IOPipeline implements IOPipelineLike {
      * where the operator's `sessionControllable` gate lives.
      */
     private readonly sessionSinkState = new Map<string, boolean>();
+    /**
+     * Per-sink session settings: the object form of `params.ioSinks.<id>` minus
+     * `enabled`. Opaque to core; returned only through {@link sessionSinkConfig}.
+     */
+    private readonly sessionSinkSettings = new Map<string, Record<string, unknown>>();
     private sessionSinksSeeded = false;
     private readonly getSessionSinks: () => unknown;
 
@@ -1291,7 +1313,9 @@ export class IOPipeline implements IOPipelineLike {
      *
      * Untrusted input: anything that is not a real boolean is ignored rather than
      * coerced, so `{"mlflow": "false"}` from a hand-written URL cannot read as
-     * `true` (nor as `false` — it simply says nothing).
+     * `true` (nor as `false` — it simply says nothing). An object entry carries
+     * `enabled` (same rule) plus settings for the sink, kept as a detached JSON
+     * copy and never interpreted here.
      * @private
      */
     private seedSessionSinks(): void {
@@ -1309,8 +1333,34 @@ export class IOPipeline implements IOPipelineLike {
         }
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
         for (const [sinkId, value] of Object.entries(raw as Record<string, unknown>)) {
-            if (typeof value === "boolean" && sinkId) this.sessionSinkState.set(sinkId, value);
+            if (!sinkId) continue;
+            if (typeof value === "boolean") {
+                this.sessionSinkState.set(sinkId, value);
+                continue;
+            }
+            if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+            const { enabled, ...settings } = value as Record<string, unknown>;
+            if (typeof enabled === "boolean") this.sessionSinkState.set(sinkId, enabled);
+            const copy = detachedJson(settings);
+            if (copy) this.sessionSinkSettings.set(sinkId, copy);
         }
+    }
+
+    /**
+     * The session's settings for one sink — the object form of
+     * `params.ioSinks.<id>` without `enabled` — or `undefined`.
+     *
+     * Returned only where the operator marked the sink `sessionControllable`
+     * (`ENV.client.io.sinks.<id>`): the same rule that lets a session switch the
+     * sink on or off. Core never interprets the keys. The value is session input,
+     * so the sink validates every field it reads, and each call returns a fresh
+     * copy: a sink mutating it changes nothing for the next caller.
+     */
+    sessionSinkConfig(sinkId: string): Record<string, unknown> | undefined {
+        if (!sinkId || !this.sinkPolicy(sinkId).sessionControllable) return undefined;
+        this.seedSessionSinks();
+        const settings = this.sessionSinkSettings.get(sinkId);
+        return settings ? detachedJson(settings) : undefined;
     }
 
     /**

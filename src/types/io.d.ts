@@ -884,6 +884,15 @@ interface IOPipelineLike {
      * built-in local sinks) instead of stalling behind it.
      */
     setSinkEnabled(sinkId: string, enabled: boolean): boolean;
+    /**
+     * The session's settings for one sink — the object form of
+     * `params.ioSinks.<id>` (`{enabled?, ...settings}`) without `enabled` — or
+     * `undefined`. Returned only for sinks the operator marked
+     * `sessionControllable`. Opaque to core and untrusted: the sink validates
+     * every field it reads and keeps its own trusted limits (allowlists) in ENV.
+     * Each call returns a fresh plain-JSON copy.
+     */
+    sessionSinkConfig(sinkId: string): Record<string, unknown> | undefined;
 
     // ── runtime binding claims ──────────────────────────────────────────
     /**

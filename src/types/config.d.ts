@@ -171,13 +171,16 @@ type XOpatSetup = {
     sessionCacheKey?: string | null;
     locale?: string | null;
     /**
-     * Per-sink IO on/off, `{"<sinkId>": boolean}` — "is this destination plugged
-     * in for this session". Honoured only for sinks the deployment marked
+     * Per-sink IO for this session. An entry is `true`/`false` ("is this
+     * destination plugged in"), or an object `{enabled?, ...settings}` whose
+     * settings the sink reads via `IO_PIPELINE.sessionSinkConfig(id)` (core never
+     * interprets them). Honoured only for sinks the deployment marked
      * `io.sinks.<id>.sessionControllable`; otherwise the operator's
-     * `io.sinks.<id>.enabled` stands, which is how a deployment pins a sink on
-     * (or off) against an untrusted session bundle. See `src/IO_PIPELINE.md`.
+     * `io.sinks.<id>.enabled` stands and settings are not handed out, which is
+     * how a deployment pins a sink against an untrusted session bundle. See
+     * `src/IO_PIPELINE.md`.
      */
-    ioSinks?: Record<string, boolean> | null;
+    ioSinks?: Record<string, boolean | ({ enabled?: boolean } & Record<string, unknown>)> | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
     webglDebugMode?: boolean | null;

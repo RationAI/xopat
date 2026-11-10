@@ -198,8 +198,8 @@ all. The switch is about the sink, not about loading the code.
 By default the experiment and run come from `experimentTemplate` /
 `runTemplate`. Set `sessionTarget` (trusted config) to let the session name them:
 
-| `sessionTarget` | session `params.mlflowTarget` present | absent |
-|-----------------|---------------------------------------|--------|
+| `sessionTarget` | session target present | absent |
+|-----------------|------------------------|--------|
 | unset / `null`  | ignored — templates decide            | templates decide |
 | `"allowed"`     | its experiment/run are used           | templates decide |
 | `"required"`    | its experiment/run are used           | sink declines every dispatch (`W_MLFLOW_NO_TARGET`) |
@@ -214,19 +214,36 @@ Set `runAllow` too: a named run is matched by `mlflow.runName`, so without it a
 session may append to (and, on delete, untag) any existing run of an allowed
 experiment, including runs created outside xOpat.
 
-The session names its destination in `params`:
+The session names its destination in the sink's own entry of `params.ioSinks`
+(the IO pipeline's generic per-sink session settings, `src/IO_PIPELINE.md`):
 
 ```jsonc
 "params": {
-    "mlflowTarget": { "experiment": "xopat-cohort-A", "run": "review-2026-11" }
+    "ioSinks": { "mlflow": { "enabled": true,
+        "target": { "experiment": "xopat-cohort-A", "run": "review-2026-11",
+                    "artifact": "annotations/{slideHash}.json" } } }
 }
 ```
+
+**The operator must also mark the sink `sessionControllable`**
+(`ENV.client.io.sinks.mlflow.sessionControllable: true`): the pipeline hands a
+sink its session settings only then, the same rule that lets a session switch it
+on or off. Without it the session target is never read — under `"required"` every
+dispatch then refuses with `W_MLFLOW_NO_TARGET`; only a script's `setTarget()`
+can still choose one.
 
 - `experiment` is required; it is created on first write if missing.
 - `run` is optional. It is matched against MLflow's own `mlflow.runName` tag, so
   an existing run of that name is reused — including one created outside xOpat —
   and created if missing. Without `run`, the template's run layout applies inside
   the chosen experiment.
+- `artifact` is optional: the path of the one file a template writes
+  (`bundle-artifact`), replacing the template's `xopat/<slot>.json`. Templates that
+  write no file ignore it; a template writing several refuses
+  (`W_MLFLOW_NO_TARGET`). `artifactPathPrefix` still bounds it, and `readBundle`
+  reads from the same path. Give it a slide dimension when slides share a run:
+  without one every slide overwrites the same file. `{slideHash}` is unique;
+  `{slideName}` is readable but the same file name in two folders collides.
 - Names may use letters, digits, space and `. _ - / :`, at most 250 characters.
   Anything else (quotes, backslashes, backticks, …) invalidates the target rather
   than being coerced — and an invalid target refuses every dispatch with
@@ -238,12 +255,13 @@ The session names its destination in `params`:
   The **resolved** name is what `experimentAllow` / `runAllow` judge. A name that
   resolves to nothing refuses with `W_MLFLOW_NO_TARGET`.
 
-| Layout you want | `params.mlflowTarget` |
-|-----------------|-----------------------|
+| Layout you want | `params.ioSinks.mlflow.target` |
+|-----------------|--------------------------------|
 | One experiment, template decides runs | `{ "experiment": "xopat-cohort-A" }` |
-| One run per slide | `{ "experiment": "xopat-cohort-A", "run": "review-{backgroundId}" }` |
+| One run per slide | `{ "experiment": "xopat-cohort-A", "run": "review-{slideHash}" }` |
 | One run per plugin/module | `{ "experiment": "xopat-cohort-A", "run": "{ownerId}" }` |
-| One experiment per slide | `{ "experiment": "xopat-{backgroundId}", "run": "review" }` |
+| One experiment per slide | `{ "experiment": "xopat-{slideHash}", "run": "review" }` |
+| One run, one file per slide | `{ "experiment": "xopat-cohort-A", "run": "review", "artifact": "annotations/{slideHash}.json" }` |
 | Everything in one run | `{ "experiment": "xopat-cohort-A", "run": "review-2026-11" }` |
 
 **Shared runs.** Whenever the target names a `run`, records the template would
@@ -281,8 +299,8 @@ template-derived experiment nobody chose:
     "bundle-export": [ { "sink": "mlflow" }, "session-memory", "post-data" ]
 } }
 // session
-"params": { "ioSinks": { "mlflow": true },
-            "mlflowTarget": { "experiment": "xopat-cohort-A", "run": "review-{backgroundId}" } }
+"params": { "ioSinks": { "mlflow": { "enabled": true,
+    "target": { "experiment": "xopat-cohort-A", "run": "review-{slideHash}" } } } }
 ```
 
 Listing `session-memory` and `post-data` after `mlflow` keeps the annotations'
@@ -359,9 +377,17 @@ loudly rather than silently, but it fails on a value that looks correct.
 Placeholders for `experimentTemplate` / `runTemplate` (resolved by
 `IO_PIPELINE.formatPath`, shared with every other sink): `{ownerId}`
 `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` `{capabilityGroup}`
-`{viewerId}` `{backgroundId}` `{key}` `{resourceName}` `{itemId}`. `{viewerId}`
-resolves to `_global` for global-scope bundles; `{backgroundId}` to `_any` when
-the dispatch is not slide-scoped. Substituted values are reduced to
+`{viewerId}` `{backgroundId}` `{key}` `{resourceName}` `{itemId}` `{slideHash}`
+`{slideName}`. `{viewerId}` resolves to `_global` for global-scope bundles;
+`{backgroundId}` to `_any` when the dispatch is not slide-scoped. `{backgroundId}`
+is the session's background id, not the slide's: for one run per slide use
+`{slideHash}`. `{slideHash}` / `{slideName}` describe the slide
+itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of the slide's data
+entry — stable across sessions, unaffected by an explicit background `id`, and
+reveals nothing of the path, so use it to address per-slide data; `{slideName}` is
+the file name — readable, but the same file name in two folders collides and it
+may carry a case number, so keep it for labels. Unresolvable, `{slideHash}` is
+`_any` and `{slideName}` empty. Substituted values are reduced to
 `[A-Za-z0-9._-]` — they come from the session config and, for `itemId`, from the
 CRUD caller.
 
@@ -444,7 +470,7 @@ never built from strings — so no `eval`/`Function` is involved.
 | `W_MLFLOW_AUTH`             | 401 / 403 — the server-side token was rejected, **or** the proxy's verifier chain rejected the viewer's JWT. Check the token's validity and the proxy's `auth.verifiers`. |
 | `W_MLFLOW_NOT_FOUND`        | 404 — experiment / run / endpoint missing. Check `baseURL` and the proxy's upstream `baseUrl`. |
 | `W_MLFLOW_EXPERIMENT_DENIED`| A mapper targeted an experiment outside `experimentAllow`. Nothing was written. |
-| `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no `params.mlflowTarget` (or `clearTarget()` was called), or — under `"allowed"` or `"required"` — the target was invalid or a name resolved to nothing. Nothing was written. |
+| `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no `params.ioSinks.mlflow.target` (or the sink is not `sessionControllable`) (or `clearTarget()` was called), or — under `"allowed"` or `"required"` — the target was invalid or a name resolved to nothing. Nothing was written. |
 | `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. |
 | `W_MLFLOW_MAPPER_INVALID`   | The template name does not exist, the mapper threw, or it returned a mapping without an experiment / run identifier tag. |
 | `W_MLFLOW_NO_ARTIFACTS`     | The mapper emitted artifacts but no `artifacts` block is configured. |

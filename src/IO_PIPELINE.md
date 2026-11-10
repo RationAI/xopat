@@ -386,6 +386,14 @@ So a bundle capability bound only to a disabled sink lands on the built-in `sess
 
 The cascade stops on purpose. Resuming it would resolve the capability to a binding the *disabled* rule had overridden — switching off the operator's `crud:*` sink used to bring the owner's own `include.json` default back to life, so a `sessionControllable` session toggle **redirected** the data instead of stopping it. An off switch unplugs one destination; it never picks a different one. Switching a sink back on invalidates the binding cache and re-emits `io:sink-registered`, so resources holding writes move again; the toggle itself also emits `io:sink-enabled` / `io:sink-disabled` for UI that wants to say so.
 
+**Per-sink session settings.** An `ioSinks` entry may also be an object: `enabled` (same rule as the boolean form) plus settings meant for that sink, e.g. where the session wants its data to go.
+
+```jsonc
+"params": { "ioSinks": { "mlflow": { "enabled": true, "target": { "experiment": "cohort-A" } } } }
+```
+
+The sink reads them with `IO_PIPELINE.sessionSinkConfig("mlflow")`, which returns the object without `enabled`, as a fresh plain-JSON copy, and **only** for a `sessionControllable` sink. Core never interprets the keys. They are session input: the sink validates every field and keeps its own limits (allowlists, prefixes) in trusted config, so a setting can narrow where data goes but never widen it. This is the channel for session-chosen sink options; do not declare a sink-specific `setup` key in core for it.
+
 Prefer this over deleting a `bindings` entry for anything that is a *runtime* decision — the binding stays declared, so switching back on needs no redeploy.
 
 **What lives where**:
@@ -397,6 +405,7 @@ Prefer this over deleting a `bindings` entry for anything that is a *runtime* de
 | Cross-peer dedup of any leak through (e.g. misconfigured sink) | `clientOpId` (Phase 8) — server dedups across retries from the same peer. For cross-peer dedup, the future session DELTA should carry the originating peer's `clientOpId` so all peers reuse it; the server sees ONE id. |
 | Blanket admin override during sessions | `ENV.client.io.disabledCapabilities`. |
 | Is one destination plugged in for this session | `ENV.client.io.sinks.<id>` + `params.ioSinks` / `IO_PIPELINE.setSinkEnabled`. |
+| Session-chosen options for one sink | `params.ioSinks.<id>` object form → `IO_PIPELINE.sessionSinkConfig(id)`; bounded by the sink's own ENV limits. |
 | Multi-master conflict resolution (CRDT/OT) | Out of scope for the IO pipeline. Lives in the session sync layer.|
 
 ### Sync core, queued dispatch
@@ -1269,7 +1278,7 @@ One `console.warn` is emitted, listing exactly which drivers were substituted. T
 
 Rule 4 (inherit from `core`) propagates this to every plugin and module owner. This is operator policy and therefore lives in the server-only `ENV.client.io` block — deliberately *not* a `setup.*` flag, since `setup` is readable and overridable through `getOption` (session / POST_DATA / URL). The pre-existing `setup.bypassCache` / `bypassCookies` flags stay where they are: those are genuine user preferences about persistence.
 
-`setup.ioSinks` is the one IO key that *is* session-readable, and it is not a counter-example: it carries only the session's wish, while `ENV.client.io.sinks.<id>.sessionControllable` — server-only — decides whether that wish is read at all. The authority stays in ENV; what travels in the session is a boolean the operator already agreed to honour.
+`setup.ioSinks` is the one IO key that *is* session-readable, and it is not a counter-example: it carries only the session's wish, while `ENV.client.io.sinks.<id>.sessionControllable` — server-only — decides whether that wish is read at all. The authority stays in ENV; what travels in the session is a boolean — or settings for that one sink — the operator already agreed to honour, and the sink's own ENV limits still bound.
 
 ---
 

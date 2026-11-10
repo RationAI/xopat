@@ -19,7 +19,7 @@
     "mapperShape": "Šablona záznamu MLflow „{{name}}“ vytvořila nepoužitelný výsledek.",
     "noArtifacts": "Tato šablona MLflow zapisuje artefakty, ale pro úložiště není nakonfigurován žádný adaptér artefaktů.",
     "notConfigured": "Úložiště MLflow není nakonfigurováno (chybí alias proxy nebo základní URL).",
-    "targetMissing": "Úložiště MLflow je pro tuto relaci zapnuté, ale nebyl vybrán žádný použitelný experiment MLflow. Nastavte v relaci params.mlflowTarget.",
+    "targetMissing": "Úložiště MLflow je pro tuto relaci zapnuté, ale nebyl vybrán žádný použitelný experiment MLflow. Nastavte v relaci params.ioSinks.mlflow.target.",
     "targetUnbounded": "Toto nasazení umožňuje relacím zvolit experiment MLflow, ale neomezuje, které, proto se volba ignoruje. Požádejte správce o nastavení experimentAllow."
   },
   "consent": {
@@ -41,6 +41,7 @@
       "experiment": "Experiment: {{experiment}}",
       "run": "Běh: {{run}}",
       "runFromTemplate": "Běh: určený strukturou záznamu",
+      "artifact": "Soubor: {{artifact}}",
       "notHonoured": "Upozornění: výchozí nastavení úložiště tohoto nasazení cíl zvolený relací ignoruje, data tak mohou i nadále jít tam, kam určí struktura záznamu."
     }
   }
