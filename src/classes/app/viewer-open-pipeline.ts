@@ -1380,6 +1380,24 @@ export class ViewerOpenPipeline {
                     // be cleared, only overridden.
                     visualizationIndex = undefined;
                 }
+                // Never render another slide's overlay: whatever bound it (a
+                // stale default, a session, a handler), a visualization tagged
+                // for other backgrounds is dropped here — loudly, since it means
+                // a binding bug upstream.
+                if (Number.isInteger(visualizationIndex) && Number.isInteger(backgroundIndex)) {
+                    const bound = config.visualizations?.[visualizationIndex as number];
+                    const bg = config.background[backgroundIndex as number];
+                    if (bound && bg && !BackgroundConfig.visualizationAppliesTo(bound, bg, config.data as any[])) {
+                        APPLICATION_CONTEXT.log("app.visualization").error(
+                            `Visualization ${visualizationIndex} ('${bound.name ?? ""}') does not apply to background `
+                            + `'${(bg as any).id}' (viewer ${viewerIndex}); it is not rendered.`
+                        );
+                        try {
+                            Dialogs.show($.t("error.visualizationForeignSlide"), 10000, Dialogs.MSG_WARN);
+                        } catch (_) { /* Dialogs not ready */ }
+                        visualizationIndex = undefined;
+                    }
+                }
                 // Per-viewer viz state lives on the bg entry — write back any
                 // override produced by the `before-open` handler chain.
                 if (Number.isInteger(backgroundIndex) && config.background[backgroundIndex as number]) {

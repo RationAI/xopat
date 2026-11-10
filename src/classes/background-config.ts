@@ -500,20 +500,40 @@ export class BackgroundConfig implements BackgroundItem {
     /**
      * Step 3 of {@link migrateLegacyConfig}: sessions that define
      * visualizations but leave a bg entry's `visualizationIndex` UNSET
-     * render the first visualization by default. Explicit `null`
-     * ("no visualization", written by the UI's [no overlays] selection)
-     * is preserved. Runs after legacy folding so distributed legacy
-     * values win over the default.
+     * render the first visualization that applies to that background
+     * ({@link visualizationAppliesTo}) by default; when none applies the
+     * index stays unset (no visualization) — another slide's overlay is
+     * never a default. Explicit `null` ("no visualization", written by the
+     * UI's [no overlays] selection) is preserved. Runs after legacy folding
+     * so distributed legacy values win over the default.
      */
     private static _applyDefaultVisualizationIndex(config: any, backgrounds: any[]): void {
         const visualizations = config?.visualizations;
         if (!Array.isArray(visualizations) || visualizations.length === 0) return;
+        const data = Array.isArray(config?.data) ? config.data : [];
         for (const bg of backgrounds) {
             if (!bg || typeof bg !== "object") continue;
             if (bg.visualizationIndex === undefined) {
-                bg.visualizationIndex = 0;
+                const index = visualizations.findIndex(
+                    viz => BackgroundConfig.visualizationAppliesTo(viz, bg, data));
+                if (index >= 0) bg.visualizationIndex = index;
             }
         }
+    }
+
+    /**
+     * Whether a visualization may render over a background. A visualization
+     * without `backgrounds` belongs to every background; otherwise one entry
+     * must equal the background's `id` or the data id the background shows.
+     */
+    static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
+        const targets = visualization?.backgrounds;
+        if (!Array.isArray(targets) || !targets.length) return true;
+        if (!background) return false;
+        const ref = background.dataReference;
+        const entry = typeof ref === "number" ? data[ref] : ref;
+        const dataId = typeof entry === "string" ? entry : entry?.dataID;
+        return targets.some((t: any) => t === background.id || (dataId !== undefined && t === dataId));
     }
 }
 (window as any).BackgroundConfig = BackgroundConfig;
