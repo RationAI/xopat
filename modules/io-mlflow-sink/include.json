@@ -22,7 +22,9 @@
         "experimentAllow": null,
         "runAllow": null,
         "artifactPathPrefix": null,
-        "artifacts": null
+        "artifacts": null,
+        "_sessionTarget": "null = ignore a session's params.mlflowTarget; \"allowed\" = honour it when present; \"required\" = honour it and decline every dispatch without it. Honoured only when experimentAllow is set. Trusted config only. See README §2b-ter.",
+        "sessionTarget": null
     },
     "requiredConfig": ["mlflow"]
 }

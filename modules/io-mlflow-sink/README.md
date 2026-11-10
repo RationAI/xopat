@@ -186,11 +186,108 @@ rather than piling up behind a destination that will not answer. See
 [`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md) → *Per-sink on/off*.
 
 Two things this does **not** change: the trusted-only keys (`proxy`, `baseURL`,
-`auth`, `experimentAllow`, `artifactPathPrefix`) remain ENV/include.json-only
-either way — a session can refuse the destination, never choose a different one;
-and the module itself still loads or not by `ENV.modules.io-mlflow-sink.enabled`,
-since sessions have no `modules` block at all. The switch is about the sink, not
-about loading the code.
+`auth`, `experimentAllow`, `artifactPathPrefix`, `sessionTarget`) remain
+ENV/include.json-only either way — a session can refuse the destination, and
+picks an experiment/run only where the operator opted in (§2b-ter), never an
+endpoint; and the module itself still loads or not by
+`ENV.modules.io-mlflow-sink.enabled`, since sessions have no `modules` block at
+all. The switch is about the sink, not about loading the code.
+
+### 2b-ter. Letting a session choose the experiment and run
+
+By default the experiment and run come from `experimentTemplate` /
+`runTemplate`. Set `sessionTarget` (trusted config) to let the session name them:
+
+| `sessionTarget` | session `params.mlflowTarget` present | absent |
+|-----------------|---------------------------------------|--------|
+| unset / `null`  | ignored — templates decide            | templates decide |
+| `"allowed"`     | its experiment/run are used           | templates decide |
+| `"required"`    | its experiment/run are used           | sink declines every dispatch (`W_MLFLOW_NO_TARGET`) |
+
+**`experimentAllow` is mandatory for this.** The target comes from the session —
+the embedding app, URL parameters or an imported peer session — so it is
+untrusted, and without an allowlist it could route a user's data into *any*
+experiment on the tracking server. With `sessionTarget` set and no
+`experimentAllow`, the session target is ignored (a console warning says so once),
+and under `"required"` every dispatch is refused with `W_MLFLOW_TARGET_UNBOUNDED`.
+Set `runAllow` too: a named run is matched by `mlflow.runName`, so without it a
+session may append to (and, on delete, untag) any existing run of an allowed
+experiment, including runs created outside xOpat.
+
+The session names its destination in `params`:
+
+```jsonc
+"params": {
+    "mlflowTarget": { "experiment": "xopat-cohort-A", "run": "review-2026-11" }
+}
+```
+
+- `experiment` is required; it is created on first write if missing.
+- `run` is optional. It is matched against MLflow's own `mlflow.runName` tag, so
+  an existing run of that name is reused — including one created outside xOpat —
+  and created if missing. Without `run`, the template's run layout applies inside
+  the chosen experiment.
+- Names may use letters, digits, space and `. _ - / :`, at most 250 characters.
+  Anything else (quotes, backslashes, backticks, …) invalidates the target rather
+  than being coerced.
+- Names may carry the shared placeholders (`{backgroundId}`, `{viewerId}`,
+  `{ownerId}`, `{capabilityGroup}`, `{key}`, … — the set `IO_PIPELINE.formatPath`
+  resolves), substituted per dispatch with the same sanitization every sink uses.
+  The **resolved** name is what `experimentAllow` / `runAllow` judge. A name that
+  resolves to nothing refuses with `W_MLFLOW_NO_TARGET`.
+
+| Layout you want | `params.mlflowTarget` |
+|-----------------|-----------------------|
+| One experiment, template decides runs | `{ "experiment": "xopat-cohort-A" }` |
+| One run per slide | `{ "experiment": "xopat-cohort-A", "run": "review-{backgroundId}" }` |
+| One run per plugin/module | `{ "experiment": "xopat-cohort-A", "run": "{ownerId}" }` |
+| One experiment per slide | `{ "experiment": "xopat-{backgroundId}", "run": "review" }` |
+| Everything in one run | `{ "experiment": "xopat-cohort-A", "run": "review-2026-11" }` |
+
+**Shared runs.** Whenever the target names a `run`, records the template would
+have spread over several runs may share one, so the built-in templates switch to
+keys that keep them apart (mappers receive `options.sharedRun === true`):
+
+| Template | Default layout | With a session `run` |
+|----------|----------------|----------------------|
+| `slide-scoring`   | metric `<scoreKey>`, tag `<scoreKey>.label` | metric `<slide>.<scoreKey>`, tag `<slide>.<scoreKey>.label` |
+| `run-per-viewer`  | metric `<scoreKey>.<slide>` | metric `<viewerId>.<scoreKey>.<slide>` |
+| `run-per-session` | param `<slide>.<scoreKey>[.<ts>]` | param `<ownerId>.<slide>.<scoreKey>[.<ts>]` |
+| `bundle-artifact` | `xopat/<slot>.<ext>`, tag `xopat.bundle.<slot>` | `xopat/<viewerId>/<slot>.<ext>`, tag `xopat.bundle.<viewerId>.<slot>` |
+
+A custom mapper registered via `registerMapper` should honour the flag the same way.
+- The template still shapes the *content* (metrics, tags, artifacts); the target
+  only replaces *where* it lands, before the `experimentAllow` / `runAllow`
+  checks — a session cannot leave the allowlists.
+- At runtime: `singletonModule("io-mlflow-sink").setTarget({experiment, run})` /
+  `clearTarget()`, or the `mlflowSink.setTarget(...)` scripting call. The script
+  call validates first, then asks the user with the exact names; the approval is
+  per destination and never remembered, so approving one experiment does not
+  approve a later switch. Not persisted.
+
+**Opt-in per session.** Combine with §2b-bis to keep MLflow off unless a session
+asks for it — the sink is then never used by accident, and never with a
+template-derived experiment nobody chose:
+
+```jsonc
+// ENV.modules["io-mlflow-sink"].mlflow
+{ "sessionTarget": "required", "template": "bundle-artifact",
+  "experimentAllow": ["xopat-*"], "runAllow": ["review-*"], ... }
+// ENV.client.io
+"sinks": { "mlflow": { "enabled": false, "sessionControllable": true } },
+"bindings": { "annotations": {
+    "bundle-export": [ { "sink": "mlflow" }, "session-memory", "post-data" ]
+} }
+// session
+"params": { "ioSinks": { "mlflow": true },
+            "mlflowTarget": { "experiment": "xopat-cohort-A", "run": "review-{backgroundId}" } }
+```
+
+Listing `session-memory` and `post-data` after `mlflow` keeps the annotations'
+normal in-session state and HTML session export working whether or not MLflow is
+switched on (they are what an unbound per-viewer bundle falls back to).
+`bundle-import` is left unbound on purpose: the sink's `readBundle` returns run
+data, not the stored artifact, so annotations keep loading from the session.
 
 ### 2c. Option layering
 
@@ -238,6 +335,7 @@ user just picked.
 | `runAllow`           | no²      | admin override | unset (unrestricted)   |
 | `artifactPathPrefix` | no²      | admin override | unset (unrestricted)   |
 | `artifacts`          | no       | admin override | unset (no artifacts)   |
+| `sessionTarget`      | no       | admin override | unset (session target ignored) |
 
 ¹ At least one of `proxy` / `baseURL` must resolve, or the sink declines. If it
 is the only sink bound, that decline now surfaces as a "nothing stored" refusal
@@ -338,6 +436,8 @@ never built from strings — so no `eval`/`Function` is involved.
 | `W_MLFLOW_AUTH`             | 401 / 403 — the server-side token was rejected, **or** the proxy's verifier chain rejected the viewer's JWT. Check the token's validity and the proxy's `auth.verifiers`. |
 | `W_MLFLOW_NOT_FOUND`        | 404 — experiment / run / endpoint missing. Check `baseURL` and the proxy's upstream `baseUrl`. |
 | `W_MLFLOW_EXPERIMENT_DENIED`| A mapper targeted an experiment outside `experimentAllow`. Nothing was written. |
+| `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no valid `params.mlflowTarget` (or `clearTarget()` was called), or a target name resolved to nothing. Nothing was written. |
+| `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. |
 | `W_MLFLOW_MAPPER_INVALID`   | The template name does not exist, the mapper threw, or it returned a mapping without an experiment / run identifier tag. |
 | `W_MLFLOW_NO_ARTIFACTS`     | The mapper emitted artifacts but no `artifacts` block is configured. |
 | `W_MLFLOW_HTTP_<status>`    | Other non-2xx (including 502/504 from a misconfigured proxy alias). |
