@@ -258,6 +258,8 @@ export function registerMlflowSinkScriptingApi(): void {
                     ? t("consent.setTarget.run", { run: normalized.run })
                     : t("consent.setTarget.runFromTemplate"),
                 t("consent.allowlistNote"),
+                // Advisory: a per-binding config may still honour it, so warn, don't refuse.
+                ...(sink.isTargetHonoured() ? [] : [t("consent.setTarget.notHonoured")]),
             ],
             // Keyed by destination and never remembered: approving one experiment
             // must not silently approve a later switch to another.

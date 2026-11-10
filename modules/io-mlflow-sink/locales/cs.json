@@ -40,7 +40,8 @@
       "title": "Změnit, kam se data v MLflow zapisují",
       "experiment": "Experiment: {{experiment}}",
       "run": "Běh: {{run}}",
-      "runFromTemplate": "Běh: určený strukturou záznamu"
+      "runFromTemplate": "Běh: určený strukturou záznamu",
+      "notHonoured": "Upozornění: výchozí nastavení úložiště tohoto nasazení cíl zvolený relací ignoruje, data tak mohou i nadále jít tam, kam určí struktura záznamu."
     }
   }
 }

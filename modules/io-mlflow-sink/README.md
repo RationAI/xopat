@@ -229,7 +229,9 @@ The session names its destination in `params`:
   the chosen experiment.
 - Names may use letters, digits, space and `. _ - / :`, at most 250 characters.
   Anything else (quotes, backslashes, backticks, …) invalidates the target rather
-  than being coerced.
+  than being coerced — and an invalid target refuses every dispatch with
+  `W_MLFLOW_NO_TARGET` under `"allowed"` too, never falling back to the templates.
+  `setTarget()` / `clearTarget()` replace it.
 - Names may carry the shared placeholders (`{backgroundId}`, `{viewerId}`,
   `{ownerId}`, `{capabilityGroup}`, `{key}`, … — the set `IO_PIPELINE.formatPath`
   resolves), substituted per dispatch with the same sanitization every sink uses.
@@ -286,8 +288,9 @@ template-derived experiment nobody chose:
 Listing `session-memory` and `post-data` after `mlflow` keeps the annotations'
 normal in-session state and HTML session export working whether or not MLflow is
 switched on (they are what an unbound per-viewer bundle falls back to).
-`bundle-import` is left unbound on purpose: the sink's `readBundle` returns run
-data, not the stored artifact, so annotations keep loading from the session.
+`bundle-import` is unbound here, so annotations keep loading from the session.
+Bind it to `mlflow` to load them back from MLflow instead: with `bundle-artifact`,
+`readBundle` returns the stored JSON file (see §4).
 
 ### 2c. Option layering
 
@@ -421,7 +424,12 @@ never built from strings — so no `eval`/`Function` is involved.
   cache is dropped on any refusal.
 - `readBundle` / `read`: resolve the experiment **without creating it** — a
   missing experiment or run is a clean "no data yet" (`{ok: true}`), never an
-  error, so hydration on a fresh deployment is silent.
+  error, so hydration on a fresh deployment is silent. For an artifact template
+  (`bundle-artifact`) `readBundle` downloads the stored file and returns it —
+  parsed when it is JSON — and a run without that file is likewise "no data
+  yet". Other templates return the run's data (tags/metrics/params). Binary
+  bundles (`IOBinaryPayload`) are not read back: their path depends on the
+  payload's extension, which an import does not know.
 - `query`: streams `runs.search` results, following MLflow page tokens and
   honoring `ctx.meta.signal`. Params: `{ filter, orderBy, maxResults }`.
 - `delete`: removes the mapped tags and writes an `xopat.deleted` tombstone tag.
@@ -436,7 +444,7 @@ never built from strings — so no `eval`/`Function` is involved.
 | `W_MLFLOW_AUTH`             | 401 / 403 — the server-side token was rejected, **or** the proxy's verifier chain rejected the viewer's JWT. Check the token's validity and the proxy's `auth.verifiers`. |
 | `W_MLFLOW_NOT_FOUND`        | 404 — experiment / run / endpoint missing. Check `baseURL` and the proxy's upstream `baseUrl`. |
 | `W_MLFLOW_EXPERIMENT_DENIED`| A mapper targeted an experiment outside `experimentAllow`. Nothing was written. |
-| `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no valid `params.mlflowTarget` (or `clearTarget()` was called), or a target name resolved to nothing. Nothing was written. |
+| `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no `params.mlflowTarget` (or `clearTarget()` was called), or — under `"allowed"` or `"required"` — the target was invalid or a name resolved to nothing. Nothing was written. |
 | `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. |
 | `W_MLFLOW_MAPPER_INVALID`   | The template name does not exist, the mapper threw, or it returned a mapping without an experiment / run identifier tag. |
 | `W_MLFLOW_NO_ARTIFACTS`     | The mapper emitted artifacts but no `artifacts` block is configured. |

@@ -156,6 +156,8 @@ export interface MlflowSinkOptions {
     accepts?: (ctx: IOContext) => boolean;
     /** The session's destination choice, if any. Read only when `sessionTarget` allows it. */
     getTarget?: () => MlflowSessionTarget | undefined;
+    /** True when the session supplied a target that failed validation (refused, never ignored). */
+    isTargetRejected?: () => boolean;
 }
 
 /**
@@ -215,24 +217,25 @@ function matchesPattern(value: string, pattern: string): boolean {
  * Delegates to the mlflow module's `Utils.buildTagFilter` (which `getOrCreateRunByTag`
  * uses too), so lookup and creation can never disagree on escaping.
  *
- * Both halves are mapper output, so both are untrusted. The key was
- * previously spliced in raw — a mapper deriving it from `ctx` could break out
- * of the expression and read other runs — and the value carried a naive
- * `"`-escape that a trailing backslash defeats. The key goes through the same
- * charset helper the log-batch payloads use; the value is escaped backslash
- * first, then quote, which is the only order that composes.
+ * Both halves are mapper output, so both are untrusted and neither may end its
+ * literal early. MLflow strips the surrounding quotes and decodes no escapes,
+ * so the text is kept verbatim inside a delimiter it does not contain (backtick
+ * for the key, `"` or else `'` for the value); anything else would either let it
+ * break out or make lookup disagree with the tag written on create. Throws when
+ * no delimiter fits.
  */
 function buildTagFilter(tag: KV): string {
     const MlFlow = (globalThis as any).MlFlow;
     if (typeof MlFlow?.Utils?.buildTagFilter === "function") {
         return MlFlow.Utils.buildTagFilter(tag.key, tag.value);
     }
-    // Fallback for an mlflow module predating Utils.buildTagFilter.
-    const key = MlFlow?.Utils?.sanitizeMetricKey
-        ? MlFlow.Utils.sanitizeMetricKey(tag.key)
-        : String(tag.key).replace(/[^A-Za-z0-9._\- /]/g, "_");
-    const value = String(tag.value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `tags.\`${key}\` = "${value}"`;
+    // Fallback for an mlflow module predating Utils.buildTagFilter -- same encoding.
+    const key = String(tag.key ?? "");
+    if (!key || key.includes("`")) throw new Error("tag key must be non-empty and contain no backtick");
+    const value = String(tag.value ?? "");
+    const q = !value.includes('"') ? '"' : !value.includes("'") ? "'" : null;
+    if (!q) throw new Error("tag value containing both ' and \" cannot be matched by MLflow search");
+    return `tags.\`${key}\` = ${q}${value}${q}`;
 }
 
 let unboundedWarned = false;
@@ -354,7 +357,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
     };
 
     const NO_TARGET_REASON =
-        "sessionTarget is \"required\" but the session selected no usable MLflow experiment (params.mlflowTarget)";
+        "the session selected no usable MLflow experiment (params.mlflowTarget missing under \"required\", invalid, or resolved to nothing)";
     const missingTarget = (): IOResult => fail(NO_TARGET_REASON, "W_MLFLOW_NO_TARGET", t("error.targetMissing"));
     const UNBOUNDED_REASON =
         "sessionTarget is set but experimentAllow is not: a session target is ignored without an allowlist";
@@ -379,7 +382,11 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
             return required ? { refusal: unboundedTarget() } : {};
         }
         const raw = opts.getTarget?.();
-        if (!raw?.experiment) return required ? { refusal: missingTarget() } : {};
+        // A supplied-but-invalid target refuses even under "allowed": falling back
+        // to the template would write somewhere the user did not pick.
+        if (!raw?.experiment) {
+            return required || opts.isTargetRejected?.() ? { refusal: missingTarget() } : {};
+        }
 
         const experiment = resolveTargetName(raw.experiment, ctx);
         const run = raw.run !== undefined ? resolveTargetName(raw.run, ctx) : undefined;
@@ -625,7 +632,21 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 const run = search?.runs?.[0];
                 if (!run?.info?.run_id) return { ok: true };
 
-                return { ok: true, payload: run.data ?? undefined };
+                // Artifact templates (`bundle-artifact`) store the bundle as a file,
+                // not as tags — return that file. Score templates keep returning
+                // the run data they wrote.
+                const artifact = mapping.artifacts?.[0];
+                if (!artifact) return { ok: true, payload: run.data ?? undefined };
+                let text: string;
+                try {
+                    text = await client.artifacts.downloadText(run.info.run_id, artifact.path);
+                } catch (e: any) {
+                    if (e?.statusCode === 404) return { ok: true }; // nothing saved yet
+                    throw e;
+                }
+                if (artifact.contentType !== "application/json") return { ok: true, payload: text };
+                // A string bundle is stored verbatim, so it need not be JSON.
+                try { return { ok: true, payload: JSON.parse(text) }; } catch { return { ok: true, payload: text }; }
             } catch (e: any) {
                 return classifyHttpError(e);
             }

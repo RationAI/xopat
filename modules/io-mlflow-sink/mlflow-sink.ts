@@ -39,6 +39,10 @@ class IOMlflowSink extends XOpatModuleSingleton {
     /** Session-selected destination. Seeded once from `params.mlflowTarget`. */
     private _target?: MlflowSessionTarget;
     private _targetSeeded = false;
+    /** The session supplied `params.mlflowTarget` but it failed validation. */
+    private _targetRejected = false;
+    /** Held so `isTargetHonoured` can compose the deployment-default options. */
+    private _pipeline?: any;
 
     constructor() {
         super();
@@ -52,6 +56,7 @@ class IOMlflowSink extends XOpatModuleSingleton {
             console.warn("[io-mlflow-sink] IO_PIPELINE not available — module is inert.");
             return;
         }
+        this._pipeline = pipeline;
 
         const sink = makeMlflowSink({
             id: "mlflow",
@@ -59,6 +64,7 @@ class IOMlflowSink extends XOpatModuleSingleton {
             getOptions: (ctx?: IOContext) => this._composeOptions(pipeline, ctx),
             getMapper: (name) => this._mappers.get(name) ?? BUILT_IN_TEMPLATES[name],
             getTarget: () => this.getTarget(),
+            isTargetRejected: () => this.isTargetRejected(),
         });
         this._disposeSink = pipeline.registerSink(sink);
     }
@@ -164,8 +170,9 @@ class IOMlflowSink extends XOpatModuleSingleton {
                 const raw = (globalThis as any).POST_DATA?.visualization?.params?.mlflowTarget;
                 if (raw !== undefined) {
                     this._target = normalizeTarget(raw);
-                    // The value may name a case or patient; say THAT it was dropped, not what it was.
-                    if (!this._target) log()?.warn("ignoring invalid params.mlflowTarget (expected {experiment, run?} with plain names)");
+                    this._targetRejected = !this._target;
+                    // The value may name a case or patient; say THAT it was rejected, not what it was.
+                    if (!this._target) log()?.warn("invalid params.mlflowTarget (expected {experiment, run?} with plain names); dispatches will be refused");
                 }
             } catch (e) {
                 log()?.warn(e, "reading params.mlflowTarget failed");
@@ -182,8 +189,32 @@ class IOMlflowSink extends XOpatModuleSingleton {
     setTarget(target: MlflowSessionTarget): MlflowSessionTarget {
         const normalized = this.validateTarget(target);
         this._targetSeeded = true;
+        this._targetRejected = false;
         this._target = normalized;
         return { ...normalized };
+    }
+
+    /**
+     * True when the session supplied a target that failed validation. The sink
+     * then refuses rather than falling back to the templates: a broken choice is
+     * not "no choice". Cleared by `setTarget` / `clearTarget`.
+     */
+    isTargetRejected(): boolean {
+        this.getTarget(); // seeds from params on first call
+        return this._targetRejected;
+    }
+
+    /**
+     * Whether the deployment-default config honours a session target at all
+     * (`sessionTarget` enabled AND `experimentAllow` bounded). Per-binding config
+     * (`ENV.client.io.bindings`) may still differ for a given owner, so this is
+     * advisory — used to warn before asking consent, never as a security gate.
+     */
+    isTargetHonoured(): boolean {
+        if (!this._pipeline) return false;
+        const o = this._composeOptions(this._pipeline);
+        return (o.sessionTarget === "allowed" || o.sessionTarget === "required")
+            && Array.isArray(o.experimentAllow) && o.experimentAllow.length > 0;
     }
 
     /**
@@ -202,6 +233,7 @@ class IOMlflowSink extends XOpatModuleSingleton {
     /** Forget the session target. With `sessionTarget: "required"` the sink then declines. */
     clearTarget(): void {
         this._targetSeeded = true;
+        this._targetRejected = false;
         this._target = undefined;
     }
 }

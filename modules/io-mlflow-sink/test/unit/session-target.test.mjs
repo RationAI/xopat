@@ -46,12 +46,13 @@ const ctxFor = (extra = {}) => ({
     ...extra,
 });
 
-function sinkWith(config, target) {
+function sinkWith(config, target, rejected = false) {
     return makeMlflowSink({
         getOptions: () => ({ proxy: "mlflow", template: "slide-scoring", experimentTemplate: "xopat-{ownerId}",
             runTemplate: "xopat-{viewerId}", identifierTag: "data_id", ...config }),
         getMapper: (name) => BUILT_IN_TEMPLATES[name],
         getTarget: () => target,
+        isTargetRejected: () => rejected,
     });
 }
 
@@ -80,6 +81,17 @@ test("\"required\" with no target refuses; unset sessionTarget ignores a target 
 
     const off = sinkWith({ experimentAllow: ["xopat-*"] }, { experiment: "xopat-chosen" });
     await off.create(ctxFor(), score("s1"));
+    expect(calls.runs[0].experiment_id).toBe("exp:xopat-annotations");
+});
+
+test("\"allowed\": an invalid session target refuses, an absent one falls back to the template @unit", async () => {
+    const calls = installFakeMlflow();
+    const rejected = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"] }, undefined, true);
+    expect((await rejected.create(ctxFor(), score("s1"))).code).toBe("W_MLFLOW_NO_TARGET");
+    expect(calls.runs.length).toBe(0);
+
+    const absent = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"] }, undefined);
+    expect((await absent.create(ctxFor(), score("s1"))).ok).toBe(true);
     expect(calls.runs[0].experiment_id).toBe("exp:xopat-annotations");
 });
 

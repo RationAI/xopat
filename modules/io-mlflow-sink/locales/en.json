@@ -40,7 +40,8 @@
       "title": "Change where data is written in MLflow",
       "experiment": "Experiment: {{experiment}}",
       "run": "Run: {{run}}",
-      "runFromTemplate": "Run: chosen by the record structure"
+      "runFromTemplate": "Run: chosen by the record structure",
+      "notHonoured": "Warning: this deployment's default storage settings ignore a session-chosen destination, so data may still go where the record structure decides."
     }
   }
 }
