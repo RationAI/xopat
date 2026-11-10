@@ -1080,7 +1080,15 @@ interface IOPipelineLike {
      * Placeholders:
      *   `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}`
      *   `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
-     *   `{resourceName}` `{itemId}`
+     *   `{resourceName}` `{itemId}` `{slideHash}` `{slideName}`
+     *
+     * `{slideHash}` / `{slideName}` describe the slide behind `backgroundId`
+     * (`UTILITIES.slideIdentityFor`). `{slideHash}` (16 hex, of the slide's
+     * data entry) is stable across sessions and explicit background ids and
+     * reveals nothing of the path — use it to address per-slide data.
+     * `{slideName}` is the file name: readable, but two folders with the same
+     * file name collide, and it may carry a case number. Unresolvable:
+     * `{slideHash}` → `_any` (like `{backgroundId}`), `{slideName}` → `empty`.
      *
      * `{capabilityId}` is direction-DEPENDENT (`bundle-export` on the way
      * out, `bundle-import` on the way back) and is therefore NOT round-trip

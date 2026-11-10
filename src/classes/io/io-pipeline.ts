@@ -223,11 +223,20 @@ export function capabilityGroupOf(capabilityId: string): string {
     return capabilityId.replace(/-(export|import)$/, "");
 }
 
-/** See `IOPipelineLike.formatPath`. Pure; exported for tests. */
+/** Tokens resolved from the slide behind `ctx.backgroundId`, not from the ctx itself. */
+const SLIDE_TOKENS = /\{slide(?:Hash|Name)\}/;
+
+/**
+ * See `IOPipelineLike.formatPath`. Pure; exported for tests. `slide` is the
+ * identity of the slide behind `ctx.backgroundId` (`UTILITIES.slideIdentityFor`),
+ * resolved by the caller; without it `{slideHash}` falls back like
+ * `{backgroundId}` does (`_any`) and `{slideName}` to `options.empty`.
+ */
 export function formatContextTemplate(
     template: string,
     ctx: IOContext,
     options?: IOFormatOptions,
+    slide?: { hash?: string; name?: string },
 ): string {
     const mode = options?.mode ?? "path";
     const empty = options?.empty ?? "_";
@@ -243,6 +252,8 @@ export function formatContextTemplate(
         key: ctx.key || "_default",
         resourceName: ctx.resourceName,
         itemId: ctx.itemId,
+        slideHash: slide?.hash || "_any",
+        slideName: slide?.name,
         ...(options?.extra ?? {}),
     };
     return String(template).replace(/\{(\w+)\}/g, (_match, token: string) => {
@@ -800,7 +811,11 @@ export class IOPipeline implements IOPipelineLike {
 
     /** See `IOPipelineLike.formatPath`. */
     formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string {
-        return formatContextTemplate(template, ctx, options);
+        // Resolve the slide only when asked for: it is a config lookup + hash.
+        const slide = SLIDE_TOKENS.test(String(template))
+            ? (window as any).UTILITIES?.slideIdentityFor?.(ctx.backgroundId)
+            : undefined;
+        return formatContextTemplate(template, ctx, options, slide);
     }
 
     /** See `IOPipelineLike.matchesPattern`. */

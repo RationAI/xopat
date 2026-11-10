@@ -983,6 +983,11 @@ Two rules that bite:
   matching `[A-Za-z0-9._-]`, never `.`/`..`, never empty, ≤128 chars. The
   *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
   other non-addressing text) only strips control characters.
+- **Address a slide by `{slideHash}`, not `{backgroundId}`.** `backgroundId` is
+  the session's id for a background (an explicit `id` replaces it); `{slideHash}`
+  is 16 hex of the slide's data entry (`UTILITIES.slideIdentityFor`), stable
+  across sessions and silent about the path. `{slideName}` (the file name) is for
+  labels only: it collides across folders and may carry a case number.
 
 Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legacy: io/"`).
 
