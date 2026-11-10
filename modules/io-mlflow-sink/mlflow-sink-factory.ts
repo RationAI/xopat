@@ -71,7 +71,79 @@ export type MlflowSinkConfig = {
     artifactPathPrefix?: string | null;
     /** Artifacts adapter config, forwarded to MlFlowClient. */
     artifacts?: Record<string, unknown> | null;
+    /**
+     * Whether a session may pick the experiment/run (see {@link MlflowSessionTarget}).
+     * Trusted config only — the operator decides if the session's choice is read.
+     *   - absent/`null`: a session target is ignored; templates decide.
+     *   - `"allowed"`:   a session target, when present, replaces the mapped experiment/run.
+     *   - `"required"`:  as `"allowed"`, and without a target the sink declines every dispatch.
+     * The chosen names are still bounded by `experimentAllow` / `runAllow`, and a
+     * session target is only ever honoured when `experimentAllow` is configured:
+     * without it a hostile session could route data to any experiment.
+     */
+    sessionTarget?: "allowed" | "required" | null;
 };
+
+/**
+ * Where a session asks its data to land. Comes from `params.mlflowTarget` or
+ * `setTarget()`, i.e. untrusted input: it only names a destination inside the
+ * deployment's allowlists, never an endpoint.
+ */
+export type MlflowSessionTarget = {
+    /**
+     * Experiment name. Created on first write if missing. May carry the shared
+     * placeholders (`{backgroundId}`, `{viewerId}`, `{ownerId}`, ...), resolved per
+     * dispatch and sanitized before the allowlist sees the result.
+     */
+    experiment: string;
+    /**
+     * Run name, placeholders as above (`"review-{backgroundId}"` = one run per slide).
+     * Matched against MLflow's own `mlflow.runName` tag, so an existing run of that
+     * name is reused (also one created outside xOpat); created if missing.
+     * Absent: the template's run layout applies inside the chosen experiment.
+     */
+    run?: string;
+};
+
+/** MLflow caps experiment and run names well above this; longer input is a mistake, not a name. */
+const MAX_TARGET_NAME = 250;
+// eslint-disable-next-line no-control-regex
+const TARGET_CTRL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+/**
+ * Characters a session-chosen name may contain. Braces carry placeholders and are
+ * resolved (and re-checked) per dispatch. Quotes, backslashes and backticks are
+ * out: the run name ends up inside an MLflow search filter, and a name that needs
+ * them is far more likely an injection attempt than a real experiment.
+ */
+const TARGET_NAME_CHARS = /^[A-Za-z0-9 ._\-/:{}]+$/;
+
+/**
+ * Untrusted input → a target, or `undefined`. Names are trimmed, stripped of
+ * control characters, length-capped and charset-bound (see TARGET_NAME_CHARS);
+ * anything else is rejected rather than coerced. The allowlists, not this
+ * function, decide where writes may go — and they judge the name only after its
+ * placeholders are resolved, per dispatch, in the sink.
+ */
+export function normalizeTarget(raw: unknown): MlflowSessionTarget | undefined {
+    if (typeof raw === "string") {
+        try { raw = JSON.parse(raw); } catch { return undefined; }
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const name = (v: unknown): string | undefined => {
+        if (typeof v !== "string") return undefined;
+        const s = v.replace(TARGET_CTRL_CHARS, "").trim();
+        return s && s.length <= MAX_TARGET_NAME && TARGET_NAME_CHARS.test(s) ? s : undefined;
+    };
+    const r = raw as Record<string, unknown>;
+    const experiment = name(r.experiment);
+    if (!experiment) return undefined;
+    if (r.run !== undefined && r.run !== null && !name(r.run)) return undefined;
+    const run = name(r.run);
+    return run ? { experiment, run } : { experiment };
+}
+
+/** Tag MLflow sets on every named run; a session-selected run is found by it. */
+const RUN_NAME_TAG = "mlflow.runName";
 
 export interface MlflowSinkOptions {
     id?: string;
@@ -82,6 +154,8 @@ export interface MlflowSinkOptions {
     getMapper: (name: string) => MlflowMapper | undefined;
     /** Optional fine-grained gate, composed with the built-in config check. */
     accepts?: (ctx: IOContext) => boolean;
+    /** The session's destination choice, if any. Read only when `sessionTarget` allows it. */
+    getTarget?: () => MlflowSessionTarget | undefined;
 }
 
 /**
@@ -138,6 +212,8 @@ function matchesPattern(value: string, pattern: string): boolean {
 
 /**
  * Build the MLflow search filter that finds a run by its identifier tag.
+ * Delegates to the mlflow module's `Utils.buildTagFilter` (which `getOrCreateRunByTag`
+ * uses too), so lookup and creation can never disagree on escaping.
  *
  * Both halves are mapper output, so both are untrusted. The key was
  * previously spliced in raw — a mapper deriving it from `ctx` could break out
@@ -148,11 +224,15 @@ function matchesPattern(value: string, pattern: string): boolean {
  */
 function buildTagFilter(tag: KV): string {
     const MlFlow = (globalThis as any).MlFlow;
+    if (typeof MlFlow?.Utils?.buildTagFilter === "function") {
+        return MlFlow.Utils.buildTagFilter(tag.key, tag.value);
+    }
+    // Fallback for an mlflow module predating Utils.buildTagFilter.
     const key = MlFlow?.Utils?.sanitizeMetricKey
         ? MlFlow.Utils.sanitizeMetricKey(tag.key)
         : String(tag.key).replace(/[^A-Za-z0-9._\- /]/g, "_");
     const value = String(tag.value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `tags.${key} = "${value}"`;
+    return `tags.\`${key}\` = "${value}"`;
 }
 
 let unboundedWarned = false;
@@ -171,6 +251,28 @@ function warnUnbounded() {
     );
 }
 
+let targetUnboundedWarned = false;
+/** `sessionTarget` without `experimentAllow` is a misconfiguration; say so once. */
+function warnTargetUnbounded() {
+    if (targetUnboundedWarned) return;
+    targetUnboundedWarned = true;
+    console.warn(
+        "[io-mlflow-sink] `sessionTarget` is set but `experimentAllow` is not -- session targets are " +
+        "IGNORED until an allowlist bounds them. Set io.sinkOverrides.mlflow.experimentAllow.",
+    );
+}
+
+/**
+ * Resolve one session-target name for a dispatch: placeholders substituted (each
+ * value sanitized by `interpolate`), then rejected if anything placeholder-like
+ * survived (an unknown or malformed token is a typo, not a name). Empty = invalid.
+ */
+function resolveTargetName(name: string, ctx: IOContext): string | undefined {
+    const resolved = interpolate(name, ctx).trim();
+    if (!resolved || /[{}]/.test(resolved)) return undefined;
+    return resolved;
+}
+
 export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
     const id = opts.id ?? "mlflow";
 
@@ -180,10 +282,13 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
 
     const resolved = (ctx?: IOContext): MlflowSinkConfig => opts.getOptions(ctx) ?? {};
 
-    const mapperOptionsOf = (o: MlflowSinkConfig): MapperOptions => ({
+    const mapperOptionsOf = (o: MlflowSinkConfig, target?: MlflowSessionTarget): MapperOptions => ({
         experimentTemplate: o.experimentTemplate ?? "xopat-{ownerId}",
         runTemplate: o.runTemplate ?? "xopat-{viewerId}",
         identifierTag: o.identifierTag ?? "data_id",
+        // A session-fixed run collects records the template would have spread
+        // over many runs; the mapper must then keep them apart by key/path.
+        sharedRun: !!target?.run,
     });
 
     const buildClient = (o: MlflowSinkConfig) => {
@@ -248,8 +353,48 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         return undefined;
     };
 
+    const NO_TARGET_REASON =
+        "sessionTarget is \"required\" but the session selected no usable MLflow experiment (params.mlflowTarget)";
+    const missingTarget = (): IOResult => fail(NO_TARGET_REASON, "W_MLFLOW_NO_TARGET", t("error.targetMissing"));
+    const UNBOUNDED_REASON =
+        "sessionTarget is set but experimentAllow is not: a session target is ignored without an allowlist";
+    const unboundedTarget = (): IOResult =>
+        fail(UNBOUNDED_REASON, "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetUnbounded"));
+
+    /**
+     * The session target for this dispatch, resolved, or a refusal.
+     *
+     * The target is untrusted (session bundle / script), so it is honoured only
+     * when the operator both enabled `sessionTarget` AND bounded experiments with
+     * `experimentAllow` -- degrade closed: without the allowlist a hostile session
+     * could route a user's data into any experiment on the tracking server.
+     * Placeholders are resolved here, before the allowlists judge the result.
+     */
+    const resolveTarget = (ctx: IOContext, o: MlflowSinkConfig)
+        : { target?: MlflowSessionTarget } | { refusal: IOResult } => {
+        if (o.sessionTarget !== "allowed" && o.sessionTarget !== "required") return {};
+        const required = o.sessionTarget === "required";
+        if (!Array.isArray(o.experimentAllow) || o.experimentAllow.length === 0) {
+            warnTargetUnbounded();
+            return required ? { refusal: unboundedTarget() } : {};
+        }
+        const raw = opts.getTarget?.();
+        if (!raw?.experiment) return required ? { refusal: missingTarget() } : {};
+
+        const experiment = resolveTargetName(raw.experiment, ctx);
+        const run = raw.run !== undefined ? resolveTargetName(raw.run, ctx) : undefined;
+        // A target that resolves to nothing is a broken choice, never "no choice":
+        // falling back to the template would write somewhere the user did not pick.
+        if (!experiment || (raw.run !== undefined && !run)) return { refusal: missingTarget() };
+        return { target: run ? { experiment, run } : { experiment } };
+    };
+
     const resolveMapping = (ctx: IOContext, item: unknown, o: MlflowSinkConfig)
         : { mapping: MlflowMapping } | { refusal: IOResult } | { skip: true } => {
+        const targetStep = resolveTarget(ctx, o);
+        if ("refusal" in targetStep) return targetStep;
+        const { target } = targetStep;
+
         const name = o.template ?? DEFAULT_TEMPLATE;
         const mapper = opts.getMapper(name);
         if (!mapper) {
@@ -262,7 +407,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
 
         let mapping: MlflowMapping | null;
         try {
-            mapping = mapper(ctx, item, mapperOptionsOf(o));
+            mapping = mapper(ctx, item, mapperOptionsOf(o, target));
         } catch (e: any) {
             return { refusal: fail(
                 `mapper "${name}" threw: ${e?.message ?? String(e)}`,
@@ -278,6 +423,19 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 "W_MLFLOW_MAPPER_INVALID",
                 t("error.mapperShape", { name }),
             ) };
+        }
+        // The session's choice replaces the destination the template derived;
+        // the template still shapes the content (metrics, tags, artifacts).
+        // Applied before the allowlist checks, so it is bounded like any mapper.
+        if (target) {
+            mapping.experiment = target.experiment;
+            if (target.run) {
+                mapping.run = {
+                    ...mapping.run,
+                    name: target.run,
+                    identifierTag: { key: RUN_NAME_TAG, value: target.run },
+                };
+            }
         }
         const denied = checkExperiment(o, mapping.experiment)
             ?? checkRun(o, mapping.run);
@@ -375,6 +533,19 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                     reason: "mlflow sink has no `proxy` or `baseURL` configured",
                     userMessage: t("error.notConfigured"),
                 };
+            }
+            if (o.sessionTarget === "required") {
+                // Plugged in but not pointed anywhere (or pointed somewhere the
+                // operator never bounded): decline loudly rather than fall back to
+                // a template-derived experiment the user never chose.
+                const step = resolveTarget(ctx, o);
+                if ("refusal" in step) {
+                    return {
+                        accept: false,
+                        reason: step.refusal.reason ?? NO_TARGET_REASON,
+                        userMessage: step.refusal.userMessage,
+                    };
+                }
             }
             if (opts.accepts && !opts.accepts(ctx)) {
                 return { accept: false, reason: `mlflow sink declined ${ctx.ownerId}` };

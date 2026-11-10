@@ -191,6 +191,10 @@ class RunsAPI {
 - All methods return raw MLflow responses, so you can drill into `info`, `data`, etc.
 - Metric keys are sanitized to the MLflow-safe character set (`sanitizeMetricKey`,
   `utils.mjs`). Reuse it rather than re-implementing it.
+- Run lookups by tag build their search filter with `Utils.buildTagFilter(key, value)`:
+  the key is sanitized and backtick-quoted, the value escaped backslash-first. Use it
+  for any filter built from record or session data — a hand-rolled `"`-only escape
+  lets a trailing `\` close the string and append clauses.
 - `HttpClient` retries 429/5xx with exponential backoff and throws `HTTPError`
   carrying `statusCode`.
 - Targets the MLflow **2.x** REST API (`/experiments/search`, not the 1.x

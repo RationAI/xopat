@@ -1,5 +1,18 @@
 # Changelog
 
+
+### 3.2.2
+
+**Features**:
+
+* **MLflow storage** — a session can choose run its data goes to and where it is stored, if the
+  deployment allows it.
+
+**Bugfixes**:
+
+* Security fix in MLflow run lookup: run names can no longer alter the search query.
+
+
 ### 3.2.1
 
 One server for many deployments, custom look and feel, and an assistant that knows the user interface.

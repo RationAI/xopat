@@ -22,6 +22,10 @@
 
 const MODULE_ID = "io-mlflow-sink";
 
+/** Consent text lives in the module's own locale bundle (namespace = module id). */
+const t = (key: string, options: Record<string, unknown> = {}): string =>
+    $.t(key, { ...options, ns: MODULE_ID });
+
 const MLFLOW_SINK_DTS = `
 /** A selectable record→MLflow structure. */
 export type TemplateInfo = {
@@ -63,6 +67,12 @@ export type MapperOptions = {
     experimentTemplate: string;
     runTemplate: string;
     identifierTag: string;
+    /**
+     * True when the session fixed the run: records the template would spread over
+     * many runs share one. Keep them apart in keys/artifact paths (e.g. prefix the
+     * slide or viewer id), or they overwrite each other.
+     */
+    sharedRun?: boolean;
 };
 
 /** Return null to decline a record — the sink then skips it cleanly. */
@@ -93,6 +103,29 @@ export interface MlflowSinkScriptApi {
      * experiment outside the deployment allowlist is refused at dispatch.
      */
     registerMapper(name: string, mapper: Mapper): Promise<string>;
+
+    /**
+     * The experiment/run this session writes into, as set (placeholders
+     * unresolved), or undefined (template-derived).
+     */
+    getTarget(): { experiment: string; run?: string } | undefined;
+
+    /**
+     * Select the experiment (and optionally the run, by name) this session writes
+     * into. Asks the user for permission. Does not persist. Only honoured when the
+     * deployment allows session targets AND bounds them with an experiment
+     * allowlist; still checked against its allowlists.
+     *
+     * Names may use letters, digits, space and . _ - / : plus placeholders resolved
+     * per record: {backgroundId} {viewerId} {ownerId} {capabilityGroup} — e.g.
+     * { experiment: "xopat-cohort-A", run: "review-{backgroundId}" } gives one run per slide.
+     * A fixed run (no placeholder) collects every slide; built-in structures then
+     * prefix keys/artifact paths with the slide or viewer so nothing is overwritten.
+     */
+    setTarget(target: { experiment: string; run?: string }): Promise<{ experiment: string; run?: string }>;
+
+    /** Forget the session's experiment/run choice. */
+    clearTarget(): void;
 }
 `;
 
@@ -128,7 +161,9 @@ export function registerMlflowSinkScriptingApi(): void {
                 "viewer), run-per-session (write-once params) and bundle-artifact (whole bundle as a JSON " +
                 "artifact). setTemplate(name) selects one for this session. registerMapper(name, fn) supplies a " +
                 "custom structure: fn receives the dispatch context and the record and returns an experiment, a " +
-                "run identifier tag, and metrics/params/tags — or null to decline the record. This namespace " +
+                "run identifier tag, and metrics/params/tags — or null to decline the record. setTarget({experiment, " +
+                "run}) picks the experiment and run this session writes into, where the deployment allows it; names may " +
+                "carry placeholders such as {backgroundId} for one run per slide. This namespace " +
                 "shapes structure ONLY; the MLflow endpoint, proxy, credentials and the allowed experiment names " +
                 "are deployment config and cannot be read or changed from a script.",
             );
@@ -153,15 +188,16 @@ export function registerMlflowSinkScriptingApi(): void {
             return hit;
         }
 
-        async _consent(title: string, details: string[], cacheKey?: string): Promise<void> {
+        async _consent(title: string, details: string[], cacheKey?: string, allowRemember = true): Promise<void> {
             await this.requireActionConsent({
                 title,
-                description: "A script wants to change how scored data is written to MLflow.",
+                description: t("consent.description"),
                 details,
                 mode: "warning",
-                confirmLabel: "Apply",
-                rejectedMessage: "The MLflow structure change was canceled by the user.",
+                confirmLabel: t("consent.confirm"),
+                rejectedMessage: t("consent.rejected"),
                 cacheKey,
+                allowRemember,
             });
         }
 
@@ -181,9 +217,9 @@ export function registerMlflowSinkScriptingApi(): void {
 
         async setTemplate(name: string): Promise<string> {
             const template = this._find(name);
-            await this._consent("Change the MLflow record structure", [
-                `New structure: ${template.name} — ${template.description}`,
-                "Records written from now on use the new layout; already-written runs are untouched.",
+            await this._consent(t("consent.setTemplate.title"), [
+                t("consent.setTemplate.structure", { name: template.name, description: template.description }),
+                t("consent.setTemplate.scope"),
             ], "mlflow:set-template");
             this._sink().setTemplate(name);
             return name;
@@ -197,14 +233,40 @@ export function registerMlflowSinkScriptingApi(): void {
             if (typeof mapper !== "function") {
                 throw new Error("registerMapper: the second argument must be a function.");
             }
-            await this._consent("Use a custom MLflow record structure", [
-                `A script-supplied mapper named "${name}" will shape every record written to MLflow.`,
-                "Experiments outside the deployment's allowlist are still refused.",
+            await this._consent(t("consent.registerMapper.title"), [
+                t("consent.registerMapper.detail", { name: String(name) }),
+                t("consent.allowlistNote"),
             ], "mlflow:register-mapper");
             const sink = this._sink();
             sink.registerMapper(name, mapper as any);
             sink.setTemplate(name);
             return name;
+        }
+
+        getTarget(): any {
+            return this._sink().getTarget();
+        }
+
+        async setTarget(target: unknown): Promise<any> {
+            const sink = this._sink();
+            // Validate BEFORE asking: the user should never approve a name the
+            // sink then rejects, nor see raw unvalidated input in the dialog.
+            const normalized = sink.validateTarget(target);
+            await this._consent(t("consent.setTarget.title"), [
+                t("consent.setTarget.experiment", { experiment: normalized.experiment }),
+                normalized.run
+                    ? t("consent.setTarget.run", { run: normalized.run })
+                    : t("consent.setTarget.runFromTemplate"),
+                t("consent.allowlistNote"),
+            ],
+            // Keyed by destination and never remembered: approving one experiment
+            // must not silently approve a later switch to another.
+            `mlflow:set-target:${normalized.experiment}::${normalized.run ?? ""}`, false);
+            return sink.setTarget(normalized);
+        }
+
+        clearTarget(): void {
+            this._sink().clearTarget();
         }
     }
 
