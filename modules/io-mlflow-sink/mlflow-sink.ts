@@ -164,11 +164,17 @@ class IOMlflowSink extends XOpatModuleSingleton {
      * sink honours it is the operator's `sessionTarget` setting, not this getter's.
      */
     getTarget(): MlflowSessionTarget | undefined {
-        if (!this._targetSeeded) {
+        const app = (globalThis as any).APPLICATION_CONTEXT;
+        // Seed once, but not before the session is parsed: seeding earlier would
+        // lock in "no target" for the whole session.
+        if (!this._targetSeeded && app?.config) {
             this._targetSeeded = true;
             try {
-                const raw = (globalThis as any).POST_DATA?.visualization?.params?.mlflowTarget;
-                if (raw !== undefined) {
+                // Session params reach modules only through the core option
+                // resolver (`mlflowTarget` is declared in src/config.json so the
+                // parser keeps it). Never read the raw session payload.
+                const raw = app.getOption("mlflowTarget");
+                if (raw != null) {
                     this._target = normalizeTarget(raw);
                     this._targetRejected = !this._target;
                     // The value may name a case or patient; say THAT it was rejected, not what it was.
