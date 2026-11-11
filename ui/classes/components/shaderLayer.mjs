@@ -37,6 +37,19 @@ const { div, span, select, option, button, input, label } = van.tags;
  *      onReorder("up"|"down")
  */
 export class ShaderLayer extends BaseComponent {
+    /**
+     * Map a raw use_mode (incl. legacy aliases) to "show" | "blend" | "clip",
+     * matching how the flex-renderer resolves it (ShaderLayer._resolveLegacyUseMode).
+     * TODO: delegate to a public flex-renderer helper once exposed (see UPSTREAM.md).
+     * @param {string|undefined} raw
+     * @return {string}
+     */
+    static normalizeUseMode(raw) {
+        if (raw === "mask") return "blend";
+        if (raw === "mask_clip" || raw === "clip_mask") return "clip";
+        return raw || "show";
+    }
+
     constructor(options = undefined) {
         options = super(options).options;
         this.cfg = options.shaderConfig;
@@ -56,7 +69,7 @@ export class ShaderLayer extends BaseComponent {
         this.fixed = !!this.cfg.fixed;
         // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
         this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
-        this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "blend" | "clip"
+        this.mode = ShaderLayer.normalizeUseMode(this.cfg.params?.use_mode);   // "show" | "blend" | "clip"
         this.availableBlendModes = OpenSeadragon.FlexRenderer.SUPPORTED_BLEND_MODES || [];
         this.blendMode = this.cfg.params?.use_blend
             || this.availableBlendModes[0]
@@ -73,7 +86,7 @@ export class ShaderLayer extends BaseComponent {
         this.title = this.cfg.name;
         this.shortTitle = this._shortenMiddle(this.title, 32);
         this.filters = options.availableFilters || {};
-        this.cacheApplied = ShaderLayer.resolveCacheStatus(this.cfg);
+        this.cacheApplied = ShaderLayer.resolveCacheStatus(this.cfg, this.layer);
         this.childrenContainerId = this.id + "-children";
         this.bodyContainerId = this.id + "-body";
         this.collapseContainerId = this.id + "-collapse";
@@ -639,11 +652,33 @@ export class ShaderLayer extends BaseComponent {
      * session itself (URL hash, exported file) carries no provenance. Any non-empty cache
      * must stay clearable: a stale value can silently override the authored params.
      * @param {object} cfg shader config
+     * @param {object} [shader] live renderer ShaderLayer, lets defaults be told apart from overrides
      * @return {string|undefined}
      */
-    static resolveCacheStatus(cfg) {
+    static resolveCacheStatus(cfg, shader = undefined) {
         if (cfg?._cacheApplied) return cfg._cacheApplied;
-        return ShaderLayer.hasCachedValues(cfg?.cache) ? "saved" : undefined;
+        if (!ShaderLayer.hasCachedValues(cfg?.cache)) return undefined;
+        const overrides = ShaderLayer.hasCacheOverrides(shader);
+        return overrides === false ? undefined : "saved";
+    }
+
+    /**
+     * Whether any control's cached value differs from its configured default. Controls write
+     * their default into the cache on every init(), so a non-empty cache alone means nothing.
+     * Only simple controls (cache key == control name) are compared; others are skipped.
+     * TODO: replace with a flex-renderer API once exposed (see UPSTREAM.md).
+     * @param {object} shader live renderer ShaderLayer
+     * @return {boolean|undefined} undefined when the shader cannot be inspected
+     */
+    static hasCacheOverrides(shader) {
+        const controls = shader?._controls;
+        if (!controls || typeof shader.hasProperty !== "function") return undefined;
+        for (const name in controls) {
+            const def = shader[name]?.params?.default;
+            if (def === undefined || !shader.hasProperty(name)) continue;
+            if (JSON.stringify(shader.loadProperty(name)) !== JSON.stringify(def)) return true;
+        }
+        return false;
     }
 
     /**
@@ -840,10 +875,10 @@ export class ShaderLayer extends BaseComponent {
 
     update(shaderConfig) {
         this.cfg = shaderConfig;
-        this.mode = shaderConfig?.params?.use_mode || "show";
+        this.mode = ShaderLayer.normalizeUseMode(shaderConfig?.params?.use_mode);
         this.blendMode = shaderConfig?.params?.use_blend || this.blendMode;
         this.type = shaderConfig?.type || this.type;
-        this.cacheApplied = ShaderLayer.resolveCacheStatus(shaderConfig);
+        this.cacheApplied = ShaderLayer.resolveCacheStatus(shaderConfig, this.layer);
         this.collapsed = shaderConfig?._uiCollapsed ?? this.collapsed;
         this._collapsedBeforeHide = shaderConfig?._uiCollapsedBeforeHide ?? this._collapsedBeforeHide;
 

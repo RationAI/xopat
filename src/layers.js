@@ -611,7 +611,9 @@ function initXOpatLayers() {
         if (!config) return;
         config.cache = {};
         config._cacheApplied = undefined;
+        // Controls reload from the emptied cache in init() on the rebuild, falling back to defaults.
         viewer.drawer.rebuild();
+        UTILITIES._emitShaderConfigUpdate(viewer, layerId, { cache: {} });
     };
 
     /**

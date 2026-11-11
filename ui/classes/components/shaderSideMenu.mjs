@@ -358,9 +358,9 @@ export class ShaderSideMenu extends BaseComponent {
         const bindContainer = (container) => draggable(container, item => {
             const id = item.dataset.id;
             window.DropDown.bind(item, () => {
-                const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
+                const currentMask = ShaderLayer.normalizeUseMode(viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode);
                 const clipSelected = currentMask === "clip";
-                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+                const maskEnabled = currentMask !== "show";
 
                 return [{
                     title: $.t('main.shaders.defaultBlending'),
