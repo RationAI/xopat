@@ -14,6 +14,9 @@
         "invokeConfirm": "Allow"
       },
       "visualization": {
+        "backgroundUpdateTitle": "Allow changing how the slide is rendered?",
+        "backgroundUpdateDescription": "The script wants to change the rendering of the slide itself in the current viewer.",
+        "backgroundUpdateUndo": "The change can be undone from the history.",
         "critiqueSystem": "You are judging how well a scientific image visualization reads, not what the specimen is. Comment only on the rendering: contrast, dynamic range, colour choice, whether an overlay is distinguishable from the image beneath it, and whether structure is lost to saturation or washed out. Do not diagnose, do not name tissue types, and do not speculate about the specimen. Answer in at most four short sentences.",
         "critiquePrompt": "Describe what is wrong with how this view is rendered and what would make the data easier to read.",
         "critiqueQuestion": "Describe what is wrong with how this view is rendered, focusing on: {{question}}",
@@ -167,9 +170,7 @@
         "emptyHiddenBody": "Every panel that lives here is hidden right now.",
         "showAllPanels": "Show all panels",
         "dragToOpen": "Open the menu: click or drag",
-        "hoverToOpen": "Hover or focus to open the menu",
-        "pinDock": "Pin menu (dock beside viewer)",
-        "unpinDock": "Unpin menu (overlay on hover)"
+        "clickToOpen": "Click to open the menu"
       },
       "menu": {
         "configMenu": "Menu options",
@@ -184,10 +185,15 @@
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
-        "faultyViz": "Invalid Data",
-        "focalPlane": "Focal plane",
-        "focalPlaneCount": "{{count}} planes",
-        "focalPlaneHint": "Alt + scroll or [ ] to change plane"
+        "faultyViz": "Invalid Data"
+      },
+      "depthRuler": {
+        "title": "Focal plane",
+        "hint": "Focal plane: drag or scroll here, Alt + scroll on the slide, or press [ ]",
+        "position": "{{index}} / {{count}}",
+        "offsetUm": "{{value}} µm",
+        "previous": "Previous focal plane",
+        "next": "Next focal plane"
       },
       "scalebar": {
         "home": "Fit the whole slide",
@@ -600,6 +606,7 @@
         "undo": "Undo",
         "redo": "Redo",
         "screenshot": "Screenshot",
+        "toggleGlobalMenu": "Show / hide the global menu",
         "viewportCopy": "Copy / align viewport",
         "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
         "peek": "Peek at background",

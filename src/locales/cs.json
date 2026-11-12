@@ -167,9 +167,7 @@
         "emptyHiddenBody": "Všechny panely, které sem patří, jsou momentálně skryté.",
         "showAllPanels": "Zobrazit všechny panely",
         "dragToOpen": "Otevřít nabídku: klikněte nebo táhněte",
-        "hoverToOpen": "Nabídku otevřete najetím myší nebo zaměřením",
-        "pinDock": "Připnout nabídku (ukotvit vedle prohlížeče)",
-        "unpinDock": "Odepnout nabídku (překrytí při najetí myší)"
+        "clickToOpen": "Kliknutím otevřete nabídku"
       },
       "menu": {
         "configMenu": "Možnosti nabídky",
@@ -184,10 +182,15 @@
       "navigator": {
         "title": "Navigátor",
         "faultyTissue": "Chybné: {{slide}}",
-        "faultyViz": "Neplatná data",
-        "focalPlane": "Ohnisková rovina",
-        "focalPlaneCount": "Rovin: {{count}}",
-        "focalPlaneHint": "Rovinu změníte pomocí Alt + kolečko nebo [ ]"
+        "faultyViz": "Neplatná data"
+      },
+      "depthRuler": {
+        "title": "Ohnisková rovina",
+        "hint": "Ohnisková rovina: táhněte nebo točte kolečkem zde, Alt + kolečko nad sklíčkem, nebo stiskněte [ ]",
+        "position": "{{index}} / {{count}}",
+        "offsetUm": "{{value}} µm",
+        "previous": "Předchozí ohnisková rovina",
+        "next": "Další ohnisková rovina"
       },
       "scalebar": {
         "home": "Zobrazit celé sklíčko",
@@ -600,6 +603,7 @@
         "undo": "Zpět",
         "redo": "Znovu",
         "screenshot": "Snímek obrazovky",
+        "toggleGlobalMenu": "Zobrazit / skrýt globální nabídku",
         "viewportCopy": "Kopírovat / zarovnat výřez",
         "viewportCopyDesc": "Zkopíruje aktuální výřez do schránky, nebo zarovná pohled, pokud je ve schránce již zkopírovaný výřez. Přenositelné mezi okny prohlížeče.",
         "peek": "Nahlédnout na pozadí",
