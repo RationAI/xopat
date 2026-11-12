@@ -66,6 +66,7 @@
       "ioNoDestination": "Úložiště pro {{what}} je chybně nakonfigurováno – žádné z nastavených cílových úložišť neexistuje, takže data se zahazují.",
       "ioSinkNotReady": "Čekající změny: {{count}}. Cílové úložiště zatím není připojeno. Nic se neztratilo – změny budou odeslány, jakmile bude dostupné.",
       "ioOffline": "Čekající změny k odeslání: {{count}}. Zdá se, že jste offline. Nic se neztratilo.",
+      "ioRefusedNoReason": "Vaše změna ({{what}}) byla odmítnuta a nebyla uložena.",
       "nothingToRender": "Nejsou žádná data k zobrazení.",
       "nothingToRenderDetails": "Aktivní relace neurčuje žádný obrázek ani vrstvy k otevření. Je váš odkaz platný?",
       "shaderProgramFailed": "Vizualizaci se nepodařilo zkompilovat a změna nebyla použita. Obvykle to znamená příliš mnoho vrstev nebo příliš mnoho ovládacích prvků barevné mapy či pokročilých posuvníků, než toto zařízení zvládne.",

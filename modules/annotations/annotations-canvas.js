@@ -2169,8 +2169,36 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
         });
+        if (!result.ok) {
+            // A refused (or throwing) promotion must not leave the drawing on
+            // screen. It is still a frozen helper - non-selectable, excluded from
+            // export, never sent to a sink - so it would look saved, be
+            // impossible to interact with, and vanish on reload. The refusal
+            // itself has already been surfaced by the pipeline.
+            console.error('[annotations] annotation creation refused; drawing removed', result?.code, result?.reason);
+            this._discardFailedPromotion(annotation);
+            return false;
+        }
         this._settleAnnotationSync(annotation, result);
-        return !!result.ok;
+        return true;
+    }
+
+    /**
+     * Remove an object whose promotion did not complete. A refusal before
+     * `apply` leaves a plain helper; a throw inside `apply` may leave it half
+     * promoted (helper flag already dropped, maybe already in a layer).
+     * @private
+     */
+    _discardFailedPromotion(annotation) {
+        if (!annotation) return;
+        try {
+            if (annotation.isHelperAnnotation) this.deleteHelperAnnotation(annotation);
+            else this._deleteAnnotation(annotation, false);
+        } catch (e) {
+            console.error('[annotations] failed to remove an annotation whose creation was refused', e);
+            try { this.canvas.remove(annotation); } catch { /* already gone */ }
+        }
+        this.canvas.requestRenderAll();
     }
 
     /**

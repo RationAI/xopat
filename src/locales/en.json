@@ -66,6 +66,7 @@
       "ioNoDestination": "Storage for {{what}} is misconfigured — none of the configured destinations exist, so data is being discarded.",
       "ioSinkNotReady": "{{count}} change(s) are waiting: the storage destination is not connected yet. Nothing has been lost — they will be sent as soon as it is available.",
       "ioOffline": "{{count}} change(s) are waiting to be sent — you appear to be offline. Nothing has been lost.",
+      "ioRefusedNoReason": "Your change to {{what}} was refused and has not been saved.",
       "nothingToRender": "No data to view.",
       "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "shaderProgramFailed": "The visualization could not be compiled and the change was not applied. This usually means too many layers, or too many colormap / advanced slider controls, for what this device supports.",

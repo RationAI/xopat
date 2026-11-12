@@ -60,6 +60,31 @@ function makeResource(pipeline, def = {}) {
 
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
+test("an apply() that throws is surfaced, not returned silently", { tag: ["@unit"] }, async () => {
+    // A local commit that blew up halfway used to come back as a bare
+    // `W_IO_APPLY_THREW` no caller looked at: the user kept a half-applied
+    // change on screen with nothing saying it was never stored.
+    const pipeline = makePipeline();
+    const resource = makeResource(pipeline);
+    const orig = console.error;
+    console.error = () => {};
+    let result;
+    try {
+        result = resource.create({ id: "boom" }, {
+            apply: () => { throw new Error("local commit failed"); },
+            inverseApply: () => {},
+        });
+    } finally {
+        console.error = orig;
+    }
+    await settle();
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("W_IO_APPLY_THREW");
+    expect(pipeline.surfaced.map(s => s.result.code)).toEqual(["W_IO_APPLY_THREW"]);
+    expect(pipeline.dispatched).toEqual([]);
+});
+
 test("a serialize() that throws costs its own op, not the whole queue", { tag: ["@unit"] }, async () => {
     const pipeline = makePipeline();
     const resource = makeResource(pipeline, {

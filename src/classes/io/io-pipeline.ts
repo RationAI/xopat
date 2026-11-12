@@ -2215,7 +2215,10 @@ export class IOPipeline implements IOPipelineLike {
         // Unconditional: the event is how features react and how the roles UI
         // learns what is restricted. Only the DIALOG is a judgement call.
         this.bus.raiseEvent("io:refused", { ctx, result: r });
-        const msg = r.userMessage ?? r.reason;
+        // A guard/sink that refuses without saying why must not make the refusal
+        // invisible: the user's change is gone either way, so name what failed.
+        const msg = r.userMessage || r.reason
+            || $.t("error.ioRefusedNoReason", { what: ctx.resourceName || ctx.ownerId || ctx.capabilityId });
         if (msg) {
             if (ctx.trigger === "system") {
                 // Nobody asked for this. Boot hydration, the restore after a

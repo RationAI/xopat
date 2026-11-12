@@ -547,11 +547,17 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         if (options.apply) {
             try { options.apply(); }
             catch (e: any) {
-                return {
+                // Surfaced like a validate/guard refusal. Returning it silently
+                // meant a local commit that blew up halfway left the user with a
+                // half-applied change and no hint that it was never saved.
+                console.error(`[IO] resource "${this.name}" ${direction}: local apply() threw; nothing was sent.`, e);
+                const refusal: IOResult = {
                     ok: false, refused: true,
                     reason: e?.message ?? String(e),
                     code: "W_IO_APPLY_THREW",
                 };
+                this.pipeline.surfaceRefusal_(ctx, refusal as any);
+                return refusal;
             }
         }
         return { ok: true };
