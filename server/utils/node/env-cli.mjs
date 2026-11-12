@@ -22,13 +22,17 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import {
     repoRoot, fromRoot, composeEnv, loadPresets, listFragments,
     collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, formatConflicts, formatProvenance,
+    describeVariables, collectHints, formatVariables,
 } from "./env-compose.mjs";
 
 const require = createRequire(import.meta.url);
 const { readDotEnv, layerEnv, findSuspectValues } = require("./dotenv.js");
+// The server's own rule for a deployment id — one definition, not a copy.
+const { isDeploymentId } = require("../../templates/javascript/deployments.js");
 
 const EXIT = { OK: 0, USAGE: 1, CONFLICT: 2, MISSING_VAR: 3, SECRET: 4, PRIVATE_HOST: 5 };
 const COMPOSE_DIR = "env/.compose";
@@ -58,8 +62,15 @@ ${c.bold("npm run up")} — compose a deployment ENV from layers and run it
   npm run up:compose -- <selector...> write the composed ENV, do not run
 
 ${c.bold("selectors")} resolve in order: preset name → env/parts/<id>.json → any file path
+  a fragment named directly replaces the preset's fragment of the same dimension:
+  ${c.dim("npm run up -- default chat/byok")}
 
 ${c.bold("flags")}
+  --deployment <id>=<selector,...>
+                         add a named deployment built from those layers (repeatable);
+                         a session picks it with ?deployment=<id>
+  --default-deployment <id>
+                         which named deployment a session that names none gets
   --list                 show every preset and fragment, then exit
   --all                  (with --check) lint every preset in the catalogue
   --print                write the composition and echo it; do not run
@@ -86,7 +97,7 @@ function parseArgs(argv) {
         selectors: [], set: {}, envFiles: [], noEnvFile: false, emit: "json",
         run: true, dev: false, print: false, check: false, force: false,
         list: false, all: false, json: false, provenance: false, out: null,
-        port: null, label: null,
+        port: null, label: null, deployments: {}, defaultDeployment: null,
     };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
@@ -112,6 +123,10 @@ function parseArgs(argv) {
             case a === "--label": opts.label = next(); break;
             case a === "--env-file": opts.envFiles.push(next()); break;
             case a.startsWith("--emit="): opts.emit = a.slice(7); break;
+            case a === "--deployment": applyDeployment(opts, next()); break;
+            case a.startsWith("--deployment="): applyDeployment(opts, a.slice(13)); break;
+            case a === "--default-deployment": opts.defaultDeployment = next(); break;
+            case a.startsWith("--default-deployment="): opts.defaultDeployment = a.slice(21); break;
             case a === "--set": applySet(opts, next()); break;
             case a.startsWith("--set="): applySet(opts, a.slice(6)); break;
             case a.startsWith("-"): fail(`unknown flag ${a}\n${HELP}`, EXIT.USAGE); break;
@@ -134,6 +149,17 @@ function applySet(opts, assignment) {
     opts.set[key] = value;
 }
 
+function applyDeployment(opts, assignment) {
+    const eq = assignment.indexOf("=");
+    const id = (eq < 0 ? assignment : assignment.slice(0, eq)).trim();
+    const selectors = eq < 0 ? [] : assignment.slice(eq + 1).split(",").map((s) => s.trim()).filter(Boolean);
+    if (!isDeploymentId(id)) {
+        fail(`--deployment: "${id}" is not a usable deployment id (lowercase letters, digits, - and _; not "base")`, EXIT.USAGE);
+    }
+    if (!selectors.length) fail(`--deployment expects <id>=<selector,...>, got "${assignment}"`, EXIT.USAGE);
+    opts.deployments[id] = [...(opts.deployments[id] ?? []), ...selectors];
+}
+
 function fail(message, code) {
     console.error(c.red(`error: ${message}`));
     process.exit(code ?? EXIT.USAGE);
@@ -149,10 +175,11 @@ function serialize(env, emit) {
     return JSON.stringify(env, null, 2);
 }
 
-function labelFor(selectors, explicit) {
+function labelFor(selectors, explicit, deployments = {}) {
     if (explicit) return explicit.replace(/[^A-Za-z0-9._-]+/g, "-");
-    if (!selectors.length) return "current";
-    return selectors.map((s) => path.basename(s, ".json")).join("+").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60);
+    const parts = [...selectors.map((s) => path.basename(s, ".json")), ...Object.keys(deployments)];
+    if (!parts.length) return "current";
+    return parts.join("+").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60);
 }
 
 function printList() {
@@ -182,6 +209,9 @@ function printList() {
             console.log(c.dim(`  ── ${d ? `${d}  (pick one)` : "combine freely"}`));
             for (const f of groups.get(d)) {
                 console.log(`  ${c.cyan(f.id.padEnd(w))}  ${f.meta.description ?? ""}`);
+                const names = [...new Set([...(f.meta.requires ?? []), ...Object.keys(f.meta.env ?? {})])];
+                if (names.length) console.log(c.dim(`  ${"".padEnd(w)}  env: ${names.join(", ")}`));
+                if (f.meta.hint) console.log(c.dim(`  ${"".padEnd(w)}  ${f.meta.hint}`));
             }
         }
     }
@@ -197,9 +227,12 @@ function printList() {
  * Everything that can be wrong with a composition, in one pass.
  * Returns the highest exit code implied by the findings.
  */
-function report(result, childEnv, { force, json, provenance, suspect = [] }) {
+function report(result, childEnv, { force, json, provenance, suspect = [], user = {}, envBlock = true }) {
     const { conflicts, warnings, env, layers } = result;
     const placeholders = collectPlaceholders(env);
+    // Who decided each variable's value: the user, a tracked default, or nobody.
+    const variables = describeVariables(result, { user });
+    const hints = collectHints(result);
     // A placeholder written into a value that BECOMES a process env var can
     // never resolve — those are injected verbatim and the server substitutes
     // only the ENV body, once. Collected during expansion, because `$meta` is
@@ -235,6 +268,7 @@ function report(result, childEnv, { force, json, provenance, suspect = [] }) {
             layers: layers.map((l) => ({ id: l.id, kind: l.kind, role: l.role, dimension: l.dimension, file: l.file })),
             conflicts, warnings,
             placeholders: [...placeholders.values()],
+            variables, hints, replaced: result.replaced ?? [],
             missingVariables: missing.map((m) => m.name),
             missingRequired: [...required],
             unresolvableVariables: unresolvable,
@@ -250,9 +284,24 @@ function report(result, childEnv, { force, json, provenance, suspect = [] }) {
             console.error((force ? c.yellow : c.red)(formatConflicts(conflicts)));
             if (force) console.error(c.yellow("--force: continuing, the last layer wins"));
         }
+        for (const r of result.replaced ?? []) {
+            console.error(c.dim(`${r.by} replaces ${r.replaced} (from preset ${r.preset})`));
+        }
         for (const w of warnings) console.error(c.yellow(`warning: ${w.message}`));
-        for (const m of missing) {
-            console.error(c.yellow(`warning: <% ${m.name} %> is unset and has no default (${m.paths[0]})`));
+        if (envBlock) {
+            // The whole list, not only what is missing: a default the user never
+            // saw (a port, an endpoint) misleads as surely as an unset key.
+            const rows = formatVariables(variables);
+            if (rows.length) console.error(c.bold("environment used by this composition"));
+            for (const row of rows) {
+                const paint = row.status === "unset" ? c.yellow : row.status === "default" ? (s) => s : c.dim;
+                console.error(paint(`  ${row.text}`));
+            }
+            for (const h of hints) console.error(c.cyan(`  ${h.layer}: ${h.hint}`));
+        } else {
+            for (const m of missing) {
+                console.error(c.yellow(`warning: <% ${m.name} %> is unset and has no default (${m.paths[0]})`));
+            }
         }
         for (const r of required) console.error(c.red(`missing required variable: ${r}`));
         for (const s of suspect) {
@@ -309,15 +358,20 @@ function buildChildEnv(result, opts) {
     }
     // Highest precedence first: a shell export must beat the secrets file,
     // which must beat a preset's env block, which must beat fragment defaults.
+    // `user` is the part somebody actually chose — kept apart so the report can
+    // tell a value the user set from a default they may never have seen.
+    const user = layerEnv({ ...process.env }, secrets);
     return {
-        env: layerEnv({ ...process.env }, secrets, result.presetEnv, result.defaults),
+        user,
+        env: layerEnv({ ...user }, result.presetEnv, result.defaults),
         files: files.filter((f) => existsSync(fromRoot(f))),
         suspect,
     };
 }
 
 function writeComposition(env, opts) {
-    const target = opts.out ? fromRoot(opts.out) : fromRoot(COMPOSE_DIR, `${labelFor(opts.selectors, opts.label)}.json`);
+    const target = opts.out ? fromRoot(opts.out)
+        : fromRoot(COMPOSE_DIR, `${labelFor(opts.selectors, opts.label, opts.deployments)}.json`);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, `${serialize(env, opts.emit)}\n`, "utf8");
     return target;
@@ -334,6 +388,32 @@ function spawnServer(envFilePath, childEnv, opts) {
     child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
 }
 
+/**
+ * Generate the local fixtures a layer declares (`$meta.fixtures`).
+ *
+ * Only what the repository can produce by itself, offline, in pure Node — today
+ * the synthetic DeepZoom slide. Deliberately not a general "make the deployment
+ * work" hook: nothing external is probed, downloaded or started here.
+ */
+async function ensureFixtures(result) {
+    const wanted = new Set();
+    for (const layer of [...result.layers, ...(result.deploymentLayers ?? [])]) {
+        for (const name of layer.meta?.fixtures ?? []) wanted.add(name);
+    }
+    if (!wanted.has("synthetic")) return;
+    try {
+        const { ensureSyntheticSlide } = await import(
+            pathToFileURL(fromRoot("test/harness/slides/make-synthetic.mjs")).href);
+        ensureSyntheticSlide();
+    } catch (e) {
+        console.error(c.yellow(`warning: could not generate the synthetic slide (${e.message}) — run \`npm run fixtures:synthetic\``));
+    }
+}
+
+const composeOptions = (opts) => ({
+    set: opts.set, deployments: opts.deployments, defaultDeployment: opts.defaultDeployment,
+});
+
 /* -------------------------------------------------------------------- main */
 
 async function main() {
@@ -349,22 +429,26 @@ async function main() {
                  "try: npm run up -- --list", EXIT.USAGE);
         }
         const { pickInteractively } = await import("./env-picker.mjs");
-        const picked = await pickInteractively();
+        // The picker previews each step with the same sources the final report
+        // uses, so what it says about a variable is what will be true at start.
+        const picked = await pickInteractively({ userEnv: (result) => buildChildEnv(result, opts).user });
         if (!picked) return EXIT.OK;
         opts.selectors = picked.selectors;
+        opts.deployments = { ...opts.deployments, ...picked.deployments };
+        opts.defaultDeployment = picked.defaultDeployment ?? opts.defaultDeployment;
         opts.run = picked.run && opts.run;
         if (picked.dev) opts.dev = true;
     }
 
     let result;
     try {
-        result = composeEnv(opts.selectors, { set: opts.set });
+        result = composeEnv(opts.selectors, composeOptions(opts));
     } catch (e) {
         fail(e.message, EXIT.USAGE);
     }
 
-    const { env: childEnv, files, suspect } = buildChildEnv(result, opts);
-    const code = report(result, childEnv, { ...opts, suspect });
+    const { env: childEnv, user, files, suspect } = buildChildEnv(result, opts);
+    const code = report(result, childEnv, { ...opts, suspect, user });
     if (code !== EXIT.OK) return code;
 
     const target = writeComposition(result.env, opts);
@@ -379,6 +463,7 @@ async function main() {
     if (opts.print && !opts.json) console.log(serialize(result.env, opts.emit));
     if (!opts.run) return EXIT.OK;
 
+    await ensureFixtures(result);
     spawnServer(target, childEnv, opts);
     return null; // the child owns the exit code
 }
@@ -400,7 +485,7 @@ function checkAll(opts) {
         const { env: childEnv } = buildChildEnv(result, opts);
         // A lone fragment is not a deployment: it legitimately lacks variables a
         // preset would supply, so only structural findings count here.
-        const code = report(result, childEnv, { ...opts, json: false });
+        const code = report(result, childEnv, { ...opts, json: false, envBlock: false });
         if (presets.includes(target[0])) worst = Math.max(worst, code);
         else if (code === EXIT.SECRET || code === EXIT.PRIVATE_HOST) worst = Math.max(worst, code);
     }

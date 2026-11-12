@@ -1,6 +1,12 @@
 {
   "$meta": {
     "description": "Local Keycloak over SAML 2.0 (server-side SP, session token signed by the server)",
+    "hint": "Needs the local Keycloak: docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d",
+    "env": {
+      "KEYCLOAK_REALM": "Keycloak realm name",
+      "KEYCLOAK_URL": "Base URL of the Keycloak server",
+      "XOPAT_SAML_JWT_SECRET": "Secret the server signs SAML session tokens with"
+    },
     "dimension": "auth",
     "requires": ["XOPAT_SAML_JWT_SECRET"],
     "defaults": { "KEYCLOAK_URL": "http://localhost:8081", "KEYCLOAK_REALM": "xopat" }

@@ -1,6 +1,9 @@
 {
   "$meta": {
     "description": "Anthropic chat with an operator-held key (server-side; never reaches the browser)",
+    "env": {
+      "ANTHROPIC_API_KEY": "Anthropic API key held by the server"
+    },
     "dimension": "chat",
     "requires": ["ANTHROPIC_API_KEY"]
   },

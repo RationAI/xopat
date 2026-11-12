@@ -1,6 +1,9 @@
 {
   "$meta": {
     "description": "Chat providers registered with NO server key — every user brings their own",
+    "env": {
+      "CERIT_BASE_URL": "Base URL of the OpenAI-compatible endpoint"
+    },
     "dimension": "chat"
   },
   /**

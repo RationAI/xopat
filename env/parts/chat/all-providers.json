@@ -1,6 +1,12 @@
 {
   "$meta": {
     "description": "Every conversational provider registered at once — each takes its operator key from the environment, or degrades to bring-your-own-key",
+    "env": {
+      "ANTHROPIC_API_KEY": "Anthropic API key held by the server",
+      "CERIT_API_KEY": "API key for the CERIT OpenAI-compatible endpoint",
+      "CERIT_BASE_URL": "Base URL of the OpenAI-compatible endpoint",
+      "OPENAI_API_KEY": "OpenAI API key held by the server"
+    },
     "dimension": "chat",
     "requires": [],
     "defaults": { "CERIT_BASE_URL": "https://llm.ai.e-infra.cz/v1" }

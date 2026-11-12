@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "Annotation bundles round-trip to a GitHub repository",
+    "env": {
+      "GITHUB_SINK_REPO": "owner/repo the annotation bundles are written to",
+      "GITHUB_TOKEN": "GitHub token with contents write access to the sink repository"
+    },
     "dimension": "io",
     "requires": ["GITHUB_TOKEN", "GITHUB_SINK_REPO"]
   },
@@ -64,11 +68,12 @@
       "permaLoad": true,
       "github": {
         "branch": "main",
-        "apiBase": "https://api.github.com",
         "proxy": "github",
         "repo": "<% GITHUB_SINK_REPO %>",
-        "pathTemplate": "xopat/{ownerId}/{viewerId}.json",
-        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
+        /* Annotations are slide-scoped: without a slide token every slide
+           opened in a viewer would read and write the same file. */
+        "pathTemplate": "xopat/{ownerId}/{viewerId}/{slideHash}.json",
+        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId} {slideName}",
         "committer": null,
         "author": null,
         "auth": null

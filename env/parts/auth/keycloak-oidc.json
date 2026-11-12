@@ -1,6 +1,12 @@
 {
   "$meta": {
     "description": "Local Keycloak over OpenID Connect (browser PKCE public client, no secret)",
+    "hint": "Needs the local Keycloak: docker compose -f test/fixtures/keycloak/docker-compose.yaml up -d",
+    "env": {
+      "KEYCLOAK_REALM": "Keycloak realm name",
+      "KEYCLOAK_URL": "Base URL of the Keycloak server",
+      "XOPAT_SSRF_ALLOWED_HOSTS": "Private hosts the server may call, comma-separated — a loopback IdP or model endpoint must be listed"
+    },
     "dimension": "auth",
     "requires": ["XOPAT_SSRF_ALLOWED_HOSTS"],
     "defaults": { "KEYCLOAK_URL": "http://localhost:8081", "KEYCLOAK_REALM": "xopat" }

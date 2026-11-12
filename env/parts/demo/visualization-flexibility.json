@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "visualization-flexibility showcase — vector layers and derived mask geometries; layer over data/tiff-webtiff",
+    "hint": "Run npm run fixtures:fetch && npm run fixtures:derive once",
+    "env": {
+      "XOPAT_NODE_PORT": "Port the viewer listens on"
+    },
     "clientKey": "localhost",
     /* Deliberately dimensionless (no `dimension` key) so it STACKS on top of a
        `data` fragment rather than competing with one — a one-option dimension

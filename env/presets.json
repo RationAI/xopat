@@ -15,7 +15,27 @@
    */
   "presets": {
     "default": {
-      "description": "The shipped standalone deployment: wsi-service on localhost, no login",
+      /**
+       * What Enter in the picker gives you, and what every other preset is a
+       * variation of. It must run on a fresh checkout with nothing else
+       * installed or started, so its slide is the generated one: `npm run up`
+       * writes the pyramid on first start (`$meta.fixtures` on the fragment).
+       *
+       * No preset depends on an external image server unless its name says so.
+       * To put real slides under any of them, name the data layer after it —
+       * a fragment given directly replaces the preset's in the same dimension:
+       *
+       *     npm run up -- default data/tiff-webtiff      # fetched TIFF fixtures
+       *     npm run up -- roles-dev data/wsi-service     # a wsi-service you run
+       */
+      "description": "The standalone deployment: generated slide, no login, no assistant — runs with nothing else installed",
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off"]
+    },
+
+    "wsi-service": {
+      /* The former default. The one data layer that needs a service this
+         repository does not start for you — see the fragment's hint. */
+      "description": "EMPAIA wsi-service on localhost as the image server, no login — needs the wsi-service container",
       "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off"]
     },
 
@@ -209,7 +229,7 @@
       /* `flags/…` is deliberately absent — debugMode comes from `--dev`
          (`npm run up:dev`), which is also what reveals the role switcher. */
       "layers": [
-        "base/core", "data/wsi-service", "auth/none",
+        "base/core", "data/synthetic-dzi", "auth/none",
         "roles/dev-all", "chat/off", "storage/tiered-sessions"
       ]
     },
@@ -225,7 +245,7 @@
          `core.scripting.run` gates: create the data as `admin`, then switch
          roles in the user menu to watch the IO gates apply to it. */
       "layers": [
-        "base/core", "data/wsi-service", "auth/none",
+        "base/core", "data/synthetic-dzi", "auth/none",
         "roles/dev-all", "chat/anthropic-server-key", "storage/tiered-sessions"
       ]
     },
@@ -238,7 +258,7 @@
          it at a local vLLM/Ollama and add `XOPAT_SSRF_ALLOWED_HOSTS`, since the
          guard refuses private upstreams. */
       "layers": [
-        "base/core", "data/wsi-service", "auth/none",
+        "base/core", "data/synthetic-dzi", "auth/none",
         "roles/dev-all", "chat/openai-compatible-cerit", "storage/tiered-sessions"
       ]
     },
@@ -256,7 +276,7 @@
          allowlists them. Pointing `MEDGEMMA_BASE_URL` at a remote host makes
          that line unnecessary. */
       "layers": [
-        "base/core", "data/wsi-service", "auth/none",
+        "base/core", "data/synthetic-dzi", "auth/none",
         "roles/dev-all", "chat/openai-compatible-cerit",
         "chat/medgemma-vision", "storage/tiered-sessions"
       ],
@@ -266,7 +286,7 @@
     "keycloak-oidc": {
       "description": "Local Keycloak login over OIDC, three roles, OpenAI chat on the viewer's own identity, gpt-4o dictation",
       "layers": [
-        "base/core", "data/wsi-service",
+        "base/core", "data/synthetic-dzi",
         "auth/keycloak-oidc", "roles/guest-pathologist-researcher",
         "chat/openai-server-key", "voice/openai-4o-transcribe", "storage/tiered-sessions"
       ],
@@ -285,7 +305,7 @@
     "keycloak-saml": {
       "description": "The same deployment reached over SAML instead of OIDC — the auth indirection, demonstrated",
       "layers": [
-        "base/core", "data/wsi-service",
+        "base/core", "data/synthetic-dzi",
         "auth/keycloak-saml", "roles/guest-pathologist-researcher",
         "chat/openai-server-key", "storage/tiered-sessions"
       ],
@@ -309,12 +329,12 @@
 
     "byok-chat": {
       "description": "Chat with no server key — exercises the per-user key issuance UI",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/byok", "storage/tiered-sessions"]
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/byok", "storage/tiered-sessions"]
     },
 
     "annotations-github": {
       "description": "Annotation bundles round-tripping to a GitHub repository",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/github"]
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off", "io/github"]
     },
 
     "mlflow": {
@@ -323,7 +343,7 @@
          they cannot be layered as peers — a fragment that wants both states one
          as its `$base`, the way `io/mlflow-annotations` does. */
       "description": "Slide-scoring results persisted to an MLflow tracking server",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow"]
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off", "io/mlflow"]
     },
 
     "mlflow-annotations": {
@@ -332,7 +352,7 @@
          Same sink, same proxy alias — only the per-binding `template` differs,
          which is the thing worth seeing work. */
       "description": "Slide scores as MLflow metrics and annotation bundles as MLflow artifacts",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/off", "io/mlflow-annotations"]
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/off", "io/mlflow-annotations"]
     },
 
     "image-proxy": {
@@ -340,7 +360,7 @@
          straight to the image server. The thing to verify is that nothing in the
          deployment reaches the image server directly — tiles and the WSI file
          browser listing both travel the viewer origin. */
-      "description": "The default deployment with tiles routed through the image-server proxy alias",
+      "description": "wsi-service with tiles routed through the image-server proxy alias — needs the wsi-service container",
       "layers": ["base/core", "data/wsi-service", "transport/proxy-image-server", "auth/none", "chat/off"],
       /* `data/wsi-service` states the upstream origin as the client `baseURL`; in
          proxy mode that origin lives server-side in `proxies.image-server.baseUrl`
@@ -368,13 +388,13 @@
          `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CERIT_API_KEY` you hold in
          `env/.env`, or enter one per user in the chat settings. */
       "description": "Durable server-side storage with a 30-day retention window, exercised by the assistant",
-      "layers": ["base/core", "data/wsi-service", "auth/none", "chat/all-providers", "storage/persistent-30d"]
+      "layers": ["base/core", "data/synthetic-dzi", "auth/none", "chat/all-providers", "storage/persistent-30d"]
     },
 
     "chat-logging": {
       "description": "Cerit chat with the full transcript/vision session log written to env/logs/",
       "layers": [
-        "base/core", "data/wsi-service", "auth/none",
+        "base/core", "data/synthetic-dzi", "auth/none",
         "chat/openai-compatible-cerit", "chat/medgemma-vision",
         "storage/tiered-sessions", "logging/chat-transcript"
       ],
@@ -384,9 +404,9 @@
     "viz-flex-demo": {
       "description": "Visualization flexibility showcase: multichannel TIFF, GeoJSON, MVT and three mask geometries over one real H&E slide",
       /**
-       * Needs two commands first:  npm run fixtures:derive  &&  npm run fixtures:serve
-       * (the second serves test/fixtures/data with range support, which the core static
-       * handler does not do). See docs/site/docs/visualization-flexibility.mdx.
+       * Needs the fixtures first:  npm run fixtures:fetch  &&  npm run fixtures:derive
+       * No separate file server: the viewer serves test/fixtures/data itself over
+       * `core.server.media`. See docs/site/docs/visualization-flexibility.mdx.
        *
        * ONE TIFF DECODER: `webtiff` owns `tiff` and reads everything — the H&E
        * slides and the mask pyramids alike.
