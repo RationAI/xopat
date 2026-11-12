@@ -657,6 +657,12 @@ interface ApplicationContext {
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
     /**
+     * Display adjustments broker (`classes/app/adjustments.ts`): per-layer levels,
+     * brightness/contrast, saturation, … as post-pipeline modules, and per-data-item
+     * sampling. Always viewer-explicit. See src/README.md → "Display adjustments".
+     */
+    adjustments: import("../classes/app/adjustments").Adjustments;
+    /**
      * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
      * until the Render Debug window is opened, gated on `debugMode`.
      */
@@ -1009,6 +1015,12 @@ interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
     currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
+    /**
+     * Stable identity of the slide behind a background id: `hash` (16 hex, of the
+     * data entry — use for addressing) and `name` (file name — labels only; may
+     * collide and may carry a case number). `undefined` for an unknown id.
+     */
+    slideIdentityFor(backgroundId: string | undefined): { hash: string; name: string } | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;
