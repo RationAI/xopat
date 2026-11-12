@@ -4,6 +4,7 @@ import {ShaderSideMenu} from "./shaderSideMenu.mjs";
 import {MultiPanelMenu} from "./multiPanelMenu.mjs";
 import {Menu} from "./menu.mjs";
 import {NavigatorSideMenu} from "./navigatorSideMenu.mjs";
+import {DataAdjustmentsPanel} from "./dataAdjustmentsPanel.mjs";
 import {resolveSideMenuCompact, resolveSideMenuTabOpen} from "../mixins/utils.mjs";
 
 const {div} = van.tags
@@ -19,6 +20,13 @@ const {div} = van.tags
  * div.attachTo(document.body);
  */
 export class RightSideViewerMenu extends BaseComponent {
+
+    /**
+     * Fallback open state of a core tab when neither the session, the user's
+     * cache nor the deployment (`ui.sideMenuTabs`) says otherwise. The data
+     * panel probes pixels for its histograms, so it stays closed until asked for.
+     */
+    static TAB_DEFAULT_OPEN = { data: false };
 
     /**
      * @param viewerPositionId
@@ -59,7 +67,7 @@ export class RightSideViewerMenu extends BaseComponent {
                 orderCacheKey: "sideViewerMenu-tab-order",
                 // Panels appended later (plugins, via Menu.append) must honor
                 // the same deployment/session default as the boot loop below.
-                initialOpenResolver: resolveSideMenuTabOpen,
+                initialOpenResolver: (id) => resolveSideMenuTabOpen(id, RightSideViewerMenu.TAB_DEFAULT_OPEN[id] ?? true),
                 onOrderChange: () => {
                     for (const viewerMenu of Object.values(window.VIEWER_MANAGER?.viewerMenus || {})) {
                         if (viewerMenu !== this) {
@@ -89,6 +97,10 @@ export class RightSideViewerMenu extends BaseComponent {
         );
         this.menu.addTab(
             {id: "shaders", icon: "ph-stack", title: $.t('main.shaders.title'), body: this.createShadersMenu()}
+        );
+        this.dataMenu = new DataAdjustmentsPanel(this.id + "-data");
+        this.menu.addTab(
+            {id: "data", icon: "ph-sliders-horizontal", title: $.t('adjustments.panelTitle'), body: this.dataMenu.create()}
         );
 
         this._compact = resolveSideMenuCompact();
@@ -145,7 +157,7 @@ export class RightSideViewerMenu extends BaseComponent {
             if (i === "navigator" && APPLICATION_CONTEXT.getUiOption?.("navigator") === false) {
                 shouldOpen = false;
             } else {
-                shouldOpen = resolveSideMenuTabOpen(i);
+                shouldOpen = resolveSideMenuTabOpen(i, RightSideViewerMenu.TAB_DEFAULT_OPEN[i] ?? true);
             }
             if (shouldOpen) {
                 this.menu.tabs[i]._setFocus();
@@ -166,6 +178,7 @@ export class RightSideViewerMenu extends BaseComponent {
         this._viewer = viewer;
         this.shadersMenu.init(viewer);
         this.navigatorMenu.init(viewer);
+        this.dataMenu.init(viewer);
         this._observeViewerCell(viewer);
         this._observeNavigatorContainer(viewer);
     }
@@ -284,6 +297,10 @@ export class RightSideViewerMenu extends BaseComponent {
         return this.navigatorMenu;
     }
 
+    getDataTab() {
+        return this.dataMenu;
+    }
+
     /**
      * Snapshot of this viewer's side panels, for `AppBar.Catalog`.
      * `anchorId` is the strip button that opens the panel (always rendered
@@ -360,9 +377,8 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     destroy() {
-        delete this.title;
-        delete this.visibility;
-        delete this.copy;
+        this.dataMenu?.destroy?.();
+        this.navigatorMenu?.destroy?.();
 
         this._navResizeObserver?.disconnect?.();
         this._navResizeObserver = undefined;
@@ -400,7 +416,12 @@ export class RightSideViewerMenu extends BaseComponent {
         const root = div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; top: 0; bottom: 0; width: 400px; overflow: visible;"
+                // The inset is the strip other per-viewer chrome reserved along
+                // the bottom (the focal-plane ruler); the loader sets it on the
+                // viewer cell. It has to be an explicit `height`, not `bottom`:
+                // `.stretch-grid__item > *` gives every cell child
+                // `height: 100%`, which overrules a `bottom` offset.
+                style: "position: absolute; top: 0; height: calc(100% - var(--xo-viewer-bottom-inset, 0px)); width: 400px; overflow: visible;"
             },
             this.menu.create()
         );
@@ -424,7 +445,7 @@ export class RightSideViewerMenu extends BaseComponent {
             for (let i of Object.keys(this.menu.tabs)) {
                 // Same resolver as the boot loop: leaving the mobile breakpoint
                 // must not resurrect a tab the deployment/session closed.
-                if (!resolveSideMenuTabOpen(i)) {
+                if (!resolveSideMenuTabOpen(i, RightSideViewerMenu.TAB_DEFAULT_OPEN[i] ?? true)) {
                     this.menu.getTab(i).close();
                 }
             }

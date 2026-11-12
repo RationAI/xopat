@@ -57,6 +57,8 @@ import { Toast } from "./classes/components/toast.mjs";
 import { MenuTabBanner } from "./classes/components/menuTabBanner.mjs";
 import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mjs";
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
+import { DepthRuler } from "./classes/components/depthRuler.mjs";
+import { Popover } from "./classes/components/popover.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
 import { DockableWindow } from "./classes/components/dockableWindow.mjs";
 import { StatusBar } from "./classes/components/statusBar.mjs";
@@ -142,7 +144,7 @@ const UI = {
 
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
     FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
-    Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
+    Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, DepthRuler, Popover, Explorer, Toolbar, ToolbarItem,
     ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar,
     Modal, IllustratedModal, TutorialsModal, LoginModal, ProgressDialog, TagSelect, Autocomplete,
     ContextMenu, KeymapPanel, RenderDebugPanel, SuggestionEditor, UserRolesPanel,

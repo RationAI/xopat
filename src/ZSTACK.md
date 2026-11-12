@@ -122,9 +122,16 @@ All read via `APPLICATION_CONTEXT.getOption(...)`, defaults + inline docs in
 
 ## UI, input, scripting, persistence
 
-- **Navigator slider** (`ui/classes/components/navigatorSideMenu.mjs`): a
-  focal-plane row at the bottom of the navigator, auto-shown when
-  `__depthController.getRange()` is non-null.
+- **Depth ruler** (`ui/classes/components/depthRuler.mjs`, one per viewer,
+  created in `ViewerManager.add`): a tick ruler along the bottom edge of the
+  viewport, shown while `__depthController.getRange()` is non-null. Drag or
+  click the track, scroll over it, use its arrow buttons, or focus it and use
+  the arrow / Home / End keys. The readout is the 1-based plane position plus
+  `labels[index]`, or `index * spacingUm` when the source gives a spacing.
+  The ruler reserves its strip instead of overlapping other chrome: its owner
+  lifts the scalebar dock (`scalebar.setBottomInset(px)`) and the side menu
+  (`--xo-viewer-bottom-inset` on the viewer cell). Per-viewer chrome that sits
+  on the bottom edge should honour the same inset.
 - **Input**: Alt + mouse wheel over the canvas; keyboard shortcuts
   `core.viewport.zDepthNext` / `zDepthPrev` (defaults `]` / `[`, remappable via
   the Keymap panel).

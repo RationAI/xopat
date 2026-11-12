@@ -7,7 +7,7 @@ import { Select } from "../elements/select.mjs";
 import { PhIcon } from "../elements/ph-icon.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
 
-const { div, span, select, option, button, input, label } = van.tags;
+const { div, span, select, option, button } = van.tags;
 
 /**
  * ShaderLayer
@@ -22,7 +22,6 @@ const { div, span, select, option, button, input, label } = van.tags;
  *        title?: string,
  *        type: string,
  *        params: { use_mode?: "show"|"clip"|"blend", use_blend?:string, ... },
- *        filters?: Record<string,{name:string,value:number}>
  *        cache?: object,
  *        _cacheApplied?: "hit"|"miss"|"stale"|string
  *    }
@@ -32,7 +31,6 @@ const { div, span, select, option, button, input, label } = van.tags;
  *      onChangeType(type)
  *      onChangeMode(mode, blend)
  *      onChangeBlend(mode, blend)
- *      onSetFilter(key, value:number)
  *      onClearCache()
  *      onReorder("up"|"down")
  */
@@ -85,7 +83,6 @@ export class ShaderLayer extends BaseComponent {
         this.type = this.cfg.type;
         this.title = this.cfg.name;
         this.shortTitle = this._shortenMiddle(this.title, 32);
-        this.filters = options.availableFilters || {};
         this.cacheApplied = ShaderLayer.resolveCacheStatus(this.cfg, this.layer);
         this.childrenContainerId = this.id + "-children";
         this.bodyContainerId = this.id + "-body";
@@ -551,36 +548,6 @@ export class ShaderLayer extends BaseComponent {
         );
     }
 
-    // ---- filters (legacy per-layer controls)
-
-    _buildFilters() {
-        const rows = [];
-        const entries = Object.entries(this.filters); // [key, {name,value}]
-        for (const [key, f] of entries) {
-            const onChange = (e) => {
-                const v = Number.parseFloat(e.target.value);
-                if (!Number.isNaN(v)) {
-                    this.filters[key].value = v;
-                    this.cb.onSetFilter?.(key, v);
-                }
-            };
-            rows.push(
-                div(
-                    { class: "shader-controls-row shader-controls-row--grid px-2", "data-columns": "2" },
-                    label({ class: "text-xs mr-2" }, f.name + ":"),
-                    input({
-                        type: "number",
-                        value: f.value,
-                        class: "input input-xs input-bordered w-24",
-                        style: "margin-right: 8px;",
-                        onchange: onChange
-                    })
-                ),
-            );
-        }
-        return div({}, ...rows);
-    }
-
     _wrapShaderControlRow(html) {
         if (typeof html !== "string") {
             return "";
@@ -601,9 +568,13 @@ export class ShaderLayer extends BaseComponent {
 
         const fragments = [];
         const controls = shader._controls || {};
+        // Pipeline controls are in `_controls` too. Legacy filters (`legacy_*` pre nodes)
+        // and authored nodes render here; the display adjustments (`xadj_*`) live only
+        // in the Data panel.
+        const owned = APPLICATION_CONTEXT.adjustments?.getOwnedControls?.(shader) || new Set();
         for (const controlName in controls) {
             const control = shader[controlName] || controls[controlName];
-            if (!control || typeof control.toHtml !== "function") {
+            if (!control || typeof control.toHtml !== "function" || owned.has(control)) {
                 continue;
             }
 
@@ -774,18 +745,19 @@ export class ShaderLayer extends BaseComponent {
     }
 
     _buildMainControls() {
-        const htmlControls = this._renderShaderControls(this.layer) || (
-            this.layer?.htmlControls
-                ? this.layer.htmlControls(html => this._wrapShaderControlRow(html))
-                : ""
-        );
+        // htmlControls() is only for a layer without a `_controls` map: on any other it
+        // would re-add the controls _renderShaderControls deliberately skipped.
+        const htmlControls = this.layer?._controls
+            ? this._renderShaderControls(this.layer)
+            : (this.layer?.htmlControls
+                ? this.layer.htmlControls({ wrapper: html => this._wrapShaderControlRow(html), includePipeline: false })
+                : "");
 
         const hasHtmlControls = typeof htmlControls === "string"
             ? htmlControls.trim().length > 0
             : !!htmlControls;
-        const hasFilters = Object.keys(this.filters || {}).length > 0;
 
-        if (!hasHtmlControls && !hasFilters) {
+        if (!hasHtmlControls) {
             return null;
         }
 
@@ -797,7 +769,6 @@ export class ShaderLayer extends BaseComponent {
                     htmlControls
                 ).create()
                 : null,
-            hasFilters ? this._buildFilters() : null,
         );
     }
 
