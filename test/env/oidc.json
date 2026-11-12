@@ -54,7 +54,7 @@
   /* Identical to test/env/saml.json except for the `auth/*` entry. */
   "$base": [
     "base/core",
-    "data/wsi-service",
+    "data/synthetic-dzi",
     "auth/keycloak-oidc",
     "roles/guest-pathologist-researcher",
     "chat/openai-server-key",
