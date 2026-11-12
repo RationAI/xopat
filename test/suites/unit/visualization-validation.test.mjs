@@ -218,6 +218,59 @@ test("oneOf branch noise is filtered by the layer's declared type @visualization
     expect(messages).not.toContain("noise");
 });
 
+test("with the real AJV, a layer is reported by its own type's branch only @visualization", async () => {
+    reset();
+    // The bundled validator, configured exactly as production does (`inlineRefs: false`).
+    // That option makes every `$ref` report a schemaPath relative to itself, so the
+    // schemaPath-based filter above cannot tell branches apart — it passed all of them
+    // through, one line per registered shader type.
+    const { createRequire } = await import("node:module");
+    const loaded = createRequire(import.meta.url)("../../../src/libs/ajv7.min.js");
+    const candidate = globalThis.ajv7 ?? loaded;
+    globalThis.Ajv2020 = typeof candidate === "function" ? candidate : candidate.default;
+
+    const layer = (type, params) => ({
+        type: "object", additionalProperties: false, required: ["type"],
+        properties: {
+            type: { const: type },
+            params: { type: "object", additionalProperties: false, properties: params },
+        },
+    });
+    installRenderer({
+        couplings: { "dicom-parametric": [] },
+        schema: {
+            $id: "https://flex-renderer/schemas/visualization-config/test.json",
+            type: "object",
+            properties: {
+                shaders: {
+                    type: "object",
+                    additionalProperties: {
+                        oneOf: ["colormap", "edge", "dicom-parametric"]
+                            .map(type => ({ $ref: `#/$defs/shaderLayers/${type}` })),
+                    },
+                },
+            },
+            $defs: {
+                shaderLayers: {
+                    colormap: layer("colormap", { color: {} }),
+                    edge: layer("edge", { edgeThickness: {} }),
+                    "dicom-parametric": layer("dicom-parametric", { units: {} }),
+                },
+            },
+        },
+    });
+
+    const report = validateVisualizations([
+        { shaders: { score: { type: "dicom-parametric", state: {}, params: { units: "x" } } } },
+    ]);
+
+    expect(report.issues.map(i => `${i.path}: ${i.message}`)).toEqual([
+        'viz[0]/shaders/score: must NOT have additional properties {"additionalProperty":"state"}',
+    ]);
+
+    reset();
+});
+
 test("identical findings surviving the filter are deduped @visualization", () => {
     const viz = { shaders: { a: { type: "colormap" } } };
     const dup = { instancePath: "/shaders/a", schemaPath: "#/x", message: "same", params: { p: 1 } };
