@@ -101,6 +101,17 @@ function initXOpatLayers() {
 
     const SNAPSHOT_STATE_KEY = "__xopat_state";
 
+    // Structural params a user edits at runtime that live in `params`, not in the
+    // control cache: the legacy input filters (UTILITIES.setFilterOfLayer) and the
+    // per-layer module pipeline (APPLICATION_CONTEXT.adjustments, UPSTREAM.md
+    // "a pre/post module pipeline"). Without them in the snapshot, undo, session
+    // sync and config write-back silently dropped every such edit.
+    const SNAPSHOT_FILTER_KEYS = ["use_gamma", "use_exposure", "use_logscale"];
+    // Marks a state that records filters + pipeline, so their ABSENCE means
+    // "none". Snapshots stored by older builds never recorded them; applying one
+    // must leave the authored filters alone instead of deleting them.
+    const SNAPSHOT_STRUCTURAL_MARK = "structural";
+
     function extractShaderState(config) {
         const params = isObject(config?.params) ? config.params : {};
         const state = {};
@@ -114,6 +125,13 @@ function initXOpatLayers() {
         }
         if (params.use_blend !== undefined) {
             state.use_blend = params.use_blend;
+        }
+        state[SNAPSHOT_STRUCTURAL_MARK] = true;
+        for (const key of SNAPSHOT_FILTER_KEYS) {
+            if (params[key] !== undefined) state[key] = params[key];
+        }
+        if (isObject(params.pipeline)) {
+            state.pipeline = jsonClone(params.pipeline);
         }
 
         return state;
@@ -153,6 +171,42 @@ function initXOpatLayers() {
         if (state.use_blend !== undefined) {
             config.params.use_blend = state.use_blend;
         }
+        // In a structural snapshot a missing filter / pipeline means "none" (it
+        // was removed, or never existed) — not "keep whatever is there", or undo
+        // of the first filter or adjustment could never take it away again.
+        const structural = state[SNAPSHOT_STRUCTURAL_MARK] === true;
+        for (const key of SNAPSHOT_FILTER_KEYS) {
+            if (state[key] !== undefined) config.params[key] = state[key];
+            else if (structural) delete config.params[key];
+        }
+        if (isObject(state.pipeline)) {
+            config.params.pipeline = jsonClone(state.pipeline);
+        } else if (structural) {
+            delete config.params.pipeline;
+        }
+    }
+
+    /**
+     * Re-apply the structural params `applySnapshotState` may have changed on a
+     * live layer. Filters and the pipeline are compiled into the program, so a
+     * config write alone does not reach the GPU until the layer resets them.
+     * @return {boolean} true when the layer had to be reset (caller rebuilds)
+     */
+    function resetStructuralParams(shader, before, after) {
+        if (!shader || !isObject(after)) return false;
+        // Legacy filters are migrated pipeline pre-nodes, and resetFilters rebuilds the
+        // pipeline from the layer's params (the same object as `after`) — one reset covers
+        // both. Silent: the caller syncs config and rebuilds the program itself.
+        if (SNAPSHOT_FILTER_KEYS.some(key => before?.[key] !== after[key])) {
+            shader.resetFilters?.(after, true, false);
+            return true;
+        }
+        if (JSON.stringify(before?.pipeline ?? null) !== JSON.stringify(after.pipeline ?? null)
+            && typeof shader.resetPipeline === "function") {
+            shader.resetPipeline(after, false);
+            return true;
+        }
+        return false;
     }
 
     // Canonical state→cfg merge convention. Exported so canonical-scene.ts
@@ -520,9 +574,19 @@ function initXOpatLayers() {
                 }
             }
 
+            const paramsBefore = isObject(config.params)
+                ? { ...config.params, pipeline: jsonClone(config.params.pipeline) }
+                : {};
             config.cache = jsonClone(isObject(incoming.cache) ? incoming.cache : {}) || {};
             applySnapshotState(config, incoming.state);
             config._cacheApplied = "session";
+            try {
+                // Main layer only: the drawer's navigator sync mirrors pipeline structure
+                // and values on the rebuild below.
+                resetStructuralParams(renderer.getShaderLayer?.(config.id), paramsBefore, config.params);
+            } catch (e) {
+                console.warn(`[layers] importLiveVisualization: structural reset failed for "${pathString}"`, e);
+            }
             mutated = true;
         }
 

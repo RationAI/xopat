@@ -3711,10 +3711,12 @@ ${form}
                 if (!file) return reject("Invalid input file: no file.");
                 const fileReader = new FileReader();
                 fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
+                // Without this a failed read left the promise pending forever.
+                fileReader.onerror = () => reject(fileReader.error ?? new Error("File read failed."));
 
                 if (mode === "text") fileReader.readAsText(file);
                 else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
-                else throw "Invalid read file mode " + mode;
+                else reject(new Error("Invalid read file mode " + mode));
             });
         },
 
@@ -5331,6 +5333,35 @@ form.submit();
             });
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
+            });
+
+            // Focal-plane (z-stack) ruler on the bottom edge of this viewport.
+            // It shows only for multi-plane slides and reserves its own strip:
+            // the scalebar dock and the side menu are lifted by its height
+            // instead of being overlapped.
+            const depthRuler = new UI.DepthRuler({
+                id: `${cellId}-depth-ruler`,
+                onInsetChange: (px: number) => {
+                    // The cell first: it cannot fail, and the side menu must
+                    // move even if the scalebar is mid-rebuild for a new slide.
+                    cell.style.setProperty("--xo-viewer-bottom-inset", `${px}px`);
+                    (viewer as any).scalebar?.setBottomInset?.(px);
+                },
+            });
+            depthRuler.attachTo(viewer.container);
+            depthRuler.onLayoutChange({ width: window.innerWidth });
+            depthRuler.init(viewer);
+            (viewer as any).__depthRuler = depthRuler;
+            const depthRulerChromeKey = `depthRuler::${(viewer as any).uniqueId ?? index}`;
+            let depthRulerHidden = false;
+            (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(depthRulerChromeKey, {
+                is:  () => !depthRulerHidden,
+                on:  () => { depthRulerHidden = false; depthRuler.setHidden(false); },
+                off: () => { depthRulerHidden = true; depthRuler.setHidden(true); },
+            });
+            viewer.addOnceHandler?.("destroy", () => {
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(depthRulerChromeKey);
+                depthRuler.destroy();
             });
 
             // Navigator visibility is owned by the right-side viewer

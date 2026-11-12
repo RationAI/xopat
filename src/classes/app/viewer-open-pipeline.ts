@@ -2498,7 +2498,9 @@ export class ViewerOpenPipeline {
                 viewerManager.setActive(0, "open-complete");
             }
 
-            if (backgroundChanged || anythingVisibleChanged) {
+            // The first open counts: change detection is gated on `hadOpenViewerState`,
+            // and visualization history + live-config-sync bootstrap on this event.
+            if (!hadOpenViewerState || backgroundChanged || anythingVisibleChanged) {
                 viewerManager.raiseEvent("after-open");
             }
 

@@ -837,9 +837,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
 
         // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
-        // Also driven by the navigator depth slider and the Alt+wheel gesture
-        // (see loader.ts canvas-scroll). Combos `]` / `[` match e.code so they
-        // sit next to the bracket keys regardless of layout.
+        // Also driven by the per-viewer DepthRuler and the Alt+wheel gesture
+        // (see viewer-scroll-zoom-controller.ts). Combos `]` / `[` match e.code
+        // so they sit next to the bracket keys regardless of layout.
         const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
             id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
             categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
@@ -877,6 +877,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             descriptionKey: "keymap.core.viewportCopyDesc",
             categoryPath: APP_PATH, defaultCombos: ["Alt+KeyW"], type: "press", trigger: "down",
             handler: ({ viewer }) => viewportCopyOrAlign(viewer),
+        });
+        // The un-docked global menu rests as an edge rail; this is its
+        // keyboard / pinnable-button way in (opens sticky, see MainLayout).
+        shortcuts.register({
+            id: "core.app.toggleGlobalMenu", titleKey: "keymap.core.toggleGlobalMenu",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyM"], type: "press", trigger: "down",
+            icon: "ph-sidebar-simple", quickAction: true,
+            handler: () => (window as any).LAYOUT?.toggleGlobalMenu(),
         });
 
         // ── Peek at background: hold "h" to momentarily hide the visualization
@@ -920,6 +928,25 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     }
                 }
                 peekState.clear();
+            },
+        });
+
+        // Before/after for display adjustments: hold to see every layer of the
+        // focused viewer without its adjustment pipeline. A renderer uniform, so
+        // holding/releasing never relinks a program.
+        const adjustmentPeek = new Set<any>();
+        shortcuts.register({
+            id: "core.view.adjustmentsBypass", titleKey: "keymap.core.adjustmentsBypass",
+            descriptionKey: "keymap.core.adjustmentsBypassDesc",
+            categoryPath: VIEW_PATH, defaultCombos: ["KeyB"], type: "hold", scope: canvasScope,
+            onPress: ({ viewer }) => {
+                if (!viewer || adjustmentPeek.has(viewer) || APPLICATION_CONTEXT.adjustments.isBypassed(viewer)) return;
+                adjustmentPeek.add(viewer);
+                APPLICATION_CONTEXT.adjustments.setBypass(viewer, true);
+            },
+            onRelease: () => {
+                for (const viewer of adjustmentPeek) APPLICATION_CONTEXT.adjustments.setBypass(viewer, false);
+                adjustmentPeek.clear();
             },
         });
 

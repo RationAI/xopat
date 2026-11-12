@@ -141,7 +141,7 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `backgroundColor` | string | — | Hex `#RGB`/`#RGBA` canvas clear color (e.g. fluorescence). Transparent if unset. Session-wide; a single slide overrides it with `background[i].fill`.                                                                                                                                                                                                                                              |
 | `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions.                                                                                                                                                                                                                                                                                                                                                         |
 | `bypassCookies` | bool | `false` | Skip cookie-backed user state.                                                                                                                                                                                                                                                                                                                                                                   |
-| `bypassCloseConfirmation` | bool | `false` | Avoid browser close confirmation popup in dirty (data modified) state.                                                                                                                                                                                                                                                                                                               |
+| `bypassCloseConfirmation` | bool | `true`  | Avoid browser close confirmation popup in dirty (data modified) state. Set `false` to get the "Leave site?" prompt on unsaved changes.                                                                                                                                                                                                                                                                                                               |
 | `bypassCache` | bool | `false` | Never reuse cached values.                                                                                                                                                                                                                                                                                                                                                                       |
 | `bypassCacheLoadTime` | bool | `false` | Skip the **cold-load** session restore: a boot with no session of its own does not adopt `xoSessionCache`. Eviction and saving still run, so a boot that arrives *with* a session (auth-redirect return, POST, hash) is unaffected. Deployment-side (`ENV.setup`) — a cold load carries no `params` by definition.                                                                                 |
 | `historySize` | number | `50` | Cap on the history stack (`src/classes/history.ts`).                                                                                                                                                                                                                                                                                                                                             |
@@ -176,8 +176,13 @@ embeddings. `params.ui: true` is equivalent to leaving the field unset.
 
 `params.ui.globalMenuMode` (`"overlay"` \| `"docked"`, string — not a boolean flag,
 so it is read directly by `MainLayout`, not via `getUiOption`) picks how that dock
-behaves: `"overlay"` (default) hides it to a thin edge rail that floats over the
-viewer on hover/focus; `"docked"` keeps it as a flex sibling that pushes the viewer.
+behaves: `"overlay"` (default) rests it as an edge rail beside the viewer and floats
+the panel over the viewer on demand; `"docked"` keeps it as a flex sibling that pushes
+the viewer. In overlay mode, clicking the rail or the *Show / hide the global menu* shortcut
+(`core.app.toggleGlobalMenu`, `Alt+M`, pinnable as a quick action) opens the panel.
+It closes on Escape, a click on the viewer, a second toggle, or about a second after
+the pointer leaves it for the viewer (moving back in time keeps it open). Hovering the rail opens
+nothing — it sits beside the outermost viewer's side menu.
 The user's runtime pin toggle (persisted in AppCache) overrides this default.
 
 `params.ui.sideMenuTabs` (bool \| `Record<string, boolean>`) picks which panels of
@@ -503,6 +508,54 @@ re-applies that snapshot through `drawer.overrideConfigureAll(shaders, order)`, 
 `app.visualization` channel, and shows `error.shaderProgramFailedRestored`. The debounced
 config write-back is suppressed while recovering, so a configuration that cannot link never
 reaches `APPLICATION_CONTEXT.config` or a session export.
+
+### Display adjustments
+
+`APPLICATION_CONTEXT.adjustments` (`classes/app/adjustments.ts`) reads and writes how data is
+displayed, always for an explicit viewer:
+
+- **Per-layer adjustments** — black/white point, gamma, brightness, contrast, saturation, hue,
+  temperature/tint, invert. Each is a control of a vec4 → vec4 module in the layer's
+  `params.pipeline.post` chain (nodes `xadj_*`, canonical order levels → brightness/contrast →
+  saturation → hue → temperature → invert). Inserting a node is the one program rebuild; every
+  later change is `control.set(...)` plus `shader.invalidate()`, a uniform update. The engine is
+  the renderer's per-layer module pipeline (`ShaderLayer#resetPipeline` / `getPipelineControl`);
+  `adjustments.isSupported()` probes for it and refuses writes on an older renderer. Only the main
+  renderer is touched: the drawer's navigator sync mirrors node structure and values.
+  - Ranges (min/max/step) come from the module definitions in `ShaderModuleRegistry`; the
+    descriptor literals are a fallback. Identity values are xOpat's and are written into every
+    inserted node, because a module default is not necessarily an identity (`invert.amount`
+    defaults to `1`).
+- **Per-data-item sampling** — `setSampling(dataReference, "auto" | "brightfield" |
+  "fluorescence" | "pixelated")` writes `imageSmoothingEnabled` / `minificationFilter` onto
+  `config.data[i]` (see `data` above) and applies them to every viewer showing that item. Not a
+  module: GL filtering is per tiled image, fixed at texture upload.
+- `list(viewer)` — data items, background first, each with its layers and current values;
+  `set` / `setBackground` (all background layers, linked) / `reset`; `setBypass` /
+  `toggleBypass` (before/after: a transient uniform via `ShaderLayer#setPipelineBypass`, never
+  written to config/cache/history; applied to group children too; `isBypassSupported()` probes
+  for it on older renderers; `setPipelineEnabled` is deliberately not used, it persists); `setLinked` / `copyToViewers` (grid comparison:
+  background layers match by position, visualization layers by structural id);
+  `histogram` / `autoLevels` (0.5 % / 99.5 % percentiles over `visualization.probeData`, i.e.
+  the raw data of the layer's first data reference at the current view); presets per user in
+  `AppCache` (`listPresets` / `savePreset` / `applyPreset`).
+- New kinds of adjustment: `registerAdjustment({key, node: "xadj_…", module, control, min, max,
+  step, identity, labelKey, order})`. The UI renders descriptors generically.
+- `getOwnedControls(shader)` — the broker's controls on a layer. Generic control UIs skip them, so
+  each control is mounted once: the shader card shows a layer's own controls plus any other
+  pipeline nodes (authored nodes, and the legacy `use_gamma` / `use_exposure` / `use_logscale`
+  filters, which the renderer migrates to `legacy_*` pre nodes); the Data panel shows `xadj_*`.
+
+Persistence and undo need no extra wiring: structural changes emit `shader-config-update`,
+value changes raise the renderer's `visualization-change`, and the live snapshot
+(`UTILITIES.exportLiveVisualization`) carries `params.pipeline` and the legacy `use_gamma` /
+`use_exposure` / `use_logscale` filters in `state` (marked `structural: true`, so their absence
+means "none" on apply).
+
+UI: the per-viewer **Data** side tab (`ui/classes/components/dataAdjustmentsPanel.mjs`, closed by
+default), the hover-revealed sliders button in the navigator header (quick background panel),
+and the `adjustments` scripting namespace. Hold **B** on the canvas
+(`core.view.adjustmentsBypass`) for a before/after peek.
 
 ### Render Debug (dev only)
 
