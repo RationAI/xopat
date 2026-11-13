@@ -77,6 +77,7 @@ Has supportive features. Use them for good integration.
 - `src/classes/scripting` Scripting API with safety checks. Used for example for LLM tight integration. **Always route user-supplied script execution through this — never `eval`/`Function`.** A namespace is self-contained: its LLM-facing hints (intent patterns, prompt tier, framing/guidance, examples) go in its own `ScriptApiMetadata.assistant`, never in the chat module (`src/classes/scripting/README.md`).
 - `src/classes/history.ts` The viewer history stack. Reasonable actions should support undo/redo.
 - `src/classes/app/shortcut-manager.ts` (`APPLICATION_CONTEXT.shortcuts`) Central keyboard-shortcut registry — register key strokes here (declared defaults, conflict enforcement, user remapping via the Keymap fullscreen-menu panel) instead of attaching raw `key-down`/`key-up` handlers. Contextual keys (Escape/Enter/Delete in widgets and inputs) stay widget-local and are NOT registered. See `src/SHORTCUTS.md`.
+- `src/classes/app/adjustments.ts` (`APPLICATION_CONTEXT.adjustments`) Display adjustments (levels, brightness/contrast, saturation, …) as renderer pipeline modules per layer, plus per-data-item sampling (brightfield/fluorescence/pixelated). Viewer-explicit; never add a bespoke brightness/contrast slider or shader param — register a descriptor (`registerAdjustment`) instead. See `src/README.md` → *Display adjustments*.
 - `src/classes/app/tutorial/` (`APPLICATION_CONTEXT.tutorials`) Interactive tour overlay behind `USER_INTERFACE.Tutorials`. Register tours with `USER_INTERFACE.Tutorials.add(...)`; never build a bespoke highlight overlay. See `src/TUTORIALS.md`.
 - `src/classes/user.ts` & `src/classes/http-client.ts` User authentication and request management. Rely on contextualized auth scopes where necessary.
 - `src/classes/auth/xopat-auth.ts` (`APPLICATION_CONTEXT.auth`) Core auth broker — lets any feature *require login* for a named context via a pluggable, registerable broker (OIDC now, SAML later). Built on `XOpatUser`. See `src/AUTH.md`. Never gate auth on `getOption` (§7); read `oidc`/`authMode` config via `getStaticMeta`.
@@ -110,6 +111,7 @@ Quick reference:
 - Streamed query: `for await (const item of r.query(params, { signal }))`.
 - Per-element KV storage: `this.cache` (sync, `kv:cache`), `this.cookies` (sync, `kv:cookies`), `this.data` (async, `kv:data`). Custom namespaces via `IO_PIPELINE.kv(this.uid, "kv:<ns>")`.
 - Admins bind capabilities to sinks/drivers in `ENV.client.io.bindings`. Sink-providing modules register at runtime via `IO_PIPELINE.registerSink(...)`.
+- **Formats** (GeoJSON, DICOM SR, a platform's own model) are registered in `IO_PIPELINE.formats` under the data owner's id as `domain` — from the owner or from anyone else — and converted with `formats.encode/decode/encodeItem`. Never build a private convertor registry, never re-encode from an owner's live state inside a sink, and never flip an owner-wide format setting to feed one destination: a sink declares `formats: {<domain>: [...]}` (or the binding pins `format`) and the pipeline calls `exportBundle` once per distinct format with `ctx.format`. See `src/IO_PIPELINE.md` → *Formats*.
 
 ### User roles & capabilities
 In the browser this is UI gating only — real authorization belongs in the embedding backend or in the server-side check below. Plugins declare `capabilities[]` in their `include.json`; IO-mediated actions auto-derive matching gates from `io.capabilities[]`, with a guard mounted on **every** IO pre-phase — `pre-create` / `pre-read` / `pre-update` / `pre-delete` for CRUD, `pre-export` / `pre-import` for bundles. Roles + grants/denies live in `core.roles` in env config, and `core.roles.claims` maps an IdP claim to roles at login (broker-agnostic; no resolver plugin needed). Code uses `this.can('cap.id')` or `this.onCapabilityChange('cap.id', fn)`; `XOpatUser.instance().assignRoles(...)` is the escape hatch for logic a mapping table cannot express.
@@ -276,7 +278,8 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
 1. **Reuse an existing component** in `ui/classes/components/`. Catalogue (non-exhaustive):
    - Dialogs / modals: `Modal`, `IllustratedModal`, `LoginModal`, `TutorialsModal`, `ProgressDialog`
    - Notifications: `Toast`, `StatusBar`, `GlobalTooltip`
-   - Windows / panels: `FloatingWindow`, `DockableWindow`, `MainLayout`, `MainPanel`, `RightSideViewerMenu`, `NavigatorSideMenu`, `ShaderSideMenu`, `ShaderLayer`
+   - Pop-overs: `Popover` (anchored floating panel for arbitrary content — sliders, inputs — portaled to `<body>`, closes on Escape / outside press; use it instead of hand-wiring `placeFixedAnchored` + `FloatingManager`, and instead of an inline row that resizes its host)
+   - Windows / panels: `FloatingWindow`, `DockableWindow`, `MainLayout`, `MainPanel`, `RightSideViewerMenu`, `NavigatorSideMenu`, `ShaderSideMenu`, `ShaderLayer`, `DataAdjustmentsPanel`, `AdjustmentControls` (live sliders rendered from adjustment descriptors), `DepthRuler` (per-viewer focal-plane ruler on the viewport's bottom edge; it reserves a bottom inset — honour `--xo-viewer-bottom-inset` / `scalebar.setBottomInset` rather than overlapping it)
    - Menus / tabs: `Menu`, `MenuTab`, `MenuTabBanner`, `MultiPanelMenu`, `MultiPanelMenuTab`, `TabsMenu`, `Explorer`
    - Fullscreen: `FullscreenMenu`, `FullscreenMenuModal`, `FullscreenMenuPanel`, `FullscreenMenuNavTab`
    - Toolbar family: `Toolbar`, `ToolbarGroup`, `ToolbarItem`, `ToolbarChoiceGroup`, `ToolbarPanelButton`, `ToolbarSeparator`
@@ -313,6 +316,15 @@ region — which is how an assistant-authored
 bubble, a questionnaire description and a recorder overlay. If your feature hands
 the model aliases instead of real viewer ids, register a resolver
 (`markdown.registerViewerResolver(fn)`) rather than a parallel link scheme.
+
+### Saved scripts as buttons, menu items, shortcuts
+
+A feature that "runs a stored script from a button" is a **user action** — depend on
+[`user-actions`](modules/user-actions/README.md) and add a deployment action (ENV
+`modules["user-actions"].actions`) instead of wiring a bespoke button to `executeScript`.
+The module owns approval, persistence, surface mounting and result display; assistants reach it
+through the `actions` scripting namespace. A host passing trigger data to a script uses
+`executeScript(script, { input })` — never string-splices data into script text.
 
 ### Forbidden patterns
 
@@ -462,7 +474,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### Build / dev loop
 
-- **A deployment is composed, not copied.** `npm run up -- <selectors>` assembles the ENV from tracked fragments (`env/parts/`) and presets (`env/presets.json`), writes it to `env/.compose/`, and starts the server with it; bare `npm run up` asks one question per dimension. Secrets live in `env/.env` — never in a config file, since the server resolves `<% VAR %>` from its process environment. Two layers writing one key differently is a hard error, not a last-wins merge. Add a **fragment** rather than another whole `env/env.<thing>.json`; the composer (`server/utils/node/env-compose.mjs`) is shared with the test matrix, so `test/env/*.json` `$base` takes the same selectors. See [`env/README.md`](env/README.md).
+- **A deployment is composed, not copied.** `npm run up -- <selectors>` assembles the ENV from tracked fragments (`env/parts/`) and presets (`env/presets.json`), writes it to `env/.compose/`, and starts the server with it; bare `npm run up` starts from a preset (Enter = `default`, which needs no external service) and layers fragments on top until you stop; `--deployment <id>=<selectors>` adds named deployments. It reports every `<% VAR %>` the composition reads and whether it is set, defaulted or unset — give a new fragment `$meta.env` descriptions and a `$meta.hint` for any setup, and never make a preset depend on a service the repository does not start (`data/wsi-service` is opt-in). Secrets live in `env/.env` — never in a config file, since the server resolves `<% VAR %>` from its process environment. Two layers writing one key differently is a hard error, not a last-wins merge. Add a **fragment** rather than another whole `env/env.<thing>.json`; the composer (`server/utils/node/env-compose.mjs`) is shared with the test matrix, so `test/env/*.json` `$base` takes the same selectors. See [`env/README.md`](env/README.md).
 - **Shipped Tailwind is purged.** `src/libs/tailwind.min.css` is the production-purged build — many `md:` / `lg:` responsive variants and arbitrary classes are missing. Plugin UI must stick to compiled utilities, inline styles, or trigger a Tailwind recompile if a new class is needed.
 - **Do NOT run builds yourself — the dev server watches and rebuilds.** Assume the developer is running the dev server (`npm run dev`); it watches all client assets and auto-rebuilds them, **including workspace bundles** (module/plugin TypeScript → `index.workspace.js` via esbuild) and module/plugin server files (rebuilt on load by the server-module-loader). Never manually invoke `esbuild`, `grunt workspaceBuild`, `grunt twinc`, `grunt buildUI`, or `npm run build`; doing so churns tracked bundles and races the watcher. Just edit the source and let the watcher pick it up.
 - **The one exception: core server-side code is NOT hot-reloaded.** Changes to the core Node backend (`server/`, `index.js`) or the PHP server require a manual server restart. This does not apply to module/plugin server files, which the server-module-loader rebuilds on load.
