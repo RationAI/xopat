@@ -132,9 +132,11 @@ All read via `APPLICATION_CONTEXT.getOption(...)`, defaults + inline docs in
   lifts the scalebar dock (`scalebar.setBottomInset(px)`) and the side menu
   (`--xo-viewer-bottom-inset` on the viewer cell). Per-viewer chrome that sits
   on the bottom edge should honour the same inset.
-- **Input**: Alt + mouse wheel over the canvas; keyboard shortcuts
-  `core.viewport.zDepthNext` / `zDepthPrev` (defaults `]` / `[`, remappable via
-  the Keymap panel).
+- **Input**: modifier + mouse wheel over the canvas — binding
+  `core.viewport.zDepthWheel`, defaults Primary (Ctrl / ⌘, the same modifier
+  that drag-rotates) and Alt. A trackpad pinch carries a synthetic `ctrlKey`
+  and still zooms. Keyboard shortcuts `core.viewport.zDepthNext` / `zDepthPrev`
+  (defaults `]` / `[`). All remappable via the Keymap panel.
 - **Scripting API** (`src/classes/scripting/viewer-api.ts`):
   `viewer.getZStack()`, `viewer.setZDepth(index)`, `viewer.stepZDepth(delta)`.
 - **Persistence**: the active plane round-trips through the canonical scene

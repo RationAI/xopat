@@ -406,9 +406,10 @@
         "grayscale": false,
         "tileCache": true,
         "preventNavigationShortcuts": false,
-        // require Ctrl/Cmd + wheel to zoom the viewer — plain wheel falls through
-        // to the host page. Recommended for notebook / scrollable-host embeddings.
-        "scrollRequiresCtrl": false,
+        // the wheel scrolls the host page until the user clicks into the viewer,
+        // and again once the pointer leaves it. Recommended for notebook /
+        // scrollable-host embeddings. (Former name: scrollRequiresCtrl.)
+        "scrollRequiresClick": false,
         // invert the scroll-to-zoom direction (scroll down to zoom in, up to zoom out)
         "reverseScroll": false,
         // when the slide has a resolved native magnification, scroll snaps between

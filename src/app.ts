@@ -12,6 +12,7 @@ import { ViewerInspectorController } from "./classes/app/viewer-inspector-contro
 import { ViewerInteractionController } from "./classes/app/viewer-interaction-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
+import { Z_WHEEL_SHORTCUT_ID } from "./classes/app/viewer-scroll-zoom-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 import { initDeploymentKey } from "./classes/app/deployment-key";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
@@ -817,7 +818,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             id: ROTATE_DRAG_SHORTCUT_ID, titleKey: "keymap.core.rotateDrag",
             descriptionKey: "keymap.core.rotateDragDesc",
             categoryPath: NAV_PATH, defaultCombos: ["Primary"], type: "press",
-            capture: "modifiers", scope: canvasScope,
+            capture: "modifiers", gesture: "drag", scope: canvasScope,
         });
 
         // Joystick navigation mode toggle. App-wide (all viewers); while on, a
@@ -837,9 +838,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
 
         // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
-        // Also driven by the per-viewer DepthRuler and the Alt+wheel gesture
-        // (see viewer-scroll-zoom-controller.ts). Combos `]` / `[` match e.code
-        // so they sit next to the bracket keys regardless of layout.
+        // Also driven by the per-viewer DepthRuler and modifier+wheel (below).
+        // Combos `]` / `[` match e.code so they sit next to the bracket keys
+        // regardless of layout.
         const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
             id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
             categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
@@ -848,6 +849,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
         registerDepth("Next", "BracketRight", 1);
         registerDepth("Prev", "BracketLeft", -1);
+
+        // Modifier + wheel → focal-plane steps (ViewerScrollZoomController).
+        // Same Primary as drag-rotate: one modifier for the slide's extra axes.
+        // Conflicts are per gesture, so the two never clash. Alt stays as a
+        // second default for setups where Primary+wheel is taken.
+        shortcuts.register({
+            id: Z_WHEEL_SHORTCUT_ID, titleKey: "keymap.core.zDepthWheel",
+            descriptionKey: "keymap.core.zDepthWheelDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["Primary", "Alt"], type: "press",
+            capture: "modifiers", gesture: "wheel", scope: canvasScope,
+        });
 
         // Primary+S => global save. trigger "down" (not "up") so preventDefault()
         // suppresses the browser's native "Save page" dialog, which fires on keydown.
