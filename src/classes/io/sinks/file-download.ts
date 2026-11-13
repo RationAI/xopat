@@ -2,9 +2,12 @@
 // UTILITIES.downloadAsFile. Supports only the `bundle` kind.
 //
 // Filename convention: <ownerId>[-<viewerId>]-<ISO date>.<ext>
-// Owners can override via ctx.meta.fileName (full filename) or
+// The extension and MIME type come from `ctx.format` when the dispatch names
+// one. Owners can override via ctx.meta.fileName (full filename) or
 // ctx.meta.fileExt (extension only). Payload may be a string,
-// ArrayBuffer, Blob, or { fileName, content } envelope.
+// ArrayBuffer, Blob, an `IOBinaryPayload`, or { fileName, content } envelope.
+
+import { isBinaryPayload } from "./sink-utils";
 
 export const fileDownloadSink: IOSink = {
     id: "file-download",
@@ -22,15 +25,31 @@ export const fileDownloadSink: IOSink = {
 
         let fileName: string | undefined = ctx.meta.fileName as string | undefined;
         let content: any = payload;
+        let payloadExt: string | undefined;
 
         if (payload && typeof payload === "object" && "content" in (payload as any)) {
             const env = payload as any;
             content = env.content;
             fileName ??= env.fileName as string | undefined;
+        } else if (isBinaryPayload(payload)) {
+            // `IOBinaryPayload` — the bytes are the file, not the envelope.
+            // Handing the envelope to `new Blob([obj])` wrote the literal text
+            // "[object Object]".
+            content = new Blob([payload.bytes as BlobPart], {
+                type: payload.contentType || "application/octet-stream",
+            });
+            payloadExt = payload.fileExt;
+        } else if (ctx.format) {
+            // Carry the format's MIME type: `downloadAsFile` types a bare string
+            // as text/plain and bare bytes as octet-stream.
+            if (typeof content === "string" || content instanceof ArrayBuffer || ArrayBuffer.isView(content)) {
+                content = new Blob([content as BlobPart], { type: ctx.format.contentType });
+            }
         }
 
         if (!fileName) {
-            const ext = (ctx.meta.fileExt as string | undefined) ?? "json";
+            const ext = ((ctx.meta.fileExt as string | undefined) ?? payloadExt
+                ?? (ctx.format?.fileExt || "json")).replace(/^\.+/, "");
             const stamp = new Date().toISOString().replace(/[:.]/g, "-");
             const viewerSuffix = ctx.viewerId ? `--${ctx.viewerId}` : "";
             fileName = `${ctx.ownerId}${viewerSuffix}-${stamp}.${ext}`;

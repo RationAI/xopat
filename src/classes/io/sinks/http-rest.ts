@@ -13,16 +13,26 @@
 //     "bundlePath": (ctx) => "/bundles/" + ctx.ownerId,
 //     "itemPath":   (ctx) => "/items/" + ctx.resourceName + (ctx.itemId ? "/" + ctx.itemId : ""),
 //   }
-// Path builders may be plain strings with `{ownerId}`/`{resourceName}`/
-// `{itemId}` placeholders for config-only setups.
+// Path builders may be plain strings using the `IO_PIPELINE.formatPath`
+// placeholder set (`{ownerId}`, `{key}`, `{viewerId}`, `{backgroundId}`,
+// `{resourceName}`, `{itemId}`, …) for config-only setups. Every substituted
+// value is reduced to one safe path segment.
+//
+// Failure codes: a request that never got an answer is `W_IO_HTTP_NETWORK`,
+// a 5xx answer is the bare status (`"503"`), anything else is the
+// per-operation `W_IO_HTTP_<OP>`. The first two are what `withRetry` and the
+// outbox stall detector key on — a 4xx is the upstream saying no.
+
+import { formatContextTemplate } from "../io-pipeline";
 
 export interface HttpRestSinkOptions {
     /** Sink id; defaults to "http-rest". Use distinct ids if you
      *  register multiple HTTP sinks with different baseURLs. */
     id?: string;
     label?: string;
-    /** Lazy getter for the sink's options (so config changes take effect). */
-    getOptions: () => Record<string, unknown>;
+    /** Lazy getter for the sink's options (so config changes take effect).
+     *  Receives the dispatch context so per-binding config can be layered in. */
+    getOptions: (ctx?: IOContext) => Record<string, unknown>;
     /** Optional fine-grained gate. */
     accepts?(ctx: IOContext): boolean;
 }
@@ -35,7 +45,7 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         if (!HttpClient) {
             throw new Error("HttpClient is not available");
         }
-        const o = opts.getOptions() ?? {};
+        const o = opts.getOptions(ctx) ?? {};
         return new HttpClient({
             proxy: o.proxy,
             baseURL: o.baseURL,
@@ -44,17 +54,19 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
     };
 
     const buildPath = (ctx: IOContext, kind: "bundle" | "item"): string => {
-        const o = opts.getOptions() ?? {};
+        const o = opts.getOptions(ctx) ?? {};
         const tmpl = kind === "bundle" ? o.bundlePath : o.itemPath;
         if (typeof tmpl === "function") return (tmpl as any)(ctx);
         if (typeof tmpl === "string") {
-            return tmpl
-                .replace("{ownerId}", ctx.ownerId)
-                .replace("{resourceName}", ctx.resourceName ?? "")
-                .replace("{itemId}", ctx.itemId ?? "");
+            return formatContextTemplate(tmpl, ctx, { empty: "" });
         }
-        // Sensible default.
-        if (kind === "bundle") return `/bundles/${ctx.ownerId}`;
+        // Sensible default. The bundle key is part of the address: per-viewer
+        // and per-slide owners would otherwise all write one document.
+        if (kind === "bundle") {
+            return ctx.key
+                ? `/bundles/${encodeURIComponent(ctx.ownerId)}/${encodeURIComponent(ctx.key)}`
+                : `/bundles/${encodeURIComponent(ctx.ownerId)}`;
+        }
         return ctx.itemId
             ? `/${ctx.resourceName}/${encodeURIComponent(ctx.itemId)}`
             : `/${ctx.resourceName}`;
@@ -72,10 +84,18 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         }
     };
 
-    const fail = (e: any, code: string): IOResult => ({
-        ok: false, refused: true, code,
-        reason: e?.message ?? String(e),
-    });
+    const fail = (e: any, opCode: string): IOResult => {
+        // `HTTPError.statusCode` defaults to 500 when there was no response at
+        // all, so "no response" has to be read off the response, not the code.
+        const status = Number(e?.response?.status ?? 0);
+        const code = !e?.response ? "W_IO_HTTP_NETWORK"
+            : status >= 500 ? String(status)
+            : opCode;
+        return {
+            ok: false, refused: true, code,
+            reason: e?.message ?? String(e),
+        };
+    };
 
     return {
         id,

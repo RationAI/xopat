@@ -17,18 +17,20 @@ export const fileUploadSink: IOSink = {
     async readBundle(ctx) {
         const U = (globalThis as any).UTILITIES;
         try {
-            const fileContent = await pickFile(ctx, U);
-            if (fileContent === null) {
+            const picked = await pickFile(ctx, U);
+            if (picked === null) {
                 return { ok: false, refused: true, reason: "user cancelled", code: "W_IO_CANCELLED" };
             }
-            return { ok: true, payload: fileContent };
+            // The name travels with the content: it is the only evidence of the
+            // file's format that is not the content itself.
+            return { ok: true, payload: picked.content, meta: { fileName: picked.fileName } };
         } catch (e: any) {
             return { ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_UPLOAD_THREW" };
         }
     },
 };
 
-function pickFile(ctx: IOContext, U: any): Promise<string | null> {
+function pickFile(ctx: IOContext, U: any): Promise<{ content: string; fileName: string } | null> {
     return new Promise((resolve, reject) => {
         const input = document.createElement("input");
         input.type = "file";
@@ -45,15 +47,16 @@ function pickFile(ctx: IOContext, U: any): Promise<string | null> {
         input.addEventListener("change", async (e) => {
             settled = true;
             try {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                const fileName = file?.name ?? "";
                 if (U?.readFileUploadEvent) {
                     const data = await U.readFileUploadEvent(e);
                     cleanup();
-                    resolve(data);
+                    resolve({ content: data, fileName });
                 } else {
-                    const file = (e.target as HTMLInputElement).files?.[0];
                     if (!file) { cleanup(); resolve(null); return; }
                     const reader = new FileReader();
-                    reader.onload = () => { cleanup(); resolve(reader.result as string); };
+                    reader.onload = () => { cleanup(); resolve({ content: reader.result as string, fileName }); };
                     reader.onerror = () => { cleanup(); reject(reader.error); };
                     reader.readAsText(file);
                 }

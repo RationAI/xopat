@@ -130,6 +130,8 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _outbox: QueueEntry[] = [];
     private _running = false;
     private _stalled = false;
+    /** `flush()` callers to release if the queue starts holding mid-drain. */
+    private _holdWaiters: Array<(r: IOResult) => void> = [];
     /** Auto-incrementing fallback identity when def.identityOf is missing. */
     private _syntheticIdSeq = 0;
     // Phase 10 persistence state.
@@ -328,6 +330,9 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             resourceName: this.name,
             itemId: persisted.itemId,
             key: "",
+            // Boot replay is the pipeline's own bookkeeping: the user did
+            // nothing just now, so a refusal is an event, not a dialog.
+            trigger: "system",
             // `identity` is persisted, so a replayed op keeps the same localId the
             // sink correlated on before the reload even if `meta` did not survive.
             meta: { ...meta, clientOpId: persisted.clientOpId, fromReplay: true,
@@ -397,7 +402,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                         : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, entry.ctx) : entry.rawPayload),
                     createdAt: Date.now(),
                     attemptCount: 0,
-                    rollbackOnAsyncRefuse: !!entry.options.rollbackOnAsyncRefuse,
+                    rollbackOnAsyncRefuse: wantsRollback(entry.options),
                     metaJson: this._safeStringify(entry.ctx.meta),
                     deploymentKey: deploymentKey(),
                 };
@@ -521,7 +526,15 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         ctx: IOContext,
         options: IOResourceMutateOptions,
     ): IOResult {
-        const v = this.def.validate?.(itemOrPatch as T, ctx);
+        // `validate` is owner code. A throw used to escape `create/update/delete`
+        // synchronously, into a caller that only ever expected a result.
+        let v: IOResult | undefined;
+        try {
+            v = this.def.validate?.(itemOrPatch as T, ctx);
+        } catch (e: any) {
+            console.error(`[IO] resource "${this.name}" ${direction}: validate() threw; nothing was sent.`, e);
+            v = { ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_VALIDATE_THREW" };
+        }
         if (v && !v.ok) {
             // Surface it, exactly as a guard refusal is surfaced (IO_PIPELINE.md,
             // "Refusal surfacing"). This used to return silently: the caller got
@@ -666,6 +679,13 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         if (prev.direction === "create" && newEntry.direction === "update" && this.def.merge) {
             try {
                 prev.rawPayload = this.def.merge(prev.rawPayload, newEntry.rawPayload);
+                // A replayed create dispatches `replayPayload`, not `rawPayload`
+                // — without this the merged update never reached the wire.
+                if (prev.replayPayload !== undefined) {
+                    prev.replayPayload = this.def.serialize
+                        ? this.def.serialize(prev.rawPayload as T, prev.ctx)
+                        : prev.rawPayload;
+                }
                 // Phase 10: rewrite the persisted entry's payload.
                 if (this.def.persistOutbox) {
                     void this._whenStoreReady().then(store => {
@@ -727,7 +747,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             // unchanged (no capacity pre-flight) and cross-identity ordering
             // is preserved, unlike a splice + tail push.
             this._outbox[verdict.index] = entry;
-            if (this.def.persistOutbox && !entry.isReplay) {
+            if (this._shouldPersist(entry)) {
                 entry.persistedPromise = this._persistEntry(entry);
             }
             if (!this._running) {
@@ -763,7 +783,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         this._outbox.push(entry);
 
         // Fire IDB persist in parallel (worker awaits it before dispatching).
-        if (this.def.persistOutbox && !entry.isReplay) {
+        if (this._shouldPersist(entry)) {
             entry.persistedPromise = this._persistEntry(entry);
         }
 
@@ -784,6 +804,34 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _bindingsPending(): boolean {
         const p = (this.pipeline as any).bindingsPending;
         return typeof p === "function" && p.call(this.pipeline, this.ownerUid, this.capabilityId) === true;
+    }
+
+    /**
+     * Should this entry get a crash-recovery record?
+     *
+     * Not when nothing is bound: the worker answers `{ok: true}` without
+     * dispatching and removes the record again, so every operation paid a
+     * `serialize` + IndexedDB write + delete for nothing. A PENDING binding is
+     * the opposite case — the entry is held, and that is exactly what must
+     * survive a reload.
+     */
+    private _shouldPersist(entry: QueueEntry): boolean {
+        if (!this.def.persistOutbox || entry.isReplay) return false;
+        return this.pipeline.isEnabled(this.ownerUid, this.capabilityId) || this._bindingsPending();
+    }
+
+    /** The answer for a queue that cannot move right now — see {@link flush}. */
+    private _heldResult(): IOResult {
+        const pending = this._bindingsPending();
+        return {
+            ok: false, refused: true,
+            code: pending ? "W_IO_SINK_NOT_READY" : "W_IO_OFFLINE",
+            reason: pending
+                ? `${this.name}: the configured destination has not registered yet`
+                : `${this.name}: offline`,
+            userMessage: $.t(pending ? "error.ioSinkNotReady" : "error.ioOffline",
+                { count: this._outbox.length }),
+        };
     }
 
     /** Worker: drain the outbox FIFO. Pauses when `_offline` is true or a bound sink is missing. */
@@ -810,6 +858,12 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                             ownerUid: this.ownerUid, resourceName: this.name,
                             pending: this._outbox.length,
                         });
+                    }
+                    // Release anyone awaiting `flush()`: the hold may have begun
+                    // after they checked, and these entries may never settle.
+                    if (this._holdWaiters.length) {
+                        const held = this._heldResult();
+                        for (const wake of this._holdWaiters.splice(0)) wake(held);
                     }
                     break;
                 }
@@ -1138,18 +1192,20 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
      */
     flush(): Promise<IOResult[]> {
         if (this._outbox.length && (this._offline || this._bindingsPending())) {
-            const pending = this._bindingsPending();
-            return Promise.resolve([{
-                ok: false, refused: true,
-                code: pending ? "W_IO_SINK_NOT_READY" : "W_IO_OFFLINE",
-                reason: pending
-                    ? `${this.name}: the configured destination has not registered yet`
-                    : `${this.name}: offline`,
-                userMessage: $.t(pending ? "error.ioSinkNotReady" : "error.ioOffline",
-                    { count: this._outbox.length }),
-            }]);
+            return Promise.resolve([this._heldResult()]);
         }
-        return Promise.all(this._outbox.map(e => e.settled));
+        if (!this._outbox.length) return Promise.resolve([]);
+        // The check above is a snapshot. If the queue starts holding while we
+        // wait (connection drops mid-drain), the worker wakes us with the same
+        // honest answer instead of leaving the caller on entries that are parked.
+        let wake!: (r: IOResult) => void;
+        const held = new Promise<IOResult[]>((resolve) => { wake = (r) => resolve([r]); });
+        this._holdWaiters.push(wake);
+        const drained = Promise.all(this._outbox.map(e => e.settled));
+        return Promise.race([drained, held]).finally(() => {
+            const i = this._holdWaiters.indexOf(wake);
+            if (i >= 0) this._holdWaiters.splice(i, 1);
+        });
     }
 
     drop(): void {

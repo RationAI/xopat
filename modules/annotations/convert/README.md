@@ -1,20 +1,53 @@
-# Convertors
-In order to flexibly support many annotation formats, you can implement your own format support by using
-`OSDAnnotations.Convertor.register([name], [object|class])`. The class provided must implement `encodePartial` and `encodeFinalize` 
-(outputting your format from internal representation) or `decode` (vice versa). These functions receive
-a list of active objects and a list of presets.
+# Annotation formats
+Annotation formats are entries of the core format registry, `IO_PIPELINE.formats`, under the domain
+`"annotations"` (see [`src/IO_PIPELINE.md` → Formats](../../../src/IO_PIPELINE.md#formats)). A format converts
+between the **native model** `{ objects, presets }` (described below) and a string or bytes:
 
-``encodePartial`` should convert data to an object structure compatible with the target output, but without
-serialization. E.g., with XML output, we would return a DOM root node.
-It gives a third party the power to work with each object and preset individually. 
-Note that partial output must not necessarily be a valid output of the given format.
-If options.serialize==false, provide a list of objects before serialization. Else,
-provide a list of serialized objects - strings.
+```js
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "my-format",
+    title: "My Format",
+    extensions: [".awesome"],
+    contentType: "application/json",
+    // What the model handed to encode() must contain. All default to true:
+    //   allProps  every property of each object, or only its factory's necessary ones
+    //   props     extra property names to keep when allProps is false
+    //   objects / presets   whether the format can carry them at all
+    traits: { allProps: false },
+    encode(model, fctx) { return myStringify(model.objects, model.presets); },
+    decode(data, fctx)  { return { objects: [...], presets: [...] }; },
+    sniff(data, hint)   { return hint.json?.myMarker ? 0.9 : 0; },   // optional, 0..1
+});
+```
 
-     return {
-         objects: [serialized or unserialized list - depends on options.serialize, possibly undefined],
-         presets: [serialized or unserialized list - depends on options.serialize, possibly undefined]
-     };
+It can be registered from anywhere — this module, a plugin, a module loaded before or after this one — and it
+immediately shows up in the import/export dialog and can be required by an IO sink or pinned on a binding.
+
+`fctx.options` are the export options (the module's `convertors` arguments, the user's values for the format's
+own declared `options`, and `exportsObjects` / `exportsPresets` saying what was asked for); `fctx.context` is the
+viewer's canvas wrapper (absent for a conversion with no viewer behind it — use `OSDAnnotations.instance()` for
+factories then); `fctx.io` is the IO dispatch when the pipeline is the caller.
+
+#### Converting directly
+
+```js
+const text = await fabricWrapper.export({ format: "geo-json" });            // the canvas, encoded
+await fabricWrapper.import(data, { format: "auto", filename: file.name });  // detect and load
+const model = fabricWrapper.toModel({ format: "geo-json", scopeSelected: true });   // un-encoded
+const text2 = await IO_PIPELINE.formats.encode("annotations", "geo-json", model, { context: fabricWrapper });
+const feature = IO_PIPELINE.formats.encodeItem("annotations", "geo-json", oneNativeObject);
+```
+
+#### The previous API (deprecated)
+
+`OSDAnnotations.Convertor.register(id, class extends OSDAnnotations.Convertor.IConvertor {…})` — a class with
+`encodePartial` + a static `encodeFinalize` and/or `decode` — still works: the class is adapted into a registry
+format. The static helpers (`encodePartial`, `encodeFinalize`, `decode`, `get`, `formats`, `getSuffix`) and
+`fabricWrapper.exportPartial` / `exportFinalize` delegate to the registry. Two differences to be aware of: for a
+format that is *not* a legacy class, the "partial" output is the native model rather than a per-format
+intermediate, and option values are per call (set through `module.setFormatOption(format, name, value)`) rather
+than static properties of the class.
 
 
 ### Supported formats
@@ -23,20 +56,27 @@ The default format is the native format. Build-in (lossy) convertors include
 
 Format IDs are exact — no aliasing is performed. Built-in IDs:
 
-| ID | Convertor |
-|----|-----------|
+| ID | Format |
+|----|--------|
 | `native` | xOpat native (lossless) |
 | `asap-xml` | ASAP XML |
 | `geo-json` | GeoJSON |
 | `qupath` | QuPath GeoJSON |
-| `dicom` | DICOM SR, contributed by `plugins/dicom` when loaded |
+| `dicom` | DICOM SR (binary), contributed by `plugins/dicom` when loaded |
+| `empaia` | EMPAIA Workbench annotations, contributed by `modules/empaia-workbench` when loaded |
 
-`auto` is a UI-only sentinel meaning "detect from the imported filename"; it is
-not a registered convertor and cannot be used for export.
+`auto` means "detect from the file name and the content" and is valid for import only.
 
 #### Where the default comes from
 
-The effective export/import format is resolved with this precedence (highest first):
+There are two formats, and they are deliberately separate:
+
+- the format of the **user's own file import/export**, shown in the annotations dialog; and
+- the format the **module uses for IO** — the bundle an unpinned IO sink (the session `post-data` export, a
+  repository) receives. A pick made in the dialog does not change it; configuration (2–4 below) does. A sink that
+  needs a specific format, or a binding that pins one, overrides it for that destination only.
+
+The dialog's format is resolved with this precedence (highest first):
 
 1. the format explicitly picked in the annotations UI — stored as a **per-browser
    preference** under the plugin cache key `ioFormat`;
@@ -53,11 +93,6 @@ browser where a user once picked a format by hand. That preference is only writt
 explicit pick — never on plugin init — so clearing the `ioFormat` cache entry restores the
 configured default.
 
-To register a new converter, register the converter class after its definition with:
-
-> ``OSDAnnotations.Convertor.register(name, convertorClass)``
-
-Or possibly add the record manually to ``OSDAnnotations.ConvertorCONVERTERS`` map.
 
 ### Generic polygon / multipolygon representation
 

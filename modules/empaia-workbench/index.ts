@@ -327,7 +327,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         });
 
         this._watchTabVisibility();
-        setAnnotationMappingContextProvider(() => this._mappingContext());
+        // Answered per dispatch: the slide a conversion is about, not the focused one.
+        setAnnotationMappingContextProvider((io) => this._mappingContextFor(io));
 
         this._readyPromise = this._boot().catch((e: any) => {
             this._failure = e?.message ?? String(e);
@@ -2896,7 +2897,11 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     private _configureAnnotationsModule(): void {
         const annotations = this.getAnnotations();
         if (!annotations) return;
-        annotations.setIOOption("format", "empaia");
+        // No `setIOOption("format", "empaia")` any more: the annotations sink
+        // declares the format it takes (`formats` in sink.ts) and the pipeline
+        // asks for it per destination. Flipping the module-wide format also
+        // changed the user's own file export, and broke this sink the moment
+        // the user picked another format in that dialog.
         this._disposeProps = annotations.registerPersistedProperties
             ? annotations.registerPersistedProperties(...REQUIRED_EXPORT_PROPS)
             : (REQUIRED_EXPORT_PROPS.forEach(p => { annotations.forceExportsProp = p; }), undefined);

@@ -203,7 +203,11 @@ The module composes its sink options on every dispatch. Latest layer wins;
 Path / commit placeholders (resolved by `IO_PIPELINE.formatPath`, shared with
 every other sink): `{ownerId}` `{ownerUid}` `{xoType}` `{direction}`
 `{capabilityId}` `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
-`{resourceName}` `{itemId}` `{slideHash}` `{slideName}`. `{viewerId}` resolves
+`{resourceName}` `{itemId}` `{slideHash}` `{slideName}` `{ext}`. `{ext}` is the
+file extension of the format the binding is pinned to — `{"sink": "github",
+"format": "geo-json", "config": {"pathTemplate": "cases/{slideHash}.{ext}"}}`
+stores GeoJSON as `.geojson`-style files — and `json` when no format is pinned
+(see `src/IO_PIPELINE.md` → *Formats*). `{viewerId}` resolves
 to `_global` for global-scope bundles, `{backgroundId}` to `_any` when the owner
 is not slide-scoped. `{slideHash}` / `{slideName}` describe the slide
 itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of the slide's data

@@ -139,8 +139,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // deployment config is reported and downgraded once here instead of
         // throwing inside Convertor.get() on every bundle flush. A runtime
         // choice (setIOOption, itself validated) still wins.
+        // `ctx.format` is the pipeline's answer: the format the destination
+        // takes (or returned). Absent, nobody named one and the module's own
+        // format applies.
         const formatOf = (ctx) => {
-            if (ctx.meta && ctx.meta.format) return ctx.meta.format;
+            if (ctx.format?.id) return ctx.format.id;
             const fallback = this.defaultFormat;
             return this.getExportOptions()?.format || fallback;
         };
@@ -157,7 +160,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return undefined;
-                return fabric.export({ format: formatOf(ctx) }, true, true);
+                // The binding's `formatOptions` (already overlaid on the format's
+                // defaults) and the dispatch itself go to the format: a format
+                // that needs slide-scoped data resolves it from `io`.
+                return fabric.export({ ...ctx.format?.options, format: formatOf(ctx), io: ctx }, true, true);
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
@@ -189,18 +195,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 if (data === undefined || data === null) return;
                 try {
-                    // Payload-specific sinks (e.g. DICOM SR) wrap their content
-                    // as `{ format, meta, buffer }` so they can carry both the
-                    // wire-format hint and any decoder-side metadata (slide
-                    // pixel spacing, FrameOfReferenceUID, …). Unwrap here so
-                    // the convertor receives the raw payload + its meta.
-                    const isWrapped = typeof data === "object"
-                        && data !== null
-                        && typeof data.format === "string"
-                        && "buffer" in data;
-                    const importOptions = isWrapped
-                        ? { format: data.format, meta: data.meta }
-                        : { format: formatOf(ctx) };
+                    // The pipeline has already resolved what this payload is
+                    // (`ctx.format`: the sink's own tag, the binding, or
+                    // detection) and merged any decoder-side metadata the sink
+                    // returned (slide pixel spacing, FrameOfReferenceUID, …)
+                    // into `ctx.meta`.
+                    const importOptions = { format: formatOf(ctx), meta: ctx.meta, io: ctx };
                     // Slide-aware restores aren't user actions; skip history
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path
@@ -216,8 +216,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                         importOptions.history = false;
                         importOptions.presetMode = 'merge';
                     }
-                    const payload = isWrapped ? data.buffer : data;
-                    await fabric.import(payload, importOptions, true);
+                    await fabric.import(data, importOptions, true);
                 } catch (e) {
                     // Rethrow so the IO pipeline surfaces the failure to the
                     // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
@@ -679,21 +678,38 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this._ioArgs;
     }
 
-    async exportViewerData(viewer, key, viewerTargetID) {
-        const fabric = this.getFabric(viewer);
-        return fabric.export();
+    /**
+     * Set a value for one of a format's own options (those it declares in
+     * `IOFormat.options`). Held per format for this session and merged into
+     * every export/import that uses the format.
+     * @param {string} format registered format id
+     * @param {string} name option name
+     * @param {*} value
+     */
+    setFormatOption(format, name, value) {
+        if (!this._formatOptions) this._formatOptions = {};
+        (this._formatOptions[format] || (this._formatOptions[format] = {}))[name] = value;
     }
 
-    async importViewerData(viewer, key, viewerTargetID, data) {
-        if (data === undefined || data === null) return;
-
-        const fabric = this.getFabric(viewer);
-        const options = { inheritSession: true, history: false };
-        await fabric.import(data, options);
+    /**
+     * The values set through {@link setFormatOption} for one format.
+     * Declared defaults are applied by the registry, not here.
+     * @param {string?} format
+     * @return {object}
+     */
+    getFormatOptions(format) {
+        return (format && this._formatOptions?.[format]) || {};
     }
 
+    /**
+     * File extension (with the leading dot) the given format is written with.
+     * @param {string?} format default the module's format
+     * @return {string}
+     */
 	getFormatSuffix(format=undefined) {
-		return OSDAnnotations.Convertor.getSuffix(format);
+		const registered = IO_PIPELINE.formats.get(OSDAnnotations.Convertor.DOMAIN,
+			format || this._ioArgs.format || this.defaultFormat);
+		return registered?.extensions[0] || "";
 	}
 
 	/**

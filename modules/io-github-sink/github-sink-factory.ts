@@ -29,7 +29,9 @@ export type GithubSinkConfig = {
      *   {ownerId} {ownerUid} {xoType} {direction}
      *   {capabilityId} {capabilityGroup}
      *   {viewerId} {backgroundId} {key} {resourceName} {itemId}
-     *   {slideHash} {slideName}
+     *   {slideHash} {slideName} {ext}
+     * `{ext}` is the file extension of the format the binding is pinned to
+     * (`{sink, format}` in `ENV.client.io.bindings`), `json` otherwise.
      *
      * `{viewerId}` resolves to "_global" for a global-scope dispatch,
      * `{backgroundId}` to "_any" when the owner is not slide-scoped.
@@ -358,6 +360,12 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
                         } as IOBinaryPayload,
                     };
                 }
+                // A binding pinned to a binary format (`ctx.format`, e.g. DICOM)
+                // stored bytes; hand the same bytes back, not a UTF-8 reading
+                // of them.
+                if ((ctx as any).format?.binary) {
+                    return { ok: true, payload: base64ToBytes(raw) };
+                }
                 const payload = base64ToUtf8(raw);
                 return { ok: true, payload };
             } catch (e: any) {
@@ -377,9 +385,16 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
             // would produce `{"bytes":{"0":137,...}}` — a JSON dump of a typed
             // array, inflating a recording by an order of magnitude and being
             // unreadable on the way back.
-            const contentBase64 = isBinaryPayload(payload)
-                ? bytesToBase64(payload.bytes)
-                : utf8ToBase64(typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+            // Bare bytes are what a binary FORMAT encodes to (see `ctx.format`).
+            const rawBytes = payload instanceof ArrayBuffer ? payload
+                : ArrayBuffer.isView(payload)
+                    ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+                    : undefined;
+            const contentBase64 = rawBytes
+                ? bytesToBase64(rawBytes)
+                : isBinaryPayload(payload)
+                    ? bytesToBase64(payload.bytes)
+                    : utf8ToBase64(typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
             // Cheap upper-bound check before incurring a round-trip.
             if (contentBase64.length > MAX_BUNDLE_BYTES * 1.4) {
                 return fail(

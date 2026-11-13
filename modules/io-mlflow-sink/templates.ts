@@ -269,9 +269,20 @@ const bundleArtifact: MlflowMapper = (ctx, item, o) => {
     // them as-is — JSON-stringifying a typed array here would produce
     // `{"0":137,"1":80,…}` and inflate a recording by an order of magnitude.
     const binary = asBinaryPayload(item);
-    const bytes = binary ? toUint8(binary.bytes) : (typeof item === "string" ? item : JSON.stringify(item ?? null));
-    const ext = binary ? (binary.fileExt ?? "bin") : "json";
-    const contentType = binary ? (binary.contentType ?? "application/octet-stream") : "application/json";
+    // The format the binding is pinned to, when it is (`{sink, format}`). It
+    // names the artifact on the way out AND on the way back — the read path
+    // maps an empty item, so anything derived from the payload alone would
+    // look for a different file than the one that was written.
+    const format = (ctx as any).format as IOFormatDescriptor | undefined;
+    // Bare bytes are what a binary format encodes to.
+    const rawBytes = item instanceof ArrayBuffer || ArrayBuffer.isView(item)
+        ? toUint8(item as Uint8Array | ArrayBuffer) : undefined;
+    const bytes = rawBytes
+        ?? (binary ? toUint8(binary.bytes) : (typeof item === "string" ? item : JSON.stringify(item ?? null)));
+    const ext = binary ? (binary.fileExt ?? "bin") : (format?.fileExt || "json");
+    const contentType = binary
+        ? (binary.contentType ?? "application/octet-stream")
+        : (format?.contentType ?? "application/json");
     const size = typeof bytes === "string" ? bytes.length : bytes.byteLength;
     // The default layout is one run per viewer; in a shared run, every viewer's
     // bundle under the same slot would overwrite the last one's artifact.

@@ -464,9 +464,10 @@ export const globalPluginWindowMethods = {
      *   pin it forever and make deployment config unchangeable.
      */
     setFormat(format, persist = false) {
+        // Deliberately NOT forwarded to the module (`setIOOption('format')`):
+        // that is the format bound IO sinks receive, and a pick made for one
+        // file download used to silently change what every sink stored.
         this.exportOptions.format = format;
-        // 'auto' is an import-time UI sentinel, not something the module can export with.
-        if (format !== 'auto') this.context.setIOOption('format', format);
         if (persist) this.cache.set('ioFormat', format);
     },
 

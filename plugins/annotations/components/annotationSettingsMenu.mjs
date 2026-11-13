@@ -136,10 +136,20 @@ function renderConvertorOption(opt) {
     }
 }
 
-function renderConvertorOptions(convertor) {
-    return Object.values(convertor.options || {})
-        .filter(opt => opt && !String(opt.type || "").startsWith("_"))
-        .map(renderConvertorOption);
+/**
+ * Controls for a format's own options. Values are held by the annotations
+ * module per format (`setFormatOption`) and merged into each export/import —
+ * the control shows the current value, not just the declared default.
+ */
+function renderConvertorOptions(convertor, format, module) {
+    const current = module.getFormatOptions(format);
+    return Object.entries(convertor.options || {})
+        .filter(([, opt]) => opt && !String(opt.type || "").startsWith("_"))
+        .map(([name, opt]) => renderConvertorOption(name.startsWith("_") ? opt : {
+            ...opt,
+            default: current[name] ?? opt.default,
+            changed: (value) => module.setFormatOption(format, name, value),
+        }));
 }
 
 // ----- Multi-viewer helpers -----
@@ -210,9 +220,16 @@ export const createAnnotationSettingsMenu = (plugin) => {
     // user typically opens this panel to do one of import/export, not both.
     const ioMode = van.state('export');
 
+    // Bumped whenever a format (un)registers, so the picker is never a snapshot.
+    const formatsTick = van.state(0);
+    const _onFormatsChanged = (e) => { if (e?.domain === 'annotations') formatsTick.val++; };
+    IO_PIPELINE.addHandler('io:format-registered', _onFormatsChanged);
+    IO_PIPELINE.addHandler('io:format-unregistered', _onFormatsChanged);
+
     // Derived state for the current convertor. Returns null in 'auto' mode
     // (no concrete convertor selected).
     const getConvertor = () => {
+        formatsTick.val; // eslint-disable-line no-unused-expressions
         if (selectedFormat.val === 'auto') return null;
         try { return OSDAnnotations.Convertor.get(selectedFormat.val); }
         catch (_e) { return null; }
@@ -409,8 +426,9 @@ export const createAnnotationSettingsMenu = (plugin) => {
                 }, plugin.t(`annotations.export.modeTabs.${m}`)))
             ),
 
-            // Format dropdown — shared by import and export.
-            fieldRow(plugin.t('annotations.export.formatLabel'),
+            // Format dropdown — shared by import and export. Re-rendered when a
+            // format registers: plugins add theirs whenever they happen to load.
+            () => (formatsTick.val, fieldRow(plugin.t('annotations.export.formatLabel'),
                 select({
                         class: "select select-bordered select-xs flex-1 min-w-0",
                         onchange: (e) => {
@@ -434,14 +452,14 @@ export const createAnnotationSettingsMenu = (plugin) => {
                         }, format);
                     })
                 )
-            ),
+            )),
 
             // Format-specific options (only when a concrete format is selected
             // and the convertor exposes any).
             () => {
                 const convertor = getConvertor();
                 if (!convertor) return div({ class: "hidden" });
-                const opts = renderConvertorOptions(convertor);
+                const opts = renderConvertorOptions(convertor, selectedFormat.val, plugin.context);
                 if (!opts.length) return div({ class: "hidden" });
                 return div({ class: "bg-base-200/60 p-2 mt-1 rounded text-xs space-y-2" }, ...opts);
             },
