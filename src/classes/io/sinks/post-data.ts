@@ -7,11 +7,14 @@
 //   xoType "plugin": POST_DATA["plugin"][ownerId][key] = serialized
 //   xoType "core":   POST_DATA[ownerId][key]           = serialized
 // A bundle-export with empty `key` and no `viewerId` lands at `[""]`;
-// a viewer-scoped export uses `"::<viewerId>"` as the inner key.
+// a viewer-scoped export uses `"<ctx.key>::<viewerId>"` as the inner key
+// (`ctx.key` itself already starts with the viewer id for viewer scopes).
 //
 // Round-trip: a POST input named `module[annotations]` parses back into
 // `POST_DATA.module.annotations`, so `readBundle` finds the payload at
 // the same path `writeBundle` produced.
+
+import { isBinaryPayload } from "./sink-utils";
 
 export interface PostDataSinkOptions {
     POST_DATA: Record<string, any>;
@@ -65,7 +68,10 @@ export function makePostDataSink(opts: PostDataSinkOptions): IOSink {
 
 function serialize(value: unknown): unknown {
     if (typeof value === "string") return value;
-    if (value instanceof ArrayBuffer || value instanceof Blob) return value;
+    if (value instanceof ArrayBuffer || value instanceof Blob || ArrayBuffer.isView(value)) return value;
+    // Kept as the envelope: `JSON.stringify` of a typed array is an index map
+    // (`{"0":137,...}`), which no reader can turn back into the bytes.
+    if (isBinaryPayload(value)) return value;
     try { return JSON.stringify(value); }
     catch { return String(value); }
 }

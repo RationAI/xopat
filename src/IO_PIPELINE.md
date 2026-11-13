@@ -111,7 +111,7 @@ await this.initIO({
 
 1. registers your bundle hooks with the pipeline
 2. adds any extra capabilities you pass via `options.capabilities`
-3. immediately calls `IO_PIPELINE.tryRestoreImport({ ownerUid })` so any preexisting global payload is rehydrated. Per-viewer rehydration happens automatically via `forceDataImportInitialization` whenever a viewer opens.
+3. immediately calls `IO_PIPELINE.tryRestoreImport({ ownerUid })` so any preexisting global payload is rehydrated. Per-viewer rehydration is dispatched once at boot by `forceDataImportInitialization`; after that, only slide-aware owners are restored automatically (on every slide open). An owner with plain `per-viewer` scope that must hydrate a viewer added later calls `tryRestoreImport({ ownerUid, viewerId })` from its own viewer-create handler.
 
 #### `bundleScope` values
 
@@ -152,8 +152,10 @@ this.annotationResource = this.defineResource({
     : { ok: false, refused: true,
         reason: "missing factoryID",
         userMessage: "Cannot save annotation: unknown shape." },
-  serialize: (item, ctx) => Convertor.encodeOne(item, ctx.meta.format ?? "native"),
-  deserialize: (raw, ctx) => Convertor.decodeOne(raw, ctx.meta.format ?? "native"),
+  // A plain, structured-clone-safe snapshot of the item. To hand a sink another
+  // model, the sink converts with `IO_PIPELINE.formats.encodeItem(...)` — see "Formats".
+  serialize: (item) => this.serializeAnnotation(item),
+  deserialize: (raw) => raw,
 });
 
 // Later, when the user creates an annotation:
@@ -163,7 +165,7 @@ const result = await this.annotationResource.create(item, {
 if (!result.ok) return;             // guards refused or apply threw — toast already shown
 ```
 
-Resources stay inert at the *sink* layer until an admin binds `crud:<name>` to a sink: `create/read/update/delete` skip serialization and dispatch when nothing is bound. Validation and **guards** still run, so external veto handlers work even when there is no remote backend.
+Resources stay inert at the *sink* layer until an admin binds `crud:<name>` to a sink: `create/read/update/delete` skip dispatch — and, for `persistOutbox` resources, the crash-recovery write — when nothing is bound. Validation and **guards** still run, so external veto handlers work even when there is no remote backend.
 
 ### Operation ordering & coalescing (per-resource outbox)
 
@@ -386,6 +388,14 @@ So a bundle capability bound only to a disabled sink lands on the built-in `sess
 
 The cascade stops on purpose. Resuming it would resolve the capability to a binding the *disabled* rule had overridden — switching off the operator's `crud:*` sink used to bring the owner's own `include.json` default back to life, so a `sessionControllable` session toggle **redirected** the data instead of stopping it. An off switch unplugs one destination; it never picks a different one. Switching a sink back on invalidates the binding cache and re-emits `io:sink-registered`, so resources holding writes move again; the toggle itself also emits `io:sink-enabled` / `io:sink-disabled` for UI that wants to say so.
 
+**Per-sink session settings.** An `ioSinks` entry may also be an object: `enabled` (same rule as the boolean form) plus settings meant for that sink, e.g. where the session wants its data to go.
+
+```jsonc
+"params": { "ioSinks": { "mlflow": { "enabled": true, "target": { "experiment": "cohort-A" } } } }
+```
+
+The sink reads them with `IO_PIPELINE.sessionSinkConfig("mlflow")`, which returns the object without `enabled`, as a fresh plain-JSON copy, and **only** for a `sessionControllable` sink. Core never interprets the keys. They are session input: the sink validates every field and keeps its own limits (allowlists, prefixes) in trusted config, so a setting can narrow where data goes but never widen it. This is the channel for session-chosen sink options; do not declare a sink-specific `setup` key in core for it.
+
 Prefer this over deleting a `bindings` entry for anything that is a *runtime* decision — the binding stays declared, so switching back on needs no redeploy.
 
 **What lives where**:
@@ -397,6 +407,7 @@ Prefer this over deleting a `bindings` entry for anything that is a *runtime* de
 | Cross-peer dedup of any leak through (e.g. misconfigured sink) | `clientOpId` (Phase 8) — server dedups across retries from the same peer. For cross-peer dedup, the future session DELTA should carry the originating peer's `clientOpId` so all peers reuse it; the server sees ONE id. |
 | Blanket admin override during sessions | `ENV.client.io.disabledCapabilities`. |
 | Is one destination plugged in for this session | `ENV.client.io.sinks.<id>` + `params.ioSinks` / `IO_PIPELINE.setSinkEnabled`. |
+| Session-chosen options for one sink | `params.ioSinks.<id>` object form → `IO_PIPELINE.sessionSinkConfig(id)`; bounded by the sink's own ENV limits. |
 | Multi-master conflict resolution (CRDT/OT) | Out of scope for the IO pipeline. Lives in the session sync layer.|
 
 ### Sync core, queued dispatch
@@ -870,8 +881,10 @@ The shape of `client.<key>.io`:
 2. `ENV.client.io.bindings[owner][capability]` defined → that exact list.
 2.5. a **runtime binding claim** for that pair → the claimed list (see below).
 3. include.json `io.defaultBindings[capability]` defined → that list.
-4. capability `kind === "bundle"` → fallback to `["post-data"]` (legacy session export).
-5. capability `kind === "crud"` → `[]` (inert).
+4. (`kv` only) inherit `bindings.core[capability]`.
+5. built-in fallback: a slide-aware bundle (`bundleScope` `per-viewer-background` / `all`) → `["session-memory", "post-data"]`; any other bundle → `["post-data"]` (legacy session export); `kv` → the namespace default; `crud` → `[]` (inert).
+
+A sink that is registered but switched off is filtered out of its list. If that empties the list, resolution does **not** fall through to a lower rule: a bundle lands on the built-in local sinks, anything else resolves to nothing.
 
 Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`) to introspect.
 
@@ -983,20 +996,99 @@ Two rules that bite:
   matching `[A-Za-z0-9._-]`, never `.`/`..`, never empty, ≤128 chars. The
   *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
   other non-addressing text) only strips control characters.
+- **Address a slide by `{slideHash}`, not `{backgroundId}`.** `backgroundId` is
+  the session's id for a background (an explicit `id` replaces it); `{slideHash}`
+  is 16 hex of the slide's data entry (`UTILITIES.slideIdentityFor`), stable
+  across sessions and silent about the path. `{slideName}` (the file name) is for
+  labels only: it collides across folders and may carry a case number.
 
 Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legacy: io/"`).
 
 ---
+
+## Formats
+
+A **format** converts between a domain's model (the plain in-memory shape its owner works with) and a wire representation — a string or bytes. Formats live in one core registry, `IO_PIPELINE.formats`, keyed by `(domain, id)` where the domain is the owner id of the data (`"annotations"`).
+
+Two things follow from the registry being core rather than owned by a module:
+
+- **Anyone can add a format for data they do not own.** `plugins/dicom` registers `"dicom"` for annotations, `modules/empaia-workbench` registers `"empaia"`, without importing the annotations module or waiting for it to load.
+- **Conversion is usable on its own.** The pipeline is one caller; an owner's "download as…" button, or an event handler converting a single object, is another.
+
+### Registering a format
+
+```ts
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "geo-json",
+    title: () => $.t("annotations.formats.geoJson"),   // resolved when shown
+    extensions: [".xo.geo.json", ".geojson"],           // first one is written
+    contentType: "application/geo+json",
+    lossy: "Text annotations are not preserved.",       // optional; shown to the user
+    options: { precision: { type: "numberInput", default: 3 } },   // values arrive per call
+    traits: { allProps: false },                        // domain-defined hints for whoever builds the model
+
+    encode(model, fctx) { return JSON.stringify(...); },     // string | bytes | undefined ("nothing to say here")
+    decode(data, fctx)  { return { objects: [...], presets: [...] }; },
+    encodeItem(item, fctx) { return ...; },             // optional: one item <-> its wire shape
+    decodeItem(raw, fctx)  { return ...; },
+    sniff(data, hint)   { return hint.json?.type === "FeatureCollection" ? 0.6 : 0; },   // 0..1
+});
+```
+
+Every method is optional — a format may be import-only, export-only, or item-level only. `fctx` carries `options` (declared defaults overlaid with the caller's values — never stored on the format), `io` (the dispatch being served, when the pipeline or a sink is the caller: a format that needs slide-scoped data resolves it from `io.viewerId` / `io.backgroundId`), `context` (whatever the owner hands its formats) and `fileName`.
+
+`register` returns a disposer and raises `io:format-registered` (`io:format-unregistered` on disposal), so a format picker never has to be a snapshot.
+
+### Converting directly
+
+```ts
+const f = IO_PIPELINE.formats;
+const text  = await f.encode("annotations", "geo-json", model, { options: { precision: 1 } });
+const { model, format } = await f.decode("annotations", "auto", data, { fileName: file.name });
+const wire  = f.encodeItem("annotations", "empaia", annotation, { io: ctx });
+f.list("annotations");                       // every registered format
+f.detect("annotations", data, { fileName }); // id, or undefined — never a guess
+```
+
+`"auto"` runs `detect`: a file-name extension is evidence (longest match wins, so `.geo.json` is not claimed by a `.json` format), a `sniff` is a look at the content, and content overrules a name that lied. A format with no `sniff` is only tried when nothing else recognised the data.
+
+### Formats and sinks
+
+A flush used to run `exportBundle` once and hand every bound sink the same payload, in whatever format one owner-global setting named. A sink that needed a specific format therefore either ignored the payload and re-encoded from live state, or flipped that global for everybody. Now the pipeline matches formats to destinations:
+
+- A **sink** states what it takes: `formats: { annotations: ["dicom"] }` (domain → ids in preference order; `"*"` for any domain). A sink that stores bytes verbatim declares nothing.
+- A **binding** may pin one: `{ "sink": "github", "format": "geo-json", "formatOptions": { … } }`. It may pick *among* a sink's formats, never outside them — that is an `io:invalid-binding`.
+- On **export** the pipeline resolves the format per sink (binding → first registered format the sink takes → none) and calls `exportBundle` **once per distinct format**, with `ctx.format = { id, contentType, fileExt, binary, options }`. `ctx.format` absent means "your own default". The same `ctx.format` reaches the sink, which uses it to name and type what it stores; `{ext}` in a path template resolves to its extension. A sink whose required formats are all unregistered is declined rather than fed the owner's default.
+- On **restore** the format is, in order: what the sink says it returned (`{ ok: true, payload, format, meta }`), the format known before the read (binding / sink declaration), then `formats.detect`. It reaches `importBundle` as `ctx.format`, and the sink's `meta` is merged into `ctx.meta`. Unknown stays unknown and the owner applies its default.
+- The **local route** (the `file-download` fallback, a user-picked file handed to `IO_PIPELINE.importBundle(raw, { viewerId, fileName, format })`) uses the owner's default on the way out and detection on the way in.
+
+An owner needs no declaration to take part: its domain is its owner id, and with no formats registered for it everything behaves as before.
+
+```json
+"bindings": {
+  "annotations": {
+    "bundle-export": [
+      "dicom-sr-annotations",
+      { "sink": "github", "format": "geo-json", "config": { "pathTemplate": "cases/{slideHash}.{ext}" } }
+    ]
+  }
+}
+```
+
+One flush, two exports: DICOM SR for the archive, GeoJSON for the repository. What the user picks in the annotations download dialog affects neither.
+
+Per-item CRUD is not converted by the pipeline: a sink that speaks another model calls `formats.encodeItem(...)` itself, because an update usually needs the native patch as well (which fields changed) and not only its wire form.
 
 ## Built-in sinks
 
 | id | Supports | Purpose |
 |----|----------|---------|
 | `post-data` | `bundle` | Writes into the global `POST_DATA` dict. Preserves the legacy HTML-form session export emitted by `serializeApp()`. Default fallback for unbound bundle capabilities. |
-| `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`. |
-| `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
-| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW` and 5xx only). Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
-| `session-memory` | `bundle` | In-memory, keyed by `ctx.key`. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
+| `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload, named and typed after `ctx.format` when the dispatch has one. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`; an `IOBinaryPayload` is written as its bytes. |
+| `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents with the file name (`meta.fileName`) so the format can be detected. Used as the readable side of session restore from disk. |
+| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW`, `W_IO_HTTP_NETWORK` and 5xx only — the sink reports an unanswered request as `W_IO_HTTP_NETWORK` and a 5xx as its bare status). Bundles are addressed per bundle key (`/bundles/{ownerId}/{key}`) unless `bundlePath` says otherwise; string path templates take the `formatPath` placeholders. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `session-memory` | `bundle` | In-memory, keyed by `ctx.key`; remembers the format each payload was written in. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
 
 ## Module-provided sinks
 
@@ -1074,7 +1166,7 @@ A binding list can name several sinks. There are exactly two iteration policies,
 | **until-refusal** | CRUD dispatch | Sinks run in binding order until one refuses; that refusal is the result. A sink that *cannot perform the op* (`W_IO_UNSUPPORTED`) is a misrouted binding, not a verdict on the data, so it does not stop the others. |
 | **first-match** *(selection, not a pass)* | streamed `query` | One stream, one sink: the first gated sink implementing `query`. |
 
-Restore additionally applies **last non-empty payload wins** — every readable sink is read, and each non-empty payload is handed to `importBundle` in binding order.
+Restore additionally applies **last non-empty payload wins** — every readable sink is read, and `importBundle` is then called **once**, with the last non-empty payload in binding order. A slide-aware owner is called with `undefined` only when *every* sink was empty (so it can wipe); an empty sink never erases what another sink returned. Two restores of the same (owner, viewer, slide) slot that overlap share one hydration.
 
 - **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals. A throwing sink never short-circuits its siblings.
 - A refusal emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, …)` automatically. For CRUD the caller also gets it back via `.settled`, and the resource reverts the local commit by default (see [`rollbackOnAsyncRefuse`](#sync-core-queued-dispatch)).
@@ -1264,7 +1356,7 @@ One `console.warn` is emitted, listing exactly which drivers were substituted. T
 
 Rule 4 (inherit from `core`) propagates this to every plugin and module owner. This is operator policy and therefore lives in the server-only `ENV.client.io` block — deliberately *not* a `setup.*` flag, since `setup` is readable and overridable through `getOption` (session / POST_DATA / URL). The pre-existing `setup.bypassCache` / `bypassCookies` flags stay where they are: those are genuine user preferences about persistence.
 
-`setup.ioSinks` is the one IO key that *is* session-readable, and it is not a counter-example: it carries only the session's wish, while `ENV.client.io.sinks.<id>.sessionControllable` — server-only — decides whether that wish is read at all. The authority stays in ENV; what travels in the session is a boolean the operator already agreed to honour.
+`setup.ioSinks` is the one IO key that *is* session-readable, and it is not a counter-example: it carries only the session's wish, while `ENV.client.io.sinks.<id>.sessionControllable` — server-only — decides whether that wish is read at all. The authority stays in ENV; what travels in the session is a boolean — or settings for that one sink — the operator already agreed to honour, and the sink's own ENV limits still bound.
 
 ---
 

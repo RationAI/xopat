@@ -1,6 +1,10 @@
 {
   "$meta": {
-    "description": "EMPAIA wsi-service on localhost:<% WSI_PORT %> — the shipped default",
+    "description": "EMPAIA wsi-service on localhost — an external image server you run yourself",
+    "hint": "Needs a wsi-service you start yourself: docker compose -f docker/wsi-service/docker-compose.yml up -d (publishes 9002, so set WSI_PORT=9002 in env/.env)",
+    "env": {
+      "WSI_PORT": "Host port of wsi-service (docker/wsi-service/docker-compose.yml publishes 9002; a bare wsi-service listens on 8080)"
+    },
     "dimension": "data",
     "clientKey": "localhost",
     "defaults": { "WSI_PORT": "8080" }

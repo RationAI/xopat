@@ -4,7 +4,7 @@
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 # Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
 # Pinned to the patch release so a cached base cannot keep a vulnerable runtime; bump on each Node security release.
-FROM node:24.22.1 AS viewer-git
+FROM node:24.22.3 AS viewer-git
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -44,7 +44,7 @@ WORKDIR /app
 ###############################
 # Build stage only — nothing here ships except /app. Kept on the full node image
 # for its toolchain (git, compilers for any native fallback build).
-FROM node:24.22.1 AS viewer-standalone-build
+FROM node:24.22.3 AS viewer-standalone-build
 
 WORKDIR /app
 COPY . /app
@@ -85,7 +85,7 @@ RUN --mount=type=cache,target=/root/.npm \
 # Runtime on the slim variant of the same Node release (same Debian), without the
 # ~800 MB build toolchain of the full image. The only native addon (sharp) ships
 # its own libvips.
-FROM node:24.22.1-slim AS viewer-standalone
+FROM node:24.22.3-slim AS viewer-standalone
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en

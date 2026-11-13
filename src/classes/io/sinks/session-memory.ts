@@ -10,16 +10,19 @@
 // dispatches; for other scopes the key is whatever the pipeline already
 // passes (viewerId, or empty string).
 //
-// IMPORTANT: do NOT include `ctx.capabilityId` in the key. The pipeline sets
-// `ctx.capabilityId = "bundle-export"` on writes (via `runOneBundleExport`)
-// and hardcodes `"bundle-import"` on reads (via `runOneRestore`), so a
-// capability-suffixed key would map every write to a slot that the
-// symmetric read can never find — round-trip silently broken. The post-data
-// sink (`./post-data.ts`) is keyed the same way (no capabilityId) for the
-// same reason.
+// IMPORTANT: do NOT include `ctx.capabilityId` in the key. A write carries the
+// export capability's id and the symmetric read carries the import one, so a
+// capability-suffixed key would map every write to a slot the read can never
+// find — round-trip silently broken. The post-data sink (`./post-data.ts`) is
+// keyed the same way (no capabilityId) for the same reason.
+//
+// The format a payload was written in is remembered beside it and returned on
+// read: an untagged string decoded with whatever format happens to be current
+// at restore time is how a slide's annotations came back empty after the user
+// changed the export format in between.
 
 export function makeSessionMemorySink(): IOSink {
-    const slots = new Map<string, unknown>();
+    const slots = new Map<string, { payload: unknown; format?: string }>();
 
     function slotKey(ctx: IOContext): string {
         return `${ctx.ownerUid}::${ctx.key}`;
@@ -38,13 +41,15 @@ export function makeSessionMemorySink(): IOSink {
                 slots.delete(slotKey(ctx));
                 return { ok: true };
             }
-            slots.set(slotKey(ctx), payload);
+            slots.set(slotKey(ctx), { payload, format: ctx.format?.id });
             return { ok: true };
         },
 
         async readBundle(ctx) {
-            const payload = slots.get(slotKey(ctx));
-            return { ok: true, payload };
+            const slot = slots.get(slotKey(ctx));
+            return slot?.format
+                ? { ok: true, payload: slot.payload, format: slot.format }
+                : { ok: true, payload: slot?.payload };
         },
     };
 }

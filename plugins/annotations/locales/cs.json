@@ -1,0 +1,249 @@
+{
+  "meta": {
+    "name": "Anotace",
+    "description": "Plugin pro vytváření, správu a sdílení anotací."
+  },
+  "annotations": {
+    "quickDraw": {
+      "presetUnavailable": "Předvolba rychlého kreslení není v aktuální konfiguraci k dispozici.",
+      "shapeUnavailable": "Tvar rychlého kreslení není pro tento prohlížeč povolen.",
+      "noPreset": "Není k dispozici žádná předvolba anotace pro kreslení."
+    },
+    "display": {
+      "title": "Zobrazení",
+      "outlineOnly": "Pouze obrys",
+      "border": "Okraj",
+      "opacity": "Neprůhlednost",
+      "measurementLabels": "Zobrazit měření u všech anotací",
+      "measurementLabelsHint": "Nad každou anotací zobrazí její plochu nebo délku. Automaticky se skryje, pokud je viditelných více než {{count}} anotací."
+    },
+    "viewerMenu": {
+      "title": "Anotace",
+      "toggleVisibility": "Zobrazit nebo skrýt anotace",
+      "outlineOnly": "Pouze obrys",
+      "measurementLabels": "Zobrazit měření u všech",
+      "settings": "Nastavení zobrazení",
+      "moreOptions": "Další možnosti",
+      "border": "Okraj",
+      "opacity": "Neprůhlednost",
+      "editPresets": "Upravit",
+      "leftClickPreset": "Levé tlačítko myši kreslí touto třídou",
+      "rightClickPreset": "Pravé tlačítko myši kreslí touto třídou",
+      "unknownPreset": "Neznámá",
+      "noPresetsPrefix": "Nejsou k dispozici žádné předvolby tříd.",
+      "createPresetLink": "Vytvořte předvolbu pro anotování.",
+      "tabs": {
+        "classes": "Třídy",
+        "annotations": "Anotace",
+        "authors": "Autoři"
+      }
+    },
+    "contextMenu": {
+      "annotation": "Anotace",
+      "changePreset": "Změnit předvolbu",
+      "selectPresetLeft": "Vybrat předvolbu pro levé tlačítko",
+      "copy": "Kopírovat",
+      "cut": "Vyjmout",
+      "paste": "Vložit",
+      "delete": "Smazat",
+      "moveToLayer": "Přesunout do vrstvy",
+      "noLayer": "(bez vrstvy)",
+      "layerNamed": "Vrstva {{id}}",
+      "sendToBack": "Přesunout dozadu",
+      "group": "Seskupit",
+      "newCollapsedLayer": "(nová sbalená vrstva)",
+      "fromSelection": "Z výběru ({{count}})",
+      "sameShapeType": "Stejný typ tvaru",
+      "samePreset": "Stejná předvolba",
+      "sameAuthor": "Stejný autor",
+      "sameCategoryText": "Stejný text kategorie",
+      "actions": "Akce",
+      "modifyAnnotation": "Upravit anotaci"
+    },
+    "workspace": {
+      "label": "Pracovní oblast",
+      "outsideWarning": "Anotace lze kreslit pouze uvnitř aktivní pracovní oblasti.",
+      "lockedHint": "Pro anotování vyberte pracovní oblast."
+    },
+    "errors": {
+      "noPresetSelect": "Není vybrána žádná třída anotace. <a class='pointer' data-action='selectPreset'>Vyberte ji zde</a> a začněte anotovat.",
+      "autoCreateFail": "Automatickou anotaci se nepodařilo vytvořit. Ujistěte se, že <a class='pointer' data-action='highlightAutoOutline'>detekujete ve správné vrstvě</a> a vybíráte barevnou oblast. Pomoci může i úprava prahu.",
+      "autoOutlineInvisibleLayer": "<a class='pointer' data-action='highlightAutoOutline'>Zvolená vrstva</a> není viditelná: metoda automatického obrysu nebude fungovat.",
+      "metaCreateFail": "Nepodařilo se vytvořit pole metadat „{{name}}“.",
+      "metaDeleteFail": "Nepodařilo se smazat pole metadat.",
+      "presetRemoveFail": "Nepodařilo se odebrat třídu.",
+      "metaNameRequired": "Musíte zadat název nového pole."
+    },
+    "tutorial": {
+      "title": "Anotace",
+      "description": "Kreslete, ukládejte a sdílejte anotace na sklíčku.",
+      "openPanel": "Otevřete kartu <b>Anotace</b> na pravém okraji, kde najdete panel nástrojů, předvolby tříd a seznam anotací.",
+      "enable": "Zapněte nebo vypněte celou vrstvu anotací — tím se vypnou i klávesové zkratky pro kreslení, takže se můžete volně posouvat bez nechtěných tahů.",
+      "settings": "Otevřete nastavení zobrazení a upravte režim pouze obrysu, šířku okraje a neprůhlednost anotací.",
+      "canvas": "Kreslí se přímo na sklíčko: vyberte předvolbu třídy a tažením myši ohraničte oblast. Pravým kliknutím na anotaci ji můžete zkopírovat / přesunout / smazat. Klávesové zkratky najdete v panelu nástrojů pod <i>Další možnosti</i>."
+    },
+    "modeOptions": {
+      "brushRadius": "Poloměr štětce",
+      "brushRadiusHint": "Velikost štětce (změníte kolečkem myši)."
+    },
+    "toolbar": {
+      "title": "Anotace",
+      "undo": "Zpět",
+      "redo": "Znovu",
+      "history": "Historie",
+      "modeOptions": "Možnosti režimu",
+      "presetSwatch": "Třídy pro kreslení (levé / pravé tlačítko myši)",
+      "presetSwatchTitle": "Třídy pro kreslení",
+      "editPresets": "Upravit třídy…",
+      "noPresets": "Zatím žádné třídy",
+      "unnamedPreset": "Nepojmenovaná třída"
+    },
+    "export": {
+      "menuTitle": "Anotace",
+      "description": "Anotace lze nahrát na server nebo stáhnout jako lokální soubory. U souborů lze importovat nebo exportovat zvolený formát.",
+      "ioSection": "Soubory anotací",
+      "formatLabel": "Formát:",
+      "autoFormat": "automatická detekce",
+      "autoFormatHint": "Rozpoznat formát podle názvu a obsahu souboru. Export vyžaduje konkrétní formát.",
+      "autoExportHint": "Pro export vyberte výše konkrétní formát. Automatická detekce se používá pouze při importu.",
+      "lossyDefaultHint": "Tento formát je ztrátový — některá data anotací se při opětovném importu nemusí zachovat.",
+      "modeTabs": {
+        "export": "Exportovat",
+        "import": "Importovat"
+      },
+      "scopeLabel": "Anotace k exportu:",
+      "replaceOnImport": "Při importu nahradit existující data",
+      "downloadPresets": "Stáhnout předvolby",
+      "downloadAnnotations": "Stáhnout anotace",
+      "chooseFileButton": "Vybrat soubor k importu…",
+      "fromSlide": "Ze sklíčka:",
+      "intoSlide": "Do sklíčka:",
+      "focusedMarker": "(aktivní)",
+      "scopeOptions": {
+        "all": "Vše",
+        "selected": "Vybrané"
+      },
+      "formatHint": "Formát",
+      "importFileButton": "Importovat soubor: formát '{{format}}'",
+      "saveFailed": "Anotace se nepodařilo uložit.",
+      "downloadFallbackHandled": "Anotace byly staženy jako soubor - není k dispozici žádná integrace se službou."
+    },
+    "comments": {
+      "title": "Komentáře",
+      "enable": "Povolit komentáře",
+      "autoOpen": "Automaticky otevřít komentáře při prvním kliknutí",
+      "rememberState": "Pamatovat si otevření/zavření okna komentářů",
+      "rememberOptions": {
+        "none": "Vždy ponechat otevřené",
+        "global": "Ponechat otevřené globálně",
+        "individual": "Ponechat otevřené pro každou anotaci"
+      },
+      "inputPlaceholder": "Přidat komentář...",
+      "replyPlaceholder": "Přidat odpověď...",
+      "send": "Odeslat komentář",
+      "reply": "Odpovědět",
+      "delete": "Smazat komentář",
+      "confirmDelete": "Klikněte znovu pro smazání",
+      "empty": "Žádné komentáře k zobrazení",
+      "time": {
+        "justNow": "právě teď",
+        "minutesAgo": "před {{count}} min",
+        "hoursAgo": "před {{count}} h",
+        "daysAgo": "před {{count}} d",
+        "weeksAgo": "před {{count}} týd.",
+        "monthsAgo": "před {{count}} měs.",
+        "yearsAgo": "před {{count}} r."
+      },
+      "errors": {
+        "notLoggedIn": "Pro přidávání komentářů se přihlaste.",
+        "noSelection": "Nejprve vyberte anotaci, kterou chcete okomentovat."
+      }
+    },
+    "authors": {
+      "empty": "Nenalezeni žádní autoři",
+      "annotationCount": "Anotací: {{count}}",
+      "show": "Zobrazit",
+      "ignoreStyling": "Ignorovat styl",
+      "color": "Barva:",
+      "dash": "Čárkování:"
+    },
+    "presets": {
+      "dialogTitle": "Předvolby tříd anotací",
+      "filterPlaceholder": "Filtrovat třídy...",
+      "addNew": "Přidat novou třídu",
+      "addField": "Přidat pole",
+      "newFieldPlaceholder": "Název pole...",
+      "valuePlaceholder": "Hodnota...",
+      "add": "Přidat",
+      "color": "Barva",
+      "delete": "Smazat třídu",
+      "typeLabel": "Typ",
+      "fieldsLabel": "Pole",
+      "unnamed": "Nepojmenovaná třída",
+      "emptyState": "Zatím žádné třídy. Vytvořte ji pomocí „Přidat novou třídu“.",
+      "noFilterResults": "Filtru neodpovídají žádné třídy.",
+      "vocabularyPick": "Přidat třídu ze seznamu...",
+      "vocabularyExhausted": "Každá dostupná třída již má předvolbu.",
+      "vocabularyLocked": "Tato třída pochází z připojené služby a nelze ji zde přejmenovat ani změnit.",
+      "useLeft": "Použít pro levé tlačítko",
+      "useRight": "Použít pro pravé tlačítko",
+      "finishEditing": "Dokončit úpravy"
+    },
+    "lock": {
+      "lock": "Zamknout",
+      "unlock": "Odemknout",
+      "badge": "Zamčeno"
+    },
+    "privacy": {
+      "mark": "Označit jako soukromé",
+      "unmark": "Zrušit označení soukromé"
+    },
+    "board": {
+      "title": "Seznam anotací",
+      "createLayer": "Vytvořit vrstvu",
+      "layer": "Vrstva",
+      "layerName": "Vrstva {{name}}",
+      "deleteSelection": "Smazat výběr",
+      "refresh": "Obnovit seznam",
+      "collapseAllLayers": "Sbalit všechny vrstvy",
+      "expandAllLayers": "Rozbalit všechny vrstvy",
+      "search": "Hledat a filtrovat",
+      "area": "Plocha",
+      "searchPlaceholder": "Hledat...",
+      "metricColumn": {
+        "label": "Metrika",
+        "off": "—",
+        "area": "Plocha",
+        "length": "Délka",
+        "mean": "Průměr",
+        "median": "Medián",
+        "percentPositive": "% poz.",
+        "components": "Obj."
+      },
+      "compute": "Spočítat",
+      "noData": "—"
+    },
+    "filters": {
+      "title": "Filtrování",
+      "button": "Filtr",
+      "modalTitle": "Filtrování anotací",
+      "apply": "Použít",
+      "clear": "Zrušit filtry",
+      "remove": "Odebrat filtr",
+      "empty": "Žádné aktivní filtry",
+      "noneAvailable": "Nejsou k dispozici žádné hodnoty",
+      "selectPlaceholder": "Vyberte hodnoty",
+      "searchPlaceholder": "Hledat hodnoty",
+      "fields": {
+        "instanceId": "ID instance",
+        "author": "Autor",
+        "presetName": "Název předvolby",
+        "factoryType": "Typ anotace",
+        "boundingRect": "Ohraničující obdélník"
+      }
+    }
+  },
+  "common": {
+    "cancel": "Zrušit"
+  }
+}

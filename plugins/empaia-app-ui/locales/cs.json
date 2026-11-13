@@ -1,0 +1,263 @@
+{
+  "meta": {
+    "name": "EMPAIA App UI",
+    "description": "Spouštějte analýzy EMPAIA z xOpat: vyberte sklíčko, nakreslete oblasti zájmu, odešlete úlohu a prohlédněte si výsledky.",
+    "longDescription": "Uživatelská část integrace EMPAIA Workbench v3. Zobrazuje sklíčka vyšetření, umožňuje patologovi označit oblasti zájmu vlastními anotačními nástroji xOpat, odesílá je aplikaci jako úlohu STANDALONE, sleduje průběh a vykresluje výsledky — anotace, hodnoty tříd, skalární primitiva a překryvy pixelových map. Vyžaduje modul 'empaia-workbench' a klienta workbench, který prohlížeč vkládá."
+  },
+  "panel": {
+    "title": "Analýza EMPAIA"
+  },
+  "status": {
+    "connecting": "Připojování k EMPAIA workbench…",
+    "notEmbeddedTitle": "Neběží uvnitř workbench",
+    "notEmbedded": "Tento prohlížeč musí být otevřen jako uživatelské rozhraní aplikace z klienta EMPAIA Workbench. Samostatně nelze nic načíst.",
+    "failedTitle": "Workbench není k dispozici"
+  },
+  "scope": {
+    "app": "Aplikace",
+    "case": "Případ",
+    "examination": "Vyšetření"
+  },
+  "slides": {
+    "title": "Sklíčka",
+    "empty": "Toto vyšetření neobsahuje žádná sklíčka.",
+    "open": "otevřít"
+  },
+  "mode": {
+    "label": "Režim",
+    "standalone": "Samostatná",
+    "preprocessing": "Předzpracování",
+    "postprocessing": "Následné zpracování",
+    "incompatibleTitle": "Tento krok nelze odsud spustit",
+    "builtOn": "Navazuje na analýzu",
+    "builtOnChange": "Změnit",
+    "builtOnPick": "Zobrazte jinou dřívější analýzu, na kterou má tento krok navázat.",
+    "waitingFor": "Čeká se na analýzu {{mode}}"
+  },
+  "roi": {
+    "title": "Oblasti zájmu",
+    "run": "Spustit analýzu",
+    "empty": "Zatím nejsou nakresleny žádné oblasti.",
+    "andMore": "…a dalších oblastí, které zde nejsou uvedeny: {{count}}.",
+    "singleHint": "Tato aplikace analyzuje v jednom běhu jednu oblast.",
+    "multiHint": "Tato aplikace shromažďuje více oblastí do jednoho běhu.",
+    "itemLabel": "{{type}} #{{id}}",
+    "saving": "Ukládání…",
+    "saved": "Uloženo ve workbench",
+    "notSaved": "Neuloženo ve workbench",
+    "saveFailed": "Oblast se nepodařilo uložit ve workbench a nelze ji analyzovat.",
+    "annotationSaveFailed": "Anotaci se nepodařilo uložit ve workbench.",
+    "analyseThis": "Analyzovat tuto oblast",
+    "quickModeName": "🅴  nakreslit oblast a analyzovat",
+    "quickModeNotReady": "Relace workbench ještě není připravena.",
+    "quickModeSingleOnly": "Tato aplikace shromažďuje více oblastí do jedné analýzy — nakreslete je a použijte Spustit analýzu.",
+    "notPermitted": "Nemáte oprávnění vytvářet oblasti zájmu.",
+    "deleteBlocked": "Tato oblast již byla analyzována a nelze ji smazat — analýza na ni trvale odkazuje.",
+    "editBlocked": "Tato oblast již byla analyzována a nelze ji změnit — analýza na ni trvale odkazuje.",
+    "lockedByJob": "Analýza {{job}} použila tuto oblast jako vstup, proto je trvale uzamčena a nelze ji změnit ani smazat.",
+    "hiddenWithAnalysis": "Tato oblast se zobrazuje spolu s analýzou, která ji použila — zobrazte tuto analýzu, abyste ji znovu viděli.",
+    "deleteFailed": "Oblast se nepodařilo odebrat z workbench.",
+    "jobOwned": "Oblasti vytvořené analýzou ({{count}}) nelze upravovat ani použít jako vstup. Kterou analýzu zobrazit, zvolíte v okně Analýzy (Nástroje → Analýzy).",
+    "stillSaving": "Oblasti, které se stále ukládají ve workbench: {{count}}.",
+    "type": {
+      "rectangle": "obdélník",
+      "polygon": "polygon",
+      "circle": "kruh"
+    },
+    "useAsRoi": "Použít jako oblasti zájmu ({{count}})",
+    "wrongShape": "Oblasti s tvarem, který tato aplikace nepřijímá jako oblast zájmu: {{count}}.",
+    "notRoiPreset": "Oblasti, které zatím nejsou oblastmi zájmu: {{count}} — označte je tak, abyste je mohli analyzovat.",
+    "singleOnlyOne": "Tato aplikace analyzuje v jednom běhu jednu oblast — vyberte jedinou oblast.",
+    "addToBatch": "Přidat oblasti do běhu ({{count}})",
+    "runBatch": "Spustit analýzu na oblastech ({{count}})",
+    "discardBatch": "Zahodit připravený běh",
+    "convertFailed": "Oblast se nepodařilo označit jako oblast zájmu.",
+    "notOnCanvas": "Tato anotace neleží na sklíčku tohoto vyšetření.",
+    "noRoiInput": "Tato aplikace nedeklaruje žádný vstup oblasti zájmu.",
+    "lockedNotConvertible": "Oblasti použité dřívější analýzou ({{count}}) již nelze měnit, a proto z nich nelze vytvořit oblasti zájmu.",
+    "lockedStillUsable": "Použito analýzou {{job}} — již nelze upravovat, ale lze znovu analyzovat.",
+    "addToBatchPartial": "Přidat do běhu {{count}} z {{total}} oblastí",
+    "skipped": "Vybrané oblasti, které nelze použít: {{count}}",
+    "noneUsable": "Žádnou z vybraných oblastí nelze analyzovat.",
+    "notStoredCount": "Oblasti, které se nepodařilo uložit ve workbench: {{count}}.",
+    "createJobRoi": "Vytvořit oblast zájmu úlohy",
+    "notAccepted": "Oblasti jsou uloženy, ale tato analýza je nemůže přijmout jako vstup."
+  },
+  "jobs": {
+    "title": "Analýzy",
+    "windowTitle": "Analýzy",
+    "openManager": "Otevřít analýzy",
+    "empty": "Pro toto sklíčko zatím nejsou žádné analýzy.",
+    "noMatches": "Hledání neodpovídá žádná analýza.",
+    "noSlide": "Není otevřeno žádné sklíčko",
+    "summary": "Analýzy: {{total}} · běží: {{running}} · zobrazeno na sklíčku: {{shown}}.",
+    "searchPlaceholder": "Hledat podle ID, aplikace, stavu nebo chyby…",
+    "shownCount": "Na sklíčku zobrazeno {{shown}} z {{total}} analýz",
+    "capped": "Zobrazeno {{shown}} z {{total}} — pro zobrazení zbytku upřesněte hledání.",
+    "loadingOutputs": "Načítání výsledků…",
+    "expandHint": "Zobrazit zprávy, akce a výsledky této analýzy",
+    "collapseHint": "Sbalit tuto analýzu",
+    "timeUnknown": "neznámý čas",
+    "run": "Spustit",
+    "stop": "Zastavit",
+    "delete": "Smazat analýzu",
+    "showOutput": "Zobrazit tuto analýzu na sklíčku (pravé tlačítko: pouze tuto)",
+    "hideOutput": "Odebrat tuto analýzu ze sklíčka (pravé tlačítko: pouze tuto)",
+    "soloLatest": "Pouze nejnovější",
+    "soloLatestHint": "Zobrazit pouze nejnovější dokončenou analýzu — výchozí zobrazení.",
+    "hideAll": "Skrýt vše",
+    "noCompleted": "Zatím nebyla dokončena žádná analýza.",
+    "visibilityFailed": "Výsledky analýzy se nepodařilo zobrazit.",
+    "runningBadge": "Běžící analýzy: {{count}}",
+    "latest": "nejnovější",
+    "latestHint": "Nejnovější dokončená analýza — ve výchozím stavu zobrazena na sklíčku. Pro porovnání zobrazte další.",
+    "runtime": "{{seconds}} s",
+    "filter": {
+      "all": "Vše",
+      "running": "Běžící",
+      "completed": "Dokončené",
+      "failed": "Neúspěšné",
+      "pending": "Nespuštěné"
+    },
+    "group": {
+      "today": "Dnes",
+      "yesterday": "Včera",
+      "earlier": "Dříve"
+    },
+    "ago": {
+      "seconds": "před {{count}} s",
+      "minutes": "před {{count}} min",
+      "hours": "před {{count}} h",
+      "days": "před {{count}} d"
+    },
+    "runFailed": "Analýzu se nepodařilo spustit.",
+    "stopFailed": "Analýzu se nepodařilo zastavit.",
+    "deleteFailed": "Analýzu se nepodařilo odebrat.",
+    "deleteOnlyBeforeRun": "Analýzu lze odebrat pouze před jejím spuštěním; po spuštění ji workbench uchovává.",
+    "stopNotPossible": "Tuto analýzu nelze zastavit — zastavit lze pouze běžící kontejnerizovanou analýzu.",
+    "selectRoiFirst": "Nejprve vyberte alespoň jednu uloženou oblast zájmu.",
+    "noRoiInput": "Tato aplikace nedeklaruje pro vybraný režim žádný vstup oblasti zájmu.",
+    "notPermitted": "Nemáte oprávnění spouštět analýzy.",
+    "status": {
+      "NONE": "nespuštěno",
+      "ASSEMBLY": "sestavuje se",
+      "READY": "připraveno",
+      "SCHEDULED": "naplánováno",
+      "RUNNING": "běží",
+      "COMPLETED": "dokončeno",
+      "FAILED": "selhalo",
+      "TIMEOUT": "vypršel čas",
+      "ERROR": "chyba",
+      "INCOMPLETE": "neúplné"
+    },
+    "draft": "příprava",
+    "draftHint": "Běh, který sestavujete. Přidejte do něj oblasti a pak jej spusťte.",
+    "showAll": "Zobrazit vše",
+    "showAllHint": "Zobrazit všechny analýzy, na které je seznam filtrován, až do limitu zobrazení.",
+    "showAllCapped": "Zobrazeno {{shown}} nejnovějších z {{total}} — více najednou by sklíčko učinilo nečitelným.",
+    "mode": {
+      "all": "Všechny kroky",
+      "standalone": "Samostatná",
+      "preprocessing": "Předzpracování",
+      "postprocessing": "Následné zpracování"
+    },
+    "modeShort": {
+      "standalone": "běh",
+      "preprocessing": "před",
+      "postprocessing": "po"
+    }
+  },
+  "results": {
+    "title": "Výsledky",
+    "name": "Název",
+    "value": "Hodnota",
+    "true": "ano",
+    "false": "ne",
+    "outputs": {
+      "annotations": "Anotace: {{count}}",
+      "pixelmaps": "Pixelové mapy: {{count}}",
+      "primitives": "Hodnoty: {{count}}",
+      "none": "Žádný výstup.",
+      "focusHint": "Zobrazit na sklíčku — přesune zobrazení na ně",
+      "focusHidden": "Zobrazte tuto analýzu, abyste mohli přejít na její anotace",
+      "focusEmpty": "Tato analýza nemá na sklíčku žádné anotace, na které by šlo přejít.",
+      "unresolved": "Tato analýza hlásí výsledky ({{count}}), ale žádný z nich se nepodařilo z workbench načíst.",
+      "namedCount": "{{name}}: {{count}}",
+      "large": "Anotace: {{count}} — přesto načíst",
+      "largeHint": "Tato analýza vytvořila více anotací, než se ve výchozím stavu zobrazuje. Načtení všech může chvíli trvat a zpomalit sklíčko.",
+      "unreadable": "Výsledky se nepodařilo načíst — zkusit znovu",
+      "unreadableHint": "Workbench neodpověděl pro: {{queries}}. To není totéž, jako když analýza nic nevytvoří.",
+      "pending": "Výsledky zatím nejsou k dispozici — zkusit znovu",
+      "pendingHint": "Analýza skončila, ale workbench zatím nevrátil její výstup. xOpat jej načítá znovu; kliknutím to zkusíte hned.",
+      "validating": "Výstup se stále kontroluje",
+      "validatingHint": "Workbench ověřuje, co tato analýza zapsala. Výsledky se zobrazí po dokončení.",
+      "namedPending": "{{name}}: zatím nedostupné",
+      "namedNone": "{{name}}: žádné"
+    },
+    "inputs": {
+      "regions": "Vstupní oblasti: {{count}}",
+      "focusHint": "Oblasti, na kterých byla tato analýza spuštěna — přesune zobrazení na ně",
+      "hidden": "Oblasti, na kterých byla tato analýza spuštěna — zobrazují se, dokud je zobrazena analýza",
+      "focusEmpty": "Oblasti, na kterých byla tato analýza spuštěna, již na sklíčku nejsou."
+    },
+    "region": {
+      "header": "Výsledky po oblastech",
+      "nth": "Oblast {{index}}",
+      "unresolved": "Tato analýza hlásí hodnoty po oblastech, které nebylo možné přiřadit k žádné oblasti."
+    },
+    "perAnnotation": {
+      "header": "Hodnoty po anotacích",
+      "count": "Hodnoty: {{count}} na anotacích: {{objects}}",
+      "focusHint": "Zobrazit tuto anotaci na sklíčku",
+      "uniform": "všech {{count}} shodných",
+      "range": "{{min}} – {{max}} · průměr {{mean}}",
+      "tallyEntry": "{{value}} ×{{count}}",
+      "tooMany": "Hodnoty: {{count}} — příliš mnoho pro výpis. Souhrn výše pokrývá celou sadu.",
+      "hidden": "Zobrazte tuto analýzu, abyste mohli přejít na její anotace"
+    }
+  },
+  "pixelmaps": {
+    "title": "Pixelové mapy",
+    "hint": "Zobrazeno, dokud je zobrazena tato analýza; průhlednost a pořadí se nastavují v panelu vrstev.",
+    "channel": "Kanál",
+    "channelN": "Kanál {{index}}",
+    "colorMap": "Barevná mapa",
+    "invert": "Obrátit stupnici",
+    "noLegend": "Tato mapa nedeklaruje žádné třídy.",
+    "noDataAtZoom": "Tato analýza při tomto zvětšení nezapsala žádnou mapu — nic se zde nevykresluje.",
+    "zoomIn": "Přiblížit",
+    "tilesFailing": "Data této mapy se nepodařilo z workbench načíst, proto se nic nevykresluje.",
+    "type": {
+      "continuous_pixelmap": "spojitá",
+      "discrete_pixelmap": "diskrétní",
+      "nominal_pixelmap": "nominální"
+    },
+    "colorMaps": {
+      "viridis": "Viridis",
+      "magma": "Magma",
+      "inferno": "Inferno",
+      "jet": "Jet",
+      "hot": "Hot",
+      "cool": "Cool",
+      "grayscale": "Odstíny šedi",
+      "redblue": "Červená–modrá"
+    }
+  },
+  "selection": {
+    "title": "Vybráno na sklíčku",
+    "empty": "Vyberte oblasti na sklíčku, které chcete analyzovat.",
+    "count": "Vybráno: {{count}}",
+    "skipped": "Vybrané oblasti, které nebudou přidány ({{count}}):"
+  },
+  "batch": {
+    "title": "Připravený běh",
+    "empty": "Zatím není nic připraveno — přidejte vybrané oblasti a sestavte běh.",
+    "staged": "Připraveno: {{count}}",
+    "appendOnly": "Oblasti lze pouze přidávat. Pro začátek znovu běh zahoďte.",
+    "lockWarning": "Spuštění této analýzy tyto oblasti trvale uzamkne: v tomto vyšetření je již nebude možné upravovat ani mazat.",
+    "orphans": "Nedokončené běhy na tomto sklíčku: {{count}}.",
+    "addFailed": "Oblasti se nepodařilo přidat do připraveného běhu.",
+    "runFailed": "Připravený běh se nepodařilo spustit.",
+    "discardFailed": "Připravený běh se nepodařilo zahodit."
+  }
+}

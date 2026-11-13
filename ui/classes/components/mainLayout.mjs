@@ -91,6 +91,32 @@ export class MainLayout extends BaseComponent {
         this._reopenOverlayExpanded = false;
         // grace-period handle so moving the pointer rail→panel doesn't close it
         this._overlayCloseTimer = null;
+        // Hovering the rail opens nothing: it sits right beside the outermost
+        // viewer's side menu, and a pointer reaching for that menu must not pop
+        // this one over it. Closing, however, does follow the pointer — see
+        // `_scheduleOverlayClose`.
+        this._overlayDismissBound = false;
+        // The floating panel never opens by itself during load: tabs registering
+        // and plugins calling `showTab()` while the app boots would otherwise
+        // greet the user with a panel over the slide they came to see. It rests
+        // as the rail until the user has done anything at all.
+        this._userInteracted = false;
+        if (typeof window !== "undefined") {
+            const markInteracted = () => {
+                this._userInteracted = true;
+                window.removeEventListener("pointerdown", markInteracted, true);
+                window.removeEventListener("keydown", markInteracted, true);
+            };
+            window.addEventListener("pointerdown", markInteracted, true);
+            window.addEventListener("keydown", markInteracted, true);
+        }
+        this._onOverlayDismissPointer = e => {
+            if (this._viewerEl?.contains(e.target)) this._closeOverlay();
+        };
+        this._onOverlayDismissKey = e => {
+            // An open dropdown inside the panel owns this Escape.
+            if (e.key === "Escape" && !this._overlayHeldByPopup()) this._closeOverlay();
+        };
         // true while the overlay panel is being drag-resized (holds it open)
         this._resizingOverlay = false;
 
@@ -441,8 +467,12 @@ export class MainLayout extends BaseComponent {
         if (!this._setDockRequestedOpen(true, persist, explicit)) return false;
         // In overlay mode an explicit open (View-menu tab click, plugin
         // showTab/focus) should actually reveal the floating panel — not just
-        // arm the rail. Auto-close on pointer/focus leave still applies.
-        if (this._dockMode === "overlay") this._openOverlay();
+        // arm the rail. It closes again once the pointer has been in the panel
+        // and left for the viewer (see `_scheduleOverlayClose`).
+        // Not during load, and not for a tab that merely finished registering.
+        if (this._dockMode === "overlay" && this._userInteracted && !this._isFlushingDeferredSync) {
+            this._openOverlay();
+        }
         return this._isDockEffectivelyVisible();
     }
 
@@ -458,6 +488,17 @@ export class MainLayout extends BaseComponent {
         // Explicit user intent clears the session-initial hide latch so the
         // open is honored. Subsequent programmatic opens are then allowed.
         this._sessionInitialHidden = false;
+        // A toggle is user intent by definition (shortcut, quick action, script).
+        this._userInteracted = true;
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        if (this._dockMode === "overlay" && !narrow && this._overlayExpanded) {
+            // Overlay: toggle the floating panel, never the rail behind it.
+            this._closeOverlay();
+            return true;
+        }
+        if (this._dockMode === "overlay" && !narrow) {
+            return this.showGlobalMenu(true, true);
+        }
         return this.isOpened()
             ? this.hideGlobalMenu(true)
             : this.showGlobalMenu(true, true);
@@ -1091,8 +1132,7 @@ export class MainLayout extends BaseComponent {
         }
 
         if (!menuAvailable) {
-            this._overlayExpanded = false;
-            this._clearOverlayCloseTimer();
+            this._resetOverlayState();
             this._dockEl.style.display = "none";
             this._dockEl.style.position = "relative";
             this._resetHandleStatic();
@@ -1128,8 +1168,7 @@ export class MainLayout extends BaseComponent {
         }
 
         // Docked mode: dock is a flex sibling that pushes the viewer.
-        this._overlayExpanded = false;
-        this._clearOverlayCloseTimer();
+        this._resetOverlayState();
         this._resetHandleStatic();
         this._dockEl.style.position = "relative";
         this._dockEl.style.zIndex = "";
@@ -1253,24 +1292,55 @@ export class MainLayout extends BaseComponent {
         this._clearOverlayCloseTimer();
         if (this._overlayExpanded) return;
         this._overlayExpanded = true;
+        this._bindOverlayDismiss(true);
         this._applyDockVisibility();
     }
 
-    /** @private schedule an overlay close after a grace period (pointer rail→panel) */
-    _scheduleOverlayClose(delay = 280) {
+    /** @private schedule an overlay close after a grace period (pointer back on the viewer) */
+    _scheduleOverlayClose(delay = 900) {
         // Dragging the inner-edge resize handle moves the pointer off the panel;
-        // don't let that leave-event close it mid-resize.
-        if (this._dockMode !== "overlay" || !this._overlayExpanded || this._resizingOverlay) return;
+        // don't let that close it mid-resize. The grace is long on purpose: an
+        // accidental slip off the panel edge must be recoverable by moving back.
+        if (this._dockMode !== "overlay" || !this._overlayExpanded
+            || this._resizingOverlay) return;
         this._clearOverlayCloseTimer();
-        this._overlayCloseTimer = setTimeout(() => this._closeOverlay(), delay);
+        this._overlayCloseTimer = setTimeout(() => {
+            this._overlayCloseTimer = null;
+            if (!this._overlayHeldByPopup()) this._closeOverlay();
+        }, delay);
+    }
+
+    /**
+     * @private a dropdown opened from the panel is portaled to <body>; the
+     * pointer travelling to it must not count as leaving the panel.
+     */
+    _overlayHeldByPopup() {
+        return !!this._dockEl?.querySelector(".dropdown-open");
+    }
+
+    /** @private Escape / click-on-viewer dismissal, live only while the panel shows */
+    _bindOverlayDismiss(bind) {
+        if (typeof window === "undefined" || this._overlayDismissBound === bind) return;
+        this._overlayDismissBound = bind;
+        const method = bind ? "addEventListener" : "removeEventListener";
+        // Capture phase on window: runs before a popup's own Escape handler
+        // closes it, so `_overlayHeldByPopup` still sees that popup.
+        window[method]("pointerdown", this._onOverlayDismissPointer, true);
+        window[method]("keydown", this._onOverlayDismissKey, true);
+    }
+
+    /** @private drop every transient overlay state without touching the layout */
+    _resetOverlayState() {
+        this._clearOverlayCloseTimer();
+        this._overlayExpanded = false;
+        this._bindOverlayDismiss(false);
     }
 
     /** @private */
     _closeOverlay() {
-        this._clearOverlayCloseTimer();
-        if (!this._overlayExpanded) return;
-        this._overlayExpanded = false;
-        this._applyDockVisibility();
+        const wasExpanded = this._overlayExpanded;
+        this._resetOverlayState();
+        if (wasExpanded) this._applyDockVisibility();
     }
 
     /**
@@ -1299,8 +1369,7 @@ export class MainLayout extends BaseComponent {
         if (persist) {
             APPLICATION_CONTEXT.AppCache.set(this._modeCacheKey, mode);
         }
-        this._clearOverlayCloseTimer();
-        this._overlayExpanded = false;
+        this._resetOverlayState();
 
         if (mode === "docked") {
             // Re-enter the flow layout and reveal the pushing dock.
@@ -1332,9 +1401,12 @@ export class MainLayout extends BaseComponent {
         if (rail) {
             const rTitle = docked
                 ? $.t("main.globalMenu.dragToOpen")
-                : $.t("main.globalMenu.hoverToOpen");
+                : $.t("main.globalMenu.clickToOpen");
             rail.setAttribute("title", rTitle);
             rail.setAttribute("aria-label", rTitle);
+            // Docked: the rail is a drag-to-size handle. Overlay: it is a
+            // button — a resize cursor there told users nothing would open.
+            rail.style.cursor = docked ? "col-resize" : "pointer";
         }
     }
 
@@ -2280,24 +2352,32 @@ export class MainLayout extends BaseComponent {
             e.preventDefault();
         });
 
-        // Overlay-mode reveal: hover/focus the rail (or the revealed panel) opens
-        // it; leaving either schedules a graced close so a rail→panel pointer
-        // move keeps it open.
-        const enter = () => { if (overlayMode()) this._openOverlay(); };
+        // Overlay-mode reveal is a click on the rail (mouseup above) or
+        // Enter / Space on it — never hover: the rail is the side menu's
+        // neighbour, and a pointer on its way to that menu's scrollbar passes
+        // over or stops on it.
+        //
+        // Closing follows the pointer, after a grace that returning to the
+        // panel cancels. It is keyed on the pointer *arriving on the viewer*,
+        // not on it leaving the panel: a leave also fires
+        // towards the resize handle, a dropdown portaled to <body>, or off the
+        // window edge the menu sits on — none of which mean "done with it".
+        const hold = () => {
+            if (overlayMode() && this._overlayExpanded) this._clearOverlayCloseTimer();
+        };
         const leave = () => { if (overlayMode()) this._scheduleOverlayClose(); };
-        this._knobEl.addEventListener("mouseenter", enter);
-        this._knobEl.addEventListener("mouseleave", leave);
-        this._knobEl.addEventListener("focusin", enter);
-        this._knobEl.addEventListener("focusout", leave);
-        this._dockEl.addEventListener("mouseenter", enter);
-        this._dockEl.addEventListener("mouseleave", leave);
-        this._dockEl.addEventListener("focusin", enter);
-        this._dockEl.addEventListener("focusout", leave);
-        // The overlay resize handle is a sibling of the panel — hovering it
-        // fires the panel's mouseleave, which would close the panel before the
-        // user can grab it. Treat it as part of the hover surface.
-        this._handleEl.addEventListener("mouseenter", enter);
-        this._handleEl.addEventListener("mouseleave", leave);
+        this._knobEl.addEventListener("keydown", e => {
+            if (!overlayMode() || (e.key !== "Enter" && e.key !== " ")) return;
+            e.preventDefault();
+            this._openOverlay();
+        });
+        this._knobEl.addEventListener("mouseenter", hold);
+        this._dockEl.addEventListener("mouseenter", hold);
+        this._dockEl.addEventListener("focusin", hold);
+        this._handleEl.addEventListener("mouseenter", hold);
+        this._viewerEl.addEventListener("mouseenter", leave);
+        // Keyboard: focus moving from the panel into the viewer.
+        this._viewerEl.addEventListener("focusin", leave);
     }
 
     /**
@@ -2376,48 +2456,47 @@ origin-center
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
-        // Thin full-height edge rail shown while the dock is collapsed (docked)
-        // or resting (overlay). Docked: click or drag it inward to reopen.
-        // Overlay: hover/focus reveals the floating panel. Kept flush and thin
-        // (7px, no caret/border) so it never overlaps the per-viewer
-        // RightSideViewerMenu. Inline positioning — the purged tailwind build
-        // lacks translate/fractional utilities.
+        // Full-height edge rail shown while the dock is collapsed (docked) or
+        // resting (overlay). Docked: click or drag it inward to reopen.
+        // Overlay: click it to reveal the floating panel. It is a real flex gutter on the shell's outer edge, NOT an
+        // absolute strip over the viewer: laid over the viewer it shared its
+        // pixels with the outermost viewer's RightSideViewerMenu, which hid
+        // the rail behind that menu and opened the panel on top of it whenever
+        // the pointer reached for the menu's scrollbar.
         const knobOnLeft = this.position === "left";
         const railTitle = this._dockMode === "overlay"
-            ? $.t("main.globalMenu.hoverToOpen")
+            ? $.t("main.globalMenu.clickToOpen")
             : $.t("main.globalMenu.dragToOpen");
-        // Static "< chevron" grip pattern so it reads as interactive (and hints
-        // the open direction) without a distracting animation — see
-        // `.xo-menu-rail` in src/assets/custom.css. Muted neutral colour, not
-        // the primary accent. The `is-left` modifier flips the chevrons (>) for
-        // a left-positioned dock. On hover it darkens and widens inward
-        // (reusing the resize handle's compiled hover:scale-x-300, anchored to
-        // the outer edge so it grows into the viewport). z-index:0 keeps it
-        // below every other UI (toolbars, side menus, dialogs).
+        // A plain strip with one muted caret in the middle, pointing the way
+        // the menu opens. Deliberately quiet: it is permanent chrome on the
+        // edge of the slide, not a control that should draw the eye.
         const knob = div({
             id: `${this.id}-knob`,
-            class: `xo-menu-rail${knobOnLeft ? " is-left" : ""}`
-                + " bg-base-200 hover:bg-base-300"
-                + " select-none transition-transform duration-150 hover:scale-x-300",
-            // cursor set inline (col-resize) so it wins over Tailwind preflight's
-            // `[role]{cursor:pointer}`; this is a resize handle, so ARIA it as a
-            // focusable vertical separator, not a button.
-            style: `display:none; position:absolute; top:0; ${knobOnLeft ? "left" : "right"}:0;`
-                + ` width:8px; height:100%; z-index:0; touch-action:none; cursor:col-resize;`
-                + ` transform-origin:${knobOnLeft ? "left" : "right"} center;`,
+            // Surface and hover come from `.xo-menu-rail` (src/assets/custom.css):
+            // it must not share the side menu's base-200 it sits next to.
+            class: "xo-menu-rail shrink-0 select-none flex items-center justify-center text-base-content",
+            // cursor is set inline (see `_updateDockAffordances`) so it wins
+            // over Tailwind preflight's `[role]{cursor:pointer}`.
+            style: `display:none; width:14px; touch-action:none;`
+                + ` cursor:${this._dockMode === "overlay" ? "pointer" : "col-resize"};`,
             title: railTitle,
             tabindex: "0",
             role: "separator",
             "aria-orientation": "vertical",
             "aria-label": railTitle,
-        });
+        }, div(
+            { style: "font-size:12px; line-height:1; pointer-events:none;" },
+            new PhIcon({ name: knobOnLeft ? "ph-caret-right" : "ph-caret-left" }).create(),
+        ));
 
         this._shellEl = shell;
         this._viewerEl = viewerWrap;
         this._handleEl = handle;
         this._knobEl = knob;
         shell.appendChild(this._toolbarPeekEl);
-        shell.appendChild(knob);
+        // Outermost flex child, so the viewer ends where the rail begins.
+        if (knobOnLeft) shell.insertBefore(knob, shell.firstChild);
+        else shell.appendChild(knob);
 
         this._syncMenuTabs();
         this._wireResize();

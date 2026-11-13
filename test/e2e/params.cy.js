@@ -246,7 +246,7 @@ describe('Viewer params: scroll-to-zoom policy', () => {
 
     //shared base for all scroll tests: every launch starts from these values
     //and each test overrides only the single flag it verifies
-    const scrollBase = {scrollRequiresCtrl: false, reverseScroll: false, snapZoomToMagnification: true};
+    const scrollBase = {scrollRequiresClick: false, reverseScroll: false, snapZoomToMagnification: true};
 
     it('plain wheel zooms and reverseScroll inverts the direction', () => {
         const viewport = config.viewport('tissue', 0);
@@ -292,20 +292,22 @@ describe('Viewer params: scroll-to-zoom policy', () => {
         });
     });
 
-    it('scrollRequiresCtrl ignores plain wheel and zooms with Ctrl held', () => {
+    it('scrollRequiresClick ignores the wheel until the viewer is clicked', () => {
         const viewport = config.viewport('tissue', 0);
 
-        launchViewer({viewport, ...scrollBase, scrollRequiresCtrl: true}).then(win => {
+        launchViewer({viewport, ...scrollBase, scrollRequiresClick: true}).then(win => {
             const zoomBefore = win.VIEWER.viewport.getZoom();
             wheel();
             cy.wait(500);
             cy.then(() => {
-                expect(win.VIEWER.viewport.getZoom(), "zoom unchanged without Ctrl")
+                expect(win.VIEWER.viewport.getZoom(), "zoom unchanged before a click")
                     .to.be.closeTo(zoomBefore, 0.001);
             });
-            wheel({ctrlKey: true});
+            cy.then(() => win.VIEWER.element.dispatchEvent(
+                new win.PointerEvent('pointerdown', {bubbles: true})));
+            wheel();
             utils.waitForZoom(win, z => Math.abs(z - zoomBefore) > 0.01,
-                "Waiting for Ctrl+wheel to zoom.");
+                "Waiting for wheel to zoom after a click.");
         });
     });
 });

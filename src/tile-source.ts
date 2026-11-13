@@ -176,7 +176,7 @@ type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
      * per-viewer `ViewerDepthController` (`viewer.__depthController`,
      * `src/classes/app/viewer-depth-controller.ts`) discovers it, drives plane
      * switches via an in-place tile swap (no reload, no white flash), and
-     * feeds the navigator slider / Alt+wheel / `[` `]` shortcuts.
+     * feeds the depth ruler / modifier+wheel / `[` `]` shortcuts.
      *
      * There are no z-only members beyond this descriptor and `setZDepth`: the
      * core derives everything else from the tile-source API a source already

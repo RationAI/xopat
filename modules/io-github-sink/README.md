@@ -203,16 +203,26 @@ The module composes its sink options on every dispatch. Latest layer wins;
 Path / commit placeholders (resolved by `IO_PIPELINE.formatPath`, shared with
 every other sink): `{ownerId}` `{ownerUid}` `{xoType}` `{direction}`
 `{capabilityId}` `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
-`{resourceName}` `{itemId}`. `{viewerId}` resolves to `_global` for
-global-scope bundles, `{backgroundId}` to `_any` when the owner is not
-slide-scoped.
+`{resourceName}` `{itemId}` `{slideHash}` `{slideName}` `{ext}`. `{ext}` is the
+file extension of the format the binding is pinned to — `{"sink": "github",
+"format": "geo-json", "config": {"pathTemplate": "cases/{slideHash}.{ext}"}}`
+stores GeoJSON as `.geojson`-style files — and `json` when no format is pinned
+(see `src/IO_PIPELINE.md` → *Formats*). `{viewerId}` resolves
+to `_global` for global-scope bundles, `{backgroundId}` to `_any` when the owner
+is not slide-scoped. `{slideHash}` / `{slideName}` describe the slide
+itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of the slide's data
+entry — stable across sessions, unaffected by an explicit background `id`, and
+reveals nothing of the path, so use it to address per-slide data; `{slideName}` is
+the file name — readable, but the same file name in two folders collides and it
+may carry a case number, so keep it for labels. Unresolvable, `{slideHash}` is
+`_any` and `{slideName}` empty.
 
 > **Use `{capabilityGroup}`, not `{capabilityId}`, in a path.** Exports carry
 > `bundle-export` and restores carry `bundle-import`, so `{capabilityId}` reads
 > back from a different file than it wrote. Both collapse to `bundle` in
 > `{capabilityGroup}`.
 
-> **Slide-scoped owners need `{backgroundId}` (or `{key}`).** Owners with
+> **Slide-scoped owners need `{slideHash}`, `{backgroundId}` or `{key}`.** Owners with
 > `bundleScope: "per-viewer-background"` — annotations among them — are
 > dispatched once per (viewer, slide). A template without a slide dimension
 > resolves every one of those dispatches to the same file, and the last slide

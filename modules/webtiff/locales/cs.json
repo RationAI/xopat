@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "name": "Podpora TIFF / WSI (web-tiff)",
+    "description": "Otevírá TIFF, BigTIFF, OME-TIFF, QPTIFF a formáty celých sklíček založené na TIFF pomocí dekodéru libtiff ve WebAssembly, včetně vzorků s vysokou bitovou hloubkou a s plovoucí desetinnou čárkou, a volí shader odpovídající uspořádání kanálů sklíčka."
+  },
+  "title": "Sklíčko TIFF",
+  "dimensions": "Rozměry",
+  "tileSize": "Velikost dlaždice",
+  "levels": "Úrovně pyramidy",
+  "channels": "Kanály",
+  "bitDepth": "Bitová hloubka",
+  "interpretation": "Interpretace",
+  "layout": "Uspořádání pyramidy"
+}

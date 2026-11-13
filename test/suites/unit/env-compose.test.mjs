@@ -27,8 +27,11 @@ const composer = await import(
 const {
     mergeDeep, composeEnv, composeLayers, readJsonc, loadEnvFile,
     collectPlaceholders, scanForLiteralSecrets, scanForPrivateHosts, scanProcessEnvValues,
-    listFragments, loadPresets,
+    listFragments, loadPresets, describeVariables, collectHints,
 } = composer;
+
+const { pickInteractively, commandFor } = await import(
+    path.resolve(here, "../../../server/utils/node/env-picker.mjs").replace(/\\/g, "/"));
 
 const layer = (id, data, extra = {}) =>
     ({ id, kind: "fragment", file: `env/parts/${id}.json`, role: "layer", dimension: null, meta: {}, data, ...extra });
@@ -421,4 +424,132 @@ test("an array $base composes several layers, and the twins differ by one @unit"
 
 test("a missing ENV file still yields an empty object @unit", () => {
     expect(loadEnvFile("env/does-not-exist.json")).toEqual({});
+});
+
+/* ------------------------------------------------ presets as starting points */
+
+test("a fragment named directly replaces the preset's fragment in its dimension @unit", () => {
+    const result = composeEnv(["default", "chat/byok"], {});
+    expect(result.conflicts).toEqual([]);
+    expect(result.replaced).toEqual([{ replaced: "chat/off", by: "chat/byok", preset: "default" }]);
+    expect(result.layers.map((l) => l.id)).not.toContain("chat/off");
+});
+
+test("a replaced fragment leaves no process-env default behind @unit", () => {
+    const kept = composeEnv(["wsi-service"], {});
+    expect(kept.defaults.WSI_PORT).toBeDefined();
+    const swapped = composeEnv(["wsi-service", "data/synthetic-dzi"], {});
+    expect(swapped.defaults.WSI_PORT).toBeUndefined();
+});
+
+test("two fragments named directly in one dimension still conflict @unit", () => {
+    const { conflicts } = composeEnv(["base/core", "chat/off", "chat/byok"], {});
+    expect(conflicts.map((c) => c.kind)).toContain("dimension");
+});
+
+test("no preset needs an external image server unless it says so @unit", () => {
+    // The default has to run on a fresh checkout. An image server is a layer
+    // somebody adds on purpose, and a preset built on one names it.
+    const dependent = Object.keys(loadPresets())
+        .filter((name) => composeEnv([name], {}).layers.some((l) => l.id === "data/wsi-service"));
+    expect(dependent.sort()).toEqual(["image-proxy", "wsi-service"]);
+});
+
+/* ----------------------------------------------------- named deployments */
+
+test("--deployment builds the same env a deployments fragment would @unit", () => {
+    const base = ["base/core", "data/synthetic-dzi", "auth/none", "chat/off"];
+    const flagged = composeEnv(base, {
+        deployments: { webtiff: ["data/tiff-webtiff"], geotiff: ["data/tiff-geotiff"] },
+    });
+    const fragment = composeEnv([...base, "demo/multi-deployment"], {});
+    expect(flagged.conflicts).toEqual([]);
+    const strip = (env) => {
+        const out = structuredClone(env);
+        for (const def of Object.values(out.deployments)) delete def.$meta;
+        return sorted(out);
+    };
+    expect(strip(flagged.env)).toEqual(strip(fragment.env));
+});
+
+test("a default deployment that was never defined is refused @unit", () => {
+    const { conflicts } = composeEnv(["default"], { defaultDeployment: "nope" });
+    expect(conflicts.map((c) => c.kind)).toContain("deployment");
+});
+
+/* --------------------------------------------------------- variable report */
+
+test("a variable is reported by who decided its value @unit", () => {
+    const result = composeEnv(["wsi-service", "chat/openai-compatible-cerit"], {});
+    const byName = (user) => Object.fromEntries(describeVariables(result, { user }).map((v) => [v.name, v]));
+
+    const untouched = byName({});
+    expect(untouched.WSI_PORT).toMatchObject({ status: "default", source: "$meta.defaults", value: "8080" });
+    expect(untouched.WSI_PORT.layers).toEqual(["data/wsi-service"]);
+    expect(untouched.WSI_PORT.description).toBeTruthy();
+    expect(untouched.CERIT_API_KEY).toMatchObject({ status: "unset", required: true });
+
+    const configured = byName({ WSI_PORT: "9002", CERIT_API_KEY: "sk-not-a-real-key" });
+    expect(configured.WSI_PORT.status).toBe("set");
+    // What the user set may be a credential: its value is never echoed.
+    expect(JSON.stringify(configured)).not.toContain("sk-not-a-real-key");
+    expect(configured.WSI_PORT.value).toBeUndefined();
+});
+
+test("every variable a fragment reads is described in its $meta.env @unit", () => {
+    for (const fragment of listFragments()) {
+        const { $meta = {}, ...data } = readJsonc(fragment.file);
+        const used = new Set([...collectPlaceholders(data).keys(), ...($meta.requires ?? [])]);
+        const undescribed = [...used].filter((name) => !$meta.env?.[name]);
+        expect(undescribed, fragment.id).toEqual([]);
+    }
+});
+
+test("a fragment's setup note travels with the composition @unit", () => {
+    const hints = collectHints(composeEnv(["wsi-service"], {}));
+    expect(hints.map((h) => h.layer)).toEqual(["data/wsi-service"]);
+});
+
+/* ------------------------------------------------------------------ picker */
+
+const pick = async (answers) => {
+    const { Readable } = await import("node:stream");
+    const log = console.log, write = process.stdout.write;
+    console.log = () => {};
+    process.stdout.write = () => true;
+    try {
+        return await pickInteractively({
+            input: Readable.from(answers.map((a) => `${a}\n`)), userEnv: () => ({}),
+        });
+    } finally {
+        console.log = log;
+        process.stdout.write = write;
+    }
+};
+
+test("Enter all the way through the picker is the default deployment @unit", async () => {
+    // count, start-from, layering loop, "start the server?"
+    const picked = await pick(["", "", "", "n"]);
+    expect(picked).toMatchObject({ selectors: ["default"], deployments: {}, run: false });
+});
+
+test("the picker layers over a preset until told to stop @unit", async () => {
+    const picked = await pick(["", "default", "chat", "byok", "extras", "flags/secure-mode", "chat", "-", "", "n"]);
+    // `-` on a dimension the user answered goes back to the preset's own answer.
+    expect(picked.selectors).toEqual(["default", "flags/secure-mode"]);
+});
+
+test("the picker repeats the selection once per deployment @unit", async () => {
+    const picked = await pick([
+        "2",
+        "", "",                                   // base: default, done
+        "tiff", "data", "tiff-webtiff", "",       // deployment 2
+        "tiff",                                   // served by default
+        "n",
+    ]);
+    expect(picked.deployments).toEqual({ tiff: ["data/tiff-webtiff"] });
+    expect(picked.defaultDeployment).toBe("tiff");
+    expect(commandFor(picked)).toBe(
+        "npm run up -- default --deployment tiff=data/tiff-webtiff --default-deployment tiff");
+    expect(composeEnv(picked.selectors, picked).conflicts).toEqual([]);
 });

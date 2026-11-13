@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "OpenAI-compatible endpoint at CERIT e-INFRA with an operator-held key",
+    "env": {
+      "CERIT_API_KEY": "API key for the CERIT OpenAI-compatible endpoint",
+      "CERIT_BASE_URL": "Base URL of the OpenAI-compatible endpoint"
+    },
     "dimension": "chat",
     "requires": ["CERIT_API_KEY"],
     "defaults": { "CERIT_BASE_URL": "https://llm.ai.e-infra.cz/v1" }
@@ -45,6 +49,9 @@
             }
           }
         }
+      },
+      "logging": {
+        "channels": { "module.vercel-ai-chat-sdk:llm": "trace" }
       }
     }
   },
@@ -54,6 +61,7 @@
     "chat-anthropic": { "enabled": false }
   },
   "modules": {
-    "vercel-ai-chat-sdk": { "enabled": true }
+    "vercel-ai-chat-sdk": { "enabled": true },
+    "user-actions": { "permaLoad": true }
   }
 }

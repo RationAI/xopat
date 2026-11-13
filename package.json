@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "3.1.2",
+  "version": "3.2.2",
   "description": "A flexible multipurpose high-resolution data viewing framework.",
   "main": "index.js",
   "bin": "index.js",
@@ -84,15 +84,23 @@
   "overrides": {
     "js-yaml": "^3.15.0",
     "minimatch": "^3.1.5",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5",
+    "adm-zip": "^0.6.1",
+    "uuid": "^11.1.1",
+    "@frsource/cypress-plugin-visual-regression-diff": {
+      "glob": "^14.0.6"
+    },
+    "sucrase": {
+      "glob": "^14.0.6"
+    }
   },
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
-    "@frsource/cypress-plugin-visual-regression-diff": "^4.1.1",
+    "@frsource/cypress-plugin-visual-regression-diff": "^4.3.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^25.5.0",
     "@types/openseadragon": "^5.0.2",
-    "@yao-pkg/pkg": "^6.23.0",
+    "@yao-pkg/pkg": "^6.25.0",
     "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
@@ -113,9 +121,9 @@
     "highlight.js": "^11.7.0",
     "i18n": "^0.15.1",
     "inquirer": "^12.1.0",
-    "jsdoc": "^4.0.2",
+    "jsdoc": "^4.0.5",
     "micromatch": "^4.0.8",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.32",
     "postcss-discard-duplicates": "^7.0.2",
     "postcss-merge-rules": "^7.0.6",
     "tailwindcss": "^3.4.14",
@@ -152,5 +160,12 @@
       "test/fixtures/sessions/*.json",
       "env/env.json"
     ]
+  },
+  "allowScripts": {
+    "esbuild@0.25.10": true,
+    "esbuild@0.28.2": true,
+    "core-js-pure": false,
+    "protobufjs": false,
+    "cypress": false
   }
 }

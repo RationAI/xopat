@@ -1,6 +1,13 @@
 {
   "$meta": {
     "description": "Standalone localhost viewer skeleton — origin, cookies, setup defaults, no data source",
+    "env": {
+      "XOPAT_BYPASS_CLOSE_CONFIRMATION": "true skips the leave-page confirmation",
+      "XOPAT_DISABLE_PLUGINS_UI": "true hides the Plugins menu",
+      "XOPAT_NODE_PORT": "Port the viewer listens on",
+      "XOPAT_PLUGIN_SELECTION_MODE": "Which plugins may load: all, or whitelist (only those enabled in the ENV)",
+      "XOPAT_SCROLL_REQUIRES_CLICK": "true makes the wheel scroll the host page until the viewer is clicked (embeddings)"
+    },
     "role": "base",
     "clientKey": "localhost",
     "defaults": { "XOPAT_NODE_PORT": "9000" }
@@ -35,7 +42,7 @@
       "locale": "en",
       "theme": "auto",
       "disablePluginsUi": "<% XOPAT_DISABLE_PLUGINS_UI:-false %>",
-      "scrollRequiresCtrl": "<% XOPAT_SCROLL_REQUIRES_CTRL:-false %>",
+      "scrollRequiresClick": "<% XOPAT_SCROLL_REQUIRES_CLICK:-false %>",
       "bypassCloseConfirmation": "<% XOPAT_BYPASS_CLOSE_CONFIRMATION:-true %>"
     },
     /* No gating by default: an empty `definitions` means every capability

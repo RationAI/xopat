@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "Raw TIFF from a static file server, decoded by the geotiff module",
+    "hint": "Run npm run fixtures:fetch once to download the slides",
+    "env": {
+      "TIFF_FILESERVER": "Base URL the TIFF files are read from; the default is the viewer's own media route over test/fixtures/data"
+    },
     "dimension": "data",
     "clientKey": "localhost"
     /* No TIFF_FILESERVER default — see the note in `data/tiff-webtiff.json`:

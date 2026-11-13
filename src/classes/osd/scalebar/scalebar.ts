@@ -79,11 +79,16 @@ OSD.Viewer.prototype.makeScalebar = function(options) {
     options = options || {};
     options.viewer = this;
 
+    // The scalebar is rebuilt for every slide (new calibration), but the strip
+    // reserved under it belongs to the viewer, not to one slide: carry it over,
+    // or the first slide change drops the dock back onto whatever reserved it.
+    const bottomInset = this.scalebar?._bottomInset || 0;
     if (this.scalebar) {
         this.scalebar.destroy();
     }
 
     this.scalebar = new OSD.Scalebar(options);
+    if (bottomInset) this.scalebar.setBottomInset(bottomInset);
 };
 
 OSD.ScalebarType = {
@@ -188,7 +193,7 @@ OSD.Scalebar = function(options) {
         // the dock's height never has to be measured — the panel may grow or
         // collapse freely without a reflow on this per-frame path.
         var location = this.getScalebarLocation();
-        const bottom = this._contH - (location.y + this._barH);
+        const bottom = this._contH - (location.y + this._barH) + (this._bottomInset || 0);
         if (location.x !== this._lastLocX || bottom !== this._lastBottom) {
             this._lastLocX = location.x;
             this._lastBottom = bottom;
@@ -532,7 +537,7 @@ OSD.Scalebar.prototype = {
                 );
                 // Sensible anchor before the first refreshHandler frame lands.
                 this.dock.style.left = (this.xOffset || 5) + "px";
-                this.dock.style.bottom = (this.yOffset || 5) + "px";
+                this.dock.style.bottom = ((this.yOffset || 5) + (this._bottomInset || 0)) + "px";
             }
             this._applyDockLayout();
             this.viewer.container.appendChild(this.dock);
@@ -1378,6 +1383,28 @@ OSD.Scalebar.prototype = {
             this._viewerDestroyHandlerBound = false;
         }
         this._init({destroy: true});
+    },
+
+    /**
+     * Reserve a strip along the bottom edge of the viewer for other chrome
+     * (e.g. the focal-plane ruler): the whole dock is lifted by `px`.
+     * @param {number} px height of the reserved strip, 0 to release it
+     */
+    setBottomInset: function(px) {
+        px = Math.max(0, Number(px) || 0);
+        const previous = this._bottomInset || 0;
+        if (px === previous) return;
+        this._bottomInset = px;
+        // Move the dock here rather than through `refreshHandler`: that one
+        // needs an open, measured viewer, and this is called while a slide is
+        // still opening. The next frame recomputes the same value anyway.
+        if (!this.dock) return;
+        if (this._lastBottom !== undefined) {
+            this._lastBottom = this._lastBottom - previous + px;
+            this.dock.style.bottom = this._lastBottom + "px";
+        } else {
+            this.dock.style.bottom = ((this.yOffset || 5) + px) + "px";
+        }
     },
 
     setActive: function(active) {

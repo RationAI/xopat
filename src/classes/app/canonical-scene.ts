@@ -203,6 +203,13 @@ function applyState(target: any, state: any): void {
     if (state.visible !== undefined) target.visible = state.visible ? 1 : 0;
     if (state.use_mode !== undefined) target.params.use_mode = state.use_mode;
     if (state.use_blend !== undefined) target.params.use_blend = state.use_blend;
+    const structural = state.structural === true;
+    for (const key of ["use_gamma", "use_exposure", "use_logscale"]) {
+        if (state[key] !== undefined) target.params[key] = state[key];
+        else if (structural) delete target.params[key];
+    }
+    if (isObject(state.pipeline)) target.params.pipeline = deepClone(state.pipeline);
+    else if (structural) delete target.params.pipeline;
 }
 
 function mergeRuntimeIntoStructuralShader(

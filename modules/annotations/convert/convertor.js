@@ -1,76 +1,94 @@
 /**
- * Example for implementation of a convertor:
- * The convertor file must be included after this file.
+ * Annotation formats live in the core format registry, `IO_PIPELINE.formats`,
+ * under the domain `"annotations"`. Register one from anywhere — this module,
+ * a plugin, a module that loads before or after this one:
  *
- * OSDAnnotations.Convertor.register("my-format", class extends OSDAnnotations.Convertor.IConvertor {
- *     static title = 'My Custom Format';
- *     static description = 'This is the best format in the universe.';
- *
- *     //override behaviour if needed, default true
- *     static includeAllAnnotationProps = false;
- *     static exportsObjects = false;
- *     static exportsPresets = false;
- *
- *     static getSuffix(context) {
- *         return '.awesome';
- *     }
- *
- *     async encodePartial(annotationsGetter, presetsGetter) {*
- *         const objects = annotationsGetter("keepThisProperty", "keepAlsoThis");
- *         const presets = presetsGetter();
- *         /**
- *          * It gives a third party the power to work with each object and preset individually.
- *          * Note that partial output must not necessarily be a valid output of the given format.
- *          * In the case of unsupported format flexibility on this granularity, simply return
- *          * an list of objects that can be later finalized into a full valid format output.
- *          *
- *          * Options are in this.options, reference to the annotation module as this.context
- *          *
- *          * Must return the following object:
- *          *\/
- *         return {
- *             objects: [serialized or unserialized list - depends on options.serialize, possibly undefined],
- *             presets: [serialized or unserialized list - depends on options.serialize, possibly undefined]
- *         };
- *     }
- *
- *     async encodeFinalize(data) {
- *         /**
- *          * Finishes encodePartial() output to a string serialized content.
- *          * encodeFinalize(encodePartial(...)) is therefore a full exporting routine.
- *          * This flexibility is meant for third party SW to work on arbitrary granularity.
- *          *\/
- *          return myFinalize(data);
- *     }
- *
- *     async decode(data) {
- *         /**
- *          * Must return
- *            {
- *               objects: [native export format JS objects],
- *               presets: [native export format JS presets]
- *            }
- *          * for native format, check the readme. Deserialize the string data and parse.
- *          *\/
- *         return myParseData(data);
- *     }
+ * IO_PIPELINE.formats.register({
+ *     domain: "annotations",
+ *     id: "my-format",
+ *     title: "My Format",             // or a function, resolved when shown (translated)
+ *     extensions: [".awesome"],
+ *     contentType: "application/json",
+ *     // What the model handed to encode() should contain (all default to true):
+ *     //   allProps  every property of each object, or only the factory's necessary ones
+ *     //   props     extra property names to keep when allProps is false
+ *     //   objects / presets   whether the format can carry them at all
+ *     traits: { allProps: false },
+ *     // model = { objects, presets } in the native shape (see the module README).
+ *     // fctx.options are the export options, fctx.context the viewer's canvas
+ *     // wrapper (absent for a conversion with no viewer behind it), fctx.io the
+ *     // IO dispatch when the pipeline is the caller.
+ *     encode(model, fctx) { return myStringify(model); },
+ *     decode(data, fctx) { return { objects: [...], presets: [...] }; },
+ *     // optional: 0..1 confidence that `data` is this format
+ *     sniff(data, hint) { return hint.json?.myMarker ? 0.9 : 0; },
  * });
  *
+ * Convert directly, without the IO pipeline:
+ *
+ *     const text = await fabricWrapper.export({ format: "my-format" });
+ *     const text = await IO_PIPELINE.formats.encode("annotations", "my-format", model, { context: fabricWrapper });
+ *     const { model, format } = await IO_PIPELINE.formats.decode("annotations", "auto", data, { fileName });
+ *
+ * `OSDAnnotations.Convertor` below is the previous API, kept working on top of
+ * the registry. It is DEPRECATED: `Convertor.register(id, IConvertorClass)`
+ * still accepts a two-stage convertor class and adapts it into a registry
+ * format, and the static helpers delegate. New code should not use it.
  */
 
 OSDAnnotations.Convertor = class {
 
-    static CONVERTERS = {};
+    /** Registry domain of every annotation format. */
+    static DOMAIN = "annotations";
+
+    static get _registry() {
+        return IO_PIPELINE.formats;
+    }
+
+    static _warned = new Set();
+    static _deprecated(what, instead) {
+        if (this._warned.has(what)) return;
+        this._warned.add(what);
+        console.warn(`[annotations] OSDAnnotations.Convertor.${what} is deprecated; use ${instead}.`);
+    }
 
     /**
-     * Register custom Annotation Converter
+     * Presets actually referenced by `annotations`; all of them when no
+     * annotations are exported.
+     * @param {[object]?} annotations
+     * @param {[object]?} presets
+     */
+    static filterUnusedPresets(annotations, presets) {
+        if (!annotations || !presets) return presets;
+        const used = new Set();
+        for (let annotation of annotations) used.add(annotation?.presetID);
+        // Null/undefined entries are dropped rather than crashing the export.
+        return presets.filter(p => p && used.has(p.presetID));
+    }
+
+    /**
+     * What a format needs in its model, with the defaults applied.
+     * @param {string} format
+     * @return {{allProps: boolean, props: string[], objects: boolean, presets: boolean}}
+     */
+    static traits(format) {
+        const traits = this._registry.get(this.DOMAIN, format)?.traits || {};
+        return {
+            allProps: traits.allProps !== false,
+            props: Array.isArray(traits.props) ? traits.props : [],
+            objects: traits.objects !== false,
+            presets: traits.presets !== false,
+        };
+    }
+
+    /**
+     * Register a two-stage convertor class.
+     * @deprecated register an IOFormat with IO_PIPELINE.formats.register(...)
      * @param {string} format a format identifier
      * @param {typeof OSDAnnotations.Convertor.IConvertor} convertor a converter object class (not an instance)
      */
     static register(format, convertor) {
-        if (typeof this.CONVERTERS[format] === "object") {
-            console.warn(`Registered annotations convertor ${format} overrides existing convertor!`);
-        }
+        this._deprecated("register()", "IO_PIPELINE.formats.register({domain: 'annotations', ...})");
         for (let opt in convertor.options) {
             if (opt.startsWith("_")) continue;
             const option = convertor.options[opt];
@@ -79,277 +97,203 @@ OSDAnnotations.Convertor = class {
                 delete convertor.options[opt];
                 continue;
             }
-            if (opt in convertor) {
-                console.warn("Invalid convertor option: overriding existing properties is not allowed!", opt, option);
-                delete convertor.options[opt];
-                continue;
-            }
-            // Bind a setter callback (not an eval'd code string) so the settings
-            // UI never has to compile arbitrary source. `format`/`opt` are
-            // captured, which also fixes the previous hardcoded 'qupath' target.
-            option.changed = (value) => { OSDAnnotations.Convertor.get(format)[opt] = value; };
-            convertor[opt] = option.default;
+            // The class statics remain the legacy defaults an IConvertor
+            // instance falls back to; values the user picks are per call.
+            if (!(opt in convertor)) convertor[opt] = option.default;
         }
-        this.CONVERTERS[format] = convertor;
+
+        let suffix = "";
+        try { suffix = convertor.getSuffix?.() || ""; } catch (_e) { /* optional */ }
+        this._registry.register({
+            domain: this.DOMAIN,
+            id: format,
+            title: convertor.title,
+            description: convertor.description,
+            extensions: suffix ? [suffix] : [],
+            lossy: convertor.lossy ? (convertor.lossyReason || "This format does not preserve everything.") : undefined,
+            options: convertor.options,
+            traits: {
+                allProps: convertor.includeAllAnnotationProps !== false,
+                objects: convertor.exportsObjects !== false,
+                presets: convertor.exportsPresets !== false,
+                legacyClass: convertor,
+            },
+            encode: async (model, fctx) => {
+                const partial = await this._legacyEncodePartial(convertor, model, fctx);
+                return convertor.encodeFinalize(partial);
+            },
+            decode: (data, fctx) => new convertor(fctx.context, fctx.options).decode(data, fctx.context, fctx.options),
+        });
+    }
+
+    static _legacyEncodePartial(convertor, model, fctx) {
+        const options = { ...fctx.options };
+        return new convertor(fctx.context, options).encodePartial(
+            // A legacy convertor may ask for extra properties per call; that
+            // needs the live canvas, so without one it gets the model as built.
+            (...props) => props.length && fctx.context?.toModel
+                ? fctx.context.toModel({ ...options, props }, true, false).objects
+                : model.objects,
+            () => model.presets
+        );
     }
 
     /**
-     * Get a given convertor
+     * A flat description of a registered format, in the shape the settings UI
+     * reads (title, description, options, lossy, exportsObjects, …). For a
+     * legacy convertor class this is the class itself.
      * @param format
      */
     static get(format) {
-        const parserCls = this.CONVERTERS[format];
-        if (!parserCls) throw "Invalid format " + format;
-        return parserCls;
-    }
-
- /**
- * Encodes the annotation data using asynchronous communication.
- * @param {Object} options
- * @param {string} options.format
- *      Format ID of the converter to use.
- * @param {boolean} [options.exportsObjects]
- *      Whether annotation objects should be exported.
- * @param {boolean} [options.exportsPresets]
- *      Whether annotation presets should be exported.
- * @param {boolean} [options.scopeSelected=false]
- *      If true, only currently selected annotations/layers are exported.
- *      Throws EXPORT_NO_SELECTION if nothing is selected.
- * @param {{x:number, y:number}} [options.imageCoordinatesOffset]
- *      Optional image coordinate offset applied on export/import.
- * @param {boolean} [options.serialize]
- *      Optimization flag: if true, converters may return non-serialized data and encodeFinalize() will serialize them.
- * @param {OSDAnnotations.FabricWrapper} context
- *      Annotations module instance.
- * @param {boolean} withAnnotations
- *      Request exporting annotation objects.
- * @param {boolean} withPresets
- *      Request exporting presets.
- *
- * @returns serialized or plain list of strings of objects based on this.options.serialize:
- * {
- *     objects: [...serialized annotations... ],
- *     presets: [...serialized presets... ],
- * }
- */
-    static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
-        const parserCls = this.get(options.format);
-        const exportAll = parserCls.includeAllAnnotationProps;
-
-        options.exportsObjects = withAnnotations && parserCls.exportsObjects;
-        options.exportsPresets = withPresets && parserCls.exportsPresets;
-
-        let selectedIds = new Set();
-        if (options.exportsObjects && options.scopeSelected) {
-            const selectedAnns = (context.getSelectedAnnotations?.() || []);
-            const layers = (context.getSelectedLayers?.() || [])
-                .filter(Boolean);
-
-            const layerAnns = layers.length
-                ? layers.flatMap(l => l.getObjects?.() || [])
-                : [];
-
-            const pushUnique = (arr) => {
-                for (const o of arr) {
-                    const id = String(o?.id ?? '');
-                    if (id) selectedIds.add(id);
-                }
-            };
-
-            pushUnique(selectedAnns);
-            pushUnique(layerAnns);
-			if (!selectedIds.size) {
-                const err = new Error('No annotations selected');
-                err.code = 'EXPORT_NO_SELECTION';
-                throw err;
-            }
-        }
-
-        const annotationsGetter = (...exportedProps) => {
-            if (!options.exportsObjects) return undefined;
-            let objs = context.toObject(
-                exportAll,
-                // Private annotations are withheld only when the deployment set
-                // `exportPrivate: false` — see OSDAnnotations#getPrivacyExcludesExport.
-                context.module.getPrivacyExcludesExport() && ((o) => !o.private),
-                ...exportedProps
-            ).objects;
-
-            if (options.scopeSelected && selectedIds.size) {
-                objs = objs.filter(o => selectedIds.has(String(o.id)));
-            }
-            return objs;
+        const registered = this._registry.get(this.DOMAIN, format);
+        if (!registered) throw new Error("Invalid format " + format);
+        if (registered.traits?.legacyClass) return registered.traits.legacyClass;
+        const traits = this.traits(format);
+        const lossyReason = typeof registered.lossy === "function" ? registered.lossy() : registered.lossy;
+        return {
+            title: this._registry.title(this.DOMAIN, format),
+            description: typeof registered.description === "function" ? registered.description() : registered.description,
+            options: registered.options || {},
+            includeAllAnnotationProps: traits.allProps,
+            exportsObjects: traits.objects,
+            exportsPresets: traits.presets,
+            lossy: !!lossyReason,
+            lossyReason: lossyReason || "",
+            getSuffix: () => registered.extensions[0] || "",
+            encodeFinalize: (data) => this.encodeFinalize(format, data),
         };
-
-        const encoded = await new parserCls(context, options).encodePartial(
-            annotationsGetter,
-            () => context.module.presets.toObject()
-        );
-        encoded.format = options.format;
-        return encoded;
     }
 
     /**
-     * Finalize encoding to a string
+     * Read-only id → format view.
+     * @deprecated use IO_PIPELINE.formats.list('annotations')
+     */
+    static get CONVERTERS() {
+        const out = {};
+        for (const format of this._registry.list(this.DOMAIN)) out[format.id] = this.get(format.id);
+        return out;
+    }
+
+    /**
+     * First half of the former two-stage export.
+     * @deprecated use fabricWrapper.toModel(options) and IO_PIPELINE.formats.encode(...)
+     * @param {Object} options export options; `format` is required
+     * @param {OSDAnnotations.FabricWrapper} context
+     * @param {boolean} withAnnotations
+     * @param {boolean} withPresets
+     * @returns for a legacy convertor its own partial output, otherwise the
+     *   model `{objects, presets}`; either way accepted by encodeFinalize()
+     */
+    static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
+        const registered = this._registry.get(this.DOMAIN, options.format);
+        if (!registered) throw new Error("Invalid format " + options.format);
+        const model = context.toModel(options, withAnnotations, withPresets);
+        const fctx = { options: this._registry.resolveOptions(registered, options), context };
+        const legacy = registered.traits?.legacyClass;
+        const partial = legacy ? await this._legacyEncodePartial(legacy, model, fctx) : { ...model };
+        partial.format = options.format;
+        // Carried so encodeFinalize() converts with the same options.
+        Object.defineProperty(partial, "_fctx", { value: fctx, enumerable: false });
+        return partial;
+    }
+
+    /**
+     * Second half of the former two-stage export.
+     * @deprecated use IO_PIPELINE.formats.encode('annotations', format, model)
      * @param {string} format
-     * @param {object} data
-     * @param {object} data.objects
-     * @param {object} data.presets
-     * @return {string}
+     * @param {object} data output of encodePartial()
+     * @return {string|Promise} synchronous for formats whose encode() is
      */
     static encodeFinalize(format, data) {
-        return this.get(format).encodeFinalize(data);
+        const registered = this._registry.get(this.DOMAIN, format);
+        if (!registered) throw new Error("Invalid format " + format);
+        const legacy = registered.traits?.legacyClass;
+        if (legacy) return legacy.encodeFinalize(data);
+        const fctx = data?._fctx || { options: this._registry.resolveOptions(registered) };
+        return registered.encode(data, fctx);
     }
 
     /**
-     * Suffix getter for a given format
-     * @param format format to use
+     * @deprecated use IO_PIPELINE.formats.get('annotations', format).extensions
      * @return {string}
      */
     static getSuffix(format) {
-        return this.get(format).getSuffix();
+        return this._registry.get(this.DOMAIN, format)?.extensions[0] || "";
     }
 
     /**
-     * Decodes the annotation data using asynchronous communication.
-     * @param options
-     * @param data
-     * @param context
+     * @deprecated use IO_PIPELINE.formats.decode('annotations', format, data, {context})
      */
     static async decode(options, data, context) {
-        const parserCls = this.get(options.format);
-        return await new parserCls(context, options).decode(data, context, options);
+        return (await this._registry.decode(this.DOMAIN, options.format, data, { options, context })).model;
     }
 
     /**
-     * Read the list of available format IDs
+     * @deprecated use IO_PIPELINE.formats.list('annotations')
      * @return {string[]}
      */
     static get formats() {
-        return Object.keys(this.CONVERTERS);
+        return this._registry.list(this.DOMAIN).map(f => f.id);
     }
 
     /**
-     * Detect a likely format from a filename based on the registered convertors'
-     * getSuffix() output and a small alias table for community extensions.
-     * Returns the format ID or null when nothing matches.
+     * Format a file name suggests (longest registered extension wins), or null.
+     * Content is not consulted — IO_PIPELINE.formats.detect() does both.
      * @param {string} name
      * @return {string|null}
      */
     static detectFromFilename(name) {
         if (!name || typeof name !== 'string') return null;
         const lower = name.toLowerCase();
-
-        // Longest declared suffix wins so 'qu.geo.json' beats '.json'.
-        let best = null;
-        let bestLen = 0;
-        for (const format of Object.keys(this.CONVERTERS)) {
-            let suffix;
-            try { suffix = this.CONVERTERS[format].getSuffix?.() || ''; } catch (_e) { suffix = ''; }
-            if (!suffix) continue;
-            const s = suffix.toLowerCase().replace(/^\.+/, '');
-            if (!s) continue;
-            if (lower.endsWith('.' + s) && s.length > bestLen) {
-                best = format;
-                bestLen = s.length;
+        let best = null, bestLength = 0;
+        for (const format of this._registry.list(this.DOMAIN)) {
+            for (const extension of format.extensions) {
+                if (lower.endsWith(extension) && extension.length > bestLength) {
+                    best = format.id;
+                    bestLength = extension.length;
+                }
             }
         }
-        if (best) return best;
-
-        // Aliases for common third-party extensions not directly produced by us.
-        if (lower.endsWith('.geojson') || lower.endsWith('.geo.json')) {
-            return this.CONVERTERS['geo-json'] ? 'geo-json' : null;
-        }
-        return null;
+        return best;
     }
 };
 
 /**
- *
+ * Base class of the former two-stage convertor API. Kept so existing external
+ * convertors keep loading; see the top of this file for the replacement.
+ * @deprecated
  * @type {OSDAnnotations.Convertor.IConvertor}
  */
 OSDAnnotations.Convertor.IConvertor = class {
-    /**
-     * Title, used in GUI
-     * @type {string}
-     */
+    /** Title, used in GUI @type {string} */
     static title = 'My Custom Format';
-    /**
-     * Description, used in GUI
-     * @type {*}
-     */
+    /** Description, used in GUI */
     static description = undefined;
     /**
-     * Options map, supported parameters, each option must be an object
-     * that has:
-     * {
-     *     type: "checkBox" // todo docs
-     *     default: default value
-     *     ...possibly provide other properties, note that 'changed' property is handled automatically
-     * }
-     * Properties defined here are automatically attached as a static properties of the given class.
-     * E.g.: option
-     * myValue: {type:"checkBox", default: false} will create
-     *    - this.constructor.myValue object with default 'false' value
-     *    - this.options.myVaue object with default value this.constructor.myValue, possibly overridden
-     *    from the constructor.
-     * Note. options starting with underscore are ignored, these can be used for custom HTML content (e.g. a text)
+     * Options map: `{ name: { type, default, ...ui props } }`. Names starting
+     * with underscore are UI-only content. Each default is also attached as a
+     * static of the class and used when an instance is given no value.
      */
     static options = {};
-
-    /**
-     * Declare whether supplied annotations come with
-     * all options (in native format ready for encoding) or with
-     * required set only
-     * @type {boolean}
-     */
+    /** Whether supplied annotations carry all properties or only the necessary set. */
     static includeAllAnnotationProps = true;
-    /**
-     * Declare whether this convertor can export annotation objects
-     * @type {boolean}
-     */
+    /** Whether this convertor can export annotation objects. */
     static exportsObjects = true;
-    /**
-     * Declare whether this convertor can export annotation presets
-     * @type {boolean}
-     */
+    /** Whether this convertor can export annotation presets. */
     static exportsPresets = true;
-
-    /**
-     * Whether export through this convertor loses information (geometry
-     * simplification, dropped property, lossy text rendering, etc.). If true,
-     * the UI shows a warning toast when the user triggers an export so they
-     * know the stored file does not round-trip cleanly.
-     * @type {boolean}
-     */
+    /** Whether export loses information; the UI warns the user when true. */
     static lossy = false;
-    /**
-     * Human-readable explanation paired with `lossy`. Used by the export UI
-     * to tell the user *what* will be dropped/simplified.
-     * @type {string}
-     */
+    /** What is lost, shown with the warning. */
     static lossyReason = "";
 
     /**
-     * @param {OSDAnnotations} annotationsModule  reference to the module
-     * @param {object} options any options your converter wants,
-     *   must be documented, passed from the module convertor options
-     * @param {boolean} options.serialize build-in parameter for optimization
-     * @param {boolean} options.exportsObjects true if annotations requested, always false if static set to false
-     * @param {boolean} options.exportsPresets true if presets requested, always false if static set to false
-     * @param options
+     * @param {OSDAnnotations.FabricWrapper} annotationsModule the viewer's canvas wrapper (has `.module`)
+     * @param {object} options
+     * @param {boolean} options.exportsObjects true if annotations requested
+     * @param {boolean} options.exportsPresets true if presets requested
      */
     constructor(annotationsModule, options) {
-        /**
-         * Reference to the annotations module.
-         * @type {OSDAnnotations}
-         * @memberOf OSDAnnotations.Convertor.IConvertor
-         */
         this.context = annotationsModule;
-        /**
-         * Options object enriched by values from static options (if undefined).
-         * @memberOf OSDAnnotations.Convertor.IConvertor
-         */
         this.options = {...options};
         for (let opt in this.constructor.options) {
             if (opt.startsWith("_")) continue;
@@ -360,77 +304,31 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
-     * Describe what filename has the exported file
-     * @param {OSDAnnotations} context
-     * @return {string}
-     */
-    static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO("_") + '.txt';
-    }
-
-    /**
-     * Annotation export into a selected format. For flexibility, the output must be a serialized object list,
-     * and array of serialized exported presets. The encoding must be flexible enough: it is a two-step procedure.
-     * For optimization, options.serialize=true means the output arrays can contain arbitrary data to avoid expensive
-     * re-encoding. encodeFinalize() must then implicitly recognize whether the arrays come with serialized items.
-     *
-     * @param {function} annotationsGetter function that returns a list of objects to export or undefined if not desired
-     * @param {function} presetsGetter function that returns a list of presets to export or undefined if not desired
-     * @return {object} must return the following structure:
-     *    {
-     *        objects: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
-     *        presets: {[(string|any)]} (serialized or unserialized annotation list or undefined if exportsObjects = false),
-     *    }
+     * @param {function} annotationsGetter returns the objects to export, or undefined
+     * @param {function} presetsGetter returns the presets
+     * @return {object} `{objects, presets}`, consumed by the static encodeFinalize()
      */
     async encodePartial(annotationsGetter, presetsGetter) {
-        throw("::encodePartial must be implemented!");
+        throw new Error("::encodePartial must be implemented!");
     }
 
     /**
-     * Finalize the encoding to a serialized string. If objects/presets
-     * are strings, the data comes in pre-serialized, otherwise the serialization
-     * was delayed and it is ready for serialization.
      * @param {object} output result of encodePartial(...)
-     * @param {[(string|any)]} output.objects
-     * @param {[(string|any)]} output.presets
      * @return {string}
      */
     static encodeFinalize(output) {
-        throw("::merge must be implemented!");
+        throw new Error("::encodeFinalize must be implemented!");
     }
 
     /**
-     * todo: consider support for un-serialized objects too...
-     * @param {string} data serialized data (result of encodeFinalize(await encodePartial()))
-     * @return {object} must return the following structure:
-     *    {
-     *        objects: [native export format JS objects] or undefined,
-     *        presets: [native export format JS presets] or undefined
-     *    }
-     *    for native format specs, check the readme. Deserialize the string data and parse.
+     * @param {string} data serialized data
+     * @return {object} `{objects, presets}` in the native shape
      */
     async decode(data) {
-        throw("::decode must be implemented!");
+        throw new Error("::decode must be implemented!");
     }
 
-    /**
-     * Native-format method that removes unused presets, or keeps all if objects are not exported
-     * @param {[object]?} annotations or undefined
-     * @param {[object]?} presets or undefined
-     */
     filterUnusedPresets(annotations, presets) {
-        if (!annotations || !presets) return presets;
-        const presetsIdSet = new Set();
-        for (let annotation of annotations) {
-            presetsIdSet.add(annotation?.presetID);
-        }
-        // Guard `p` — symmetric with the `annotation?.presetID` on the line
-        // above. An undefined/null entry in `presets` would otherwise crash
-        // the entire export with "Cannot read properties of undefined
-        // (reading 'presetID')" and surface as a user-facing dialog via the
-        // IO pipeline's failure path. Filter null/undefined entries out
-        // rather than letting one bad entry kill the whole save.
-        return presets.filter(p => p && presetsIdSet.has(p.presetID));
+        return OSDAnnotations.Convertor.filterUnusedPresets(annotations, presets);
     }
 };
-

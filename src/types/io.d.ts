@@ -163,7 +163,17 @@ interface IOContext {
      * would let a real refusal disappear, which nobody notices at all.
      */
     trigger?: "user" | "system";
-    /** Free-form metadata, e.g. format hints. */
+    /**
+     * The format this bundle travels in, when one is known.
+     *
+     * On export the pipeline resolves it per sink — a binding's `format`, else
+     * the first registered format the sink says it takes (`IOSink.formats`) —
+     * and calls `exportBundle` once per distinct format; `undefined` means "the
+     * owner's own default". On import it is what the sink said it returned,
+     * else the binding/sink format, else what `formats.detect` recognised.
+     */
+    format?: IOFormatDescriptor;
+    /** Free-form metadata. On import it also carries what the sink returned as `IOResult.meta`. */
     meta: Record<string, unknown>;
 }
 
@@ -173,7 +183,18 @@ interface IOContext {
  * surfaced via `Dialogs.show`; `reason` is what gets logged.
  */
 type IOResult<T = unknown> =
-    | { ok: true; payload?: T }
+    | {
+          ok: true;
+          payload?: T;
+          /**
+           * `readBundle` only: the format id of `payload`, when the sink knows
+           * it (a sink that stores DICOM returns `"dicom"`). Reaches the owner
+           * as `ctx.format`.
+           */
+          format?: string;
+          /** `readBundle` only: decoder-side metadata, merged into the owner's `ctx.meta`. */
+          meta?: Record<string, unknown>;
+      }
     | {
           ok: false;
           refused: true;
@@ -210,6 +231,112 @@ interface IOBinaryPayload {
     contentType?: string;
     /** Extension a sink may append when it names the stored object. */
     fileExt?: string;
+}
+
+// ── formats ────────────────────────────────────────────────────────────────
+
+/** A format's wire form: text, or bytes. */
+type IOEncoded = string | Uint8Array | ArrayBuffer;
+
+/** UI descriptor of one format option. `default` seeds the per-call value. */
+interface IOFormatOptionDescriptor {
+    /** Control kind (`"checkBox"`, `"select"`, `"numberInput"`, …) for a settings UI. */
+    type: string;
+    default?: unknown;
+    [key: string]: unknown;
+}
+
+/** What a format's conversion call is told. */
+interface IOFormatContext {
+    /** Declared defaults overlaid with the caller's values. Per call — never stored on the format. */
+    options: Record<string, unknown>;
+    /** The dispatch this conversion serves, when the pipeline (or a sink) is the caller. */
+    io?: IOContext;
+    /**
+     * Whatever the domain's owner hands its formats (the annotations module
+     * passes the viewer's canvas wrapper). Optional: a format must also work
+     * for a conversion that has no live view behind it.
+     */
+    context?: unknown;
+    /** Name of the file the data came from, when decoding one. */
+    fileName?: string;
+}
+
+interface IOFormatSniffHint {
+    fileName?: string;
+    contentType?: string;
+    /** The data parsed as JSON, when it is JSON — so N formats do not parse it N times. */
+    json?: unknown;
+}
+
+/**
+ * A conversion between a domain's model and a wire representation.
+ *
+ * `domain` is the owner id of the data (`"annotations"`); the model is that
+ * owner's plain in-memory shape. Register with `IO_PIPELINE.formats.register` —
+ * from the owner or from anyone else. Every method is optional: a format may be
+ * import-only, export-only, or item-level only.
+ */
+interface IOFormat<Model = any, Item = any> {
+    domain: string;
+    id: string;
+    /** Resolved when shown, so it can be a translated string. */
+    title: string | (() => string);
+    description?: string | (() => string);
+    /** File extensions, the first being the one written (`[".geojson", ".geo.json"]`). */
+    extensions: string[];
+    /** MIME type. Default `text/plain`, or `application/octet-stream` when `binary`. */
+    contentType?: string;
+    /** The wire form is bytes, not text. */
+    binary?: boolean;
+    /** Set when encoding loses information; the text says what. */
+    lossy?: string | (() => string);
+    options?: Record<string, IOFormatOptionDescriptor>;
+    /** Domain-defined hints for the owner building the model (e.g. which properties to include). */
+    traits?: Record<string, unknown>;
+
+    /**
+     * `undefined` means "this format has nothing to say for this context" (a
+     * DICOM SR for a slide that is not DICOM) — the bundle is then simply not
+     * part of the flush, which is different from throwing.
+     */
+    encode?(model: Model, fctx: IOFormatContext): IOEncoded | undefined | Promise<IOEncoded | undefined>;
+    decode?(data: string | Uint8Array | ArrayBuffer, fctx: IOFormatContext): Model | Promise<Model>;
+    /** One item ⇄ its wire shape, for per-item traffic and manual conversion. */
+    encodeItem?(item: Item, fctx: IOFormatContext): unknown;
+    decodeItem?(raw: unknown, fctx: IOFormatContext): Item | undefined;
+    /** Confidence (0..1) that `data` is in this format. `0` is a definite no. */
+    sniff?(data: string | Uint8Array | ArrayBuffer, hint: IOFormatSniffHint): number;
+}
+
+/** The format a dispatch travels in — `IOContext.format`. */
+interface IOFormatDescriptor {
+    domain: string;
+    id: string;
+    /** `false` when the id was named (by a binding, a sink, a stored tag) but nothing registered it. */
+    registered: boolean;
+    contentType: string;
+    /** Without the leading dot; `""` when unknown. */
+    fileExt: string;
+    binary: boolean;
+    options: Record<string, unknown>;
+}
+
+interface IOFormatRegistryLike {
+    register(format: IOFormat): IODisposer;
+    get(domain: string, id: string): IOFormat | undefined;
+    has(domain: string, id: string): boolean;
+    list(domain: string): IOFormat[];
+    title(domain: string, id: string): string;
+    descriptor(domain: string, id: string, options?: Record<string, unknown>): IOFormatDescriptor;
+    resolveOptions(format: IOFormat | undefined, options?: Record<string, unknown>): Record<string, unknown>;
+    /** Format id recognising `data` (file name first, then content), or `undefined`. */
+    detect(domain: string, data: unknown, hint?: IOFormatSniffHint): string | undefined;
+    encode(domain: string, id: string, model: unknown, fctx?: Partial<IOFormatContext>): Promise<IOEncoded | undefined>;
+    /** `id` may be `"auto"`; the result says which format decoded it. */
+    decode(domain: string, id: string, data: unknown, fctx?: Partial<IOFormatContext>): Promise<{ model: unknown; format: string }>;
+    encodeItem(domain: string, id: string, item: unknown, fctx?: Partial<IOFormatContext>): unknown;
+    decodeItem(domain: string, id: string, raw: unknown, fctx?: Partial<IOFormatContext>): unknown;
 }
 
 /**
@@ -329,6 +456,14 @@ interface IOSink {
      * still lives in the guards (see src/IO_SINK_AUTHORING.md §0).
      */
     route?: "sink" | "local";
+    /**
+     * Bundle formats this sink takes, per domain (owner id; `"*"` for any):
+     * `{ annotations: ["dicom"] }`. The pipeline asks the owner for the first
+     * one that is registered and hands the sink that payload, with
+     * `ctx.format` describing it. A sink that stores bytes verbatim declares
+     * nothing and receives whatever the binding (or the owner) chose.
+     */
+    formats?: Record<string, string[]>;
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx: IOContext, payload: unknown): Promise<IOResult> | IOResult;
@@ -525,8 +660,10 @@ interface IOResourceDef<T = unknown> {
  *                   provided alongside `apply`, the resource auto-pushes a
  *                   history entry. Also used by the post-commit rollback path
  *                   when `rollbackOnAsyncRefuse: true` and the queued dispatch
- *                   resolves to refusal — the pipeline drives `history.undo()`
- *                   so the entry is popped and `inverseApply` runs once.
+ *                   resolves to refusal — the resource runs THIS call's
+ *                   `inverseApply` once and invalidates its history entry
+ *                   (it does not go through `history.undo()`, which would
+ *                   undo whatever happens to be on top of the stack).
  *  - `inversePayload`
  *                   wire payload the *inverse* op carries when auto-history
  *                   replays this mutation. `inverseApply` fixes local state;
@@ -714,10 +851,12 @@ interface IOOwnerBundleHooks {
  * Resolution order (highest to lowest):
  *   1. `disabled[ownerId]` set → IO inert
  *   2. `bindings[ownerId][capabilityId]` defined → that exact list
- *   3. include.json `io.defaultBindings[capabilityId]` defined → that list
- *   4. capability kind === `"bundle"` → fallback to `["post-data"]`
- *      (preserves legacy HTML-form session export)
- *   5. capability kind === `"crud"` → `[]` (inert)
+ *   3. a runtime `claimBinding(...)` from a module → the merged claims
+ *   4. include.json `io.defaultBindings[capabilityId]` defined → that list
+ *   5. capability kind === `"kv"` → inherit `bindings.core[capabilityId]`
+ *   6. built-in fallback: slide-aware bundle → `["session-memory", "post-data"]`,
+ *      any other bundle → `["post-data"]` (legacy HTML-form session export),
+ *      `"kv"` → the namespace default, `"crud"` → `[]` (inert)
  */
 /**
  * One entry in a binding list: either a bare sink id (the legacy form, still
@@ -756,6 +895,14 @@ type IOBindingTarget =
           config?: Record<string, unknown>;
           /** Optional human label for admin/debug surfaces. */
           label?: string;
+          /**
+           * Bundle format this destination receives (a registered format id of
+           * the owner's domain). Overrides what the sink would pick itself; must
+           * be one the sink takes when it declares `formats`.
+           */
+          format?: string;
+          /** Values for that format's options. */
+          formatOptions?: Record<string, unknown>;
       };
 
 /** Normalized binding entry, as returned by `bindingTargetsFor`. */
@@ -764,6 +911,8 @@ interface IOResolvedBinding {
     /** Always an object (`{}` when the binding carried none). Frozen. */
     config: Readonly<Record<string, unknown>>;
     label?: string;
+    format?: string;
+    formatOptions?: Readonly<Record<string, unknown>>;
 }
 
 interface IOConfigBlock {
@@ -805,9 +954,10 @@ interface IOConfigBlock {
      * is therefore the hard pin: the sink behaves exactly as it always has and
      * nothing but ENV can change it.
      *
-     * A sink that is registered but disabled resolves as if no binding had named
-     * it — resolution falls through to the lower-precedence rules, so a bundle
-     * capability lands on the built-in local sinks instead of stalling. That is
+     * A sink that is registered but disabled is filtered out of its binding
+     * list. If that empties the list, resolution does NOT fall through to
+     * lower-precedence rules: a bundle capability lands on the built-in local
+     * sinks instead of stalling, anything else resolves to no sinks. That is
      * deliberately NOT the same state as a sink which has not registered yet
      * (that one holds writes and refuses with `W_IO_SINK_NOT_READY`).
      *
@@ -857,6 +1007,9 @@ type IODisposer = () => void;
  * `APPLICATION_CONTEXT.io`).
  */
 interface IOPipelineLike {
+    /** Format registry and conversion service — see {@link IOFormat}. */
+    readonly formats: IOFormatRegistryLike;
+
     // ── capability registry ─────────────────────────────────────────────
     registerCapability(ownerUid: string, cap: IOCapability): IODisposer;
     listCapabilities(ownerUid?: string): Array<{ ownerUid: string; capability: IOCapability }>;
@@ -884,6 +1037,15 @@ interface IOPipelineLike {
      * built-in local sinks) instead of stalling behind it.
      */
     setSinkEnabled(sinkId: string, enabled: boolean): boolean;
+    /**
+     * The session's settings for one sink — the object form of
+     * `params.ioSinks.<id>` (`{enabled?, ...settings}`) without `enabled` — or
+     * `undefined`. Returned only for sinks the operator marked
+     * `sessionControllable`. Opaque to core and untrusted: the sink validates
+     * every field it reads and keeps its own trusted limits (allowlists) in ENV.
+     * Each call returns a fresh plain-JSON copy.
+     */
+    sessionSinkConfig(sinkId: string): Record<string, unknown> | undefined;
 
     // ── runtime binding claims ──────────────────────────────────────────
     /**
@@ -995,7 +1157,20 @@ interface IOPipelineLike {
          */
         trigger?: "user" | "system";
     }): Promise<IOResult[]>;
-    importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]>;
+    /**
+     * Hand caller-supplied data (a user-picked file) to owners' `importBundle`
+     * on the local route. `viewerId` / `backgroundId` address it like a restore
+     * would; a per-viewer owner ignores an import that names no viewer.
+     */
+    importBundle(
+        rawData: unknown,
+        scope?: {
+            ownerUid?: string; viewerId?: string; backgroundId?: string;
+            /** Format id of `rawData`; detected (from `fileName` and content) when omitted. */
+            format?: string;
+            fileName?: string;
+        },
+    ): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
 
     /**
@@ -1080,7 +1255,15 @@ interface IOPipelineLike {
      * Placeholders:
      *   `{ownerId}` `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}`
      *   `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
-     *   `{resourceName}` `{itemId}`
+     *   `{resourceName}` `{itemId}` `{slideHash}` `{slideName}`
+     *
+     * `{slideHash}` / `{slideName}` describe the slide behind `backgroundId`
+     * (`UTILITIES.slideIdentityFor`). `{slideHash}` (16 hex, of the slide's
+     * data entry) is stable across sessions and explicit background ids and
+     * reveals nothing of the path — use it to address per-slide data.
+     * `{slideName}` is the file name: readable, but two folders with the same
+     * file name collide, and it may carry a case number. Unresolvable:
+     * `{slideHash}` → `_any` (like `{backgroundId}`), `{slideName}` → `empty`.
      *
      * `{capabilityId}` is direction-DEPENDENT (`bundle-export` on the way
      * out, `bundle-import` on the way back) and is therefore NOT round-trip

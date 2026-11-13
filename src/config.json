@@ -359,8 +359,10 @@
             "sideMenuTabs": null
         },
         /*
-          Per-sink IO on/off, `{"<sinkId>": true|false}` — e.g.
-          {"mlflow": false} to run without pushing anything to MLflow.
+          Per-sink IO for this session, `{"<sinkId>": true|false}` — e.g.
+          {"mlflow": false} to run without pushing anything to MLflow — or an
+          object `{"enabled": bool, ...settings}` whose settings the sink reads
+          via IO_PIPELINE.sessionSinkConfig(id) (core never interprets them).
           Honoured ONLY for sinks the deployment marked
           `core.client.<active>.io.sinks.<id>.sessionControllable`; with that
           absent the operator's value stands and a session cannot redirect data.
@@ -404,9 +406,10 @@
         "grayscale": false,
         "tileCache": true,
         "preventNavigationShortcuts": false,
-        // require Ctrl/Cmd + wheel to zoom the viewer — plain wheel falls through
-        // to the host page. Recommended for notebook / scrollable-host embeddings.
-        "scrollRequiresCtrl": false,
+        // the wheel scrolls the host page until the user clicks into the viewer,
+        // and again once the pointer leaves it. Recommended for notebook /
+        // scrollable-host embeddings. (Former name: scrollRequiresCtrl.)
+        "scrollRequiresClick": false,
         // invert the scroll-to-zoom direction (scroll down to zoom in, up to zoom out)
         "reverseScroll": false,
         // when the slide has a resolved native magnification, scroll snaps between

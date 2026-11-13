@@ -43,10 +43,11 @@
  */
 {
   /* Composer selectors: fragment ids under `env/parts/`, in merge order.
-     `base/core` + `data/wsi-service` is byte-equivalent to env/env.default.json. */
+     The data layer is the generated slide: no project depends on an image
+     server it does not start itself. */
   "$base": [
     "base/core",
-    "data/wsi-service",
+    "data/synthetic-dzi",
     "auth/keycloak-saml",
     "roles/guest-pathologist-researcher",
     "chat/openai-server-key",

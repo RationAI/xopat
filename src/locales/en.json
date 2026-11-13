@@ -14,6 +14,9 @@
         "invokeConfirm": "Allow"
       },
       "visualization": {
+        "backgroundUpdateTitle": "Allow changing how the slide is rendered?",
+        "backgroundUpdateDescription": "The script wants to change the rendering of the slide itself in the current viewer.",
+        "backgroundUpdateUndo": "The change can be undone from the history.",
         "critiqueSystem": "You are judging how well a scientific image visualization reads, not what the specimen is. Comment only on the rendering: contrast, dynamic range, colour choice, whether an overlay is distinguishable from the image beneath it, and whether structure is lost to saturation or washed out. Do not diagnose, do not name tissue types, and do not speculate about the specimen. Answer in at most four short sentences.",
         "critiquePrompt": "Describe what is wrong with how this view is rendered and what would make the data easier to read.",
         "critiqueQuestion": "Describe what is wrong with how this view is rendered, focusing on: {{question}}",
@@ -66,6 +69,7 @@
       "ioNoDestination": "Storage for {{what}} is misconfigured — none of the configured destinations exist, so data is being discarded.",
       "ioSinkNotReady": "{{count}} change(s) are waiting: the storage destination is not connected yet. Nothing has been lost — they will be sent as soon as it is available.",
       "ioOffline": "{{count}} change(s) are waiting to be sent — you appear to be offline. Nothing has been lost.",
+      "ioRefusedNoReason": "Your change to {{what}} was refused and has not been saved.",
       "nothingToRender": "No data to view.",
       "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "shaderProgramFailed": "The visualization could not be compiled and the change was not applied. This usually means too many layers, or too many colormap / advanced slider controls, for what this device supports.",
@@ -95,7 +99,8 @@
       "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
       "sessionExpiredReloading": "Your session expired or became invalid. Reloading…",
       "viewerFilesNotConfigured": "Viewer does not show all files - some were not properly configured!",
-      "visualizationShaderSkipped": "Some visualization layers cannot be displayed in this deployment and were skipped.",
+      "visualizationForeignSlide": "An overlay belonging to a different slide was bound to this slide and has been hidden.",
+      "visualizationShaderSkipped":"Some visualization layers cannot be displayed in this deployment and were skipped.",
       "visualizationValidationIssues": "Some visualization layers are invalid and were not displayed.",
       "visualizationRendererWarnings": "The visualization reported {{count}} problem(s) while rendering — some layers may not look as configured (e.g. default colors instead of the configured palette). If a layer shows a broom icon, clearing its saved values may help; the session export lists the details.",
       "visualizationParamsIgnored": "Some visualization settings are not recognised by their shader. The layers are still rendered, but those settings may have no effect — see the console for details.",
@@ -165,9 +170,7 @@
         "emptyHiddenBody": "Every panel that lives here is hidden right now.",
         "showAllPanels": "Show all panels",
         "dragToOpen": "Open the menu: click or drag",
-        "hoverToOpen": "Hover or focus to open the menu",
-        "pinDock": "Pin menu (dock beside viewer)",
-        "unpinDock": "Unpin menu (overlay on hover)"
+        "clickToOpen": "Click to open the menu"
       },
       "menu": {
         "configMenu": "Menu options",
@@ -182,10 +185,15 @@
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
-        "faultyViz": "Invalid Data",
-        "focalPlane": "Focal plane",
-        "focalPlaneCount": "{{count}} planes",
-        "focalPlaneHint": "Alt + scroll or [ ] to change plane"
+        "faultyViz": "Invalid Data"
+      },
+      "depthRuler": {
+        "title": "Focal plane",
+        "hint": "Focal plane: drag or scroll here, Alt + scroll on the slide, or press [ ]",
+        "position": "{{index}} / {{count}}",
+        "offsetUm": "{{value}} µm",
+        "previous": "Previous focal plane",
+        "next": "Next focal plane"
       },
       "scalebar": {
         "home": "Fit the whole slide",
@@ -208,7 +216,7 @@
         "blendingExplain": "Toggle blending (default: mask)",
         "defaultBlending": "Custom blending (default: mask)",
         "maskEnable": "Enable mask",
-        "maskDisable": "Enable mask",
+        "maskDisable": "Disable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
         "notAvailable": "No visualization available.",
@@ -359,7 +367,7 @@
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "valueCopied": "The value was copied to your clipboard.",
       "viewerDuplicateDataSource": "Two viewports ({{slots}}) display the same data source. Saving or exporting targets this data once — actions from either viewport write to the same output and may overwrite each other.",
-      "scrollRequiresCtrl": "Hold Ctrl (or Cmd) and scroll to zoom the viewer.",
+      "scrollRequiresClick": "Click the viewer first to zoom with the mouse wheel.",
       "joystickOn": "Joystick navigation on — press and hold the mouse button, then move to pan.",
       "joystickOff": "Joystick navigation off.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
@@ -446,7 +454,7 @@
       "globalMenu": "Show Global Menu",
       "sideMenuCompact": "Compact Side Menu (icons only)",
       "disablePluginsUi": "Hide Plugin Catalogue",
-      "scrollRequiresCtrl": "Require Ctrl to Zoom",
+      "scrollRequiresClick": "Click Viewer Before Wheel Zoom",
       "reverseScroll": "Reverse Scroll Direction",
       "snapZoomToMagnification": "Snap Zoom to Magnification",
       "scrollSpeed": "Zoom Speed",
@@ -513,6 +521,51 @@
       "layerStencil": "Stencil",
       "noLayers": "No first-pass layers available for this frame."
     },
+    "adjustments": {
+      "panelTitle": "Data",
+      "title": "Adjustments",
+      "quickTitle": "Adjust background",
+      "unsupported": "Display adjustments need a newer renderer build (per-layer module pipeline). Sampling already works.",
+      "black": "Black point",
+      "white": "White point",
+      "gamma": "Gamma",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "saturation": "Saturation",
+      "hue": "Hue",
+      "temperature": "Temperature",
+      "tint": "Tint",
+      "invert": "Invert",
+      "histogram": "Histogram of the current view — click to refresh",
+      "auto": "Auto",
+      "autoHint": "Set black and white points from the visible data (0.5% / 99.5% percentiles)",
+      "reset": "Reset",
+      "resetHint": "Remove these adjustments",
+      "resetAllHint": "Remove the adjustments of every layer in this viewer",
+      "adjusted": "adjusted",
+      "noData": "Nothing is displayed in this viewer.",
+      "link": "Link viewers",
+      "linkHint": "Apply every adjustment to the matching layers of all viewers",
+      "copyToViewersHint": "Copy this viewer's adjustments to all other viewers",
+      "beforeAfter": "Before/after",
+      "beforeAfterHint": "Toggle the original look of this viewer (hold B on the canvas for a quick peek)",
+      "presets": "Presets",
+      "applyPreset": "Apply preset…",
+      "presetName": "Preset name",
+      "savePreset": "Save the current adjustments as a preset",
+      "sampling": "Sampling",
+      "samplingHint": "How this data is interpolated and how it looks when zoomed out",
+      "samplingMode": {
+        "auto": "Default",
+        "brightfield": "Brightfield",
+        "fluorescence": "Fluorescence (keep bright detail)",
+        "pixelated": "Pixelated (label maps)"
+      },
+      "role": {
+        "background": "Background",
+        "visualization": "Overlay"
+      }
+    },
     "keymap": {
       "title": "Keymap",
       "search": "Search shortcuts",
@@ -553,6 +606,7 @@
         "undo": "Undo",
         "redo": "Redo",
         "screenshot": "Screenshot",
+        "toggleGlobalMenu": "Show / hide the global menu",
         "viewportCopy": "Copy / align viewport",
         "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
         "peek": "Peek at background",
@@ -561,8 +615,12 @@
         "interactionLensDesc": "Hold to hand the pointer to shaders that follow it, such as the fisheye lens. Panning and click-zoom are suspended while held so the lens stays put; wheel zoom still works.",
         "zDepthNext": "Next focal plane",
         "zDepthPrev": "Previous focal plane",
+        "zDepthWheel": "Focal plane by scrolling",
+        "zDepthWheelDesc": "Hold this modifier and scroll to step through focal planes on slides with a z-stack. Elsewhere the wheel zooms as usual.",
         "toggleJoystick": "Toggle joystick navigation",
-        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster."
+        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster.",
+        "adjustmentsBypass": "Before/after adjustments (hold)",
+        "adjustmentsBypassDesc": "Hold to see the focused viewer without its display adjustments (levels, brightness, saturation …)."
       }
     },
     "plugins": {

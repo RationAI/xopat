@@ -21,7 +21,9 @@ ENV file per combination is what produced the pile of near-identical files this
 directory used to be. So the decisions are layers:
 
 ```bash
-npm run up                       # ask one question per decision, interactively
+npm run up                       # interactive: pick a start, then layer until done
+npm run up -- default            # generated slide, no login — runs on a fresh checkout
+npm run up -- default chat/byok  # a preset with one decision changed
 npm run up -- --list             # every preset and fragment, grouped by dimension
 npm run up -- dicom-idc          # a named preset from env/presets.json
 npm run up -- base/core data/dicomweb-idc auth/keycloak-saml chat/anthropic-server-key
@@ -36,9 +38,77 @@ fragment id under `env/parts/`, then any file path — which is why a hand-writt
 ENV is just another layer rather than a different mechanism.
 
 The composed result is written to `env/.compose/<label>.json` (gitignored,
-inspectable) alongside `<label>.provenance.json`, which records **which layer won
-every leaf**. The server is then started the ordinary way, with `XOPAT_ENV`
-pointing at that file — nothing downstream knows composition happened.
+inspectable); `--provenance` prints **which layer won every leaf**. The server
+is then started the ordinary way, with `XOPAT_ENV` pointing at that file —
+nothing downstream knows composition happened.
+
+**Nothing shipped depends on a service the repository does not provide.**
+`default` — and every preset not named after an external system — uses
+`data/synthetic-dzi`, a slide `npm run up` generates on first start (a fragment
+declares that with `$meta.fixtures`). An image server is a layer you add on
+purpose: `data/wsi-service`, or the `wsi-service` preset. The composer never
+probes, downloads or starts anything external; what it does is tell you which
+variables such a layer reads (below). `env/env.default.json` is the whole-file
+form of the wsi-service deployment, kept as the reference for it.
+
+#### The interactive picker
+
+Bare `npm run up` is a starting point plus a loop:
+
+1. **How many deployments** the server should offer — Enter for one. With more,
+   the first stack is the base env and each further one gets an id and becomes a
+   [named deployment](#multiple-deployments-in-one-env-deployments) over it.
+2. **Start from** a preset — Enter takes `default` — or `-` for the bare base.
+3. **Layer** for as long as you want: pick a dimension (data, auth, chat, …) to
+   answer, re-answer or clear it, or toggle the freely-combining extras. Every
+   step is composed immediately, so a conflict, a variable nobody set, or a
+   fragment's setup note shows at the step that caused it. Enter on the menu ends
+   the loop.
+
+It finishes by printing the command that reproduces the result, e.g.
+`npm run up -- default chat/byok --deployment tiff=data/tiff-webtiff`.
+
+#### A preset is a starting point
+
+A fragment named **directly** replaces the preset's fragment in the same
+dimension: `default chat/byok` is the default deployment with a different
+assistant, not a conflict between `chat/off` and `chat/byok`. Two fragments you
+name yourself in one dimension still conflict. The preset's `env` and `override`
+blocks are kept as written — an override aimed at the replaced layer stays in the
+composition, so check the result when swapping the data layer of a preset that
+has one (`image-proxy`).
+
+#### Named deployments from the command line
+
+```bash
+npm run up -- default --deployment tiff=data/tiff-webtiff --deployment dicom=data/dicomweb-idc
+npm run up -- default --deployment tiff=data/tiff-webtiff --default-deployment tiff
+```
+
+`--deployment <id>=<selector,...>` writes `deployments.<id>.$layers`, exactly
+what a fragment such as `demo/multi-deployment` would; see
+[Multiple deployments in one env](#multiple-deployments-in-one-env-deployments).
+
+#### What a composition reads from the environment
+
+Fragments are opaque by design, so before the server starts `npm run up` lists
+every `<% VAR %>` the composition reads and **who decided its value**:
+
+```
+environment used by this composition
+  CERIT_API_KEY    UNSET, no default — required  [chat/openai-compatible-cerit]  API key for the CERIT …
+  WSI_PORT         not set — default "8080" ($meta.defaults)  [data/wsi-service]  Host port of wsi-service …
+  XOPAT_NODE_PORT  set  [base/core]  Port the viewer listens on
+  data/wsi-service: Needs a wsi-service you start yourself: docker compose -f …
+```
+
+`set` means the shell or `env/.env` supplied it (the value is never printed);
+`not set — default` names the tracked default that applies instead, which is the
+case worth reading — a port you never chose; `UNSET` resolves to an empty
+string. Descriptions and the trailing setup notes come from the fragments'
+`$meta.env` / `$meta.hint`. `--list` shows them per fragment, `--json` carries
+them as `variables` / `hints`. The server itself does not repeat this: a
+deployment started with a bare `XOPAT_ENV` gets no report.
 
 ### Conflicts are an error, not a merge
 
@@ -99,7 +169,15 @@ secret-free — `npm run up:check` fails on a literal credential.
     "role": "layer",                  // or "base": exists to be overridden
     "requires": ["XOPAT_SAML_JWT_SECRET"],   // reported when unset
     "defaults": { "KEYCLOAK_URL": "http://localhost:8081" },
-    "conflictsWith": ["auth/keycloak-oidc"]
+    "conflictsWith": ["auth/keycloak-oidc"],
+    // One line per variable the fragment reads — shown wherever it is reported.
+    // A unit test fails on a variable that has none.
+    "env": { "KEYCLOAK_URL": "Base URL of the Keycloak server" },
+    // One sentence of setup the user has to do themselves. A JSONC comment is
+    // stripped on parse and never reaches them; this does.
+    "hint": "Needs the local Keycloak: docker compose -f … up -d",
+    // Local fixtures `npm run up` generates before starting ("synthetic" only).
+    "fixtures": ["synthetic"]
   },
   "core": { "...": "the ordinary ENV shape" }
 }

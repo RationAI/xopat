@@ -557,7 +557,7 @@ const BuildLogic = {
             "src/**/*.ts",
             "--bundle",
             "--format=iife",
-            "--target=es2019",
+            "--target=es2020",
             "--outdir=src/dist",
             "--sourcemap"
         ]);
@@ -618,7 +618,7 @@ const BuildLogic = {
         fs.writeFileSync(tmp, combined);
         try {
             await spawnAsync("npx", [
-                "esbuild", tmp, "--minify", "--target=es2019",
+                "esbuild", tmp, "--minify", "--target=es2020",
                 `--outfile=${outFile}`
             ]);
             logger.log("[build] wrote src/dist/xopat-core.min.js");

@@ -800,10 +800,10 @@ export class FullscreenMenus {
 
         const interactionCard = this.card($.t('settings.card.interaction'),
             this.createCheckbox(
-                "scroll-requires-ctrl-checkbox",
-                $.t('settings.scrollRequiresCtrl'),
-                liveOnCheck('scrollRequiresCtrl'),
-                APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
+                "scroll-requires-click-checkbox",
+                $.t('settings.scrollRequiresClick'),
+                liveOnCheck('scrollRequiresClick'),
+                APPLICATION_CONTEXT.getOption('scrollRequiresClick')
             ),
             this.createCheckbox(
                 "reverse-scroll-checkbox",

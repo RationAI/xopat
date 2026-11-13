@@ -1,6 +1,9 @@
 {
   "$meta": {
     "description": "OpenAI chat with an operator-held key (server-side; never reaches the browser)",
+    "env": {
+      "OPENAI_API_KEY": "OpenAI API key held by the server"
+    },
     "dimension": "chat",
     "requires": []
   },

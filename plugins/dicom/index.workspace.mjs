@@ -180,24 +180,25 @@ addPlugin('dicom', class extends XOpatPlugin {
             '00324000';   // StudyComments
 
 
+        // The "dicom" annotation format lives in the core format registry, so it
+        // registers as soon as its module loads — independent of when (or
+        // whether) the annotations module does. It only needs to know how to
+        // find a viewer's slide, which is this plugin's knowledge.
+        this._srFormat = import('./annotation-convertor.mjs').then((sr) => {
+            sr.setSlideMetaResolver((viewer) => this._resolveDicomSlide(viewer)?.meta);
+            return sr;
+        });
+
         this.integrateWithSingletonModule('annotations', async (module) => {
-            // The DICOM SR sink was registered up-front in the constructor (so
-            // the annotations module's initIO sees the binding when it
-            // resolves them). All we need here is the convertor — its
-            // `OSDAnnotations.Convertor.register("dicom", …)` call must run
-            // before the sink invokes `encodePartial` / `encodeFinalize` /
-            // `decode`. Gating it on annotations being ready keeps the
-            // dependency direction sane (DICOM uses annotations' convertor
-            // registry, not the other way round).
-            await import('./annotation-convertor.mjs');
+            const sr = await this._srFormat;
 
             // Baseline the SR content hash right after slide hydration: the
-            // sink's writeBundle re-encodes the live state on every
-            // slide-leave flush, and only a hash mismatch stows. Encoding the
-            // just-hydrated state through the same path makes "opened, looked,
-            // left" hash-equal — zero redundant SR instances for read-only
-            // visits. Detect hydration (vs user file import) by the options
-            // importBundle stamps: format 'dicom' + history disabled.
+            // sink stows only when the content it is handed differs from what
+            // it last saw. Summarizing the just-hydrated state the same way an
+            // export would makes "opened, looked, left" hash-equal — zero
+            // redundant SR instances for read-only visits. Detect hydration
+            // (vs user file import) by the options importBundle stamps:
+            // format 'dicom' + history disabled.
             module.addHandler('import', async (e) => {
                 const opts = e?.options || {};
                 if (opts.format !== 'dicom' || opts.history !== false) return;
@@ -205,9 +206,9 @@ addPlugin('dicom', class extends XOpatPlugin {
                 const slide = this._resolveDicomSlide(fabric?.viewer);
                 if (!slide?.meta?.seriesUID || !slide.meta.micronsX) return;
                 try {
-                    const conversion = await OSDAnnotations.Convertor.encodePartial(
-                        { format: 'dicom', serialize: false, meta: slide.meta }, fabric);
-                    this._srStateFor(slide.meta.seriesUID).hash = this._hashConversion(conversion);
+                    const model = fabric.toModel({ format: 'dicom' });
+                    this._srStateFor(slide.meta.seriesUID).hash =
+                        sr.summarizeSrModel(model, slide.meta, { context: fabric }).hash;
                 } catch (err) {
                     // Baseline is an optimization only — worst case is one
                     // redundant (content-identical) stow on first leave.
@@ -461,8 +462,13 @@ addPlugin('dicom', class extends XOpatPlugin {
      * Marker stamped on generated visualizations so a re-open reuses the entry
      * instead of appending a duplicate. It also survives a session export, which
      * means a re-imported session will not grow a second copy.
+     *
+     * NOT underscore-prefixed: the session serializers (`safeStringify` in
+     * `src/app.ts`, the renderer's own export) drop every key starting with `_`.
+     * As `__dicomOverlaysFor` the marker was gone after each page reload, so every
+     * reload appended another copy of the visualization and of its data entries.
      */
-    static OVERLAY_MARKER = "__dicomOverlaysFor";
+    static OVERLAY_MARKER = "dicomOverlaysFor";
 
     /**
      * Marks a shader layer whose `params` this plugin filled in from the server
@@ -513,11 +519,25 @@ addPlugin('dicom', class extends XOpatPlugin {
         const config = APPLICATION_CONTEXT.config;
         if (!Array.isArray(config.data)) config.data = [];
 
-        const shaders = {};
-        derived.forEach((d, order) => {
-            const dataIndex = config.data.push(
+        // Reuse an entry that already names this derived object. The visualization
+        // marker is the first line of defence against re-appending; this is the
+        // second, so a visualization that had to be rebuilt (marker lost, entry
+        // removed by the user) does not also grow `config.data`.
+        const dataIndexFor = (d) => {
+            const existing = config.data.findIndex(entry => {
+                const id = entry?.protocol === "dicom" ? entry.dataID : null;
+                return id && id.studyUID === studyUID && id.seriesUID === d.seriesUID
+                    && id.role === d.kind && id.sourceSeriesUID === seriesUID;
+            });
+            if (existing >= 0) return existing;
+            return config.data.push(
                 this._makeDataOverride(studyUID, d.seriesUID, d.kind, { sourceSeriesUID: seriesUID })
             ) - 1;
+        };
+
+        const shaders = {};
+        derived.forEach((d, order) => {
+            const dataIndex = dataIndexFor(d);
 
             // An object carrying its own Palette Color LUT arrives display-ready
             // (the tile source bakes the whole DICOM chain), so it needs a
@@ -1059,6 +1079,13 @@ addPlugin('dicom', class extends XOpatPlugin {
         // Already attached for this slide (re-open, or a restored session that
         // carries the generated entry) — reuse it rather than append a copy.
         const existing = visualizations.findIndex(v => v && v[marker] === id.seriesUID);
+        // TEMPORARY [dicom-dup-debug] — remove once the config.data growth is explained.
+        console.error("[dicom-dup-debug] attach " + JSON.stringify({
+            dataLength: Array.isArray(config.data) ? config.data.length : null,
+            visualizations: visualizations.length,
+            withMarker: visualizations.filter(v => v && v[marker] !== undefined).length,
+            reusing: existing,
+        }));
         if (existing >= 0) {
             event.visualizationIndex = existing;
             return;
@@ -1349,24 +1376,6 @@ addPlugin('dicom', class extends XOpatPlugin {
         return st;
     }
 
-    /**
-     * Cheap stable content hash of an encodePartial conversion (FNV-1a over
-     * the serialized DICOM items — includes the co-encoded preset blob, so
-     * preset-only changes are "dirty" too). encodePartial builds items
-     * deterministically from canvas + palette state, so equal state ⇒ equal
-     * string ⇒ equal hash; no crypto needed, this only suppresses redundant
-     * writes and never guards integrity.
-     */
-    _hashConversion(conversion) {
-        const s = JSON.stringify(conversion?.objects ?? []);
-        let h = 0x811c9dc5;
-        for (let i = 0; i < s.length; i++) {
-            h ^= s.charCodeAt(i);
-            h = Math.imul(h, 0x01000193);
-        }
-        return (h >>> 0).toString(36) + ":" + s.length;
-    }
-
     _registerDicomSrSink() {
         const plugin = this;
 
@@ -1387,56 +1396,40 @@ addPlugin('dicom', class extends XOpatPlugin {
             // the mismatch mid-save — and a dispatch every sink declines is
             // now a refusal, not a silent success.
             supports: { kinds: ['bundle'], owners: ['annotations'] },
+            // This sink stores DICOM SR and nothing else. The pipeline asks the
+            // annotations module for exactly that, so what arrives here is the
+            // finished file — the sink no longer re-encodes from the live canvas
+            // behind the pipeline's back.
+            formats: { annotations: ['dicom'] },
 
-            // Export: re-encode from the live fabric wrapper for the targeted
-            // viewer. The pipeline-supplied `payload` (from annotations'
-            // exportBundle) is intentionally ignored — DICOM SR's wire format
-            // differs from the module's native JSON, and the convertor needs
-            // slide-scoped meta the bundle hook doesn't carry.
-            writeBundle: async (ctx) => {
+            // Export: store the SR the pipeline hands us — unless it says
+            // nothing new.
+            writeBundle: async (ctx, payload) => {
                 const slide = resolveSlide(ctx);
                 if (!slide) return { ok: true }; // no DICOM slide for this viewer — silently skip
-                if (!slide.meta.micronsX) {
-                    return { ok: false, refused: true,
-                        reason: 'missing PixelSpacing on DICOM slide',
-                        userMessage: 'Cannot save annotations as DICOM SR: slide is missing PixelSpacing.',
-                        code: 'W_DICOM_NO_PIXEL_SPACING' };
-                }
-                const annotations = singletonModule('annotations');
-                const fabric = annotations?.getFabric?.(slide.viewer);
-                if (!fabric) {
-                    return { ok: false, refused: true,
-                        reason: 'no fabric wrapper for viewer',
-                        code: 'W_DICOM_NO_FABRIC' };
-                }
                 try {
-                    const conversion = await OSDAnnotations.Convertor.encodePartial(
-                        { format: 'dicom', serialize: false, meta: slide.meta }, fabric);
                     const state = plugin._srStateFor(slide.meta.seriesUID);
-                    const hash = plugin._hashConversion(conversion);
+                    // Present for files this session encoded; absent for bytes
+                    // of any other origin, which are stored as given.
+                    const summary = (await plugin._srFormat).srSummaryOf(payload);
+                    if (summary) {
+                        // Unchanged since hydration / last stow → nothing to say.
+                        // (The baseline hash is captured on slide hydration by the
+                        // annotations 'import' listener, see the annotations
+                        // integration block.)
+                        if (state.hash === summary.hash) return { ok: true };
 
-                    // Unchanged since hydration / last stow → nothing to say.
-                    // (The baseline hash is captured on slide hydration by the
-                    // annotations 'import' listener, see the annotations
-                    // integration block.)
-                    if (state.hash === hash) return { ok: true };
+                        // Never-annotated slide with an empty palette: don't
+                        // create noise SRs. Everything else stows — including an
+                        // "empty" snapshot (annotations all deleted, palette-only
+                        // changes): the new SR supersedes the previous latest, so
+                        // stale annotations stop resurrecting and presets persist
+                        // without requiring a drawn annotation.
+                        if (!summary.hasAnnotations && !summary.hasPresets && !state.hasRemoteSR) return { ok: true };
+                    }
 
-                    // Never-annotated slide with an empty palette: don't
-                    // create noise SRs. Everything else stows — including an
-                    // "empty" snapshot (annotations all deleted, palette-only
-                    // changes): the new SR supersedes the previous latest, so
-                    // stale annotations stop resurrecting and presets persist
-                    // without requiring a drawn annotation.
-                    const items = conversion.objects || [];
-                    const hasAnnotations = items.some(o => o.ValueType === "SCOORD3D");
-                    const presetsItem = items.find(o => o.ValueType === "TEXT"
-                        && o.ConceptNameCodeSequence?.[0]?.CodeValue === "XOPAT.PRESETS");
-                    const hasPresets = !!presetsItem && presetsItem.TextValue !== "[]";
-                    if (!hasAnnotations && !hasPresets && !state.hasRemoteSR) return { ok: true };
-
-                    const buffer = OSDAnnotations.Convertor.encodeFinalize('dicom', conversion);
-                    await DicomTools.stow(plugin._client, slide.meta.studyUID, buffer);
-                    state.hash = hash;
+                    await DicomTools.stow(plugin._client, slide.meta.studyUID, payload);
+                    if (summary) state.hash = summary.hash;
                     state.hasRemoteSR = true;
                     return { ok: true };
                 } catch (e) {
@@ -1447,9 +1440,9 @@ addPlugin('dicom', class extends XOpatPlugin {
                 }
             },
 
-            // Import: find the latest SR for the viewer's series, return the raw
-            // DICOM buffer wrapped with format + meta so annotations' importBundle
-            // can route it through `Convertor.decode("dicom", …)`.
+            // Import: find the latest SR for the viewer's series and return the
+            // raw DICOM buffer, tagged with its format and the slide metadata
+            // the decoder needs.
             readBundle: async (ctx) => {
                 const slide = resolveSlide(ctx);
                 if (!slide) return { ok: true, payload: undefined };
@@ -1469,7 +1462,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                         { headers: { Accept: 'application/dicom' } }
                     );
                     const buffer = await res.arrayBuffer();
-                    return { ok: true, payload: { format: 'dicom', meta: slide.meta, buffer } };
+                    return { ok: true, payload: buffer, format: 'dicom', meta: slide.meta };
                 } catch (e) {
                     return { ok: false, refused: true,
                         reason: `WADO-RS ${e?.statusCode ?? ''} ${e?.message ?? ''}`.trim(),

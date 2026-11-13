@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Chat Anthropic Claude",
+    "description": "Integrace poskytovatele Anthropic Claude. baseUrl / apiKey / model / anthropicVersion nastavte v server.json — jsou pouze na straně serveru."
+  }
+}

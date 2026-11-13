@@ -171,13 +171,16 @@ type XOpatSetup = {
     sessionCacheKey?: string | null;
     locale?: string | null;
     /**
-     * Per-sink IO on/off, `{"<sinkId>": boolean}` — "is this destination plugged
-     * in for this session". Honoured only for sinks the deployment marked
+     * Per-sink IO for this session. An entry is `true`/`false` ("is this
+     * destination plugged in"), or an object `{enabled?, ...settings}` whose
+     * settings the sink reads via `IO_PIPELINE.sessionSinkConfig(id)` (core never
+     * interprets them). Honoured only for sinks the deployment marked
      * `io.sinks.<id>.sessionControllable`; otherwise the operator's
-     * `io.sinks.<id>.enabled` stands, which is how a deployment pins a sink on
-     * (or off) against an untrusted session bundle. See `src/IO_PIPELINE.md`.
+     * `io.sinks.<id>.enabled` stands and settings are not handed out, which is
+     * how a deployment pins a sink against an untrusted session bundle. See
+     * `src/IO_PIPELINE.md`.
      */
-    ioSinks?: Record<string, boolean> | null;
+    ioSinks?: Record<string, boolean | ({ enabled?: boolean } & Record<string, unknown>)> | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
     webglDebugMode?: boolean | null;
@@ -206,10 +209,14 @@ type XOpatSetup = {
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
     /**
-     * If true, the viewer only zooms on `Ctrl/Cmd + wheel`; plain wheel scrolls
-     * the host page through. Intended for notebook / scrollable-host embeddings
-     * where unintentional viewer zoom hijacks page scroll.
+     * If true, the wheel scrolls the host page until the user clicks into the
+     * viewer; the viewer releases it again when the pointer leaves. Intended for
+     * notebook / scrollable-host embeddings where unintentional viewer zoom
+     * hijacks page scroll. Gates on a click rather than a modifier so that
+     * modifier+wheel (focal planes) means the same in every mode.
      */
+    scrollRequiresClick?: boolean | null;
+    /** @deprecated Former name of {@link scrollRequiresClick}; still honoured. */
     scrollRequiresCtrl?: boolean | null;
     /**
      * If true, the scroll-to-zoom direction is inverted: scrolling down zooms in
@@ -227,7 +234,7 @@ type XOpatSetup = {
     /**
      * Multiplier on the normalized wheel delta (default `1`). Values above 1
      * cover more zoom range per wheel turn, below 1 tame an over-sensitive
-     * device. Applies to continuous zoom, magnification snapping and Alt+wheel
+     * device. Applies to continuous zoom, magnification snapping and modifier+wheel
      * z-stack scrubbing alike.
      */
     scrollSpeed?: number | null;

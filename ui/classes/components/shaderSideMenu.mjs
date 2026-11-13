@@ -358,9 +358,9 @@ export class ShaderSideMenu extends BaseComponent {
         const bindContainer = (container) => draggable(container, item => {
             const id = item.dataset.id;
             window.DropDown.bind(item, () => {
-                const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
+                const currentMask = ShaderLayer.normalizeUseMode(viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode);
                 const clipSelected = currentMask === "clip";
-                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+                const maskEnabled = currentMask !== "show";
 
                 return [{
                     title: $.t('main.shaders.defaultBlending'),
@@ -493,24 +493,15 @@ export class ShaderSideMenu extends BaseComponent {
             .filter(s => !disabledShaders.includes(s.type()))
             .map(s => ({type: s.type(), name: s.name()}));
 
-        // map filters if you want editable rows (optional)
-        const filters = {};
+        // Legacy filters (use_gamma/use_exposure/use_logscale) are migrated pipeline
+        // pre-nodes now: their controls render with the layer's own (ShaderLayer card).
         shaderConfig.params = shaderConfig.params || {};
-        for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
-            if (shaderConfig.params.hasOwnProperty(key)) {
-                filters[key] = {
-                    name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                    value: shaderLayer.getFilterValue(key, shaderConfig.params[key])
-                };
-            }
-        }
 
         const uiLayer = new ShaderLayer({
             id: `${shaderLayer.id}-shader`,
             shaderLayer,
             shaderConfig: shaderConfig,
             htmlContext,
-            availableFilters: filters,
             availableShaders,
             callbacks: {
                 onToggleVisible: (checked) => {
@@ -569,8 +560,6 @@ export class ShaderSideMenu extends BaseComponent {
                     viewer.drawer.rebuild(0);
                 },
 
-                onSetFilter: (key, val) =>
-                    UTILITIES.setFilterOfLayer(shaderLayer.id, key, val, viewer),
                 onClearCache: () =>
                     UTILITIES.clearShaderCache(shaderLayer.id, viewer),
                 onReorder: (dir) => {

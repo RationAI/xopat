@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Chat kompatibilní s OpenAI",
+    "description": "Obecný poskytovatel chatu kompatibilní s OpenAI. Funguje s libovolným API podobným GPT (vLLM, Ollama, LM Studio, OpenAI, Together, Groq, CERIT-AI atd.). baseUrl / apiKey / modely nastavte v server.json — jsou pouze na straně serveru."
+  }
+}

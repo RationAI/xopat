@@ -8,8 +8,8 @@
 //                || /^5\d\d$/.test(String(r.code ?? "")),
 //   }));
 //
-// The wrapper preserves the inner sink's id, accepts() filter, and
-// supported capability kinds. Each retry attempt receives the same `ctx`
+// The wrapper preserves everything the inner sink declares (id, route,
+// accepts() filter, supported kinds). Each retry attempt receives the same `ctx`
 // (so sinks that read `ctx.meta.clientOpId` can dedup server-side
 // across retries).
 
@@ -25,7 +25,7 @@ export interface WithRetryOptions {
 const DEFAULT_RETRY_ON: (r: IOResult) => boolean = (r) => {
     if (r.ok) return false;
     const code = String((r as any).code ?? "");
-    return code.endsWith("_THREW") || /^5\d\d$/.test(code);
+    return code.endsWith("_THREW") || code === "W_IO_HTTP_NETWORK" || /^5\d\d$/.test(code);
 };
 
 const DEFAULT_BACKOFF = (n: number) => 200 * Math.pow(2, n);
@@ -63,6 +63,11 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
     };
 
     return {
+        // Everything the inner sink declares about itself (`route`, format
+        // requirements, future fields) must survive wrapping — a wrapped
+        // `route: "local"` sink that lost the field would be judged as an
+        // ordinary destination. The explicit entries below override methods.
+        ...inner,
         id: options.id ?? inner.id,
         label: inner.label,
         // `supports` is either the legacy kind array or the full

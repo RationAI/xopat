@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "Route slide traffic through the server proxy alias `image-server` instead of straight to the tile server",
+    "hint": "Proxies data/wsi-service — it has nothing to route over another data layer",
+    "env": {
+      "WSI_PORT": "Host port of wsi-service (docker/wsi-service/docker-compose.yml publishes 9002; a bare wsi-service listens on 8080)"
+    },
     "dimension": "transport",
     "clientKey": "localhost",
     "defaults": { "WSI_PORT": "8080" }

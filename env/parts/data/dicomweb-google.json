@@ -1,6 +1,9 @@
 {
   "$meta": {
     "description": "Google Healthcare DICOMweb store (needs an auth/* fragment that yields a Google token)",
+    "env": {
+      "GOOGLE_DICOM_SERVICE_URL": "DICOMweb root of the Google Healthcare store"
+    },
     "dimension": "data",
     "clientKey": "localhost",
     "requires": ["GOOGLE_DICOM_SERVICE_URL"]

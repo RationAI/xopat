@@ -54,6 +54,8 @@ interface IOSink {
     id: string;
     label?: string;
     supports: IOCapabilityKind[] | IOSinkSupport;
+    route?: "sink" | "local";
+    formats?: Record<string, string[]>;   // bundle formats you take, per domain — see §7
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx, payload): Promise<IOResult> | IOResult;
@@ -70,7 +72,7 @@ interface IOSink {
 Only `id` and `supports` are required — implement the methods your kinds need.
 Full types in [`src/types/io.d.ts`](types/io.d.ts).
 
-Every method returns an `IOResult`: `{ok: true, payload?}` or
+Every method returns an `IOResult`: `{ok: true, payload?}` (a `readBundle` may add `format` and `meta`, §7) or
 `{ok: false, refused: true, reason, userMessage?, code?}`. `reason` is logged;
 `userMessage` is what the user sees. Throwing is allowed — the pipeline converts
 it to a `W_IO_*_THREW` refusal — but returning a refusal with a `userMessage`
@@ -236,6 +238,49 @@ without a base64 round-trip, and sinks that cannot are free to refuse.
 
 An empty read is a success (`{ok: true}` with no payload), not a failure: it
 means the destination worked and had nothing stored yet.
+
+### Formats: say what you take, never convert behind the pipeline's back
+
+A sink that stores bytes verbatim is done. A sink that only makes sense in one
+format (a DICOM archive, a platform with its own annotation model) **declares
+it** and stores what it is then handed:
+
+```ts
+IO_PIPELINE.registerSink({
+    id: "dicom-sr-annotations",
+    supports: { kinds: ["bundle"], owners: ["annotations"] },
+    formats: { annotations: ["dicom"] },            // domain (owner id) -> format ids, in preference order
+    async writeBundle(ctx, payload) {
+        // payload IS a DICOM file; ctx.format = { id: "dicom", contentType, fileExt, binary, options }
+        await stow(payload);
+        return { ok: true };
+    },
+    async readBundle(ctx) {
+        return { ok: true, payload: bytes, format: "dicom", meta: { /* what the decoder needs */ } };
+    },
+});
+```
+
+The pipeline asks the owner for that format, for you alone — other sinks bound
+to the same capability get theirs from the same flush. Do **not** reach into
+the owner's live state to re-encode, and do not flip an owner-wide format
+setting: both make the payload you were given a lie, and the second changes
+what every other destination (and the user's own download) receives.
+
+- `ctx.format` is absent when nobody named a format: the owner used its default.
+  Use `ctx.format?.fileExt` / `.contentType` to name and type what you store,
+  and return `format` from `readBundle` when you know it — an untagged read is
+  detected from its content, which is a fallback, not a contract.
+- An operator may pin a format on a format-agnostic sink
+  (`{ "sink": "github", "format": "geo-json" }`). A pinned format is on the
+  context of the read as well as the write, so naming a file after it is safe.
+- The format you need does not exist yet? Register it —
+  `IO_PIPELINE.formats.register({ domain, id, encode, decode, … })` needs
+  neither the owner's cooperation nor its load order. See
+  [`IO_PIPELINE.md` → Formats](IO_PIPELINE.md#formats).
+- Per-item CRUD is handed the owner's serialized item as is. Convert it with
+  `IO_PIPELINE.formats.encodeItem(domain, id, item, { io: ctx })`.
+- `withRetry(sink)` keeps everything the sink declares (`route`, `formats`).
 
 ## 8. Getting bound
 

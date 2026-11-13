@@ -1,13 +1,9 @@
 //ASAP XML not yet fully tested, does not render well all objects, problem with hierarchies
-OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Convertor.IConvertor {
-    static title = 'ASAP-XML Annotations';
-    static description = 'ASAP-compatible XML Annotations Format';
-
-    static lossy = true;
-    static lossyReason = "ASAP-XML stores only polygon outlines — multipolygons are flattened to the outer ring, and lines/angles/text are not preserved.";
-
-    static getSuffix() {
-        return '.xml';
+OSDAnnotations.AsapXmlCodec = class {
+    /** @param {IOFormatContext} fctx */
+    constructor(fctx) {
+        this.options = fctx.options;
+        this.module = fctx.context?.module || OSDAnnotations.instance();
     }
 
     static parse(string) {
@@ -22,45 +18,21 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         return xmlDoc;
     }
 
-    static encodeFinalize(output) {
+    encode(model) {
+        //https://github.com/computationalpathologygroup/ASAP/issues/167
+        const annotations = model.objects;
+        const presets = model.presets;
+
+        let wasError = '';
+
         let doc = document.implementation.createDocument("", "", null);
         let ASAP_annot = doc.createElement("ASAP_Annotations");
         let xml_annotations = doc.createElement("Annotations");
         //always preset, although might be empty
         ASAP_annot.appendChild(xml_annotations);
-
-        if (Array.isArray(output.objects)) {
-            for (let obj of output.objects) {
-                const xmlNode = typeof obj === "string" ? this.parse(obj) : obj;
-                xml_annotations.appendChild(xmlNode);
-            }
-        }
-
-        if (Array.isArray(output.presets)) {
-            let xml_groups = doc.createElement("AnnotationGroups");
-            for (let obj of output.presets) {
-                const xmlNode = typeof obj === "string" ? this.parse(obj) : obj;
-                xml_groups.appendChild(xmlNode);
-            }
-            ASAP_annot.appendChild(xml_groups);
-        }
-        doc.appendChild(ASAP_annot);
-        return new XMLSerializer().serializeToString(doc);
-    }
-
-    async encodePartial(annotationsGetter, presetsGetter) {
-        //https://github.com/computationalpathologygroup/ASAP/issues/167
-        const annotations = annotationsGetter();
-        const presets = presetsGetter();
-        const result = {};
-
-        let wasError = '';
-
-        let doc = document.implementation.createDocument("", "", null);
         const presetsIdSet = new Set();
 
-        if (this.options.exportsObjects && Array.isArray(annotations)) {
-            result.objects = [];
+        if (this.options.exportsObjects !== false && Array.isArray(annotations)) {
             // for each object (annotation) create new annotation element with coresponding coordinates
             for (let i = 0; i < annotations.length; i++) {
                 let obj = annotations[i];
@@ -71,12 +43,12 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                 const xml_annotation = doc.createElement("Annotation");
                 let coordinates=[];
 
-                let factory = this.context.module.getAnnotationObjectFactory(obj.factoryID);
+                let factory = this.module.getAnnotationObjectFactory(obj.factoryID);
                 if (factory) {
                     // Todo some better reporting mechanism
                     if (factory.factoryID === "multipolygon") {
                         wasError = 'ASAP XML Does not support multipolygons - saved as polygon.';
-                        coordinates = this.context.module.polygonFactory.toPointArray({points: obj.points[0]},
+                        coordinates = this.module.polygonFactory.toPointArray({points: obj.points[0]},
                             OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
                     } else {
                         coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
@@ -113,17 +85,13 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                     xml_coordinates.appendChild(xml_coordinate);
                 }
                 xml_annotation.appendChild(xml_coordinates);
-
-                if (this.options.serialize) {
-                    result.objects.push(new XMLSerializer().serializeToString(xml_annotation));
-                } else {
-                    result.objects.push(xml_annotation);
-                }
+                xml_annotations.appendChild(xml_annotation);
             }
         }
 
-        if (this.options.exportsPresets && Array.isArray(presets)) {
-            result.presets = [];
+        if (this.options.exportsPresets !== false && Array.isArray(presets)) {
+            let xml_groups = doc.createElement("AnnotationGroups");
+            ASAP_annot.appendChild(xml_groups);
 
             for (let preset of presets) {
                 const xml_preset = doc.createElement("Group");
@@ -142,12 +110,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                 }
 
                 xml_preset.appendChild(preset_attributes);
-
-                if (this.options.serialize) {
-                    result.presets.push(new XMLSerializer().serializeToString(xml_preset));
-                } else {
-                    result.presets.push(xml_preset);
-                }
+                xml_groups.appendChild(xml_preset);
                 presetsIdSet.delete(preset.presetID);
             }
             //todo check for consitency presetsIdSet?
@@ -158,10 +121,11 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             Dialogs.show(wasError, 15000, Dialogs.MSG_ERR);
         }
 
-        return result;
+        doc.appendChild(ASAP_annot);
+        return new XMLSerializer().serializeToString(doc);
     }
 
-    async decode(data ) {
+    decode(data) {
         let xmlDoc = this.constructor.parse(data);
 
         const presets = {}, annotations = [];
@@ -236,4 +200,23 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             presets: Object.values(presets)
         };
     }
+};
+
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "asap-xml",
+    title: 'ASAP-XML Annotations',
+    description: 'ASAP-compatible XML Annotations Format',
+    extensions: [".xml"],
+    contentType: "application/xml",
+    lossy: "ASAP-XML stores only polygon outlines — multipolygons are flattened to the outer ring, and lines/angles/text are not preserved.",
+
+    encode: (model, fctx) => new OSDAnnotations.AsapXmlCodec(fctx).encode(model),
+    decode: (data, fctx) => new OSDAnnotations.AsapXmlCodec(fctx).decode(data),
+
+    sniff(data) {
+        if (typeof data !== "string") return 0;
+        if (data.includes("<ASAP_Annotations")) return 0.95;
+        return data.trimStart().startsWith("<") ? 0.3 : 0;
+    },
 });

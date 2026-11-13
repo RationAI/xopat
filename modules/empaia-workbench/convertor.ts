@@ -97,6 +97,8 @@ export interface AnnotationLink {
     empaiaId?: string;
     /** Class value the annotation's preset maps to, if any. */
     classValue?: string;
+    /** Drawn with the ROI preset — must be posted with `is_roi=true`. */
+    isRoi?: boolean;
 }
 
 /**
@@ -381,124 +383,144 @@ export function firstClassValue(annotation: any): string | undefined {
     return undefined;
 }
 
-// ── the registered convertor ────────────────────────────────────────────────
+// ── the registered format ───────────────────────────────────────────────────
 
-let _contextProvider: (() => AnnotationMappingContext | undefined) | undefined;
+let _contextProvider: ((io?: unknown) => AnnotationMappingContext | undefined) | undefined;
 
 /**
- * The convertor is instantiated by the annotations module, which knows nothing
- * about EMPAIA — so the mapping context is supplied out of band by this module
- * once the workbench session resolves.
+ * The format converts on behalf of the annotations module, which knows nothing
+ * about EMPAIA — so the mapping context is supplied by this module.
+ *
+ * The provider receives the IO dispatch the conversion serves (when there is
+ * one) and must answer for THAT slide: bundles are keyed by
+ * `(viewerId, backgroundId)`, and answering from the active slide posted a
+ * background viewport's annotations against the focused slide's id.
  */
-export function setAnnotationMappingContextProvider(provider: () => AnnotationMappingContext | undefined): void {
+export function setAnnotationMappingContextProvider(
+    provider: (io?: unknown) => AnnotationMappingContext | undefined
+): void {
     _contextProvider = provider;
 }
 
-export function currentMappingContext(): AnnotationMappingContext | undefined {
-    return _contextProvider?.();
+export function currentMappingContext(io?: unknown): AnnotationMappingContext | undefined {
+    return _contextProvider?.(io);
 }
 
 export const EMPAIA_CONVERTOR_FORMAT = "empaia";
 
-/** Registers `OSDAnnotations.Convertor` format `"empaia"`. Idempotent. */
+/** Encode a native model `{objects}` as `{items, links}` — see `AnnotationLink`. */
+function encodeModel(model: { objects?: any[] }, ctx: AnnotationMappingContext): string {
+    const items: Array<Partial<EmpaiaAnnotation>> = [];
+    // Sidecar, parallel to `items`: which local annotation produced each
+    // entry and whether it is already on the server. The bundle sink
+    // needs it to upload only what is new instead of re-posting the whole
+    // set (which would mint fresh ids and orphan job-linked ROIs). It is
+    // not part of the EMPAIA model — `decode` ignores it.
+    const links: AnnotationLink[] = [];
+    const skipped: string[] = [];
+
+    for (const native of model?.objects || []) {
+        const mapped = nativeToEmpaia(native, ctx);
+        if (!mapped) {
+            if (native?.factoryID) skipped.push(String(native.factoryID));
+            continue;
+        }
+        items.push(mapped);
+        links.push({
+            incrementId: native?.incrementId !== undefined ? String(native.incrementId) : undefined,
+            empaiaId: typeof native?.empaiaId === "string" ? native.empaiaId : undefined,
+            classValue: ctx.classValueForPreset?.(native?.presetID),
+            isRoi: !!ctx.roiPresetId && String(native?.presetID ?? "") === ctx.roiPresetId,
+        });
+    }
+    if (skipped.length) {
+        console.warn(`[empaia-workbench] ${skipped.length} annotation(s) have no EMPAIA representation ` +
+            `and were skipped: ${[...new Set(skipped)].join(", ")}`);
+    }
+    return JSON.stringify({ items, links });
+}
+
+function decodeModel(data: any, ctx: AnnotationMappingContext): { objects: Record<string, any>[]; presets: any[] } {
+    let parsed: any = data;
+    if (typeof parsed === "string") {
+        try { parsed = JSON.parse(parsed); }
+        catch { throw new Error("EMPAIA annotation payload is not valid JSON."); }
+    }
+    const items = Array.isArray(parsed) ? parsed
+        : (Array.isArray(parsed?.items) ? parsed.items : []);
+
+    const objects: Record<string, any>[] = [];
+    const dropped: string[] = [];
+    for (const item of items) {
+        const native = empaiaToNative(item, ctx);
+        if (native) objects.push(native);
+        else dropped.push(String(item?.type ?? typeof item));
+    }
+    // A record the mapper cannot represent is dropped — and used to be
+    // dropped in total silence, which is indistinguishable from the
+    // analysis having produced nothing. Say what was lost and of what type.
+    if (dropped.length) {
+        console.warn(`[empaia-workbench] ${dropped.length}/${items.length} annotation(s) could not ` +
+            `be mapped and were skipped (types: ${[...new Set(dropped)].join(", ")}).`);
+    }
+    return { objects, presets: [] };
+}
+
+/**
+ * Registers the annotation format `"empaia"` in the core format registry.
+ * Idempotent, and independent of whether the annotations module has loaded.
+ */
 export function registerEmpaiaConvertor(): void {
-    const OSDAnnotations: any = (window as any).OSDAnnotations;
-    if (!OSDAnnotations?.Convertor?.register) {
-        console.warn("[empaia-workbench] OSDAnnotations.Convertor unavailable — annotation format not registered.");
+    const formats: any = (window as any).IO_PIPELINE?.formats;
+    if (!formats?.register) {
+        console.warn("[empaia-workbench] IO_PIPELINE.formats unavailable — annotation format not registered.");
         return;
     }
-    if (OSDAnnotations.Convertor.CONVERTERS?.[EMPAIA_CONVERTOR_FORMAT]) return;
+    if (formats.has("annotations", EMPAIA_CONVERTOR_FORMAT)) return;
 
-    OSDAnnotations.Convertor.register(EMPAIA_CONVERTOR_FORMAT, class extends OSDAnnotations.Convertor.IConvertor {
-        static title = "EMPAIA Annotations";
-        static description = "Annotations in the EMPAIA Workbench Service v3 data model.";
-        static getSuffix() { return ".empaia.json"; }
+    const contextOrThrow = (io: unknown, doing: string): AnnotationMappingContext => {
+        const ctx = currentMappingContext(io);
+        if (!ctx) throw new Error(`EMPAIA workbench session is not ready — cannot ${doing} annotations.`);
+        return ctx;
+    };
 
-        // Presets have no EMPAIA counterpart of their own: an annotation's
-        // class IS its preset, carried per annotation as a `Class` record.
-        static exportsPresets = false;
-        static exportsObjects = true;
-        // MUST stay true. With `false`, `FabricWrapper.toObject` runs its
-        // output through `trimExportJSON`, which reduces every object to its
-        // factory's `necessaryProperties` and passes no extra keeps — so
-        // `empaiaId` (the server link) and `nppCreated` would be dropped and
-        // every export would look like a set of brand-new annotations.
-        static includeAllAnnotationProps = true;
+    formats.register({
+        domain: "annotations",
+        id: EMPAIA_CONVERTOR_FORMAT,
+        title: "EMPAIA Annotations",
+        description: "Annotations in the EMPAIA Workbench Service v3 data model.",
+        extensions: [".empaia.json"],
+        contentType: "application/json",
+        lossy: "EMPAIA has no ellipse (non-circular ellipses export as a circle of the mean radius), " +
+            "no text/angle/multipolygon annotations (skipped), and its arrows re-import as plain lines.",
+        traits: {
+            // MUST stay true. With `false`, `FabricWrapper.toObject` runs its
+            // output through `trimExportJSON`, which reduces every object to its
+            // factory's `necessaryProperties` — so `empaiaId` (the server link)
+            // and `nppCreated` would be dropped and every export would look like
+            // a set of brand-new annotations.
+            allProps: true,
+            // Asked for explicitly as well: they are not part of any factory's
+            // geometry whitelist, and the module-level `forceExportsProp`
+            // registration is a separate mechanism.
+            props: REQUIRED_EXPORT_PROPS,
+            // Presets have no EMPAIA counterpart of their own: an annotation's
+            // class IS its preset, carried per annotation as a `Class` record.
+            presets: false,
+        },
 
-        static lossy = true;
-        static lossyReason =
-            "EMPAIA has no ellipse (non-circular ellipses export as a circle of the mean radius), " +
-            "no text/angle/multipolygon annotations (skipped), and its arrows re-import as plain lines.";
+        encode: (model: any, fctx: any) => encodeModel(model, contextOrThrow(fctx?.io, "export")),
+        decode: (data: any, fctx: any) => decodeModel(data, contextOrThrow(fctx?.io, "import")),
+        // One annotation ⇄ one EMPAIA record; `undefined` when it has no counterpart.
+        encodeItem: (item: any, fctx: any) => nativeToEmpaia(item, contextOrThrow(fctx?.io, "export")),
+        decodeItem: (raw: any, fctx: any) => empaiaToNative(raw, contextOrThrow(fctx?.io, "import")),
 
-        async encodePartial(annotationsGetter: () => any[]) {
-            const ctx = currentMappingContext();
-            if (!ctx) throw new Error("EMPAIA workbench session is not ready — cannot export annotations.");
-
-            // Ask for the linkage properties explicitly as well: they are not
-            // part of any factory's geometry whitelist, and the module-level
-            // `forceExportsProp` registration is a separate mechanism.
-            const natives = annotationsGetter(...REQUIRED_EXPORT_PROPS) || [];
-            const items: Array<Partial<EmpaiaAnnotation>> = [];
-            // Sidecar, parallel to `items`: which local annotation produced each
-            // entry and whether it is already on the server. The bundle sink
-            // needs it to upload only what is new instead of re-posting the whole
-            // set (which would mint fresh ids and orphan job-linked ROIs). It is
-            // not part of the EMPAIA model — `decode` ignores it.
-            const links: AnnotationLink[] = [];
-            const skipped: string[] = [];
-
-            for (const native of natives) {
-                const mapped = nativeToEmpaia(native, ctx);
-                if (!mapped) {
-                    if (native?.factoryID) skipped.push(String(native.factoryID));
-                    continue;
-                }
-                items.push(mapped);
-                links.push({
-                    incrementId: native?.incrementId !== undefined ? String(native.incrementId) : undefined,
-                    empaiaId: typeof native?.empaiaId === "string" ? native.empaiaId : undefined,
-                    classValue: ctx.classValueForPreset?.(native?.presetID),
-                });
-            }
-            if (skipped.length) {
-                console.warn(`[empaia-workbench] ${skipped.length} annotation(s) have no EMPAIA representation ` +
-                    `and were skipped: ${[...new Set(skipped)].join(", ")}`);
-            }
-            return { objects: items, presets: undefined, links };
-        }
-
-        static encodeFinalize(output: { objects?: any[]; links?: AnnotationLink[] }) {
-            return JSON.stringify({ items: output?.objects ?? [], links: output?.links ?? [] });
-        }
-
-        async decode(data: any) {
-            const ctx = currentMappingContext();
-            if (!ctx) throw new Error("EMPAIA workbench session is not ready — cannot import annotations.");
-
-            let parsed: any = data;
-            if (typeof parsed === "string") {
-                try { parsed = JSON.parse(parsed); }
-                catch { throw new Error("EMPAIA annotation payload is not valid JSON."); }
-            }
-            const items = Array.isArray(parsed) ? parsed
-                : (Array.isArray(parsed?.items) ? parsed.items : []);
-
-            const objects: Record<string, any>[] = [];
-            const dropped: string[] = [];
-            for (const item of items) {
-                const native = empaiaToNative(item, ctx);
-                if (native) objects.push(native);
-                else dropped.push(String(item?.type ?? typeof item));
-            }
-            // A record the mapper cannot represent is dropped — and used to be
-            // dropped in total silence, which is indistinguishable from the
-            // analysis having produced nothing. Say what was lost and of what type.
-            if (dropped.length) {
-                console.warn(`[empaia-workbench] ${dropped.length}/${items.length} annotation(s) could not ` +
-                    `be mapped and were skipped (types: ${[...new Set(dropped)].join(", ")}).`);
-            }
-            return { objects, presets: [] };
-        }
+        sniff(_data: unknown, hint: { json?: any }) {
+            const json = hint?.json;
+            if (!json || typeof json !== "object" || Array.isArray(json) || !Array.isArray(json.items)) return 0;
+            const first = json.items[0];
+            return !first || first.reference_type !== undefined || first.npp_created !== undefined ? 0.85 : 0.2;
+        },
     });
 }
 

@@ -29,22 +29,76 @@ const slideAffineFor = (meta) => slideAffine({
  * 1.64 MB that used to be parsed at boot in every session. It is needed only to
  * read or write DICOM SR — i.e. when annotations are actually imported or
  * exported — never to open a slide.
- *
- * Called from the two async entry points (`encodePartial`, `decode`).
- * `encodeFinalize` stays synchronous, because the annotations module consumes
- * its return value directly and raises the `export` event with it; making it
- * async would hand every listener a Promise. It always runs after
- * `encodePartial`, which has already loaded the library.
  */
 const ensureDcmjs = () => loadVendorScript(
     "dcmjs", new URL('./dist/dcmjs.js', import.meta.url).href);
 
-OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Convertor.IConvertor {
-    static title = 'DICOM SR';
-    static description = 'DICOM Structured Report (TID 1500)';
-    static exportsPresets = true;
-    static includeAllAnnotationProps = false;
-    static getSuffix() { return '.dcm'; }
+/**
+ * Resolves the DICOM slide metadata (pixel spacing, FrameOfReferenceUID, study
+ * and series UIDs, patient) for the viewer a conversion is about. Installed by
+ * the plugin, which owns the slide lookup; this module only knows the format.
+ * @type {((viewer: any) => object|undefined)|undefined}
+ */
+let slideMetaResolver;
+export function setSlideMetaResolver(resolver) {
+    slideMetaResolver = resolver;
+}
+
+/** Slide metadata for one conversion: given explicitly, else from the viewer behind it. */
+function slideMetaFor(fctx) {
+    const given = fctx.options?.meta;
+    if (given?.frameOfReferenceUID) return given;
+    const viewer = fctx.context?.viewer
+        ?? (fctx.io?.viewerId ? VIEWER_MANAGER.getViewer(fctx.io.viewerId, false) : undefined);
+    return viewer ? slideMetaResolver?.(viewer) : undefined;
+}
+
+/**
+ * What an encoded SR says, without parsing it back.
+ *
+ * The file itself is useless for change detection — every write mints fresh
+ * UIDs and a timestamp — so the content items are hashed instead (FNV-1a over
+ * their JSON, which includes the co-encoded preset blob, so a preset-only change
+ * is "dirty" too). Items are built deterministically from canvas + palette
+ * state: equal state ⇒ equal hash.
+ * @return {{hash: string, hasAnnotations: boolean, hasPresets: boolean}}
+ */
+export function summarizeSrItems(items) {
+    const list = items || [];
+    const text = JSON.stringify(list);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    const presetsItem = list.find(o => o.ValueType === "TEXT"
+        && o.ConceptNameCodeSequence?.[0]?.CodeValue === DicomSrCodec._PRESETS_CONCEPT.CodeValue);
+    return {
+        hash: (h >>> 0).toString(36) + ":" + text.length,
+        hasAnnotations: list.some(o => o.ValueType === "SCOORD3D"),
+        hasPresets: !!presetsItem && presetsItem.TextValue !== "[]",
+    };
+}
+
+/** Summary of each file `encode` produced, keyed by the buffer it returned. */
+const summaries = new WeakMap();
+
+/** {@link summarizeSrItems} of a buffer this format encoded, or undefined for foreign bytes. */
+export function srSummaryOf(buffer) {
+    return buffer && typeof buffer === "object" ? summaries.get(buffer) : undefined;
+}
+
+/** {@link summarizeSrItems} of the model as it would be encoded for `meta`'s slide. */
+export function summarizeSrModel(model, meta, fctx = {}) {
+    return summarizeSrItems(new DicomSrCodec({ options: {}, ...fctx }).buildItems(model, meta));
+}
+
+class DicomSrCodec {
+    /** @param {IOFormatContext} fctx */
+    constructor(fctx) {
+        this.options = fctx.options || {};
+        this.module = fctx.context?.module || OSDAnnotations.instance();
+    }
 
     // Private concept code carrying the xOpat preset blob inside the SR
     // ContentSequence. Standard DICOM SR has no native slot for "drawing
@@ -73,18 +127,12 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
     };
 
     // --- EXPORT: OSD -> DICOM ---
-    async encodePartial(annotationsGetter, presetsGetter) {
-        // Loaded here so the synchronous `encodeFinalize` that follows finds it.
-        await ensureDcmjs();
-
-        // Handle input whether it's a function or the object itself
-        // If it's the FabricWrapper, toObject() returns the serialized JSON structure
-        const annotations = typeof annotationsGetter === 'function' ? annotationsGetter() :
-            (annotationsGetter?.toObject ? annotationsGetter.toObject().objects : annotationsGetter);
-
-        if (!annotations) return { objects: [] };
-
-        const meta = this.options.meta;
+    /**
+     * The SR ContentSequence items for a native model `{objects, presets}`.
+     * Pure with respect to the file: no UIDs, no timestamps, no dcmjs.
+     */
+    buildItems(model, meta) {
+        const annotations = this.options.exportsObjects === false ? [] : (model?.objects || []);
         if (!meta?.micronsX || !meta?.micronsY) throw new Error("Missing pixel spacing metadata for export");
 
         const objects = [];
@@ -148,7 +196,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         // An EMPTY array is still emitted: a "supersede" SR written after the
         // user deletes all annotations must be a well-formed snapshot that
         // decodes to `{objects: [], presets: []}` (merge of [] is a no-op).
-        const presets = typeof presetsGetter === 'function' ? presetsGetter() : presetsGetter;
+        const presets = this.options.exportsPresets === false ? undefined : model?.presets;
         if (Array.isArray(presets)) {
             objects.push({
                 RelationshipType: "CONTAINS",
@@ -158,11 +206,11 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
             });
         }
 
-        return { objects: objects, meta: meta };
+        return objects;
     }
 
     // --- IMPORT: DICOM -> OSD ---
-    async decode(data) {
+    async decode(data, meta) {
         const dcmjs = await ensureDcmjs();
 
         // Patch BEFORE reading
@@ -174,7 +222,6 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
             dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicomData.dict);
         }
 
-        const meta = this.options.meta;
         const objects = [];
         let presets = [];
         const contentSeq = dataset.ContentSequence || [];
@@ -248,7 +295,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         // 2. Identify Factory
         const factoryID = this._getFactoryForConceptCode(conceptCode, type);
-        const factory = this.context.module.getAnnotationObjectFactory(factoryID);
+        const factory = this.module.getAnnotationObjectFactory(factoryID);
         if (!factory) {
             console.warn(`No factory found for ${factoryID}`);
             return null;
@@ -294,8 +341,8 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         // otherwise factory.create produces objects without one, and
         // updateSingleAnnotationVisuals warns when the synchronous render path
         // triggered by text/grouped factories sees them mid-import.
-        const defaultPreset = this.context.module.presets.get();
-        const commonProps = this.context.module.presets.getCommonProperties(defaultPreset);
+        const defaultPreset = this.module.presets.get();
+        const commonProps = this.module.presets.getCommonProperties(defaultPreset);
         const options = OpenSeadragon.extend(true, {}, commonProps);
 
         let fabricObj = factory.create(parameters, options);
@@ -352,7 +399,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- CONVERSION HELPERS ---
     _toDicomItems(obj, meta) {
-        const factory = this.context.module.getAnnotationObjectFactory(obj.factoryID);
+        const factory = this.module.getAnnotationObjectFactory(obj.factoryID);
         if (!factory) return [];
 
         let points;
@@ -459,14 +506,8 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         tags.forEach(t => { if (!dict[t.tag]) { dict[t.tag] = t; nameMap[t.name] = t; } });
     }
 
-    static encodeFinalize(output) {
-        const dcmjs = window.dcmjs;
-        // Synchronous by contract (see `ensureDcmjs`), so it cannot load the
-        // library itself — `encodePartial` has already done that. Reaching here
-        // without it means finalize was called on partial output this convertor
-        // did not produce.
-        if (!dcmjs) throw new Error(
-            "dcmjs library not loaded — DICOM SR export must go through encodePartial() first");
+    /** Wrap SR content items into a complete DICOM file for `meta`'s study/series. */
+    static write(objects, meta, dcmjs) {
         this._patchDcmjsDictionary(dcmjs);
 
         const now = new Date();
@@ -480,7 +521,6 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         const dicomTime = `${hh}${min}${ss}.000`;
 
         const { DicomMetaDictionary, DicomDict } = dcmjs.data;
-        const { objects, meta } = output;
 
         const dataset = {
             PatientID: meta.patient?.patientID || "ANONYMOUS",
@@ -523,4 +563,40 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         dicomDict.dict = denormalized;
         return dicomDict.write();
     }
+}
+
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "dicom",
+    title: 'DICOM SR',
+    description: 'DICOM Structured Report (TID 1500)',
+    extensions: [".dcm"],
+    contentType: "application/dicom",
+    binary: true,
+    traits: { allProps: false },
+
+    /**
+     * A complete SR file for the slide behind this conversion, or `undefined`
+     * when there is no DICOM slide to describe: an SR is a statement about a
+     * specific series, so without one there is nothing this format can say.
+     */
+    async encode(model, fctx) {
+        const meta = slideMetaFor(fctx);
+        if (!meta) return undefined;
+        const items = new DicomSrCodec(fctx).buildItems(model, meta);
+        const buffer = DicomSrCodec.write(items, meta, await ensureDcmjs());
+        summaries.set(buffer, summarizeSrItems(items));
+        return buffer;
+    },
+
+    decode: (data, fctx) => new DicomSrCodec(fctx).decode(data, slideMetaFor(fctx)),
+
+    // DICOM Part 10: a 128-byte preamble, then the magic "DICM".
+    sniff(data) {
+        const bytes = data instanceof ArrayBuffer ? new Uint8Array(data)
+            : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+            : undefined;
+        if (!bytes || bytes.length < 132) return 0;
+        return bytes[128] === 0x44 && bytes[129] === 0x49 && bytes[130] === 0x43 && bytes[131] === 0x4d ? 1 : 0;
+    },
 });

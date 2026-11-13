@@ -47,7 +47,7 @@ export class BackgroundConfig implements BackgroundItem {
         Object.defineProperty(this, 'dataReference', {
             get: () => {
                 const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
-                const idx = this._rawValue ? currentGlobalData.indexOf(this._rawValue) : -1;
+                const idx = this._indexIn(currentGlobalData);
                 // If the raw value lives in the data array, expose its index
                 return idx !== -1 ? idx : this._rawValue;
             },
@@ -61,6 +61,29 @@ export class BackgroundConfig implements BackgroundItem {
             },
             enumerable: true
         });
+    }
+
+    /**
+     * Where this background's data spec sits in `data`, or -1.
+     *
+     * Identity first, structure second. `config.data` is replaced by a deep clone on
+     * every merging open and on session restore, after which an OBJECT spec
+     * (`{dataID, protocol}`) is no longer `===` anything in the list. Matching on
+     * identity alone then reported "not registered" for a spec that was, and each
+     * open pushed a fresh copy of every such background's data — the previous
+     * copies left behind as unreferenced entries. A structural hit re-binds
+     * `_rawValue` to the live entry, so later in-place edits land on the list.
+     */
+    _indexIn(data: any[]): number {
+        const raw: any = this._rawValue;
+        if (raw === undefined || raw === null) return -1;
+        let index = data.indexOf(raw);
+        if (index === -1 && typeof raw === "object") {
+            const key = JSON.stringify(raw);
+            index = data.findIndex(entry => entry && typeof entry === "object" && JSON.stringify(entry) === key);
+            if (index !== -1) this._rawValue = data[index];
+        }
+        return index;
     }
 
     /**
@@ -134,7 +157,7 @@ export class BackgroundConfig implements BackgroundItem {
 
             // dataReference is index OR DataID
             if (typeof ref !== 'number' && ref !== null && ref !== undefined) {
-                if (!globalData.includes(instance._rawValue)) {
+                if (instance._indexIn(globalData) === -1) {
                     globalData.push(instance._rawValue);
                 }
             }
@@ -500,20 +523,40 @@ export class BackgroundConfig implements BackgroundItem {
     /**
      * Step 3 of {@link migrateLegacyConfig}: sessions that define
      * visualizations but leave a bg entry's `visualizationIndex` UNSET
-     * render the first visualization by default. Explicit `null`
-     * ("no visualization", written by the UI's [no overlays] selection)
-     * is preserved. Runs after legacy folding so distributed legacy
-     * values win over the default.
+     * render the first visualization that applies to that background
+     * ({@link visualizationAppliesTo}) by default; when none applies the
+     * index stays unset (no visualization) — another slide's overlay is
+     * never a default. Explicit `null` ("no visualization", written by the
+     * UI's [no overlays] selection) is preserved. Runs after legacy folding
+     * so distributed legacy values win over the default.
      */
     private static _applyDefaultVisualizationIndex(config: any, backgrounds: any[]): void {
         const visualizations = config?.visualizations;
         if (!Array.isArray(visualizations) || visualizations.length === 0) return;
+        const data = Array.isArray(config?.data) ? config.data : [];
         for (const bg of backgrounds) {
             if (!bg || typeof bg !== "object") continue;
             if (bg.visualizationIndex === undefined) {
-                bg.visualizationIndex = 0;
+                const index = visualizations.findIndex(
+                    viz => BackgroundConfig.visualizationAppliesTo(viz, bg, data));
+                if (index >= 0) bg.visualizationIndex = index;
             }
         }
+    }
+
+    /**
+     * Whether a visualization may render over a background. A visualization
+     * without `backgrounds` belongs to every background; otherwise one entry
+     * must equal the background's `id` or the data id the background shows.
+     */
+    static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
+        const targets = visualization?.backgrounds;
+        if (!Array.isArray(targets) || !targets.length) return true;
+        if (!background) return false;
+        const ref = background.dataReference;
+        const entry = typeof ref === "number" ? data[ref] : ref;
+        const dataId = typeof entry === "string" ? entry : entry?.dataID;
+        return targets.some((t: any) => t === background.id || (dataId !== undefined && t === dataId));
     }
 }
 (window as any).BackgroundConfig = BackgroundConfig;

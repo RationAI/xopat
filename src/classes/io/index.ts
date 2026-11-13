@@ -64,11 +64,16 @@ export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
     // xOpat at its own backend, and it is the one talking to a network. Without
     // the wrapper a single dropped connection lost the write outright, which
     // reads to the user as "Save worked" (the outbox drained) with nothing
-    // stored. Defaults only retry `*_THREW` and 5xx — a 4xx is the upstream
-    // saying no, and repeating it just delays the refusal.
+    // stored. Defaults only retry `*_THREW`, `W_IO_HTTP_NETWORK` and 5xx — a
+    // 4xx is the upstream saying no, and repeating it just delays the refusal.
     pipeline.registerSink(withRetry(makeHttpRestSink({
         id: "http-rest",
-        getOptions: () => pipeline.sinkOverrides("http-rest"),
+        // Deployment-wide overrides, then the `{sink, config}` of the binding
+        // this dispatch resolved through.
+        getOptions: (ctx) => ({
+            ...pipeline.sinkOverrides("http-rest"),
+            ...(ctx ? pipeline.bindingConfig(ctx.ownerUid, ctx.capabilityId, "http-rest") : {}),
+        }),
     })));
     // Default fallback for slide-aware bundle owners (bundleScope:
     // "per-viewer-background" / "all"). post-data is a single global slot
