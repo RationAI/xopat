@@ -5,11 +5,67 @@
 
 **Features**:
 
-* **MLflow storage** — a session can choose run its data goes to and where it is stored, if the
-  deployment allows it.
+* **MLflow storage** — a session can choose the experiment, run and file its data goes to, if the
+  deployment allows it (`params.ioSinks.mlflow.target`).
+* **Per-sink session settings** — a `params.ioSinks.<id>` entry may be an object
+  (`{enabled, ...settings}`) that the sink reads with `IO_PIPELINE.sessionSinkConfig(id)`;
+  honoured only for sinks the deployment marks `sessionControllable`.
+* **Slide placeholders** — `{slideHash}` / `{slideName}` in IO path templates name stored data by slide.
+* **`npm run up` without an image server** — the `default` preset, and every preset not named after an
+  external system, now runs on a slide generated on first start. The former default is the `wsi-service`
+  preset; `data/wsi-service` remains a layer you add on purpose.
+* **`npm run up` picker** — start from a preset (Enter takes `default`) and keep layering data, login,
+  assistant and other choices on top until done; it can also set up several named deployments in one go
+  (`--deployment <id>=<layers>` on the command line). A fragment named after a preset replaces the
+  preset's choice of the same kind: `npm run up -- default chat/byok`.
+* **`npm run up` environment report** — before the server starts it lists every variable the chosen
+  configuration reads, whether you set it or a default applies, what it is for, and any setup a layer needs.
+* **Data formats** — one registry for import/export formats (`IO_PIPELINE.formats`). Any plugin or module
+  can add a format for data it does not own, and convert without going through a save.
+* **Formats per destination** — a storage sink says which format it takes, or a binding pins one, and one
+  save serves each destination in its own format. File names and types follow the format.
+* **Annotations** — formats are detected from file content as well as file name; DICOM SR can be imported
+  from a file; format options keep their values. `OSDAnnotations.Convertor` is deprecated but still works.
+* **Focal planes with Ctrl + wheel** — Ctrl (⌘ on macOS) + wheel steps through focal planes, the same
+  modifier that rotates with Ctrl + drag; Alt + wheel keeps working. Both can be remapped in the Keymap
+  panel. A trackpad pinch still zooms.
+* **Embedded viewers: click to use the wheel** — `scrollRequiresClick` (former `scrollRequiresCtrl`,
+  still honoured; env variable `XOPAT_SCROLL_REQUIRES_CLICK`) lets the wheel scroll the host page until
+  the viewer is clicked, instead of requiring Ctrl to zoom, so Ctrl + wheel means the same everywhere.
+* **Focal-plane ruler** — slides with several focal planes get a ruler along the bottom of the viewport
+  (drag, click, scroll, arrow keys). It replaces the slider in the navigator panel, so it stays available
+  with the navigator closed and on phones, and shows the plane label or depth in µm when the slide has one.
+* **Navigator quick adjustments** — the sliders open in a pop-over under the navigator and no longer
+  resize it or push the panels below. It stays open while you pan and zoom the slide.
+* **Un-docked global menu** — it opens with a click on the edge rail, `Alt+M` or a pinned quick action,
+  and closes on Escape, a click on the slide, or shortly after the pointer leaves it. It no longer opens
+  on hover or by itself while the viewer loads, and its edge rail is visually distinct from the viewer side menu.
 
 **Bugfixes**:
 
+* Fullscreen menu navigation: the selected entry now reaches the page it opens, and long entry names are
+  capped and ellipsised instead of stretching the sidebar.
+* A long slide name in the navigator header pushed its buttons out of view.
+* The un-docked global menu's edge rail overlapped the side menu of the rightmost viewer.
+* The un-docked global menu closed while the pointer was on one of its own dropdowns.
+* Picking a format in the annotations download dialog no longer changes what storage sinks receive.
+* Restoring annotations on slide change could wipe them when a second sink had nothing stored.
+* The built-in HTTP storage never retried a failed request, and overwrote one document for every viewer
+  and slide (its default address now includes the viewer and slide).
+* Binary data downloaded as a file contained the text `[object Object]`.
+* EMPAIA: regions of interest saved in bulk lost their ROI flag; a failed save could leave or repeat a record.
+
+**Security / maintenance**:
+
+* Dependencies: `npm audit` is clean. `dcmjs` 0.30 → 0.52.3 (DICOM SR files are written byte-identically
+  and read the same as before); `undici` and `zod`, used by the server-side chat providers, are on patched
+  versions; overrides added for `adm-zip`, `uuid`, `sharp` and `glob` where the package that depends on
+  them has not updated yet.
+* npm 12 install scripts: `allowScripts` in `package.json` approves `esbuild` and denies the rest. The
+  legacy Cypress suite needs its binary installed by hand (`npx cypress install`).
+* Core bundles target ES2020 (was ES2019), which removes the BigInt build warnings.
+* Docker: Node 24.22.3 (security release of 2026-11-10); the PHP image moved from Ubuntu 22.04 (PHP 8.1,
+  no longer receiving security fixes) to 24.04 (PHP 8.3).
 * Security fix in MLflow run lookup: run names can no longer alter the search query.
 
 
