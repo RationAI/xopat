@@ -19,7 +19,8 @@ Files
 - `analyzeDropdown.mjs`: the plugin class. Registers the tab, builds the apps window and the
   inputs form from the app's EAD, runs jobs, renders results, and sets the job status badge.
 - `jobResultsOverlay.mjs`: `JobResultsOverlay` renders output annotations through OSDAnnotations,
-  one layer and one coloured preset per job (`job-<jobId>`). The annotations can be edited and are
+  one layer and one coloured preset per annotation output (`job-<jobId>-<outputKey>`), so the outputs
+  of one job can be told apart. The annotations can be edited and are
   saved with the session, but are never synced back to EMPAIA.
 - `jobHistory.mjs`: `JobHistory` (storage in the `jobHistory` plugin option) and the modal UI
   (`JobHistoryPanel`, `JobHistoryCard`): search by job name, filter by app, inline results panel.

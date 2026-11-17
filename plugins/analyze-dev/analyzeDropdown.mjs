@@ -282,7 +282,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 return;
             }
 
-            const allShapes = [];
+            const groups = [];
             let fetchFailed = false;
             for (const key of annotationKeys) {
                 const collectionId = job.outputs[key];
@@ -295,18 +295,19 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                         continue;
                     }
                     const decoded = await this._empaiaConvertor.decode({ items: result.items, presets: [] });
-                    if (decoded?.objects) allShapes.push(...decoded.objects.filter(Boolean));
+                    const shapes = (decoded?.objects || []).filter(Boolean);
+                    if (shapes.length) groups.push({ key, shapes });
                 } catch (e) {
                     fetchFailed = true;
                     console.warn('[analyze] failed to fetch/decode annotations for key', key, e);
                 }
             }
 
-            if (!allShapes.length) {
+            if (!groups.length) {
                 return fetchFailed ? undefined : false;
             }
 
-            await this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
+            await this._overlay.addJobResults(finalJob.id, groups, viewerId);
             return true;
 
         } catch (e) {

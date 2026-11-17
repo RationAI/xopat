@@ -2,16 +2,25 @@ const COLOR_PALETTE = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#7c3aed', '#
 
 class JobResultsOverlay {
     constructor() {
-        this._jobStore = new Map(); // jobId → { layerId, viewerId }
+        this._jobStore = new Map(); // jobId → { layerIds: string[], viewerId, visible }
         this._colorIndex = 0;
     }
 
-    async addJobResults(jobId, shapes, viewerId) {
-        if (!shapes || !shapes.length) {
+    /**
+     * Render a job's output annotations, one layer and one coloured preset per output.
+     * @param {string} jobId
+     * @param {Array<{key: string, shapes: Array}>} groups output key and its decoded shapes
+     * @param {string} viewerId
+     */
+    async addJobResults(jobId, groups, viewerId) {
+        const nonEmpty = (groups || [])
+            .map(g => ({ key: g.key, shapes: (g.shapes || []).filter(Boolean) }))
+            .filter(g => g.shapes.length);
+        if (!nonEmpty.length) {
             return;
         }
 
-        // Clear any existing layer/preset for this job before creating new ones.
+        // Clear any existing layers/presets for this job before creating new ones.
         if (this._jobStore.has(jobId)) {
             await this.clearJob(jobId);
         }
@@ -34,40 +43,42 @@ class JobResultsOverlay {
             return;
         }
 
-        const color = COLOR_PALETTE[this._colorIndex % COLOR_PALETTE.length];
+        const shortId = String(jobId).slice(0, 8);
+        const entry = { layerIds: [], viewerId: String(viewerId), visible: true };
+        // Registered before the layers exist so clearJob can remove a partially added job.
+        this._jobStore.set(jobId, entry);
 
-        const layerId = `job-${jobId}`;
-        const layerName = `Job ${String(jobId).slice(0, 8)}`;
+        for (const { key, shapes } of nonEmpty) {
+            const color = COLOR_PALETTE[this._colorIndex++ % COLOR_PALETTE.length];
+            const layerId = `job-${jobId}-${key}`;
+            const layerName = `${key} (job ${shortId})`;
 
-        try {
-            // createLayer() returns Promise<undefined>; retrieve via getLayer() after awaiting.
-            await fabric.createLayer(layerId);
-            const layer = fabric.getLayer(layerId);
-            if (layer) layer.name = layerName;
+            try {
+                // createLayer() returns Promise<undefined>; retrieve via getLayer() after awaiting.
+                await fabric.createLayer(layerId);
+                entry.layerIds.push(layerId);
+                const layer = fabric.getLayer(layerId);
+                if (layer) layer.name = layerName;
 
-            // Create a local preset so updateSingleAnnotationVisuals can apply the job colour.
-            const preset = annot.presets.addPreset(layerId, layerName, color);
+                // Create a local preset so updateSingleAnnotationVisuals can apply the output colour.
+                const preset = annot.presets.addPreset(layerId, layerName, color);
 
-            const valid = shapes.filter(Boolean);
-            for (const shape of valid) {
-                shape.layerID = layerId;
-                shape.presetID = preset.presetID;
-                // color must be set explicitly: commonAnnotationVisuals has no 'color' property,
-                // so updateRendering's typeof check would skip preset colour application otherwise.
-                shape.color = color;
+                for (const shape of shapes) {
+                    shape.layerID = layerId;
+                    shape.presetID = preset.presetID;
+                    // color must be set explicitly: commonAnnotationVisuals has no 'color' property,
+                    // so updateRendering's typeof check would skip preset colour application otherwise.
+                    shape.color = color;
+                }
+
+                await fabric.addAnnotationsBulk(shapes, {
+                    historyName: 'Load job results',
+                    progress: true,
+                    viewer: viewer,
+                });
+            } catch (e) {
+                console.error('[job-overlay] failed to add job results for job', jobId, 'output', key, e);
             }
-
-            await fabric.addAnnotationsBulk(valid, {
-                historyName: 'Load job results',
-                progress: true,
-                viewer: viewer,
-            });
-
-            this._jobStore.set(jobId, { layerId, viewerId: String(viewerId) });
-            this._colorIndex++;
-
-        } catch (e) {
-            console.error('[job-overlay] failed to add job results for job', jobId, e);
         }
     }
 
@@ -79,14 +90,16 @@ class JobResultsOverlay {
         const annot = OSDAnnotations.instance();
         const fabric = annot?.getFabric(viewer);
         if (!fabric) return;
-        fabric.setLayerVisibility(entry.layerId, visible);
+        const ids = new Set(entry.layerIds.map(String));
+        for (const layerId of entry.layerIds) {
+            fabric.setLayerVisibility(layerId, visible);
+        }
         // Belt-and-suspenders: sweep all canvas objects matching this job.
         // Some annotations may have layerID reset to undefined during bulk-add
         // if the layer lookup failed mid-batch; presetID is set independently
         // and never cleared, so it reliably identifies every annotation.
         for (const obj of fabric.canvas._objects || []) {
-            if (String(obj.layerID) === String(entry.layerId) ||
-                String(obj.presetID) === String(entry.layerId)) {
+            if (ids.has(String(obj.layerID)) || ids.has(String(obj.presetID))) {
                 obj.visible = !!visible;
                 obj.evented = !!visible;
                 obj.selectable = !!visible;
@@ -104,18 +117,20 @@ class JobResultsOverlay {
         if (viewer) {
             const annot = OSDAnnotations.instance();
             const fabric = annot?.getFabric(viewer);
-            if (fabric) {
-                try {
-                    await fabric.deleteLayer(entry.layerId);
-                } catch (e) {
-                    console.warn('[job-overlay] failed to delete layer', entry.layerId, e);
+            for (const layerId of entry.layerIds) {
+                if (fabric) {
+                    try {
+                        await fabric.deleteLayer(layerId);
+                    } catch (e) {
+                        console.warn('[job-overlay] failed to delete layer', layerId, e);
+                    }
                 }
-            }
-            if (annot) {
-                try {
-                    annot.presets.removePreset(entry.layerId);
-                } catch (e) {
-                    console.warn('[job-overlay] failed to remove preset', entry.layerId, e);
+                if (annot) {
+                    try {
+                        annot.presets.removePreset(layerId);
+                    } catch (e) {
+                        console.warn('[job-overlay] failed to remove preset', layerId, e);
+                    }
                 }
             }
         }
