@@ -11,6 +11,8 @@
   (`{enabled, ...settings}`) that the sink reads with `IO_PIPELINE.sessionSinkConfig(id)`;
   honoured only for sinks the deployment marks `sessionControllable`.
 * **Slide placeholders** — `{slideHash}` / `{slideName}` in IO path templates name stored data by slide.
+  `{slideHash}` is keyed by the operator secret `ENV.client.io.slideHashKey` and refuses without it;
+  MLflow session targets reject `{slideName}` and any unknown placeholder.
 * **`npm run up` without an image server** — the `default` preset, and every preset not named after an
   external system, now runs on a slide generated on first start. The former default is the `wsi-service`
   preset; `data/wsi-service` remains a layer you add on purpose.
@@ -23,7 +25,9 @@
 * **Data formats** — one registry for import/export formats (`IO_PIPELINE.formats`). Any plugin or module
   can add a format for data it does not own, and convert without going through a save.
 * **Formats per destination** — a storage sink says which format it takes, or a binding pins one, and one
-  save serves each destination in its own format. File names and types follow the format.
+  save serves each destination in its own format. File names and types follow the format. A sink that
+  stores any format (GitHub, MLflow, HTTP) takes a `formats` option in its own config; unpinned, it stores
+  the owner's configured default, never the user's download choice.
 * **Annotations** — formats are detected from file content as well as file name; DICOM SR can be imported
   from a file; format options keep their values. `OSDAnnotations.Convertor` is deprecated but still works.
 * **Focal planes with Ctrl + wheel** — Ctrl (⌘ on macOS) + wheel steps through focal planes, the same
@@ -51,7 +55,12 @@
 * Picking a format in the annotations download dialog no longer changes what storage sinks receive.
 * Restoring annotations on slide change could wipe them when a second sink had nothing stored.
 * The built-in HTTP storage never retried a failed request, and overwrote one document for every viewer
-  and slide (its default address now includes the viewer and slide).
+  and slide (its default address now includes the viewer and slide). **Breaking:** per-viewer and per-slide
+  data now lives at `/bundles/{ownerId}/{key}`; set `bundlePath: "/bundles/{ownerId}"` in the sink's
+  config to keep reading the old single document. Item creation is never retried (it could store an item
+  twice), and the sink's own client no longer retries on top of the retry wrapper. Path template values
+  are percent-encoded instead of rewritten, so ids such as `a:1` and `a_1` stay distinct, and
+  `{slideHash}` / `{slideName}` resolve in its templates.
 * Binary data downloaded as a file contained the text `[object Object]`.
 * EMPAIA: regions of interest saved in bulk lost their ROI flag; a failed save could leave or repeat a record.
 
