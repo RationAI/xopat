@@ -140,14 +140,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // throwing inside Convertor.get() on every bundle flush. A runtime
         // choice (setIOOption, itself validated) still wins.
         // `ctx.format` is the pipeline's answer: the format the destination
-        // takes (or returned). Absent, nobody named one and the module's own
-        // format applies.
+        // takes, was pinned to, or returned — for a sink that takes any format
+        // and has no pin, the deployment `defaultFormat` handed over below.
+        // Absent, the user's choice (download dialog) applies only to the local
+        // file route; a stored destination never follows a UI preference.
         const formatOf = (ctx) => {
             if (ctx.format?.id) return ctx.format.id;
-            const fallback = this.defaultFormat;
-            return this.getExportOptions()?.format || fallback;
+            if (ctx.route === "local") return this.getExportOptions()?.format || this.defaultFormat;
+            return this.defaultFormat;
         };
         await this.initIO({
+            // Deployment `convertors.format` (validated), else native. What a
+            // format-agnostic sink (GitHub, MLflow, http-rest) stores when
+            // neither the binding nor the sink's own config pins a format.
+            defaultFormat: () => this.defaultFormat,
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
             // auto-fires flush-on-leave + restore-on-enter when the active
@@ -160,8 +166,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return undefined;
-                // The binding's `formatOptions` (already overlaid on the format's
-                // defaults) and the dispatch itself go to the format: a format
+                // The binding's `formatOptions` (only those it sets; they win over
+                // the user's values) and the dispatch itself go to the format: a format
                 // that needs slide-scoped data resolves it from `io`.
                 return fabric.export({ ...ctx.format?.options, format: formatOf(ctx), io: ctx }, true, true);
             },
@@ -200,7 +206,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                     // detection) and merged any decoder-side metadata the sink
                     // returned (slide pixel spacing, FrameOfReferenceUID, …)
                     // into `ctx.meta`.
-                    const importOptions = { format: formatOf(ctx), meta: ctx.meta, io: ctx };
+                    // The binding's `formatOptions` apply both ways, so a value
+                    // written with one setting is read back with the same one.
+                    const importOptions = { ...ctx.format?.options, format: formatOf(ctx), meta: ctx.meta, io: ctx };
                     // Slide-aware restores aren't user actions; skip history
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path

@@ -24,6 +24,7 @@ test.beforeAll(async () => {
             XOpatViewerSingleton: class {},
             XOpatHistory: { XOpatHistoryProvider: class {} },
             addModule: () => {},
+            requireViewerSingletonPresence: () => {},
             fabric: { Rect: class {}, Ellipse: class {}, Polygon: class {}, Polyline: class {}, Line: class {} },
         },
     });

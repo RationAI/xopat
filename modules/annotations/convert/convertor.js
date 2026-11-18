@@ -97,9 +97,20 @@ OSDAnnotations.Convertor = class {
                 delete convertor.options[opt];
                 continue;
             }
-            // The class statics remain the legacy defaults an IConvertor
-            // instance falls back to; values the user picks are per call.
+            // The class static is the legacy default store: code written for
+            // the old API changes a default by assigning it (directly or via
+            // `option.changed`). The registry fills declared defaults before
+            // the convertor ever sees an undefined value, so the descriptor's
+            // `default` reads the static live — otherwise such an assignment
+            // would be silently ignored. Values passed per call still win.
             if (!(opt in convertor)) convertor[opt] = option.default;
+            option.changed = (value) => { convertor[opt] = value; };
+            Object.defineProperty(option, "default", {
+                get: () => convertor[opt],
+                set: (value) => { convertor[opt] = value; },
+                enumerable: true,
+                configurable: true,
+            });
         }
 
         let suffix = "";
@@ -131,7 +142,9 @@ OSDAnnotations.Convertor = class {
         return new convertor(fctx.context, options).encodePartial(
             // A legacy convertor may ask for extra properties per call; that
             // needs the live canvas, so without one it gets the model as built.
-            (...props) => props.length && fctx.context?.toModel
+            // `undefined` objects means they were not requested (presets-only
+            // export, or a format that cannot carry them): never fetch them.
+            (...props) => model.objects !== undefined && props.length && fctx.context?.toModel
                 ? fctx.context.toModel({ ...options, props }, true, false).objects
                 : model.objects,
             () => model.presets
@@ -141,7 +154,9 @@ OSDAnnotations.Convertor = class {
     /**
      * A flat description of a registered format, in the shape the settings UI
      * reads (title, description, options, lossy, exportsObjects, …). For a
-     * legacy convertor class this is the class itself.
+     * legacy convertor class this is the class itself. For any other format it
+     * is a fresh read-only snapshot: assigning to it changes nothing. Set a
+     * format option value with `annotationsModule.setFormatOption(format, name, value)`.
      * @param format
      */
     static get(format) {

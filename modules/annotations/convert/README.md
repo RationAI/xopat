@@ -47,7 +47,9 @@ format. The static helpers (`encodePartial`, `encodeFinalize`, `decode`, `get`, 
 `fabricWrapper.exportPartial` / `exportFinalize` delegate to the registry. Two differences to be aware of: for a
 format that is *not* a legacy class, the "partial" output is the native model rather than a per-format
 intermediate, and option values are per call (set through `module.setFormatOption(format, name, value)`) rather
-than static properties of the class.
+than static properties of the class. `Convertor.get(id)` of such a format is a read-only snapshot, so assigning to
+it has no effect. A legacy class keeps its old contract: its option statics (and each option's `changed(value)`)
+are the defaults, so changing one changes what the next export or import uses.
 
 
 ### Supported formats

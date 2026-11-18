@@ -199,6 +199,47 @@ test("a two-stage convertor class still registers and works both ways @unit", as
     expect((await Convertor.decode({ format: "legacy" }, "n=2")).objects.length).toBe(2);
 });
 
+test("a legacy convertor's option statics stay its defaults, as the old API promised @unit", async () => {
+    const Defaults = class extends Convertor.IConvertor {
+        static options = { prefix: { type: "textInput", default: "a:" } };
+        async encodePartial(annotationsGetter) { return { n: (annotationsGetter() || []).length, prefix: this.options.prefix }; }
+        static encodeFinalize(output) { return output.prefix + output.n; }
+    };
+    Convertor.register("legacy-defaults", Defaults);
+    expect(await registry.encode(DOMAIN, "legacy-defaults", model())).toBe("a:1");
+
+    // Assigning the static — what code written for the old API does — changes the default…
+    Defaults.prefix = "b:";
+    expect(await registry.encode(DOMAIN, "legacy-defaults", model())).toBe("b:1");
+    // …as does the `changed` hook register() used to install.
+    Defaults.options.prefix.changed("c:");
+    expect(Defaults.options.prefix.default).toBe("c:");
+    expect(await registry.encode(DOMAIN, "legacy-defaults", model())).toBe("c:1");
+    // A per-call value still wins.
+    expect(await registry.encode(DOMAIN, "legacy-defaults", model(), { options: { prefix: "d:" } })).toBe("d:1");
+});
+
+test("a presets-only legacy export never fetches objects, even when it asks for extra props @unit", async () => {
+    let fetched = 0;
+    const Props = class extends Convertor.IConvertor {
+        async encodePartial(annotationsGetter, presetsGetter) {
+            return { objects: annotationsGetter("extraProp"), presets: presetsGetter() };
+        }
+        static encodeFinalize(output) { return JSON.stringify({ objects: output.objects ?? null, presets: output.presets.length }); }
+    };
+    Convertor.register("legacy-props", Props);
+    const fabricWrapper = {
+        module: moduleStub,
+        toModel: (_options, withAnnotations) => {
+            if (withAnnotations) fetched++;
+            return { objects: withAnnotations ? [structuredClone(POLYGON)] : undefined, presets: [structuredClone(PRESET)] };
+        },
+    };
+    const partial = await Convertor.encodePartial({ format: "legacy-props" }, fabricWrapper, false, true);
+    expect(fetched).toBe(0);
+    expect(JSON.parse(Convertor.encodeFinalize("legacy-props", partial))).toEqual({ objects: null, presets: 1 });
+});
+
 test("the old two-stage calls work for a registry format, synchronously where it is @unit", async () => {
     const fabricWrapper = { module: moduleStub, toModel: () => model() };
     const partial = await Convertor.encodePartial({ format: "native" }, fabricWrapper);
