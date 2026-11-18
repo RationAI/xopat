@@ -24,6 +24,11 @@ function installFakeMlflow({ files = {}, runData = { tags: [{ key: "t", value: "
                     if (!(path in files)) throw Object.assign(new Error("not found"), { statusCode: 404 });
                     return files[path];
                 },
+                downloadBytes: async (runId, path) => {
+                    calls.downloads.push({ runId, path, bytes: true });
+                    if (!(path in files)) throw Object.assign(new Error("not found"), { statusCode: 404 });
+                    return files[path];
+                },
             };
         },
     };
@@ -73,4 +78,16 @@ test("a session artifact target is read from the same path it was written to @un
     });
     expect(await sink.readBundle(ctx)).toEqual({ ok: true, payload: [] });
     expect(calls.downloads).toEqual([{ runId: "run1", path: "annotations/slideA.json" }]);
+});
+
+test("a binding pinned to a binary format reads the artifact back as bytes @unit", async () => {
+    const stored = new Uint8Array([0x44, 0x49, 0x43, 0x4d, 0xff, 0x00]).buffer;
+    const calls = installFakeMlflow({ files: { "xopat/slideA.dcm": stored } });
+    const format = { domain: "annotations", id: "dicom-sr", registered: true, binary: true,
+        contentType: "application/dicom", fileExt: "dcm", options: {} };
+    const res = await sinkWith("bundle-artifact").readBundle({ ...ctx, format });
+    expect(res.ok).toBe(true);
+    expect(res.payload).toBeInstanceOf(Uint8Array);
+    expect(Array.from(res.payload)).toEqual([0x44, 0x49, 0x43, 0x4d, 0xff, 0x00]);
+    expect(calls.downloads).toEqual([{ runId: "run1", path: "xopat/slideA.dcm", bytes: true }]);
 });

@@ -3,10 +3,11 @@
     "description": "Annotation bundles round-trip to a GitHub repository",
     "env": {
       "GITHUB_SINK_REPO": "owner/repo the annotation bundles are written to",
-      "GITHUB_TOKEN": "GitHub token with contents write access to the sink repository"
+      "GITHUB_TOKEN": "GitHub token with contents write access to the sink repository",
+      "XOPAT_SLIDE_HASH_KEY": "Secret keying {slideHash} in stored paths; any long random string. Changing it re-addresses every stored slide file"
     },
     "dimension": "io",
-    "requires": ["GITHUB_TOKEN", "GITHUB_SINK_REPO"]
+    "requires": ["GITHUB_TOKEN", "GITHUB_SINK_REPO", "XOPAT_SLIDE_HASH_KEY"]
   },
   /**
    * The PAT lives ONLY in the server-side proxy header, so the browser never
@@ -29,6 +30,9 @@
     "client": {
       "localhost": {
         "io": {
+          /* Keys {slideHash}: without it the hash of a guessable slide path
+             would be reversible by anyone who can read the repository. */
+          "slideHashKey": "<% XOPAT_SLIDE_HASH_KEY %>",
           "bindings": {
             "annotations": {
               "bundle-export": ["github"],
@@ -71,9 +75,16 @@
         "proxy": "github",
         "repo": "<% GITHUB_SINK_REPO %>",
         /* Annotations are slide-scoped: without a slide token every slide
-           opened in a viewer would read and write the same file. */
+           opened in a viewer would read and write the same file. {slideName}
+           is kept out of paths and commit messages: it is the raw file name and
+           may carry a case number. */
         "pathTemplate": "xopat/{ownerId}/{viewerId}/{slideHash}.json",
-        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId} {slideName}",
+        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId} {slideHash}",
+        /* The format each owner's data is stored in. GitHub stores whatever it
+           is handed, so this is the operator's choice — without it the owner's
+           deployment default applies (and a warning says so). A binding's
+           {sink, format} still overrides it. */
+        "formats": { "annotations": "native" },
         "committer": null,
         "author": null,
         "auth": null

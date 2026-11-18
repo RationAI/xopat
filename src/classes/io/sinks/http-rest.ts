@@ -15,15 +15,26 @@
 //   }
 // Path builders may be plain strings using the `IO_PIPELINE.formatPath`
 // placeholder set (`{ownerId}`, `{key}`, `{viewerId}`, `{backgroundId}`,
-// `{resourceName}`, `{itemId}`, …) for config-only setups. Every substituted
-// value is reduced to one safe path segment.
+// `{resourceName}`, `{itemId}`, `{slideHash}`, …) for config-only setups.
+// Every substituted value is percent-encoded into one URL segment (mode
+// `"uri"`): ids are kept distinct and whole, never rewritten.
+//
+// Default bundle path: `/bundles/{ownerId}` for global owners, and
+// `/bundles/{ownerId}/{key}` for per-viewer / per-slide owners (their bundle
+// key is part of the address — before v3 they all shared one document). Set
+// `bundlePath: "/bundles/{ownerId}"` to keep the old single-document URL.
+//
+// Retries: the client is built with `maxRetries: 0`, so `withRetry` (which
+// core wraps around this sink) is the ONE retry layer — HttpClient's own
+// 429/5xx retry would otherwise multiply with it. `withRetry` does not retry
+// `create` by default: POST is not idempotent.
 //
 // Failure codes: a request that never got an answer is `W_IO_HTTP_NETWORK`,
-// a 5xx answer is the bare status (`"503"`), anything else is the
+// a 5xx or 429 answer is the bare status (`"503"`), anything else is the
 // per-operation `W_IO_HTTP_<OP>`. The first two are what `withRetry` and the
 // outbox stall detector key on — a 4xx is the upstream saying no.
 
-import { formatContextTemplate } from "../io-pipeline";
+import { formatContextTemplate, pinnedFormatFrom } from "../io-pipeline";
 
 export interface HttpRestSinkOptions {
     /** Sink id; defaults to "http-rest". Use distinct ids if you
@@ -33,6 +44,10 @@ export interface HttpRestSinkOptions {
     /** Lazy getter for the sink's options (so config changes take effect).
      *  Receives the dispatch context so per-binding config can be layered in. */
     getOptions: (ctx?: IOContext) => Record<string, unknown>;
+    /** Template expander — pass `IO_PIPELINE.formatPath` so slide tokens
+     *  (`{slideHash}`, `{slideName}`) resolve. Without it they fall back to
+     *  `_any` / empty, i.e. one address for every slide. */
+    formatPath?: (template: string, ctx: IOContext, options?: IOFormatOptions) => string;
     /** Optional fine-grained gate. */
     accepts?(ctx: IOContext): boolean;
 }
@@ -50,6 +65,8 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
             proxy: o.proxy,
             baseURL: o.baseURL,
             auth: o.auth,
+            // `withRetry` is the one retry layer — see the header comment.
+            maxRetries: 0,
         });
     };
 
@@ -58,7 +75,8 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         const tmpl = kind === "bundle" ? o.bundlePath : o.itemPath;
         if (typeof tmpl === "function") return (tmpl as any)(ctx);
         if (typeof tmpl === "string") {
-            return formatContextTemplate(tmpl, ctx, { empty: "" });
+            const format = opts.formatPath ?? formatContextTemplate;
+            return format(tmpl, ctx, { mode: "uri", empty: "" });
         }
         // Sensible default. The bundle key is part of the address: per-viewer
         // and per-slide owners would otherwise all write one document.
@@ -89,7 +107,7 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         // all, so "no response" has to be read off the response, not the code.
         const status = Number(e?.response?.status ?? 0);
         const code = !e?.response ? "W_IO_HTTP_NETWORK"
-            : status >= 500 ? String(status)
+            : status >= 500 || status === 429 ? String(status)
             : opCode;
         return {
             ok: false, refused: true, code,
@@ -102,6 +120,9 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         label: opts.label ?? "HTTP",
         supports: ["bundle", "crud"],
         accepts: opts.accepts,
+        // Stores whatever it is handed; `formats: { <domain>: "<id>" }` in the
+        // sink's options picks which (see `IOSink.preferredFormat`).
+        preferredFormat: (domain, ctx) => pinnedFormatFrom(opts.getOptions(ctx), domain),
 
         async writeBundle(ctx, payload) {
             try {

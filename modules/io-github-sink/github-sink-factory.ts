@@ -30,8 +30,8 @@ export type GithubSinkConfig = {
      *   {capabilityId} {capabilityGroup}
      *   {viewerId} {backgroundId} {key} {resourceName} {itemId}
      *   {slideHash} {slideName} {ext}
-     * `{ext}` is the file extension of the format the binding is pinned to
-     * (`{sink, format}` in `ENV.client.io.bindings`), `json` otherwise.
+     * `{ext}` is the file extension of the format this dispatch travels in
+     * (see `formats`), `json` when none is known.
      *
      * `{viewerId}` resolves to "_global" for a global-scope dispatch,
      * `{backgroundId}` to "_any" when the owner is not slide-scoped.
@@ -58,6 +58,13 @@ export type GithubSinkConfig = {
     committer?: { name: string; email: string };
     /** Forwarded into PUT body verbatim. */
     author?: { name: string; email: string };
+    /**
+     * The format each domain is stored in: `{ annotations: "geo-json" }`, or
+     * `{ annotations: { id: "geo-json", options: {...} } }`; `"*"` for any
+     * domain. A binding's `{sink, format}` still wins. Unset, the owner's
+     * deployment default applies (never the user's download-dialog choice).
+     */
+    formats?: Record<string, IOFormatPin>;
 };
 
 export interface GithubSinkOptions {
@@ -314,6 +321,12 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
         // Declaring it means an admin who binds `crud:*` here is told at boot
         // via `io:invalid-binding` instead of losing writes silently.
         supports: { kinds: ["bundle"] },
+
+        // Stores whatever it is handed; the `formats` key of the composed
+        // config picks which. Older cores without the helper: no pin.
+        preferredFormat(domain: string, ctx: IOContext): IOFormatPin | undefined {
+            return (globalThis as any).IO_PIPELINE?.pinnedFormatFrom?.(opts.getOptions(ctx), domain);
+        },
 
         accepts(ctx: IOContext): boolean | IOAcceptDecision {
             const o = opts.getOptions(ctx) ?? {};

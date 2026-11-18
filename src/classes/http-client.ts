@@ -64,7 +64,7 @@ export interface RequestOptions {
     body?: any;
     headers?: Record<string, string>;
     /** @default "auto" */
-    expect?: "json" | "text" | "auto";
+    expect?: "json" | "text" | "bytes" | "auto";
     /**
      * Caller-owned abort signal. Composed with the client's internal timeout —
      * the request aborts on whichever fires first, so a caller signal never
@@ -598,6 +598,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
+                // Binary bodies (images, DICOM, recordings): never decoded as text.
+                if (expect === "bytes") return await res.arrayBuffer();
                 if (expect === "json") {
                     try {
                         return await res.json();

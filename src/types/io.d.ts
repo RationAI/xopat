@@ -319,6 +319,13 @@ interface IOFormatDescriptor {
     /** Without the leading dot; `""` when unknown. */
     fileExt: string;
     binary: boolean;
+    /**
+     * Option values set explicitly for this dispatch (the binding's
+     * `formatOptions`), never the format's declared defaults — the registry
+     * applies those at encode/decode, underneath whatever the owner passes.
+     * An owner overlays these on its own (user-chosen) values, on export
+     * and import alike.
+     */
     options: Record<string, unknown>;
 }
 
@@ -356,8 +363,13 @@ interface IOFormatOptions {
      * `"raw"` — no charset restriction; control characters (incl. CR/LF)
      *   are still stripped and the value is capped at 256 chars. For
      *   NON-ADDRESSING text only, e.g. a commit message.
+     * `"uri"` — each value is percent-encoded (`encodeURIComponent`) into ONE
+     *   URL segment, so distinct ids stay distinct (`a:1` ≠ `a_1`) and nothing
+     *   is truncated; `.`/`..` are encoded too, so a value cannot climb a
+     *   segment. Control characters are stripped. For REST paths whose
+     *   server stores items under their raw ids.
      */
-    mode?: "path" | "name" | "raw";
+    mode?: "path" | "name" | "raw" | "uri";
     /** Substitute for values that sanitize to empty. Default `"_"`. */
     empty?: string;
     /** Extra placeholders, merged over the ctx-derived set. */
@@ -464,6 +476,17 @@ interface IOSink {
      * nothing and receives whatever the binding (or the owner) chose.
      */
     formats?: Record<string, string[]>;
+    /**
+     * The format this sink's OWN operator config pins for a domain
+     * (`modules["io-github-sink"].github.formats`, `sinkOverrides`, a
+     * binding's `config`). Lets a plain binding (`["github"]`) select a format
+     * without the `{sink, format}` object form. Resolution: binding `format`
+     * → this → `formats` above → the owner's `defaultFormat`. Validated like a
+     * binding pin: unregistered, or outside `formats`, declines the sink.
+     * Read from trusted config only — never session input. Implement with
+     * `IO_PIPELINE.pinnedFormatFrom(options, domain)`.
+     */
+    preferredFormat?(domain: string, ctx: IOContext): IOFormatPin | undefined;
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
     writeBundle?(ctx: IOContext, payload: unknown): Promise<IOResult> | IOResult;
@@ -842,7 +865,20 @@ interface IOGuardSpec {
 interface IOOwnerBundleHooks {
     exportBundle?(ctx: IOContext): Promise<unknown> | unknown;
     importBundle?(ctx: IOContext, data: unknown): Promise<void> | void;
+    /**
+     * The format id (registered under this owner's domain) that a sink taking
+     * any format stores when neither the binding nor the sink's own config
+     * pins one. Deployment-derived only — a user preference here would make
+     * what is stored change with a UI choice.
+     */
+    defaultFormat?(): string | undefined;
 }
+
+/**
+ * A format pinned in a sink's own operator config: an id, or an id with the
+ * format's option values. See `IOSink.preferredFormat` / `IO_PIPELINE.pinnedFormatFrom`.
+ */
+type IOFormatPin = string | { id: string; options?: Record<string, unknown> };
 
 /**
  * App-level IO config (lives in `ENV.client.io`).
@@ -918,6 +954,16 @@ interface IOResolvedBinding {
 interface IOConfigBlock {
     /** Owner ids (or uids) for which IO is fully inert. Highest precedence. */
     disabled?: string[];
+    /**
+     * Operator secret keying `{slideHash}` (HMAC-SHA256 of the slide's data
+     * entry). Without it, a template using `{slideHash}` refuses
+     * (`W_IO_SLIDE_HASH_KEY`) — an unkeyed hash of a guessable slide path is
+     * reversible by whoever holds the stored data. Inject it from the server
+     * environment (`<% XOPAT_SLIDE_HASH_KEY %>`); it reaches the browser, so it
+     * protects stored data from third parties, not from viewer users. Changing
+     * it re-addresses every slide-keyed record. Never session-controllable.
+     */
+    slideHashKey?: string;
     /**
      * Per-(owner, capability) disable. Each tuple is `[ownerId, capabilityId]`
      * (matches by `ownerId` OR `ownerUid`). Resolved at the same precedence
@@ -1258,9 +1304,11 @@ interface IOPipelineLike {
      *   `{resourceName}` `{itemId}` `{slideHash}` `{slideName}`
      *
      * `{slideHash}` / `{slideName}` describe the slide behind `backgroundId`
-     * (`UTILITIES.slideIdentityFor`). `{slideHash}` (16 hex, of the slide's
-     * data entry) is stable across sessions and explicit background ids and
-     * reveals nothing of the path — use it to address per-slide data.
+     * (`UTILITIES.slideIdentityFor`). `{slideHash}` (16 hex of HMAC-SHA256 of
+     * the slide's data entry, keyed by `ENV.client.io.slideHashKey`) is stable
+     * across sessions and explicit background ids — use it to address
+     * per-slide data. Without the key it throws `W_IO_SLIDE_HASH_KEY` (a sink
+     * pass reports that as a refusal) whenever a slide is behind the context.
      * `{slideName}` is the file name: readable, but two folders with the same
      * file name collide, and it may carry a case number. Unresolvable:
      * `{slideHash}` → `_any` (like `{backgroundId}`), `{slideName}` → `empty`.
@@ -1273,6 +1321,14 @@ interface IOPipelineLike {
      * Unknown tokens are replaced with `options.empty` and warned about once.
      */
     formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string;
+
+    /**
+     * Read a sink config's format pin for one domain:
+     * `formats: { annotations: "geo-json" | { id, options }, "*": … }`.
+     * The shared parser for `IOSink.preferredFormat`, so format-agnostic sinks
+     * agree on the config shape. `undefined` when nothing (valid) is pinned.
+     */
+    pinnedFormatFrom(config: unknown, domain: string): IOFormatPin | undefined;
 
     /**
      * Anchored glob match (`*` = any run of characters). Used for

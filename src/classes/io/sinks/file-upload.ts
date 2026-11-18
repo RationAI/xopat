@@ -30,7 +30,30 @@ export const fileUploadSink: IOSink = {
     },
 };
 
-function pickFile(ctx: IOContext, U: any): Promise<{ content: string; fileName: string } | null> {
+/**
+ * Is the picked file one of the owner's binary formats? Reading such a file as
+ * text corrupts it before any decoder sees it. A format pinned on the context
+ * decides; otherwise the longest registered extension the name ends with —
+ * the only evidence available before the file is read.
+ */
+function isBinaryFile(ctx: IOContext, fileName: string): boolean {
+    if (ctx.format) return !!ctx.format.binary;
+    const formats = (globalThis as any).IO_PIPELINE?.formats as IOFormatRegistryLike | undefined;
+    if (!formats || !ctx.ownerId) return false;
+    const name = fileName.toLowerCase();
+    let binary = false, longest = 0;
+    for (const format of formats.list(ctx.ownerId)) {
+        for (const ext of format.extensions ?? []) {
+            if (name.endsWith(ext) && ext.length > longest) {
+                longest = ext.length;
+                binary = !!format.binary;
+            }
+        }
+    }
+    return binary;
+}
+
+function pickFile(ctx: IOContext, U: any): Promise<{ content: string | ArrayBuffer; fileName: string } | null> {
     return new Promise((resolve, reject) => {
         const input = document.createElement("input");
         input.type = "file";
@@ -49,16 +72,18 @@ function pickFile(ctx: IOContext, U: any): Promise<{ content: string; fileName: 
             try {
                 const file = (e.target as HTMLInputElement).files?.[0];
                 const fileName = file?.name ?? "";
+                const binary = isBinaryFile(ctx, fileName);
                 if (U?.readFileUploadEvent) {
-                    const data = await U.readFileUploadEvent(e);
+                    const data = await U.readFileUploadEvent(e, binary ? "bytes" : "text");
                     cleanup();
                     resolve({ content: data, fileName });
                 } else {
                     if (!file) { cleanup(); resolve(null); return; }
                     const reader = new FileReader();
-                    reader.onload = () => { cleanup(); resolve({ content: reader.result as string, fileName }); };
+                    reader.onload = () => { cleanup(); resolve({ content: reader.result as string | ArrayBuffer, fileName }); };
                     reader.onerror = () => { cleanup(); reject(reader.error); };
-                    reader.readAsText(file);
+                    if (binary) reader.readAsArrayBuffer(file);
+                    else reader.readAsText(file);
                 }
             } catch (err) { cleanup(); reject(err); }
         }, { once: true });

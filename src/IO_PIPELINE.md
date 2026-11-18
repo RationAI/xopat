@@ -431,7 +431,7 @@ This restores the legacy mouse-move ergonomics — no microtask yield between us
 Three additions make the sync-core design strictly safer than blocking on dispatch:
 
 - **`clientOpId`**: every `create/update/delete` mints a UUID and writes it to `ctx.meta.clientOpId`. Sinks include it with the server request. Servers dedup on this id when the pipeline retries.
-- **`withRetry(sink, options)`**: a small helper that wraps any sink with bounded retry + exponential backoff. Network blips become invisible to the user. Default: 3 attempts, exponential 200/400/800 ms, retry on `*_THREW` and 5xx codes.
+- **`withRetry(sink, options)`**: a small helper that wraps any sink with bounded retry + exponential backoff. Network blips become invisible to the user. Default: 3 attempts, exponential 200/400/800 ms, retry on `*_THREW`, `W_IO_HTTP_NETWORK`, `429` and 5xx codes, and never on `create` (not idempotent — a lost answer to a stored create would store it twice). A sink that dedups on `clientOpId` server-side opts in with `methods: [...]`.
   ```ts
   IO_PIPELINE.registerSink(withRetry(httpSink, {
       attempts: 3, backoff: n => 200 * 2 ** n,
@@ -995,12 +995,21 @@ Two rules that bite:
   collaboration). `formatPath` reduces every value to a single segment
   matching `[A-Za-z0-9._-]`, never `.`/`..`, never empty, ≤128 chars. The
   *template* is trusted and keeps its `/`. `mode: "raw"` (commit messages and
-  other non-addressing text) only strips control characters.
+  other non-addressing text) only strips control characters. `mode: "uri"`
+  (REST paths that must keep raw ids distinct, used by `http-rest`)
+  percent-encodes each value into one segment, `.`/`..` included, without
+  truncating.
 - **Address a slide by `{slideHash}`, not `{backgroundId}`.** `backgroundId` is
   the session's id for a background (an explicit `id` replaces it); `{slideHash}`
-  is 16 hex of the slide's data entry (`UTILITIES.slideIdentityFor`), stable
-  across sessions and silent about the path. `{slideName}` (the file name) is for
-  labels only: it collides across folders and may carry a case number.
+  is 16 hex of HMAC-SHA256 of the slide's data entry (`UTILITIES.slideIdentityFor`),
+  keyed by the operator secret `ENV.client.io.slideHashKey`, stable across
+  sessions. The key is what makes it silent about the path: slide paths are
+  guessable, so an unkeyed hash is reversible by whoever holds the stored data.
+  Without the key `formatPath` throws `W_IO_SLIDE_HASH_KEY` for a context with a
+  slide behind it (a sink pass reports it as a refusal) rather than falling back
+  to `_any` or an unkeyed hash. Changing the key re-addresses all slide-keyed
+  data. `{slideName}` (the file name) collides across folders and may carry a
+  case number — keep it out of anything stored.
 
 Regression suite: `test/legacy/io/path-template.mjs` (`npm test -- --grep "legacy: io/"`).
 
@@ -1051,17 +1060,18 @@ f.list("annotations");                       // every registered format
 f.detect("annotations", data, { fileName }); // id, or undefined — never a guess
 ```
 
-`"auto"` runs `detect`: a file-name extension is evidence (longest match wins, so `.geo.json` is not claimed by a `.json` format), a `sniff` is a look at the content, and content overrules a name that lied. A format with no `sniff` is only tried when nothing else recognised the data.
+`"auto"` runs `detect`: a file-name extension is evidence (longest match wins, so `.geo.json` is not claimed by a `.json` format), a `sniff` is a look at the content, and content overrules a name that lied. Detection is evidence, not proof: every format that claimed the data is tried in order of likelihood, so one whose `decode` then throws hands over to the next. Formats with no `sniff` are tried after all of those; a format whose `sniff` returned 0 never is.
 
 ### Formats and sinks
 
 A flush used to run `exportBundle` once and hand every bound sink the same payload, in whatever format one owner-global setting named. A sink that needed a specific format therefore either ignored the payload and re-encoded from live state, or flipped that global for everybody. Now the pipeline matches formats to destinations:
 
 - A **sink** states what it takes: `formats: { annotations: ["dicom"] }` (domain → ids in preference order; `"*"` for any domain). A sink that stores bytes verbatim declares nothing.
-- A **binding** may pin one: `{ "sink": "github", "format": "geo-json", "formatOptions": { … } }`. It may pick *among* a sink's formats, never outside them — that is an `io:invalid-binding`.
-- On **export** the pipeline resolves the format per sink (binding → first registered format the sink takes → none) and calls `exportBundle` **once per distinct format**, with `ctx.format = { id, contentType, fileExt, binary, options }`. `ctx.format` absent means "your own default". The same `ctx.format` reaches the sink, which uses it to name and type what it stores; `{ext}` in a path template resolves to its extension. A sink whose required formats are all unregistered is declined rather than fed the owner's default.
-- On **restore** the format is, in order: what the sink says it returned (`{ ok: true, payload, format, meta }`), the format known before the read (binding / sink declaration), then `formats.detect`. It reaches `importBundle` as `ctx.format`, and the sink's `meta` is merged into `ctx.meta`. Unknown stays unknown and the owner applies its default.
-- The **local route** (the `file-download` fallback, a user-picked file handed to `IO_PIPELINE.importBundle(raw, { viewerId, fileName, format })`) uses the owner's default on the way out and detection on the way in.
+- A **format-agnostic sink's own config** may pin one, so a plain binding (`["github"]`) selects a format without the object form: the sink implements `preferredFormat(domain, ctx)`, reading `formats: { annotations: "geo-json" }` (or `{ id, options }`; `"*"` for any domain) from its composed options through `IO_PIPELINE.pinnedFormatFrom(options, domain)`. GitHub, MLflow and `http-rest` do — `modules["io-github-sink"].github.formats`, `sinkOverrides.<sink>.formats`, or a binding's `config.formats`. It is validated like a binding pin (registered, and among the sink's `formats` if it declares any); a bad pin declines the sink.
+- A **binding** may pin one: `{ "sink": "github", "format": "geo-json", "formatOptions": { … } }`. It may pick *among* a sink's formats, never outside them — that is an `io:invalid-binding` at boot, and the sink is declined for that owner on every dispatch (as it is while the pinned format is not registered). `formatOptions` are the only option values `ctx.format.options` carries — never the format's declared defaults — and the owner applies them over its own (user-chosen) values on export **and** import, so data is read back with the settings it was written with.
+- On **export** the pipeline resolves the format per sink (binding → sink config pin → first registered format the sink takes → for a sink that takes any format, the owner's `defaultFormat` → none) and calls `exportBundle` **once per distinct format**, with `ctx.format = { id, contentType, fileExt, binary, options }`. `ctx.format` absent means "your own default". An owner passes `initIO({ defaultFormat: () => id })` — a **deployment** value, never a user preference — so a format-agnostic sink stores something deterministic; the pipeline warns once per (sink, owner) that an explicit pin is better. Every export also carries `ctx.route` (`"local"` for the file fallback and local-route sinks): only there may an owner follow the user's own format choice. The same `ctx.format` reaches the sink, which uses it to name and type what it stores; `{ext}` in a path template resolves to its extension. A sink whose required formats are all unregistered is declined rather than fed the owner's default.
+- On **restore** the format is, in order: what the sink says it returned (`{ ok: true, payload, format, meta }`), the format known before the read (binding / sink config pin / sink declaration), then `formats.detect`, then — for an owner default — that default. An owner default is a guess about data that may predate it, so detection goes ahead of it. It reaches `importBundle` as `ctx.format`, and the sink's `meta` is merged into `ctx.meta`. Unknown stays unknown and the owner applies its default.
+- The **local route** (the `file-download` fallback, a user-picked file handed to `IO_PIPELINE.importBundle(raw, { viewerId, fileName, format })`) uses the owner's own choice on the way out (`ctx.route: "local"`, no `ctx.format`) and detection on the way in.
 
 An owner needs no declaration to take part: its domain is its owner id, and with no formats registered for it everything behaves as before.
 
@@ -1087,7 +1097,7 @@ Per-item CRUD is not converted by the pipeline: a sink that speaks another model
 | `post-data` | `bundle` | Writes into the global `POST_DATA` dict. Preserves the legacy HTML-form session export emitted by `serializeApp()`. Default fallback for unbound bundle capabilities. |
 | `file-download` | `bundle` | Triggers `UTILITIES.downloadAsFile` with the payload, named and typed after `ctx.format` when the dispatch has one. Owners can hint `ctx.meta.fileName` / `ctx.meta.fileExt`; an `IOBinaryPayload` is written as its bytes. |
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents with the file name (`meta.fileName`) so the format can be detected. Used as the readable side of session restore from disk. |
-| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW`, `W_IO_HTTP_NETWORK` and 5xx only — the sink reports an unanswered request as `W_IO_HTTP_NETWORK` and a 5xx as its bare status). Bundles are addressed per bundle key (`/bundles/{ownerId}/{key}`) unless `bundlePath` says otherwise; string path templates take the `formatPath` placeholders. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
+| `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink, registered behind `withRetry` (defaults: 3 attempts, exponential backoff, retrying `*_THREW`, `W_IO_HTTP_NETWORK`, 429 and 5xx only, and never `create` — the sink reports an unanswered request as `W_IO_HTTP_NETWORK` and a 5xx/429 as its bare status; its own `HttpClient` runs with `maxRetries: 0`). Bundles are addressed per bundle key (`/bundles/{ownerId}/{key}`; global owners keep `/bundles/{ownerId}`) unless `bundlePath` says otherwise; string path templates take the `formatPath` placeholders (slide tokens included), percent-encoded (`mode: "uri"`). Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
 | `session-memory` | `bundle` | In-memory, keyed by `ctx.key`; remembers the format each payload was written in. The default fallback for slide-aware bundle owners (`bundleScope: "per-viewer-background"` / `"all"`), which `post-data`'s single global slot cannot serve. |
 
 ## Module-provided sinks
@@ -1166,7 +1176,7 @@ A binding list can name several sinks. There are exactly two iteration policies,
 | **until-refusal** | CRUD dispatch | Sinks run in binding order until one refuses; that refusal is the result. A sink that *cannot perform the op* (`W_IO_UNSUPPORTED`) is a misrouted binding, not a verdict on the data, so it does not stop the others. |
 | **first-match** *(selection, not a pass)* | streamed `query` | One stream, one sink: the first gated sink implementing `query`. |
 
-Restore additionally applies **last non-empty payload wins** — every readable sink is read, and `importBundle` is then called **once**, with the last non-empty payload in binding order. A slide-aware owner is called with `undefined` only when *every* sink was empty (so it can wipe); an empty sink never erases what another sink returned. Two restores of the same (owner, viewer, slide) slot that overlap share one hydration.
+Restore reads every readable sink before importing. For **slide-aware** owners (a restore with a `backgroundId`), whose `importBundle` wipes first, **last non-empty payload wins** — `importBundle` is called **once**, with the last non-empty payload in binding order, and with `undefined` only when *every* sink was empty (so it can wipe); an empty sink never erases what another sink returned. **Global and per-viewer** owners get one `importBundle` per non-empty payload, in binding order, so they can merge state from several sinks. Two restores of the same (owner, viewer, slide) slot that overlap share one hydration.
 
 - **Errors thrown** from any hook are caught, converted to `{ ok: false, refused: true, reason: e.message, code: 'W_IO_*_THREW' }`, and surfaced the same way as refusals. A throwing sink never short-circuits its siblings.
 - A refusal emits `io:refused` on `VIEWER_MANAGER` and shows `Dialogs.show(userMessage ?? reason, …)` automatically. For CRUD the caller also gets it back via `.settled`, and the resource reverts the local commit by default (see [`rollbackOnAsyncRefuse`](#sync-core-queued-dispatch)).

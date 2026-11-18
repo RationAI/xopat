@@ -72,6 +72,13 @@ export type MlflowSinkConfig = {
     /** Artifacts adapter config, forwarded to MlFlowClient. */
     artifacts?: Record<string, unknown> | null;
     /**
+     * The format each domain's bundle artifact is written in:
+     * `{ annotations: "geo-json" }` (or `{ id, options }`; `"*"` for any
+     * domain). A binding's `{sink, format}` still wins. Unset, the owner's
+     * deployment default applies (never the user's download-dialog choice).
+     */
+    formats?: Record<string, IOFormatPin>;
+    /**
      * Whether a session may pick the experiment/run (see {@link MlflowSessionTarget}).
      * Trusted config only — the operator decides if the session's choice is read.
      *   - absent/`null`: a session target is ignored; templates decide.
@@ -124,6 +131,27 @@ const TARGET_CTRL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
  * them is far more likely an injection attempt than a real experiment.
  */
 const TARGET_NAME_CHARS = /^[A-Za-z0-9 ._\-/:{}]+$/;
+/**
+ * Placeholders a session-chosen name may use. Deliberately narrower than the
+ * `formatPath` set:
+ *  - no `{slideName}` — the raw file name may carry a case number, and a
+ *    session bundle or script must not be able to publish it into experiment,
+ *    run or artifact names (operator templates may still use it);
+ *  - no `{resourceName}` / `{itemId}` — empty on a bundle dispatch, so they
+ *    would collapse every record into one name.
+ */
+const TARGET_PLACEHOLDERS = new Set([
+    "slideHash", "backgroundId", "viewerId", "ownerId", "ownerUid",
+    "capabilityGroup", "capabilityId", "xoType", "key",
+]);
+
+/** Every brace belongs to a whole `{token}` from TARGET_PLACEHOLDERS. */
+function placeholdersAllowed(name: string): boolean {
+    for (const m of name.matchAll(/\{(\w+)\}/g)) {
+        if (!TARGET_PLACEHOLDERS.has(m[1]!)) return false;
+    }
+    return !/[{}]/.test(name.replace(/\{\w+\}/g, ""));
+}
 
 /**
  * Untrusted input → a target, or `undefined`. Names are trimmed, stripped of
@@ -140,7 +168,8 @@ export function normalizeTarget(raw: unknown): MlflowSessionTarget | undefined {
     const name = (v: unknown): string | undefined => {
         if (typeof v !== "string") return undefined;
         const s = v.replace(TARGET_CTRL_CHARS, "").trim();
-        return s && s.length <= MAX_TARGET_NAME && TARGET_NAME_CHARS.test(s) ? s : undefined;
+        return s && s.length <= MAX_TARGET_NAME && TARGET_NAME_CHARS.test(s) && placeholdersAllowed(s)
+            ? s : undefined;
     };
     const r = raw as Record<string, unknown>;
     const experiment = name(r.experiment);
@@ -276,12 +305,19 @@ function warnTargetUnbounded() {
 }
 
 /**
- * Resolve one session-target name for a dispatch: placeholders substituted (each
- * value sanitized by `interpolate`), then rejected if anything placeholder-like
- * survived (an unknown or malformed token is a typo, not a name). Empty = invalid.
+ * Resolve one session-target name for a dispatch: placeholders checked against
+ * TARGET_PLACEHOLDERS, substituted (each value sanitized by `formatPath`), then
+ * rejected if anything placeholder-like survived. A token that resolves to
+ * nothing is substituted with the `{}` sentinel so it is caught too: dropping it
+ * silently would turn `review-{typo}` into `review-` and pour every slide into
+ * one run. Empty = invalid.
  */
 function resolveTargetName(name: string, ctx: IOContext): string | undefined {
-    const resolved = interpolate(name, ctx).trim();
+    if (!placeholdersAllowed(name)) return undefined;
+    const pipeline = (globalThis as any).IO_PIPELINE;
+    const resolved = (typeof pipeline?.formatPath === "function"
+        ? pipeline.formatPath(name, ctx, { mode: "name", empty: "{}" })
+        : interpolate(name, ctx)).trim();
     if (!resolved || /[{}]/.test(resolved)) return undefined;
     return resolved;
 }
@@ -548,6 +584,12 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         label: opts.label ?? "MLflow",
         supports: { kinds: ["bundle", "crud"] },
 
+        // Artifacts store whatever they are handed; the `formats` key of the
+        // composed config picks which. Older cores without the helper: no pin.
+        preferredFormat(domain: string, ctx: IOContext): IOFormatPin | undefined {
+            return (globalThis as any).IO_PIPELINE?.pinnedFormatFrom?.(resolved(ctx), domain);
+        },
+
         accepts(ctx: IOContext): boolean | IOAcceptDecision {
             const o = opts.getOptions(ctx) ?? {};
             if (!o.proxy && !o.baseURL) {
@@ -656,8 +698,22 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 // the run data they wrote.
                 const artifact = mapping.artifacts?.[0];
                 if (!artifact) return { ok: true, payload: run.data ?? undefined };
+                // A binding pinned to a binary format (DICOM, …) stored bytes:
+                // hand the same bytes back. A text download would decode them
+                // as UTF-8 and corrupt them irreversibly.
+                const binary = !!ctx.format?.binary;
+                if (binary && typeof client.artifacts.downloadBytes !== "function") {
+                    return {
+                        ok: false, refused: true, code: "W_MLFLOW_NO_BINARY_READ",
+                        reason: `artifacts adapter cannot download bytes; cannot read binary format "${ctx.format!.id}"`,
+                    };
+                }
                 let text: string;
                 try {
+                    if (binary) {
+                        const bytes = await client.artifacts.downloadBytes(run.info.run_id, artifact.path);
+                        return { ok: true, payload: new Uint8Array(bytes) };
+                    }
                     text = await client.artifacts.downloadText(run.info.run_id, artifact.path);
                 } catch (e: any) {
                     if (e?.statusCode === 404) return { ok: true }; // nothing saved yet

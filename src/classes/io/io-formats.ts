@@ -26,6 +26,14 @@ function resolveText(value: string | (() => string) | undefined): string | undef
     return value;
 }
 
+function explicitOptions(options?: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options ?? {})) {
+        if (value !== undefined) out[key] = value;
+    }
+    return out;
+}
+
 /** Bytes of a wire payload, whichever of the accepted shapes it arrived in. */
 function isBytes(data: unknown): data is Uint8Array | ArrayBuffer {
     return data instanceof ArrayBuffer || ArrayBuffer.isView(data);
@@ -101,7 +109,10 @@ export class IOFormatRegistry implements IOFormatRegistryLike {
             binary,
             contentType: format?.contentType ?? (binary ? "application/octet-stream" : "text/plain"),
             fileExt: (format?.extensions?.[0] ?? "").replace(/^\./, ""),
-            options: this.resolveOptions(format, options),
+            // Only what the caller (a binding) set. Declared defaults are applied
+            // at encode/decode time; folding them in here would let them
+            // override the values an owner holds for the user.
+            options: explicitOptions(options),
         };
     }
 
@@ -114,8 +125,13 @@ export class IOFormatRegistry implements IOFormatRegistryLike {
      * shorter ones, so `.geo.json` is not claimed by a `.json` format.
      */
     detect(domain: string, data: unknown, hint: IOFormatSniffHint = {}): string | undefined {
+        return this.rank(domain, data, hint)[0];
+    }
+
+    /** Every format that might read `data`, most likely first (see {@link detect}). */
+    private rank(domain: string, data: unknown, hint: IOFormatSniffHint = {}): string[] {
         const formats = this.list(domain).filter(f => !!f.decode);
-        if (!formats.length) return undefined;
+        if (!formats.length) return [];
 
         const sniffHint: IOFormatSniffHint = { ...hint };
         if (sniffHint.json === undefined && typeof data === "string") {
@@ -128,8 +144,7 @@ export class IOFormatRegistry implements IOFormatRegistryLike {
         }
 
         const name = String(hint.fileName ?? "").toLowerCase();
-        let best: string | undefined;
-        let bestScore = 0;
+        const scored: { id: string; score: number }[] = [];
         for (const format of formats) {
             const extLength = name
                 ? Math.max(0, ...format.extensions.filter(e => name.endsWith(e)).map(e => e.length))
@@ -146,9 +161,10 @@ export class IOFormatRegistry implements IOFormatRegistryLike {
             } else {
                 score = sniffed ?? 0;
             }
-            if (score > bestScore) { bestScore = score; best = format.id; }
+            if (score > 0) scored.push({ id: format.id, score });
         }
-        return best;
+        // Stable: equal scores keep registration order, as `detect` always did.
+        return scored.sort((a, b) => b.score - a.score).map(s => s.id);
     }
 
     private contextFor(format: IOFormat, fctx?: Partial<IOFormatContext>): IOFormatContext {
@@ -174,18 +190,26 @@ export class IOFormatRegistry implements IOFormatRegistryLike {
             const format = this.require(domain, id, "decode");
             return { model: await format.decode!(data as any, this.contextFor(format, fctx)), format: id };
         }
-        const detected = this.detect(domain, data, { fileName: fctx?.fileName });
-        if (detected) return this.decode(domain, detected, data, fctx);
-        // Nothing claimed it. Formats without a `sniff` cannot, so give each of
-        // those one honest attempt before giving up — never a format that
-        // looked and said no.
+        // Every format that claimed the data, most likely first: a name or a
+        // sniff is evidence, not proof, so one that then fails to read it hands
+        // over to the next. After those, formats without a `sniff` (they
+        // cannot claim anything) get one honest attempt each — never a format
+        // that looked and said no.
+        const candidates = this.rank(domain, data, { fileName: fctx?.fileName });
         for (const format of this.list(domain)) {
-            if (!format.decode || format.sniff) continue;
-            try {
-                return { model: await format.decode(data as any, this.contextFor(format, fctx)), format: format.id };
-            } catch { /* next */ }
+            if (format.decode && !format.sniff && !candidates.includes(format.id)) candidates.push(format.id);
         }
-        throw new Error(`No registered "${domain}" format recognises this data.`);
+        let firstError: unknown;
+        for (const candidate of candidates) {
+            const format = this.get(domain, candidate)!;
+            try {
+                return { model: await format.decode!(data as any, this.contextFor(format, fctx)), format: candidate };
+            } catch (e) {
+                firstError ??= e;
+            }
+        }
+        throw new Error(`No registered "${domain}" format recognises this data.`,
+            firstError !== undefined ? { cause: firstError } : undefined);
     }
 
     encodeItem(domain: string, id: string, item: unknown, fctx?: Partial<IOFormatContext>): unknown {

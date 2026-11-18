@@ -242,17 +242,22 @@ can still choose one.
   write no file ignore it; a template writing several refuses
   (`W_MLFLOW_NO_TARGET`). `artifactPathPrefix` still bounds it, and `readBundle`
   reads from the same path. Give it a slide dimension when slides share a run:
-  without one every slide overwrites the same file. `{slideHash}` is unique;
-  `{slideName}` is readable but the same file name in two folders collides.
+  without one every slide overwrites the same file — use `{slideHash}`.
 - Names may use letters, digits, space and `. _ - / :`, at most 250 characters.
   Anything else (quotes, backslashes, backticks, …) invalidates the target rather
   than being coerced — and an invalid target refuses every dispatch with
   `W_MLFLOW_NO_TARGET` under `"allowed"` too, never falling back to the templates.
   `setTarget()` / `clearTarget()` replace it.
-- Names may carry the shared placeholders (`{backgroundId}`, `{viewerId}`,
-  `{ownerId}`, `{capabilityGroup}`, `{key}`, … — the set `IO_PIPELINE.formatPath`
-  resolves), substituted per dispatch with the same sanitization every sink uses.
-  The **resolved** name is what `experimentAllow` / `runAllow` judge. A name that
+- Names may carry `{slideHash}` `{backgroundId}` `{viewerId}` `{ownerId}`
+  `{ownerUid}` `{capabilityGroup}` `{capabilityId}` `{xoType}` `{key}`,
+  substituted per dispatch with the same sanitization every sink uses
+  (`IO_PIPELINE.formatPath`). Any other token invalidates the target — a typo
+  such as `review-{slidehash}` must not quietly become `review-` and pour every
+  slide into one run. `{slideName}` is excluded on purpose: it is the raw file
+  name, may carry a case number, and a session or script must not be able to
+  publish it to the tracking server. `{resourceName}` / `{itemId}` are excluded
+  because they are empty on bundle dispatches. The **resolved** name is what
+  `experimentAllow` / `runAllow` judge. A name, or any token in it, that
   resolves to nothing refuses with `W_MLFLOW_NO_TARGET`.
 
 | Layout you want | `params.ioSinks.mlflow.target` |
@@ -374,6 +379,13 @@ trailing slash produces into `_`: `"xopat/"` becomes `"xopat/_"` and then denies
 `"xopat"`. A denial is reported as `W_MLFLOW_ARTIFACT_DENIED`, so this fails
 loudly rather than silently, but it fails on a value that looks correct.
 
+**Choosing the format** of a bundle artifact: `formats: { "annotations": "geo-json" }`
+(or `{ "id", "options" }`; `"*"` for any owner) in the sink config
+(`modules["io-mlflow-sink"].mlflow`, `sinkOverrides.mlflow`, or a binding's `config`)
+picks it for a plain binding; a binding's `{ "sink": "mlflow", "format": … }`
+overrides it. Unpinned, the owner's deployment default is written, never the
+user's download-dialog choice.
+
 Placeholders for `experimentTemplate` / `runTemplate` (resolved by
 `IO_PIPELINE.formatPath`, shared with every other sink): `{ownerId}`
 `{ownerUid}` `{xoType}` `{direction}` `{capabilityId}` `{capabilityGroup}`
@@ -382,12 +394,15 @@ Placeholders for `experimentTemplate` / `runTemplate` (resolved by
 `{backgroundId}` to `_any` when the dispatch is not slide-scoped. `{backgroundId}`
 is the session's background id, not the slide's: for one run per slide use
 `{slideHash}`. `{slideHash}` / `{slideName}` describe the slide
-itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of the slide's data
-entry — stable across sessions, unaffected by an explicit background `id`, and
-reveals nothing of the path, so use it to address per-slide data; `{slideName}` is
-the file name — readable, but the same file name in two folders collides and it
-may carry a case number, so keep it for labels. Unresolvable, `{slideHash}` is
-`_any` and `{slideName}` empty. Substituted values are reduced to
+itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of HMAC-SHA256 of
+the slide's data entry, keyed by the operator secret `ENV.client.io.slideHashKey`
+— stable across sessions, unaffected by an explicit background `id`, and not
+reversible by guessing paths without the key, so use it to address per-slide
+data. Without the key a template using `{slideHash}` refuses
+(`W_IO_SLIDE_HASH_KEY`). `{slideName}` is the file name — readable, but the same
+file name in two folders collides and it may carry a case number, so keep it out
+of anything stored. With no slide behind the dispatch, `{slideHash}` is `_any` and
+`{slideName}` empty. Substituted values are reduced to
 `[A-Za-z0-9._-]` — they come from the session config and, for `itemId`, from the
 CRUD caller.
 
@@ -452,8 +467,9 @@ never built from strings — so no `eval`/`Function` is involved.
   missing experiment or run is a clean "no data yet" (`{ok: true}`), never an
   error, so hydration on a fresh deployment is silent. For an artifact template
   (`bundle-artifact`) `readBundle` downloads the stored file and returns it —
-  parsed when it is JSON — and a run without that file is likewise "no data
-  yet". Other templates return the run's data (tags/metrics/params). Binary
+  parsed when it is JSON, or as bytes (`Uint8Array`, via the adapter's
+  `downloadBytes`) when the binding pins a binary format — and a run without
+  that file is likewise "no data yet". Other templates return the run's data (tags/metrics/params). Binary
   bundles (`IOBinaryPayload`) are not read back: their path depends on the
   payload's extension, which an import does not know.
 - `query`: streams `runs.search` results, following MLflow page tokens and

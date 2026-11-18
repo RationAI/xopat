@@ -274,13 +274,19 @@ what every other destination (and the user's own download) receives.
 - An operator may pin a format on a format-agnostic sink
   (`{ "sink": "github", "format": "geo-json" }`). A pinned format is on the
   context of the read as well as the write, so naming a file after it is safe.
+- A format-agnostic sink should also let its **own config** pick the format, so
+  a plain binding can: implement
+  `preferredFormat: (domain, ctx) => IO_PIPELINE.pinnedFormatFrom(getOptions(ctx), domain)`
+  and document a `formats: { <domain>: "<id>" | { id, options } }` option. Don't
+  parse it yourself, and read it from trusted (operator) config only. Unpinned,
+  you receive the owner's deployment default.
 - The format you need does not exist yet? Register it —
   `IO_PIPELINE.formats.register({ domain, id, encode, decode, … })` needs
   neither the owner's cooperation nor its load order. See
   [`IO_PIPELINE.md` → Formats](IO_PIPELINE.md#formats).
 - Per-item CRUD is handed the owner's serialized item as is. Convert it with
   `IO_PIPELINE.formats.encodeItem(domain, id, item, { io: ctx })`.
-- `withRetry(sink)` keeps everything the sink declares (`route`, `formats`).
+- `withRetry(sink)` keeps everything the sink declares (`route`, `formats`, `preferredFormat`).
 
 ## 8. Getting bound
 

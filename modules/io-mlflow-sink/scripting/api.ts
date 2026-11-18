@@ -117,13 +117,14 @@ export interface MlflowSinkScriptApi {
      * allowlist; still checked against its allowlists.
      *
      * Names may use letters, digits, space and . _ - / : plus placeholders resolved
-     * per record: {slideHash} {slideName} {backgroundId} {viewerId} {ownerId} {capabilityGroup} — e.g.
+     * per record: {slideHash} {backgroundId} {viewerId} {ownerId} {capabilityGroup} — e.g.
      * { experiment: "xopat-cohort-A", run: "review-{slideHash}" } gives one run per slide.
      * A fixed run (no placeholder) collects every slide; built-in structures then
      * prefix keys/artifact paths with the slide or viewer so nothing is overwritten.
      * "artifact" sets the path of the one file a structure writes (bundle-artifact),
      * e.g. "annotations/{slideHash}.json"; it still has to fit the deployment's
      * artifact prefix, and without a slide placeholder every slide shares one file.
+     * Any other placeholder (including {slideName}, the raw file name) is rejected.
      */
     setTarget(target: { experiment: string; run?: string; artifact?: string }): Promise<{ experiment: string; run?: string; artifact?: string }>;
 

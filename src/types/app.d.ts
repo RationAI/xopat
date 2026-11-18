@@ -1016,11 +1016,12 @@ interface XOpatUtilities {
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
     currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
     /**
-     * Stable identity of the slide behind a background id: `hash` (16 hex, of the
-     * data entry — use for addressing) and `name` (file name — labels only; may
-     * collide and may carry a case number). `undefined` for an unknown id.
+     * Stable identity of the slide behind a background id: `hash` (16 hex of
+     * HMAC-SHA256(`hashKey`, data entry) — use for addressing; absent without a
+     * key) and `name` (file name — labels only; may collide and may carry a
+     * case number). `undefined` for an unknown id.
      */
-    slideIdentityFor(backgroundId: string | undefined): { hash: string; name: string } | undefined;
+    slideIdentityFor(backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;

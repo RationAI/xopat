@@ -36,6 +36,7 @@ const { IOPipeline } = await import("../../../src/classes/io/io-pipeline.ts");
 const { makeHttpRestSink } = await import("../../../src/classes/io/sinks/http-rest.ts");
 const { withRetry } = await import("../../../src/classes/io/sinks/with-retry.ts");
 const { fileDownloadSink } = await import("../../../src/classes/io/sinks/file-download.ts");
+const { fileUploadSink } = await import("../../../src/classes/io/sinks/file-upload.ts");
 
 const ctxOf = (over = {}) => ({
     direction: "export", capabilityId: "bundle-export", xoType: "module",
@@ -100,13 +101,46 @@ test("http-rest's default bundle path is distinct per bundle key @unit", async (
     expect(requests[1].path).toBe("/bundles/annotations/v1%3A%3Aslide%2Fa");
 });
 
-test("http-rest string templates substitute every occurrence, sanitized @unit", async () => {
+test("http-rest string templates substitute every occurrence, percent-encoded @unit @security", async () => {
     const requests = failingHttpClient(() => httpError(404));
     const sink = makeHttpRestSink({
         getOptions: () => ({ baseURL: "/api", itemPath: "/{resourceName}/{itemId}/copy/{itemId}" }),
     });
     await sink.update(ctxOf({ direction: "update", resourceName: "annotation", itemId: "../../etc" }), {});
-    expect(requests[0].path).toBe("/annotation/.._.._etc/copy/.._.._etc");
+    await sink.update(ctxOf({ direction: "update", resourceName: "annotation", itemId: ".." }), {});
+    expect(requests[0].path).toBe("/annotation/..%2F..%2Fetc/copy/..%2F..%2Fetc");
+    expect(requests[1].path).toBe("/annotation/%2E%2E/copy/%2E%2E");
+});
+
+test("http-rest template values stay distinct and whole @unit", async () => {
+    const requests = failingHttpClient(() => httpError(404));
+    const sink = makeHttpRestSink({ getOptions: () => ({ baseURL: "/api", itemPath: "/items/{itemId}" }) });
+    const long = "x".repeat(300);
+    for (const itemId of ["a:1", "a_1", long]) {
+        await sink.update(ctxOf({ direction: "update", resourceName: "annotation", itemId }), {});
+    }
+    expect(requests.map(r => r.path)).toEqual(["/items/a%3A1", "/items/a_1", `/items/${long}`]);
+});
+
+test("http-rest expands templates through the injected formatPath @unit", async () => {
+    const requests = failingHttpClient(() => httpError(404));
+    const seen = [];
+    const sink = makeHttpRestSink({
+        getOptions: () => ({ baseURL: "/api", bundlePath: "/bundles/{ownerId}/{slideHash}" }),
+        formatPath: (template, ctx, options) => { seen.push(options); return `/resolved/${ctx.backgroundId}`; },
+    });
+    await sink.writeBundle(ctxOf({ backgroundId: "bg1" }), "x");
+    expect(requests[0].path).toBe("/resolved/bg1");
+    expect(seen[0].mode).toBe("uri");
+});
+
+test("IOPipeline.formatPath resolves slide tokens per slide @unit", async () => {
+    globalThis.UTILITIES = { slideIdentityFor: (bg) => ({ hash: `h-${bg}`, name: `n ${bg}` }) };
+    const pipeline = new IOPipeline({ POST_DATA: {}, getConfig: () => ({}), notify: () => {} });
+    const a = pipeline.formatPath("/b/{slideHash}/{slideName}", ctxOf({ backgroundId: "s1" }), { mode: "uri" });
+    const b = pipeline.formatPath("/b/{slideHash}/{slideName}", ctxOf({ backgroundId: "s2" }), { mode: "uri" });
+    expect(a).toBe("/b/h-s1/n%20s1");
+    expect(b).toBe("/b/h-s2/n%20s2");
 });
 
 test("http-rest hands the dispatch ctx to getOptions @unit", async () => {
@@ -118,7 +152,40 @@ test("http-rest hands the dispatch ctx to getOptions @unit", async () => {
     expect(seen.length).toBeGreaterThan(0);
 });
 
+test("http-rest's HttpClient does not retry on its own @unit", async () => {
+    const built = [];
+    globalThis.HttpClient = class {
+        constructor(o) { built.push(o); }
+        async request() { return { data: null }; }
+    };
+    await makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) }).readBundle(ctxOf());
+    expect(built[0].maxRetries).toBe(0);
+});
+
 // ── withRetry ──────────────────────────────────────────────────────────────
+
+test("withRetry never retries a create by default, but does retry idempotent writes @unit", async () => {
+    const fast = { attempts: 3, backoff: () => 0 };
+    let requests = failingHttpClient(() => httpError(502));
+    let sink = withRetry(makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) }), fast);
+    await sink.create(ctxOf({ direction: "create", resourceName: "annotation" }), {});
+    expect(requests.length).toBe(1);
+    await sink.update(ctxOf({ direction: "update", resourceName: "annotation", itemId: "1" }), {});
+    expect(requests.length).toBe(4);
+
+    requests = failingHttpClient(() => httpError(502));
+    sink = withRetry(makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) }),
+        { ...fast, methods: ["create"] });
+    await sink.create(ctxOf({ direction: "create", resourceName: "annotation" }), {});
+    expect(requests.length).toBe(3);
+});
+
+test("withRetry retries a 429 @unit", async () => {
+    const requests = failingHttpClient(() => httpError(429));
+    const sink = withRetry(makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) }), { attempts: 2, backoff: () => 0 });
+    expect((await sink.writeBundle(ctxOf(), "x")).code).toBe("429");
+    expect(requests.length).toBe(2);
+});
 
 test("withRetry keeps the inner sink's route @unit @security", () => {
     const wrapped = withRetry({ id: "local", supports: ["bundle"], route: "local", async writeBundle() { return { ok: true }; } });
@@ -140,12 +207,64 @@ test("file-download writes the bytes of a binary payload, not the envelope @unit
     expect(downloads[0].content.type).toBe("video/webm");
 });
 
+/** A fake file picker: the hidden input "picks" `fileName` as soon as it is clicked. */
+function fakePicker(fileName) {
+    const modes = [];
+    const prevDocument = globalThis.document;
+    globalThis.document = {
+        body: { appendChild() {} },
+        createElement() {
+            const handlers = {};
+            const input = {
+                style: {}, remove() {},
+                addEventListener: (name, fn) => { handlers[name] = fn; },
+                click: () => handlers.change({ target: { files: [{ name: fileName }] } }),
+            };
+            return input;
+        },
+    };
+    globalThis.addEventListener ??= () => {};
+    globalThis.UTILITIES = {
+        readFileUploadEvent: async (_e, mode = "text") => { modes.push(mode); return mode === "bytes" ? new ArrayBuffer(2) : "text"; },
+    };
+    return { modes, restore: () => { globalThis.document = prevDocument; } };
+}
+
+test("file-upload reads a file of a binary format as bytes, anything else as text @unit", async () => {
+    const formats = [
+        { id: "native", extensions: [".json"] },
+        { id: "dicom-sr", extensions: [".dcm"], binary: true },
+    ];
+    globalThis.IO_PIPELINE = { formats: { list: (domain) => domain === "annotations" ? formats : [] } };
+    const importCtx = ctxOf({ direction: "import", capabilityId: "bundle-import" });
+
+    let picker = fakePicker("slide.DCM");
+    let r = await fileUploadSink.readBundle(importCtx);
+    picker.restore();
+    expect(picker.modes).toEqual(["bytes"]);
+    expect(r.payload).toBeInstanceOf(ArrayBuffer);
+    expect(r.meta.fileName).toBe("slide.DCM");
+
+    picker = fakePicker("slide.json");
+    r = await fileUploadSink.readBundle(importCtx);
+    picker.restore();
+    expect(picker.modes).toEqual(["text"]);
+    expect(r.payload).toBe("text");
+
+    // A format pinned on the dispatch decides, whatever the file is called.
+    picker = fakePicker("export.json");
+    await fileUploadSink.readBundle({ ...importCtx, format: { id: "dicom-sr", binary: true } });
+    picker.restore();
+    expect(picker.modes).toEqual(["bytes"]);
+    delete globalThis.IO_PIPELINE;
+});
+
 // ── restore ────────────────────────────────────────────────────────────────
 
 const OWNER = "module.annotations";
 
-/** A slide-aware owner bound to the given sinks, each answering `readBundle` with its payload. */
-function restorePipeline(sinkPayloads, { readDelayMs = 0 } = {}) {
+/** An owner (slide-aware by default) bound to the given sinks, each answering `readBundle` with its payload. */
+function restorePipeline(sinkPayloads, { readDelayMs = 0, bundleScope = "per-viewer-background" } = {}) {
     const imported = [];
     const ids = Object.keys(sinkPayloads);
     const pipeline = new IOPipeline({
@@ -154,7 +273,7 @@ function restorePipeline(sinkPayloads, { readDelayMs = 0 } = {}) {
         notify: () => {},
     });
     pipeline.registerOwner(OWNER, {
-        ownerId: "annotations", xoType: "module", bundleScope: "per-viewer-background",
+        ownerId: "annotations", xoType: "module", bundleScope,
         exportBundle: async () => undefined,
         importBundle: async (_ctx, data) => { imported.push(data); },
     });
@@ -183,6 +302,12 @@ test("two populated sinks import once, last one winning @unit", async () => {
     const { pipeline, imported } = restorePipeline({ first: "older", second: "newer" });
     await pipeline.tryRestoreImport(SLOT);
     expect(imported).toEqual(["newer"]);
+});
+
+test("a global owner imports every populated sink, so it can merge them @unit", async () => {
+    const { pipeline, imported } = restorePipeline({ first: "a", empty: undefined, second: "b" }, { bundleScope: "global" });
+    await pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(imported).toEqual(["a", "b"]);
 });
 
 test("a slide-aware owner is still told when every sink is empty @unit", async () => {

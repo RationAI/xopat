@@ -103,6 +103,7 @@ const data = new TextEncoder().encode("hello world");
 await ml.artifacts.uploadBytes(runId, "notes/hello.txt", data, { contentType: "text/plain" });
 const list = await ml.artifacts.list(runId, "notes");
 const text = await ml.artifacts.downloadText(runId, "notes/hello.txt");
+const bytes = await ml.artifacts.downloadBytes(runId, "scans/slice.dcm"); // ArrayBuffer — never read binary as text
 ```
 
 Artifacts inherit the parent's `proxy`/`auth` unless the deployment routes them
@@ -137,6 +138,7 @@ class MyAdapter {
     uploadBytes(run_id, path, bytes) { /* ... */ }
     list(run_id, path) { /* ... */ }
     downloadText(run_id, path) { /* ... */ }
+    downloadBytes(run_id, path) { /* ... ArrayBuffer */ } // optional; required for binary bundle formats
 }
 
 new MlFlowClient({ proxy: "mlflow", baseURL: "/api/2.0/mlflow",

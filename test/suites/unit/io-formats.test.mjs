@@ -158,6 +158,23 @@ test('decode "auto" reports which format it used @unit', async () => {
     await expect(r.decode(DOMAIN, "auto", "<xml/>")).rejects.toThrow(/recognises/);
 });
 
+test('decode "auto" falls back when the likeliest format fails to read the data @unit', async () => {
+    // The name says geo, the content does not say no — but geo cannot read it.
+    const BROKEN_GEO = { ...GEO, sniff: undefined, decode: () => { throw new Error("not geo"); } };
+    const UNSNIFFED = { domain: DOMAIN, id: "plain", title: "Plain", extensions: [".txt"], decode: (d) => ({ text: d }) };
+    const { r } = registry(NATIVE, BROKEN_GEO, UNSNIFFED);
+    const out = await r.decode(DOMAIN, "auto", '{"native":true}', { fileName: "x.geojson" });
+    expect(out.format).toBe("native");
+    // Nothing claims it: the formats with no sniff each get one attempt.
+    const opaque = await r.decode(DOMAIN, "auto", "opaque", { fileName: "x.geojson" });
+    expect(opaque.format).toBe("plain");
+    // A format whose own sniff said no is never tried.
+    const { r: strict } = registry(NATIVE, BROKEN_GEO);
+    const err = await strict.decode(DOMAIN, "auto", "opaque", { fileName: "x.geojson" }).catch(e => e);
+    expect(err.message).toMatch(/recognises/);
+    expect(err.cause?.message).toBe("not geo");
+});
+
 // ── pipeline: formats per sink ─────────────────────────────────────────────
 
 function exportPipeline({ bindings, sinks }) {
@@ -197,7 +214,9 @@ test("each sink receives the format it takes, from one flush @unit", async () =>
     expect(exports.sort()).toEqual(["(default)", "bin", "geo"]);
     expect(written.plain).toEqual({ payload: "payload:default:", format: undefined, ext: undefined });
     expect(written["dicom-store"].format).toBe("bin");
-    expect(written["geo-store"]).toEqual({ payload: "payload:geo:3", format: "geo", ext: "geo.json" });
+    // No binding options: the dispatch carries none. Declared defaults are the
+    // registry's to apply at encode time, beneath the owner's own values.
+    expect(written["geo-store"]).toEqual({ payload: "payload:geo:", format: "geo", ext: "geo.json" });
 });
 
 test("sinks sharing a format share one export @unit", async () => {
@@ -237,6 +256,37 @@ test("a sink whose required formats are all missing is declined, not fed the def
     expect(results.some(r => !r.ok)).toBe(true);
     // The owner was only asked for its default, to see whether anything was lost.
     expect(exports).toEqual(["(default)"]);
+});
+
+test("a binding with no formatOptions carries none, so it cannot shadow the owner's values @unit", () => {
+    const { r } = registry(GEO);
+    expect(r.descriptor(DOMAIN, "geo").options).toEqual({});
+    expect(r.descriptor(DOMAIN, "geo", { precision: undefined, x: 1 }).options).toEqual({ x: 1 });
+});
+
+test("a binding format the sink does not take is declined at dispatch @unit", async () => {
+    const { pipeline, written, exports } = exportPipeline({
+        bindings: [{ sink: "dicom-store", format: "geo" }],
+        sinks: { "dicom-store": { annotations: ["bin"] } },
+    });
+    const results = await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written["dicom-store"]).toBeUndefined();
+    expect(exports).not.toContain("geo");
+    expect(results.some(r => !r.ok)).toBe(true);
+});
+
+test("a binding format that is not registered is declined, not thrown on every flush @unit", async () => {
+    const { pipeline, written } = exportPipeline({
+        bindings: [{ sink: "plain", format: "not-registered" }],
+        sinks: { plain: undefined },
+    });
+    const results = await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.plain).toBeUndefined();
+    expect(results.some(r => !r.ok)).toBe(true);
+    // Registered later, it starts working.
+    pipeline.formats.register({ ...NATIVE, id: "not-registered" });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.plain?.format).toBe("not-registered");
 });
 
 test("a binding format the sink does not take is reported at validation @unit", () => {
@@ -339,4 +389,115 @@ test("a user-picked file is detected from its name and content @unit", async () 
     expect(imported[0].meta.fileName).toBe("a.geojson");
     await pipeline.importBundle("anything", { ownerUid: OWNER, format: "native" });
     expect(imported[1].format).toBe("native");
+});
+
+// ── format-agnostic sinks: the sink's own config pin and the owner default ──
+//
+// A plain binding (`["github"]`) plus the sink's module config used to have no
+// way to pick a format: no `ctx.format` reached the owner, and annotations fell
+// back to the user's download-dialog choice — so what was stored followed a UI
+// preference. Now the sink reports its config pin (`preferredFormat`), and with
+// none the pipeline hands over the owner's DEPLOYMENT default.
+
+const { pinnedFormatFrom } = await import("../../../src/classes/io/io-pipeline.ts");
+
+function agnosticPipeline({ bindings = ["store"], pin, ownerDefault, sinkRoute, readResult } = {}) {
+    const exports = [];
+    const written = {};
+    const imported = [];
+    const pipeline = new IOPipeline({
+        POST_DATA: {},
+        getConfig: () => ({ bindings: { annotations: { "bundle-export": bindings, "bundle-import": bindings } } }),
+        notify: () => {},
+    });
+    for (const f of [NATIVE, GEO, BINARY]) pipeline.formats.register(f);
+    pipeline.registerOwner(OWNER, {
+        ownerId: DOMAIN, xoType: "module", bundleScope: "global",
+        exportBundle: async (ctx) => {
+            exports.push({ format: ctx.format?.id ?? "(default)", route: ctx.route ?? "sink" });
+            return `payload:${ctx.format?.id ?? "default"}:${ctx.format?.options?.precision ?? ""}`;
+        },
+        importBundle: async (ctx, data) => { imported.push({ data, format: ctx.format?.id }); },
+        ...(ownerDefault !== undefined ? { defaultFormat: () => ownerDefault } : {}),
+    });
+    pipeline.registerCapability(OWNER, { id: "bundle-import", kind: "bundle" });
+    pipeline.registerSink({
+        id: "store", supports: ["bundle"], ...(sinkRoute ? { route: sinkRoute } : {}),
+        preferredFormat: (domain, ctx) => pinnedFormatFrom({ formats: pin }, domain),
+        async writeBundle(ctx, payload) { written.store = { payload, format: ctx.format?.id }; return { ok: true }; },
+        async readBundle() { return readResult ?? { ok: true }; },
+    });
+    return { pipeline, exports, written, imported };
+}
+
+test("pinnedFormatFrom reads an id, {id, options}, and the '*' fallback @unit", () => {
+    expect(pinnedFormatFrom({ formats: { annotations: "geo" } }, DOMAIN)).toBe("geo");
+    expect(pinnedFormatFrom({ formats: { annotations: { id: "geo", options: { precision: 2 } } } }, DOMAIN))
+        .toEqual({ id: "geo", options: { precision: 2 } });
+    expect(pinnedFormatFrom({ formats: { "*": "native", other: "geo" } }, DOMAIN)).toBe("native");
+    expect(pinnedFormatFrom({ formats: { "*": "native", annotations: "geo" } }, DOMAIN)).toBe("geo");
+    for (const bad of [undefined, null, {}, { formats: [] }, { formats: { annotations: 5 } },
+        { formats: { annotations: { options: {} } } }, { formats: { annotations: "" } }]) {
+        expect(pinnedFormatFrom(bad, DOMAIN)).toBeUndefined();
+    }
+});
+
+test("a sink's own config pin selects the format of a plain binding @unit", async () => {
+    const { pipeline, written, exports } = agnosticPipeline({
+        pin: { annotations: { id: "geo", options: { precision: 5 } } }, ownerDefault: "native" });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.store).toEqual({ payload: "payload:geo:5", format: "geo" });
+    expect(exports).toEqual([{ format: "geo", route: "sink" }]);
+});
+
+test("a binding's format beats the sink's config pin @unit", async () => {
+    const { pipeline, written } = agnosticPipeline({
+        bindings: [{ sink: "store", format: "bin" }], pin: { annotations: "geo" } });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.store.format).toBe("bin");
+});
+
+test("a sink config pin naming an unregistered format declines the sink @unit", async () => {
+    const { pipeline, written } = agnosticPipeline({ pin: { annotations: "nope" }, ownerDefault: "native" });
+    const results = await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.store).toBeUndefined();
+    expect(results.some(r => !r.ok)).toBe(true);
+});
+
+test("unpinned, a format-agnostic sink gets the owner's deployment default @unit", async () => {
+    const { pipeline, written, exports } = agnosticPipeline({ ownerDefault: "native" });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.store.format).toBe("native");
+    expect(exports).toEqual([{ format: "native", route: "sink" }]);
+});
+
+test("an unregistered owner default leaves the choice to the owner, as before @unit", async () => {
+    const { pipeline, written } = agnosticPipeline({ ownerDefault: "not-registered" });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(written.store.format).toBeUndefined();
+});
+
+test("a local-route sink is asked with route 'local', so the owner may use the user's choice @unit", async () => {
+    const { pipeline, exports } = agnosticPipeline({ sinkRoute: "local" });
+    await pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(exports).toEqual([{ format: "(default)", route: "local" }]);
+});
+
+test("a restore under the owner default detects first, so older data still loads @unit", async () => {
+    // Stored as geo before the default (native) was handed over.
+    let run = agnosticPipeline({ ownerDefault: "native",
+        readResult: { ok: true, payload: '{"type":"FeatureCollection","n":0}' } });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.imported[0].format).toBe("geo");
+
+    // Nothing recognises it: the default is the last resort.
+    run = agnosticPipeline({ ownerDefault: "native", readResult: { ok: true, payload: "opaque" } });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.imported[0].format).toBe("native");
+
+    // A sink config pin is trusted ahead of detection, like a binding.
+    run = agnosticPipeline({ pin: { annotations: "native" },
+        readResult: { ok: true, payload: '{"type":"FeatureCollection","n":0}' } });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.imported[0].format).toBe("native");
 });

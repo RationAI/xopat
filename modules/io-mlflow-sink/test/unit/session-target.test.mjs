@@ -186,7 +186,7 @@ test("an artifact target moves the one file a template writes, bounded by the pr
     const sink = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"], template: "bundle-artifact",
         artifacts: { type: "mlflow-artifacts" } },
         { experiment: "xopat-cohort", run: "review", artifact: "annotations/{slideHash}.json" });
-    globalThis.IO_PIPELINE = { formatPath: (tmpl, ctx, o) => tmpl.replace("{slideHash}", "0123456789abcdef").replace(/\{(\w+)\}/g, (_, k) => String(ctx[k] ?? "")) };
+    globalThis.IO_PIPELINE = { formatPath: (tmpl, ctx, o) => tmpl.replace("{slideHash}", "0123456789abcdef").replace(/\{(\w+)\}/g, (_, k) => String(ctx[k] ?? "") || (o?.empty ?? "")) };
     try {
         expect((await sink.writeBundle(ctxFor(), { objects: [] })).ok).toBe(true);
         expect(calls.uploads.map(u => u.path)).toEqual(["annotations/0123456789abcdef.json"]);
@@ -213,4 +213,66 @@ test("normalizeTarget validates artifact like a name @unit", () => {
     expect(normalizeTarget({ experiment: "e", artifact: "a/{slideHash}.json" }))
         .toEqual({ experiment: "e", artifact: "a/{slideHash}.json" });
     expect(normalizeTarget({ experiment: "e", artifact: "a\"b.json" })).toBeUndefined();
+});
+
+test("normalizeTarget rejects {slideName} and unknown or malformed placeholders @unit", () => {
+    expect(normalizeTarget({ experiment: "xopat-A", run: "review-{slideHash}" }))
+        .toEqual({ experiment: "xopat-A", run: "review-{slideHash}" });
+    for (const bad of [
+        // The raw file name may carry a case number: never from a session or script.
+        { experiment: "xopat-A", run: "review-{slideName}" },
+        { experiment: "xopat-{slideName}" },
+        { experiment: "xopat-A", artifact: "a/{slideName}.json" },
+        // Typos must not collapse to "review-" and merge every slide into one run.
+        { experiment: "xopat-A", run: "review-{slidehash}" },
+        { experiment: "xopat-A", run: "review-{typo}" },
+        // Empty on bundle dispatches.
+        { experiment: "xopat-A", run: "review-{itemId}" },
+        { experiment: "xopat-A", run: "review-{resourceName}" },
+        // Stray braces.
+        { experiment: "xopat-A", run: "review-{" },
+        { experiment: "xopat-A", run: "review-}" },
+        { experiment: "xopat-A", run: "review-{}" },
+    ]) {
+        expect(normalizeTarget(bad)).toBeUndefined();
+    }
+});
+
+test("a target placeholder that resolves to nothing refuses instead of merging runs @unit", async () => {
+    const calls = installFakeMlflow();
+    // Sentinel-honouring formatPath, as the core one is.
+    globalThis.IO_PIPELINE = { formatPath: (tmpl, ctx, o) =>
+        tmpl.replace(/\{(\w+)\}/g, (_, k) => String(ctx[k] ?? "") || (o?.empty ?? "")) };
+    try {
+        // `key` is an allowed token but empty in this context.
+        const sink = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"] },
+            { experiment: "xopat-cohort", run: "review-{key}" });
+        const result = await sink.create(ctxFor({ key: "" }), score("s1"));
+        expect(result.ok).toBe(false);
+        expect(result.code).toBe("W_MLFLOW_NO_TARGET");
+        expect(calls.runs).toEqual([]);
+
+        // A target that bypassed normalizeTarget (e.g. set by an older build) still refuses.
+        const typo = sinkWith({ sessionTarget: "allowed", experimentAllow: ["xopat-*"] },
+            { experiment: "xopat-cohort", run: "review-{typo}" });
+        expect((await typo.create(ctxFor(), score("s1"))).code).toBe("W_MLFLOW_NO_TARGET");
+        expect(calls.runs).toEqual([]);
+    } finally {
+        delete globalThis.IO_PIPELINE;
+    }
+});
+
+test("the sink's own `formats` config is reported as its format pin @unit", async () => {
+    const { pinnedFormatFrom } = await import("../../../../src/classes/io/io-pipeline.ts");
+    globalThis.IO_PIPELINE = { pinnedFormatFrom };
+    try {
+        const pinned = sinkWith({ formats: { annotations: { id: "geo-json", options: { precision: 2 } }, "*": "native" } });
+        expect(pinned.preferredFormat("annotations", ctxFor())).toEqual({ id: "geo-json", options: { precision: 2 } });
+        expect(pinned.preferredFormat("scores", ctxFor())).toBe("native");
+        expect(sinkWith({}).preferredFormat("annotations", ctxFor())).toBeUndefined();
+    } finally {
+        delete globalThis.IO_PIPELINE;
+    }
+    // An older core without the helper: no pin, never a throw.
+    expect(sinkWith({ formats: { annotations: "geo-json" } }).preferredFormat("annotations", ctxFor())).toBeUndefined();
 });
