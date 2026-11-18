@@ -364,11 +364,18 @@ test("the reported channel is the channel that was measured", { tag: ["@syntheti
         // (base - tint), so measuring one and labelling the other is detectable.
         const asR = { source: "rendered", channel: "R", threshold: "auto" };
         const asG = { source: "rendered", channel: "G", threshold: "auto" };
-        await engine.computeForObject(window.VIEWER, object, asR);
-        await engine.computeForObject(window.VIEWER, object, asG);
-        return { r: engine.getCached(object, asR), g: engine.getCached(object, asG) };
+        const outR = await engine.computeForObject(window.VIEWER, object, asR);
+        const outG = await engine.computeForObject(window.VIEWER, object, asG);
+        return {
+            reasons: { r: outR?.reason ?? null, g: outG?.reason ?? null },
+            r: engine.getCached(object, asR),
+            g: engine.getCached(object, asG),
+        };
     }, roi.incrementId);
 
+    // A refusal names its reason here instead of surfacing as a null below.
+    expect(measured.reasons.r, "R sampling must succeed, not degrade").toBe(null);
+    expect(measured.reasons.g, "G sampling must succeed, not degrade").toBe(null);
     expect(measured.r.channel).toBe("R");
     expect(measured.g.channel).toBe("G");
     // R = base + tint, G = base - tint, tint = -10 → means of 150 and 170. Asserted
