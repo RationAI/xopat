@@ -1079,13 +1079,6 @@ addPlugin('dicom', class extends XOpatPlugin {
         // Already attached for this slide (re-open, or a restored session that
         // carries the generated entry) — reuse it rather than append a copy.
         const existing = visualizations.findIndex(v => v && v[marker] === id.seriesUID);
-        // TEMPORARY [dicom-dup-debug] — remove once the config.data growth is explained.
-        console.error("[dicom-dup-debug] attach " + JSON.stringify({
-            dataLength: Array.isArray(config.data) ? config.data.length : null,
-            visualizations: visualizations.length,
-            withMarker: visualizations.filter(v => v && v[marker] !== undefined).length,
-            reusing: existing,
-        }));
         if (existing >= 0) {
             event.visualizationIndex = existing;
             return;

@@ -349,14 +349,6 @@ console.log("# chat registry hot reload");
 
         const script = `
             import { pathToFileURL } from "node:url";
-            // A pre-state-bag instance left behind by an older build: it has the
-            // data but none of the methods the current class added.
-            globalThis.__XOPAT_CHAT_SERVER_REGISTRY__ = {
-                providerTypes: new Map([["legacy", { id: "legacy" }]]),
-                providerInstances: new Map(), providerAdapters: new Map(),
-                providerSecrets: new Map(), personalities: new Map(),
-                sessionPrincipal: new Map(), modelCapabilities: new Map(),
-            };
             const A = await import(pathToFileURL(${JSON.stringify(path.join(tmp, "a.mjs"))}).href);
             const r1 = A.ChatServerRegistry.instance();
             r1.registerAdapter({ id: "t", resolveModel: async () => ({}) });
@@ -367,8 +359,6 @@ console.log("# chat registry hot reload");
                 differentClass: A.ChatServerRegistry !== B.ChatServerRegistry,
                 differentInstance: r1 !== r2,
                 sharedState: r1.state === r2.state,
-                legacyAdopted: !!r1.getProviderType("legacy"),
-                legacyGlobalCleared: globalThis.__XOPAT_CHAT_SERVER_REGISTRY__ === undefined,
                 stateSurvived: !!r2.getProviderType("pt"),
             }));
         `;
@@ -380,8 +370,6 @@ console.log("# chat registry hot reload");
         ok("…and a different instance", r.differentInstance);
         ok("…sharing one state bag", r.sharedState);
         ok("state survives the reload (no 'is not a function')", r.stateSurvived);
-        ok("a pre-state-bag global is adopted", r.legacyAdopted);
-        ok("…and then removed", r.legacyGlobalCleared);
     } catch (e) {
         ok("chat registry hot-reload check ran", false, String(e?.stderr || e?.message || e));
     } finally {

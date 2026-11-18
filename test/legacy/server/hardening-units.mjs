@@ -416,8 +416,13 @@ console.log("# server-module-loader build lock");
         /renameSync\(/.test(loaderSrc) && /tmpDir/.test(loaderSrc));
     ok("…and takes a cross-process lock",
         /withBuildLock/.test(loaderSrc) && /wx/.test(loaderSrc));
-    ok("the meta stamp is written after the rename, never before",
-        loaderSrc.indexOf("renameSync(tmpOut, outFile)") < loaderSrc.indexOf("writeFileSync(metaFile"));
+    {
+        // Every call site of the stamp (not its definition) must follow the rename.
+        const renameAt = loaderSrc.indexOf("renameSync(tmpOut, outFile)");
+        const stampCalls = [...loaderSrc.matchAll(/(?<!function )writeArtifactMeta\(outFile/g)].map(m => m.index);
+        ok("the meta stamp is written after the rename, never before",
+            renameAt >= 0 && stampCalls.length > 0 && stampCalls.every(at => at > renameAt));
+    }
 }
 
 // ── I. Cluster supervisor policy ────────────────────────────────────────────
