@@ -612,7 +612,7 @@ OSD.Scalebar.prototype = {
 
                     // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                     const rotCol = document.createElement("div");
-                    rotCol.className = "flex flex-col items-center pb-2 pl-1";
+                    rotCol.className = "flex flex-col items-center pb-2 pl-2";
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
@@ -624,7 +624,7 @@ OSD.Scalebar.prototype = {
 
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(readoutField(rotReadout, "°", 26), rotSliderContainer);
+                    rotCol.append(readoutField(rotReadout, "°", 32), rotSliderContainer);
                     this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += ' noUi-reverse';
@@ -1005,7 +1005,7 @@ OSD.Scalebar.prototype = {
                     addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                     const rotCol = document.createElement("div");
-                    rotCol.className = "flex flex-col items-center pb-2 pl-1";
+                    rotCol.className = "flex flex-col items-center pb-2 pl-2";
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
@@ -1016,7 +1016,7 @@ OSD.Scalebar.prototype = {
                     rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(readoutField(rotReadout, "°", 26), rotSliderContainer);
+                    rotCol.append(readoutField(rotReadout, "°", 32), rotSliderContainer);
                     this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += " noUi-reverse";

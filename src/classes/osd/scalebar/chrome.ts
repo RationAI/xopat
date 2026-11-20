@@ -789,8 +789,19 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         // Collapsed only the strip is left (the slider panel is a
         // collapsible); expanded the panel stacks above it, each at its own
         // width, left edges aligned.
+        // Classes and inline both: the same pair of utilities the dock
+        // toggles, with the inline value as the tie-breaker against whatever
+        // the container was created with.
+        magnificationContainer.classList.toggle("flex-row", c);
+        magnificationContainer.classList.toggle("items-center", c);
+        magnificationContainer.classList.toggle("flex-col", !c);
+        magnificationContainer.classList.toggle("items-start", !c);
+        magnificationContainer.style.display = "flex";
         magnificationContainer.style.flexDirection = c ? "row" : "column";
         magnificationContainer.style.alignItems = c ? "center" : "flex-start";
+        // The strip is the second box of the stack, under the slider panel.
+        slidersBox.style.order = "0";
+        header.style.order = "1";
         toggle.title = window.$.t(c ? 'main.scalebar.expand' : 'main.scalebar.minimize');
         toggle.firstChild.textContent = c ? "▴" : "▾";
         // The quick-zoom pass skips itself while expanded and only reruns on a
