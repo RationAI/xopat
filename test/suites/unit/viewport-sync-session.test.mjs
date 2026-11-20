@@ -113,6 +113,43 @@ test("sync: clearing the session takes rotation and mirror back out of every fol
     expect(ViewportSyncAPI._session).toBe(null);
 });
 
+test("sync: a clear aborts a point pick in flight on any viewer @unit", async () => {
+    const ref = makeViewer("ref"), a = makeViewer("a");
+    open(ref, a);
+    seedSession("ref", { ref: rotationTransform(0), a: rotationTransform(30) });
+
+    let aborted = 0;
+    api(a)._activeCalibrationCancel = () => { aborted++; };
+    api(ref).resetSession();
+    expect(aborted).toBe(1);
+    expect(api(a)._activeCalibrationCancel).toBe(null);
+
+    seedSession("ref", { ref: rotationTransform(0), a: rotationTransform(30) });
+    api(a)._activeCalibrationCancel = () => { aborted++; };
+    api(ref).resetViewer();
+    expect(aborted).toBe(2);
+});
+
+test("sync: auto-align all replaces an existing hand-made alignment @unit", async () => {
+    const ref = makeViewer("ref"), follower = makeViewer("follower", -30);
+    open(follower, ref);
+    seedSession("follower", { follower: rotationTransform(0), ref: rotationTransform(30) });
+    ViewportSyncAPI._session.leaderPts = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }];
+    await api(follower).enable({ allowManual: false });
+    await api(ref).enable({ allowManual: false });
+
+    // These stubs cannot be registered, so the follower fails to re-join —
+    // which is exactly when a kept manual transform would have gone unnoticed.
+    const result = await ViewportSyncAPI.autoSyncAll(ref);
+
+    const S = ViewportSyncAPI._session;
+    expect(S.leaderId).toBe("ref");
+    expect(S.leaderPts).toBe(null);
+    expect(Object.keys(S.transforms)).toEqual(["ref"]);
+    expect(result.aligned).toBe(1);
+    expect(result.failed).toBe(1);
+});
+
 test("sync: clearing one viewer releases only that viewer, also after it was unlinked @unit", async () => {
     const ref = makeViewer("ref"), a = makeViewer("a", -30), b = makeViewer("b", -45);
     open(ref, a, b);

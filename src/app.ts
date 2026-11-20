@@ -1070,19 +1070,29 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             icon: "ph-cursor-click",
             label: $.t('sync.recalibrate'),
             hint: $.t('sync.recalibrateHint'),
+            // Session-wide, like its neighbours here: every viewport, first
+            // one first. Calibrating a single viewport is that viewport's own
+            // SYNC menu.
             onClick: async () => {
-                const viewer: any = VIEWER_MANAGER.get?.() || VIEWER_MANAGER.viewers?.[0];
-                const api: any = viewer?.scalebar?.ViewportSyncAPI;
+                const api: any = anySyncApi();
                 if (!api) return;
+                if ((VIEWER_MANAGER.viewers?.length || 0) < 2) {
+                    Dialogs.show($.t('sync.needsTwoSlides'), 2000, Dialogs.MSG_INFO);
+                    return;
+                }
                 try {
-                    api.resetViewer();
-                    await api.enable({ mode: "manual" });
-                    Dialogs.show($.t('sync.enabled'), 1500, Dialogs.MSG_INFO);
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.recalibrate", true);
+                    const r = await api.constructor.manualSyncAll();
+                    Dialogs.show($.t('sync.autoSyncDone', r), 2000, Dialogs.MSG_INFO);
                 } catch (e: any) {
-                    if (!/cancel/i.test(e?.message || "")) {
+                    if (/cancel/i.test(e?.message || "")) {
+                        Dialogs.show($.t('sync.cancelled'), 1500, Dialogs.MSG_INFO);
+                    } else {
                         console.error(e);
                         Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
                     }
+                } finally {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.recalibrate", false);
                 }
             },
         });
@@ -1109,8 +1119,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         controls.register("core.closeViewer", {
             label: $.t('main.scalebar.closeViewer'),
             icon: "ph-x",
-            // Last in the strip, after any owner's controls.
+            // Last in the strip, after any owner's controls, and set apart
+            // from them: it sat flush against "next slide".
             order: 1000,
+            detached: true,
             visible: () => (VIEWER_MANAGER.viewers?.length || 0) > 1,
             onClick: ({ viewer }: { viewer: OpenSeadragon.Viewer }) => {
                 APPLICATION_CONTEXT.closeViewer(viewer).catch((e: any) =>
