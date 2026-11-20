@@ -67,7 +67,7 @@ import {
     isDefined,
     toSignedRotation,
 } from "./units";
-import { addQuickZoomChrome, addSyncMenuChrome } from "./chrome";
+import { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField } from "./chrome";
 import { ViewportSyncAPI } from "./viewport-sync-api";
 
 /**
@@ -575,7 +575,6 @@ OSD.Scalebar.prototype = {
 
                     const viewport = this.viewer.viewport;
                     const inside = "oklch(var(--b1))";
-                    const outside = "oklch(var(--er))";
 
                     this.magnificationContainer = document.createElement("div");
                     this.magnificationContainer.id = this.id + "-magnification";
@@ -587,8 +586,7 @@ OSD.Scalebar.prototype = {
                     // the parent stacking context and overlap menus.
                     this.magnificationContainer.classList.add(
                         // `relative` (not absolute): the panel is a flex child of
-                        // the dock now, and it must still be the containing block
-                        // for the absolutely-positioned sync header. z-[1] keeps
+                        // the dock. z-[1] keeps
                         // the header's z-index:3 and the label's hover z-index:40
                         // trapped in a local stacking context.
                         "relative",
@@ -622,9 +620,6 @@ OSD.Scalebar.prototype = {
                     rotReadout.min = "-180";
                     rotReadout.max = "180";
                     rotReadout.step = "1";
-                    rotReadout.style.width = "50px";
-                    rotReadout.className =
-                        "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -633,7 +628,7 @@ OSD.Scalebar.prototype = {
 
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(rotReadout, rotSliderContainer);
+                    rotCol.append(readoutField(rotReadout, "°", 28), rotSliderContainer);
                     this.magnificationContainer.appendChild(rotCol);
 
                     noUiSlider.cssClasses.target += ' noUi-reverse';
@@ -786,12 +781,7 @@ OSD.Scalebar.prototype = {
 
                     let percentNative = ((nativeVal - range.min) / totalRange) * 100;
                     percentNative = Math.max(0, Math.min(100, percentNative));
-                    const bgStyle = `linear-gradient(to top,
-  ${inside} 0%,
-  ${inside} ${percentNative}%,
-  ${outside} ${percentNative}%,
-  ${outside} 100%
-)`;
+                    const bgStyle = digitalZoomTrack(inside, percentNative);
 
                     const sliderContainer = document.createElement("span");
                     sliderContainer.className = "relative flex-1 w-1.5 my-2";
@@ -808,18 +798,14 @@ OSD.Scalebar.prototype = {
                     magInput.type = "number";
                     magInput.inputMode = "decimal";
                     magInput.step = "0.1";
-                    magInput.className = "input input-xs";
                     magInput.min = String(minMag);
                     magInput.max = String(maxMag);
-                    magInput.style.width = "45px";
-                    magInput.style.transform = "translate(14px, 0)";
-                    magInput.className =
-                        "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
-                    magInput.style.padding = "0";
-                    magInput.style.height = "24px";
-                    magInput.style.fontSize = "11px";
+                    magInput.title = window.$.t('main.scalebar.magnificationHint');
 
-                    sliderWrap.appendChild(magInput);
+                    const magField = readoutField(magInput, "×", 28);
+                    // Centred over the slider + its pip labels, not the track alone.
+                    magField.style.transform = "translate(14px, 0)";
+                    sliderWrap.appendChild(magField);
 
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
@@ -1004,8 +990,7 @@ OSD.Scalebar.prototype = {
                     // the parent stacking context and overlap menus.
                     this.magnificationContainer.classList.add(
                         // `relative` (not absolute): the panel is a flex child of
-                        // the dock now, and it must still be the containing block
-                        // for the absolutely-positioned sync header. z-[1] keeps
+                        // the dock. z-[1] keeps
                         // the header's z-index:3 and the label's hover z-index:40
                         // trapped in a local stacking context.
                         "relative",
@@ -1037,9 +1022,6 @@ OSD.Scalebar.prototype = {
                     rotReadout.min = "-180";
                     rotReadout.max = "180";
                     rotReadout.step = "1";
-                    rotReadout.style.width = "50px";
-                    rotReadout.className =
-                        "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -1047,7 +1029,7 @@ OSD.Scalebar.prototype = {
                     rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(rotReadout, rotSliderContainer);
+                    rotCol.append(readoutField(rotReadout, "°", 28), rotSliderContainer);
                     this.magnificationContainer.appendChild(rotCol);
 
                     noUiSlider.cssClasses.target += " noUi-reverse";
@@ -1161,15 +1143,9 @@ OSD.Scalebar.prototype = {
                     const levelReadout = document.createElement("input");
                     levelReadout.type = "text";
                     levelReadout.readOnly = true;
-                    levelReadout.className =
-                        "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
-                    levelReadout.style.padding = "0";
-                    levelReadout.style.height = "24px";
-                    levelReadout.style.fontSize = "11px";
-                    levelReadout.style.width = "56px";
-                    levelReadout.style.transform = "translate(14px, 0)";
-
-                    sliderWrap.appendChild(levelReadout);
+                    const levelField = readoutField(levelReadout, "", 48);
+                    levelField.style.transform = "translate(14px, 0)";
+                    sliderWrap.appendChild(levelField);
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
 
@@ -1324,6 +1300,8 @@ OSD.Scalebar.prototype = {
             }
             // Drop the ViewerControls subscription of this strip's slot.
             this._ui.unmountControls?.();
+            // Portaled to <body>: it would outlive the strip it hangs on.
+            this._ui.closeLabelPopover?.();
 
             // Destroy rotation slider
             if (this._ui.rotSliderEl?.noUiSlider) {

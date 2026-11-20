@@ -566,6 +566,7 @@ class ViewportSyncAPI {
      * automatic registration the user just rejected.
      */
     resetViewer(viewerId = this.master.uniqueId) {
+        this._cancelActiveCalibrations();
         const S = this._getSession();
         const peerApis = this._allSyncViewers().map(v => v.scalebar.ViewportSyncAPI);
 
@@ -697,6 +698,7 @@ class ViewportSyncAPI {
      * rather than recompute the same answer.
      */
     resetSession() {
+        this._cancelActiveCalibrations();
         const S = this._getSession();
         const pending = this._pendingManual();
         for (const v of this._allSyncViewers()) {
@@ -743,12 +745,24 @@ class ViewportSyncAPI {
                 (current, total) => {
                     this.__ui?.setProgress?.(`${current}/${total}`);
                 },
-                { timeoutMs: 15000, messageKey: pickOpts.messageKey }
+                { messageKey: pickOpts.messageKey }
             );
             // Handle so the UI can abort an in-flight point pick (clicking
             // SYNC again while busy).
             this._activeCalibrationCancel = cleanupPick;
         });
+    }
+
+    /**
+     * Abort every in-flight point pick, on any viewer. A clear invalidates
+     * what a running calibration is being measured against: left alone, the
+     * picker — and the reference markers shown for it — would linger until
+     * its idle timeout, then store a transform into a session that no longer
+     * holds the points it was matched to.
+     */
+    _cancelActiveCalibrations() {
+        for (const v of this._allSyncViewers()) v.scalebar.ViewportSyncAPI.cancelCalibration?.();
+        this.cancelCalibration();
     }
 
     /**
@@ -784,7 +798,11 @@ class ViewportSyncAPI {
         const overlays = [];
         const total = 3;
 
-        const timeoutMs = Math.max(1000, opts.timeoutMs ?? 30000); // “reasonable time”
+        // Idle limit, not a deadline: every click and every viewport movement
+        // restarts it (see `restartTimeout`), so it only fires on a picker the
+        // user walked away from. Finding a landmark that matches a numbered
+        // point on the reference slide takes far longer than a few seconds.
+        const timeoutMs = Math.max(1000, opts.timeoutMs ?? 120000);
         let timeoutRef = null;
 
         // Distance, not duration: OSD's own `event.quick` also demands the
@@ -807,6 +825,7 @@ class ViewportSyncAPI {
             viewer.removeHandler("canvas-click", handler);
             viewer.removeHandler("canvas-press", pressHandler);
             viewer.removeHandler("canvas-drag", dragHandler);
+            viewer.removeHandler("animation", restartTimeout);
             window.removeEventListener("keydown", keyHandler, true);
             if (viewer.container) viewer.container.style.cursor = prevCursor;
             if (timeoutRef) clearTimeout(timeoutRef);
@@ -906,6 +925,8 @@ class ViewportSyncAPI {
         viewer.addHandler("canvas-click", handler);
         viewer.addHandler("canvas-press", pressHandler);
         viewer.addHandler("canvas-drag", dragHandler);
+        // Panning/zooming towards a landmark counts as activity.
+        viewer.addHandler("animation", restartTimeout);
         window.addEventListener("keydown", keyHandler, true);
         if (viewer.container) viewer.container.style.cursor = "crosshair";
         restartTimeout();

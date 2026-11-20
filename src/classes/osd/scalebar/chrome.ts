@@ -200,14 +200,73 @@ function renderImageLikeInto(container, src) {
  * (fit slide) button followed by the reachable magnification stops, so the
  * common "go to 10x" move costs one click instead of expanding the panel and
  * dragging a slider. Stops above the slide's native magnification are
- * rendered in the error color — that zoom is interpolated, the detail is not
- * in the data. Uncalibrated slides get the same row over zoom levels (L1..Ln).
+ * rendered muted and italic (`DIGITAL_ZOOM_COLOR`) — that zoom is
+ * interpolated, the detail is not in the data. Deliberately not the error
+ * color: nothing is wrong, and red there read as a fault or as the active stop. Uncalibrated slides get the same row over zoom levels (L1..Ln).
  *
  * @param {OpenSeadragon.Scalebar} scalebar
  * @param {OpenSeadragon.Viewer} viewer
  * @param {HTMLElement} header the collapsed row this group belongs to
  * @param {HTMLElement} insertAfter sibling this group is placed behind
  */
+/**
+ * Text colour of a zoom stop beyond the slide's native magnification. Shared
+ * with the expanded panel's slider track (`digitalZoomTrack`).
+ */
+const DIGITAL_ZOOM_COLOR = "oklch(var(--bc) / 0.55)";
+
+/**
+ * Slider-track background: solid up to `percentNative` (bottom-up), hatched
+ * above it — the stretch where zoom is interpolated.
+ * @param {string} solid CSS colour of the native range
+ * @param {number} percentNative 0..100
+ */
+function digitalZoomTrack(solid, percentNative) {
+    return `linear-gradient(to top, ${solid} 0 ${percentNative}%, transparent ${percentNative}% 100%), `
+        + `repeating-linear-gradient(-45deg, ${DIGITAL_ZOOM_COLOR} 0 2px, oklch(var(--bc) / 0.12) 2px 4px)`;
+}
+
+/**
+ * Wrap a readout `<input>` into the panel's shared value box and append its
+ * unit, so every readout looks the same and says what it measures.
+ * @param {HTMLInputElement} input
+ * @param {string} unit short suffix ("°", "×"); empty for none
+ * @param {number} inputWidth px
+ * @return {HTMLElement} the box to insert where the input used to go
+ */
+function readoutField(input, unit, inputWidth) {
+    const box = document.createElement("label");
+    box.className = "flex flex-row items-center justify-center rounded-lg bg-base-100 shadow text-base-content font-bold";
+    box.style.height = "24px";
+    box.style.padding = "0 0.3rem";
+    box.style.fontSize = "11px";
+    box.style.cursor = "text";
+    box.title = input.title;
+
+    input.className = "font-bold";
+    input.style.width = `${inputWidth}px`;
+    input.style.height = "100%";
+    input.style.padding = "0";
+    input.style.border = "none";
+    input.style.outline = "none";
+    input.style.background = "transparent";
+    input.style.color = "inherit";
+    input.style.fontSize = "inherit";
+    input.style.textAlign = unit ? "right" : "center";
+    // The unit takes the place of the spinner; arrow keys still step.
+    input.style.appearance = "textfield";
+    box.appendChild(input);
+
+    if (unit) {
+        const suffix = document.createElement("span");
+        suffix.textContent = unit;
+        suffix.style.opacity = "0.6";
+        suffix.style.paddingLeft = "1px";
+        box.appendChild(suffix);
+    }
+    return box;
+}
+
 function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
     const viewport = viewer.viewport;
     const group = document.createElement("div");
@@ -219,8 +278,11 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
     const makeButton = (label, title, onClick, isDigital) => {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "btn btn-xs join-item border-none px-1"
-            + (isDigital ? " text-error" : "");
+        button.className = "btn btn-xs join-item border-none px-1";
+        if (isDigital) {
+            button.style.color = DIGITAL_ZOOM_COLOR;
+            button.style.fontStyle = "italic";
+        }
         button.title = title;
         button.textContent = label;
         button.addEventListener("click", onClick);
@@ -293,11 +355,11 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
     // which is the whole point: the row must not push the metric bar onto a
     // second line.
     //
-    // `currentColor` rather than a fixed colour: a digital-zoom stop is already
-    // `text-error`, so it fills red for free, and both DaisyUI themes work
-    // without hardcoding. `backgroundImage` rather than `background` so the btn
-    // base colour and its :hover state survive underneath.
-    const FILL_TINT = "color-mix(in oklab, currentColor 20%, transparent)";
+    // A theme token rather than `currentColor`: digital-zoom stops carry a
+    // muted text colour, and their fill must not fade with it.
+    // `backgroundImage` rather than `background` so the btn base colour and its
+    // :hover state survive underneath.
+    const FILL_TINT = "oklch(var(--bc) / 0.2)";
     // log2 tolerance for "sitting on" a stop. Also the reached-threshold, so a
     // stop does not flip between full and empty on rounding noise.
     const STOP_EPS = 0.01;
@@ -397,14 +459,14 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
     scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
 
-    // Single inline strip that hangs off the top of the magnification
-    // panel. Items spread across the full width with justify-between:
-    // [▾]    [SYNC|clear]    [LABEL]
+    // Single inline strip along the bottom of the magnification panel, under
+    // the sliders: [▾] [SYNC|menu] [viewer controls] [LABEL]. It is a flow
+    // child in both panel states (see `_applyCollapsed`), so the panel is
+    // always at least as wide as the strip — hung off the panel's top edge as
+    // an absolute box it used to stick out past the right side — and the
+    // controls stay in the same place when the panel collapses onto them.
     const header = document.createElement("div");
-    header.className = "absolute flex flex-row items-center justify-between gap-2";
-    header.style.left = "-10px";
-    header.style.top = "-15px";
-    header.style.right = "-10px";
+    header.className = "relative flex flex-row items-center justify-between gap-2";
     header.style.zIndex = "3";
     magnificationContainer.appendChild(header);
     scalebar._ui.header = header;
@@ -466,7 +528,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     syncMenu.title = window.$.t('sync.menuTitle');
     syncMenu.innerHTML = '<i class="ph-light ph-caret-down" style="font-size:10px;line-height:1"></i>';
 
-    syncMenu.addEventListener("click", (ev) => {
+    const openSyncMenu = (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
         const linkable = (VIEWER_MANAGER?.viewers?.length || 0) > 1;
@@ -491,21 +553,16 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
                 action: clearAlignment,
             },
         ]);
-    });
+    };
+    syncMenu.addEventListener("click", openSyncMenu);
+    // Right-click opens the same menu from the button itself — the only route
+    // to it while the panel is collapsed and the caret is hidden. A disabled
+    // button (single viewer) dispatches no `contextmenu`; nothing to link then.
+    sync.addEventListener("contextmenu", openSyncMenu);
+    syncMenu.addEventListener("contextmenu", openSyncMenu);
+    // Shown in both panel states: it is the only visible route to the menu,
+    // and the SYNC button's `join` rounding needs its right-hand sibling.
     syncGroup.appendChild(syncMenu);
-
-    // The caret is only meaningful while the panel is open.
-    const updateSyncMenuVisibility = () => {
-        syncMenu.style.display = scalebar._ui.collapsed ? "none" : "";
-    };
-
-    // Chain into the existing __syncToolChanged hook set by SyncToggleButton.
-    const prev = viewer.__syncToolChanged;
-    viewer.__syncToolChanged = () => {
-        prev?.();
-        updateSyncMenuVisibility();
-    };
-    updateSyncMenuVisibility();
 
     // 4) Label thumbnail — pushed to the right with margin-left:auto.
     const LABEL_BOX = { width: "56px", height: "26px" };
@@ -514,10 +571,15 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
 
     const labelEl = document.createElement("div");
     labelEl.className = "rounded-md bg-base-200 overflow-hidden flex items-center justify-center cursor-zoom-in";
+    labelEl.tabIndex = 0;
+    labelEl.setAttribute("role", "button");
     labelEl.style.width = LABEL_BOX.width;
     labelEl.style.height = LABEL_BOX.height;
     labelEl.style.flex = "0 0 auto";
-    labelEl.style.transformOrigin = "left center";
+    // Grow right + up on hover: the strip sits at the bottom of the panel in
+    // both states, below it is the metric bar; the free space is the canvas
+    // above and beside.
+    labelEl.style.transformOrigin = "left bottom";
     labelEl.style.transition = "transform 0.18s ease";
     labelEl.style.display = "none";
     labelEl.title = window.$.t('main.scalebar.slideLabel');
@@ -525,42 +587,75 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._ui.labelEl = labelEl;
 
     /**
-     * Collapsed the strip is a single row, so a 56px label pushes the
-     * quick-zoom stops off the edge. There it becomes a square `join-item`
-     * welded onto the right of the SYNC button — which also gives that button
-     * the right-hand sibling its `join` rounding already assumes — and the
-     * full label is reachable by hovering it. Expanded, it floats right of
-     * the row at full width as before.
+     * Always its own element at the end of the strip — welded onto the SYNC
+     * button it read as part of that button. Collapsed the strip is a single
+     * row and a 56px label pushes the quick-zoom stops off the edge, so there
+     * it shrinks to a square; the full label is one hover or click away.
      */
     const placeLabel = () => {
         const c = !!scalebar._ui.collapsed;
-        if (c) {
-            if (labelEl.parentNode !== syncGroup) syncGroup.appendChild(labelEl);
-            labelEl.classList.add("join-item");
-            labelEl.classList.remove("rounded-md");
-            labelEl.style.width = LABEL_BOX.height;
-            labelEl.style.height = "";
-            labelEl.style.alignSelf = "stretch";
-            // Grow right + up on hover: left is the SYNC button, below is the
-            // metric bar; the free space is the canvas above and beside.
-            labelEl.style.transformOrigin = "left bottom";
-            // A dashed "no label" box is pure noise in a one-row strip.
-            labelEl.style.display = scalebar._ui.hasLabel ? "" : "none";
-        } else {
-            if (labelEl.parentNode !== header) header.appendChild(labelEl);
-            labelEl.classList.remove("join-item");
-            labelEl.classList.add("rounded-md");
-            labelEl.style.width = LABEL_BOX.width;
-            labelEl.style.height = LABEL_BOX.height;
-            labelEl.style.alignSelf = "";
-            labelEl.style.transformOrigin = "left center";
-            labelEl.style.display = scalebar._ui.labelReady ? "" : "none";
-        }
+        labelEl.style.width = c ? LABEL_BOX.height : LABEL_BOX.width;
+        // A dashed "no label" box is pure noise in a one-row strip.
+        labelEl.style.display = (c ? scalebar._ui.hasLabel : scalebar._ui.labelReady) ? "" : "none";
     };
     scalebar._ui.placeLabel = placeLabel;
 
+    // Click pins the label at a readable size (hover alone vanishes the moment
+    // the pointer drifts). Built per open from whatever is rendered now: the
+    // source may hand back a live node, which can only sit in one place.
+    const labelCopy = () => {
+        const shown = labelEl.firstElementChild;
+        let copy = null;
+        if (shown?.tagName === "IMG") {
+            copy = document.createElement("img");
+            copy.src = shown.src;
+            copy.alt = shown.alt;
+        } else if (shown?.tagName === "CANVAS") {
+            copy = document.createElement("canvas");
+            copy.width = shown.width;
+            copy.height = shown.height;
+            copy.getContext("2d")?.drawImage(shown, 0, 0);
+        }
+        if (!copy) return null;
+        copy.style.display = "block";
+        copy.style.maxWidth = "min(480px, 80vw)";
+        copy.style.maxHeight = "min(360px, 60vh)";
+        copy.style.minWidth = "200px";
+        copy.style.objectFit = "contain";
+        return copy;
+    };
+    const closeLabelPopover = () => {
+        const popover = scalebar._ui.labelPopover;
+        scalebar._ui.labelPopover = null;
+        popover?.destroy?.();
+    };
+    scalebar._ui.closeLabelPopover = closeLabelPopover;
+    const toggleLabelPopover = () => {
+        if (scalebar._ui.labelPopover) { closeLabelPopover(); return; }
+        if (!scalebar._ui.hasLabel || !UI?.Popover) return;
+        const copy = labelCopy();
+        if (!copy) return;
+        labelEl.style.transform = "";
+        const popover = new UI.Popover({
+            anchor: () => labelEl,
+            trigger: labelEl,
+            placement: "right",
+            onClose: () => {
+                if (scalebar._ui.labelPopover === popover) closeLabelPopover();
+            },
+        }, copy);
+        scalebar._ui.labelPopover = popover;
+        if (!popover.open()) closeLabelPopover();
+    };
+    labelEl.addEventListener("click", toggleLabelPopover);
+    labelEl.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        ev.preventDefault();
+        toggleLabelPopover();
+    });
+
     labelEl.addEventListener("mouseenter", () => {
-        if (labelEl.style.pointerEvents === "none") return;
+        if (labelEl.style.pointerEvents === "none" || scalebar._ui.labelPopover) return;
         labelEl.style.transform = `scale(${scalebar._ui.collapsed
             ? LABEL_SCALE_HOVER_COLLAPSED : LABEL_SCALE_HOVER})`;
         labelEl.style.position = "relative";
@@ -645,36 +740,54 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
             if (el) el.style.display = c ? "" : "none";
         }
         scalebar._applyDockLayout?.();
+        // The bar's length is the measurement and cannot follow the panel,
+        // so the panel follows the bar: never narrower than its shortest
+        // state, which is what it sits on most of the time.
+        const barMin = scalebar.minWidth;
+        magnificationContainer.style.minWidth = c ? ""
+            : (typeof barMin === "number" ? `${barMin}px` : (barMin || ""));
         // Cancel any in-flight hover-scale on the label.
+        closeLabelPopover();
         labelEl.style.transform = "";
         labelEl.style.position = "";
         labelEl.style.zIndex = "";
         // Collapsed mode hides everything except the chevron + SYNC + label.
         placeLabel();
-        updateSyncMenuVisibility();
         if (c) {
-            // The header flows as a normal child of the container so the
-            // container collapses to the header's natural height. The
-            // scalebar's refreshHandler then drops it just above the bar.
-            header.style.position = "relative";
-            header.style.left = "";
-            header.style.top = "";
-            header.style.right = "";
+            // Only the strip is left: the container is a plain flex row
+            // that collapses to the strip's natural height. The scalebar's
+            // refreshHandler then drops it just above the bar.
+            header.style.gridColumn = "";
+            header.style.gridRow = "";
+            header.style.padding = "";
             magnificationContainer.classList.remove("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
             magnificationContainer.classList.add("items-center");
+            magnificationContainer.style.display = "";
+            magnificationContainer.style.gridTemplateRows = "";
+            magnificationContainer.style.gridTemplateColumns = "";
+            magnificationContainer.style.justifyContent = "";
             magnificationContainer.style.height = "auto";
             magnificationContainer.style.background = "transparent";
             toggle.title = window.$.t('main.scalebar.expand');
             toggle.firstChild.textContent = "▴";
         } else {
-            // Expanded: header floats above the panel top-edge again.
-            header.style.position = "absolute";
-            header.style.left = "-10px";
-            header.style.top = "-15px";
-            header.style.right = "-10px";
+            // Expanded: a grid — slider columns in the first row (their own
+            // fixed height), the strip spanning the second. Grid rather than
+            // the container's flex row because an auto-width grid sizes to its
+            // widest row, which is what keeps the strip inside the panel.
+            header.style.gridColumn = "1 / -1";
+            header.style.gridRow = "2";
+            header.style.padding = "0 0.25rem 0.25rem";
             magnificationContainer.classList.add("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
             magnificationContainer.classList.remove("items-center");
-            magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
+            magnificationContainer.style.display = "grid";
+            magnificationContainer.style.gridTemplateRows = `${scalebar.magnificationContainerHeight}px auto`;
+            // Explicit: `1 / -1` on the strip spans the explicit grid only.
+            magnificationContainer.style.gridTemplateColumns = "auto auto";
+            // Extra width the strip claims goes between the two columns, not
+            // into them: the sliders keep their own width.
+            magnificationContainer.style.justifyContent = "space-between";
+            magnificationContainer.style.height = "auto";
             magnificationContainer.style.background = "";
             toggle.title = window.$.t('main.scalebar.minimize');
             toggle.firstChild.textContent = "▾";
@@ -698,4 +811,4 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._applyCollapsed();
 }
 
-export { addQuickZoomChrome, addSyncMenuChrome };
+export { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField };
