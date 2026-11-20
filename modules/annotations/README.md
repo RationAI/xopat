@@ -341,6 +341,10 @@ handleClickUp(o, point, isLeftClick, objectFactory) {
 }
 ```
 
+The `objectFactory` argument is the module's active drawing tool (`getActiveFactory()`), or
+`undefined` when no preset is bound to the button. It is not the preset's own factory: a preset
+is a class, and selecting one never changes the tool.
+
 `OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
 implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied
 to a plugin-owned mode. Modes whose short click does real work (the free-form-tool brushes, the

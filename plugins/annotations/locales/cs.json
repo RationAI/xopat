@@ -177,7 +177,6 @@
       "add": "Přidat",
       "color": "Barva",
       "delete": "Smazat třídu",
-      "typeLabel": "Typ",
       "fieldsLabel": "Pole",
       "unnamed": "Nepojmenovaná třída",
       "emptyState": "Zatím žádné třídy. Vytvořte ji pomocí „Přidat novou třídu“.",

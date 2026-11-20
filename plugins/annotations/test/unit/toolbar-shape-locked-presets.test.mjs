@@ -2,9 +2,9 @@
  * Toolbar shape picking with locked presets.
  *
  * `enablePresetModify: false` locks the classes, not the drawing tool. The toolbar's
- * shape picker routes through `switchModeActive('custom', factoryId)`, which used to
- * swap the factory via `updatePresetWith` — gated on the lock, so the toolbar showed
- * the new shape while the canvas kept drawing the preset's old one.
+ * shape picker routes through `switchModeActive('custom', factoryId)`, which sets the
+ * module's active factory and never writes into a preset: the shape is a tool choice,
+ * the preset's own factory only a deprecated default.
  *
  * Pure mixin-level assertions against a hand-rolled `context`, no canvas and no browser.
  */
@@ -51,6 +51,12 @@ function fakeContext() {
             updatePreset(id, props) { this.owner.updatePresetCalls.push({ id, props }); },
         },
         getAnnotationObjectFactory: factory,
+        activeFactory: left.objectFactory,
+        getActiveFactory() { return this.activeFactory; },
+        setActiveFactory(id) {
+            this.activeFactory = factory(id);
+            this.raiseEvent("active-factory-change", { factory: this.activeFactory });
+        },
         raiseEvent(name, payload) { this.events.push({ name, payload }); },
         setModeById(id) { modeId = id; },
     };
@@ -65,14 +71,15 @@ function fakePlugin(context) {
     });
 }
 
-test("toolbar shape pick swaps the factory even with presets locked", { tag: ["@unit"] }, () => {
+test("toolbar shape pick swaps the tool, not the preset, even with presets locked", { tag: ["@unit"] }, () => {
     const context = fakeContext();
     const plugin = fakePlugin(context);
 
     plugin.switchModeActive("custom", "ellipse", true);
 
-    expect(context.presets.left.objectFactory.factoryID, "canvas draws what the toolbar shows").toBe("ellipse");
-    expect(context.events.map(e => e.name)).toContain("preset-update");
+    expect(context.getActiveFactory().factoryID, "canvas draws what the toolbar shows").toBe("ellipse");
+    expect(context.presets.left.objectFactory.factoryID, "the class keeps its default").toBe("polygon");
+    expect(context.events.map(e => e.name)).toEqual(["active-factory-change"]);
 });
 
 test("locked presets still refuse class edits", { tag: ["@unit"] }, () => {
@@ -86,12 +93,15 @@ test("locked presets still refuse class edits", { tag: ["@unit"] }, () => {
     expect(context.events).toHaveLength(0);
 });
 
-test("the preset card's shape dropdown stays locked", { tag: ["@unit"] }, () => {
-    const context = fakeContext();
-    const plugin = fakePlugin(context);
+test("a preset's factory is not editable from the UI, locked or not", { tag: ["@unit"] }, () => {
+    for (const enablePresetModify of [false, true]) {
+        const context = fakeContext();
+        const plugin = Object.assign(fakePlugin(context), { enablePresetModify });
 
-    plugin.updatePresetWith("p1", "objectFactory", "ellipse");
+        plugin.updatePresetWith("p1", "objectFactory", "ellipse");
 
-    expect(context.presets.left.objectFactory.factoryID).toBe("polygon");
-    expect(context.events).toHaveLength(0);
+        expect(context.presets.left.objectFactory.factoryID).toBe("polygon");
+        expect(context.updatePresetCalls).toHaveLength(0);
+        expect(context.events).toHaveLength(0);
+    }
 });

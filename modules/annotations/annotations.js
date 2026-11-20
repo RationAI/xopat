@@ -830,10 +830,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         for (let instance of OSDAnnotations.FabricWrapper.instances()) {
             instance.setMouseOSDInteractive(isOSDInteractive);
         }
-        if (isOSDInteractive) {
-            if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-            if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
-        }
+        if (isOSDInteractive) this.getActiveFactory().finishIndirect();
 		this.mouseOSDInteractive = isOSDInteractive;
 		if (_raise) this.raiseEvent('osd-interactivity-toggle');
 	}
@@ -855,6 +852,51 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
 		return undefined;
+	}
+
+	/**
+	 * The drawing tool: the factory a click creates an annotation with. It is
+	 * independent of the active preset (class) - selecting a preset never changes
+	 * it. Shared by both mouse buttons.
+	 *
+	 * Resolution: explicitly set factory -> the one cached from the last session
+	 * -> the active preset's (deprecated) default factory -> polygon. Whatever is
+	 * resolved first is latched, so the tool also stays put for a user who never
+	 * picked a shape.
+	 * @param {boolean} [isLeftClick=true] which button's preset supplies the default
+	 * @return {OSDAnnotations.AnnotationObjectFactory}
+	 */
+	getActiveFactory(isLeftClick=true) {
+		let factory = this._activeFactoryID && this.getAnnotationObjectFactory(this._activeFactoryID);
+		if (factory) return factory;
+
+		// Factories may register late; an id that does not resolve (yet) is not latched.
+		factory = this.getAnnotationObjectFactory(this.cache.get('tool.factory'));
+		if (!factory) {
+			const preset = this.presets.getActivePreset(isLeftClick) || this.presets.getActivePreset(!isLeftClick);
+			factory = preset?.objectFactory;
+			// Nothing to derive from: answer polygon, but leave the latch open for a preset.
+			if (!factory) return this.polygonFactory;
+		}
+		this._activeFactoryID = factory.factoryID;
+		return factory;
+	}
+
+	/**
+	 * Set the drawing tool, see getActiveFactory().
+	 * @event active-factory-change
+	 * @param {OSDAnnotations.AnnotationObjectFactory|string} factory instance or factoryID
+	 * @return {boolean} false if the factory is not registered
+	 */
+	setActiveFactory(factory) {
+		if (typeof factory === "string") factory = this.getAnnotationObjectFactory(factory);
+		if (!factory) return false;
+		if (this._activeFactoryID === factory.factoryID) return true;
+
+		this._activeFactoryID = factory.factoryID;
+		this.cache.set('tool.factory', factory.factoryID);
+		this.raiseEvent('active-factory-change', {factory});
+		return true;
 	}
 
 	/**
@@ -2426,8 +2468,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_setModeToAuto(switching) {
 		this._wasModeFiredByKey = false;
-		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+		this.getActiveFactory().finishIndirect();
 
 		if (this.mode.setToAuto(switching)) {
 			// Assign first: a handler reading `context.mode` must not see the mode
@@ -2724,7 +2765,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2749,7 +2791,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 */
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		//do nothing
@@ -3366,8 +3409,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	handleMouseMove(e, point) {
 		//todo experiment with this condition, also is it necessary for fft?
 		if (this.context.isMouseOSDInteractive()) {
-			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);
-			if (this.context.presets.right) this.context.presets.right.objectFactory.updateCreate(point.x, point.y);
+			// the in-flight shape keeps its own factory even if the tool changed meanwhile
+			(this._lastUsed || this.context.getActiveFactory()).updateCreate(point.x, point.y);
 			this.context.fabric.rerender();
 		}
 	}

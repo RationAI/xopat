@@ -335,7 +335,7 @@ export const viewerMenuMethods = {
             this.context.presets.foreach((preset) => {
                 const category = preset.getMetaValue('category')
                     || this.t('annotations.viewerMenu.unknownPreset');
-                const icon = preset.objectFactory.getIcon();
+                const icon = 'ph-tag';
                 const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
                 presetItems.push({
                     icon,
@@ -812,7 +812,7 @@ export const viewerMenuMethods = {
                     }
                 },
                 span({
-                    class: `shrink-0 ph-light ${preset.objectFactory.getIcon() ?? ''}`,
+                    class: 'shrink-0 ph-light ph-tag',
                     style: `color:${preset.color};`
                 }),
                 span({ class: 'truncate min-w-0 text-left' }, category),

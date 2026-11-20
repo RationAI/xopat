@@ -239,7 +239,8 @@ metadata, it is stored in the annotation `meta` field.
 
 ##### Preset variables         
     color       the annotation color, a group update on annotations will be overriden by this value
-    factoryID   the associated factory the preset uses to create annotations, #todo provide general fallback implementation
+    factoryID   deprecated: the preset's default annotation type. Kept for round-trips; the type actually
+                    drawn is the viewer's active tool, which this only seeds when none was chosen yet
     presetID    the id of this object to be paired with annotations
     meta        a map: {<id>: {name: string, value: any}} that adds custom meta to the group: name is a
                     human-readable label, the value can be any JSON-friendly value

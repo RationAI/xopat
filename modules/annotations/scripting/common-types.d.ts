@@ -55,6 +55,7 @@ export type AnnotationRecord = Record<string, unknown> & {
 
 export type AnnotationPresetRecord = {
     presetID: string;
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, { name?: string; value?: string }>;
@@ -215,6 +216,7 @@ export type PresetMetaPatchValue =
 export type AnnotationPresetCreateInput = {
     presetID?: string;
     category?: string;
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, PresetMetaPatchValue>;
@@ -223,6 +225,7 @@ export type AnnotationPresetCreateInput = {
 };
 
 export type AnnotationPresetUpdateInput = {
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, PresetMetaPatchValue>;

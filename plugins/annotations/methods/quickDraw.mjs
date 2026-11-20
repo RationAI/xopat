@@ -190,9 +190,9 @@ export const quickDrawMethods = {
             this.context.setPreset(preset, isLeft);
         }
 
-        // (b) Shape + manual mode. switchModeActive swaps the active preset's
-        // objectFactory to `factory` and enters `custom` — same code path the
-        // toolbar shape picker uses.
+        // (b) Shape + manual mode. switchModeActive sets the active tool to
+        // `factory` and enters `custom` — same code path the toolbar shape
+        // picker uses. The preset (class) is left alone.
         if (action.factory) {
             if (!(this._allowedFactories || []).includes(action.factory)) {
                 Dialogs.show(this.t('annotations.quickDraw.shapeUnavailable'), 3000, Dialogs.MSG_WARN);
@@ -204,7 +204,7 @@ export const quickDrawMethods = {
         }
 
         // (c) Preset-only (or bare): just enter manual mode with whatever preset
-        // is active. Ensure at least one active preset exists first.
+        // is active; the shape stays the current tool. Ensure at least one active preset exists first.
         if (!this.context.getPreset(isLeft) && !this.context.presets.ensureActivePreset(isLeft)) {
             Dialogs.show(this.t('annotations.quickDraw.noPreset'), 3000, Dialogs.MSG_WARN);
             return;

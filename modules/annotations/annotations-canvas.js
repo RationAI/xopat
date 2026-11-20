@@ -3892,7 +3892,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 return;
             }
 
-            let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
+            let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             // Record whether a mode consumed this right-release so the canvas
             // context-menu provider can open only when the event was NOT handled
@@ -3924,7 +3924,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
             _this.module.cursor.mouseTime = Date.now();
 
-            let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
+            let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, false, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
@@ -3955,7 +3955,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 return;
             }
 
-            let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
+            let factory = _this.module.presets.left ? _this.module.getActiveFactory(true) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             if (_this.module.mode.handleClickUp(event, point, true, factory)) {
                 event.preventDefault();
@@ -3994,7 +3994,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             // "no preset" warning dialog. Prefers an existing preset; only
             // fabricates a default one when the deployment opts in.
             let preset = _this.module.presets.ensureActivePreset(true);
-            let factory = preset ? preset.objectFactory : undefined;
+            let factory = preset ? _this.module.getActiveFactory(true) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
