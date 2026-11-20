@@ -22,7 +22,7 @@ const postcss = require("postcss");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
 
-const { buildWorkspaceItem, buildUI, buildCore, inspectWorkspaceBundle } = require("../../mixins/build-logic");
+const { buildWorkspaceItem, buildUI, buildCore, inspectWorkspaceBundle, inspectCoreBundle, describeStaleCoreBundle } = require("../../mixins/build-logic");
 const {pathsEqual} = require("../../mixins/pathsEqual");
 const { findPresetFiles } = require("../../node/tailwind-presets");
 
@@ -435,6 +435,27 @@ const twincMerge = function (grunt) {
             grunt.log.ok(`[twinc-merge] Workspace freshness check: ${items.length} item(s), ${rebuilt} rebuilt.`);
         }
 
+        /**
+         * Rebuild `src/dist` when it is older than `src/**\/*.ts`.
+         *
+         * The core counterpart of rebuildStaleWorkspaces, and the one whose
+         * absence was the loudest: the UI bundle is rebuilt on every start and
+         * plain module files are served as written, so a core left behind by an
+         * edit made while the watcher was down does not merely run old code -
+         * the new UI calls into a core that lacks what it needs and the viewer
+         * dies at boot.
+         */
+        async function rebuildStaleCore() {
+            const verdict = inspectCoreBundle(root);
+            if (!verdict.stale) {
+                grunt.log.ok("[twinc-merge] Core freshness check: src/dist is current.");
+                return;
+            }
+            grunt.log.writeln(`[twinc-merge] Rebuilding stale ${describeStaleCoreBundle(verdict)}`);
+            await rebuildCore();
+            grunt.log.ok("[twinc-merge] Core freshness check: src/dist rebuilt.");
+        }
+
         async function rebuildUI() {
             return buildUI(nodeLogger);
         }
@@ -680,12 +701,25 @@ const twincMerge = function (grunt) {
                     }
 
                     // one UI rebuild per cycle if any /ui/ file changed (no matter how many)
+                    // A failed bundle build leaves the PREVIOUS bundle in place, so
+                    // the page keeps loading and simply runs old code. Name it:
+                    // the anonymous `esbuild exited 1` this used to produce does
+                    // not say that anything is now stale.
+                    const bundleStep = async (name, build) => {
+                        try {
+                            await build();
+                        } catch (e) {
+                            grunt.log.error(`[twinc-merge] ${name} build FAILED: the previous bundle is still being served, so the viewer runs out-of-date code until this is fixed.`);
+                            throw e;
+                        }
+                    };
+
                     if (needUI) {
-                        await rebuildUI();
+                        await bundleStep("UI (ui/index.js)", rebuildUI);
                     }
 
                     if (needCore) {
-                        await rebuildCore();
+                        await bundleStep("Core (src/dist)", rebuildCore);
                     }
 
                     await workspaces;
@@ -797,6 +831,9 @@ const twincMerge = function (grunt) {
                     // After the CSS baseline, before the first page load: catch
                     // up on everything edited while the watcher was down.
                     try { await rebuildStaleWorkspaces(); } catch (e) { grunt.log.error(`[twinc-merge] Workspace freshness check failed: ${e.message}`); }
+                    try { await rebuildStaleCore(); } catch (e) {
+                        grunt.log.error(`[twinc-merge] Core rebuild FAILED (${e.message}): src/dist is out of date and the viewer will run old core code against the current UI, which usually breaks at startup.`);
+                    }
                     grunt.log.ok("[twinc-merge] Watcher started.");
                 })
                 .on("error", (e) => grunt.log.error("[twinc-merge] watcher error:", e));

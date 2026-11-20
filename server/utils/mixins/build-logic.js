@@ -190,6 +190,84 @@ function inspectWorkspaceBundle(itemDirectory, packageData) {
     return { stale: newestAt > builtAt, artifact, newestSource };
 }
 
+const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+/** Directories under `src/` that the core bundle is not compiled from. */
+const CORE_NON_SOURCE_DIRS = new Set(["libs", "dist", "types", "locales", "assets", "node_modules"]);
+/** The outputs the page cannot boot without; the oldest one dates the build. */
+const CORE_OUTPUTS = ["src/dist/app.js", "src/dist/loader.js"];
+/** A watcher writes the bundle a moment after the save. */
+const CORE_FRESHNESS_SLACK_MS = 2000;
+
+/**
+ * Is the core bundle (`src/dist`) older than the TypeScript it is built from?
+ *
+ * Same hole as {@link inspectWorkspaceBundle}, one level up: the watcher rebuilds
+ * core only on a live change under `src/`, while the UI bundle is rebuilt on every
+ * start and plain module files are served as written. So after a pull or an edit
+ * made with the watcher down, a NEW UI and NEW modules run against an OLD core —
+ * which does not fail quietly, it fails at boot (`APPLICATION_CONTEXT.<new field>`
+ * is undefined) and takes the viewer down behind a loading spinner.
+ *
+ * @param {string} [root] repository root (defaults to this checkout)
+ * @returns {{stale: boolean, missing: string[], builtAt: number|null,
+ *            newestSource: string|null, newestAt: number}}
+ *   `newestSource` and `missing` are repo-relative, forward-slashed
+ */
+function inspectCoreBundle(root = REPO_ROOT) {
+    const relative = (file) => path.relative(root, file).replace(/\\/g, "/");
+    const missing = [];
+    let builtAt = Infinity;
+    for (const rel of CORE_OUTPUTS) {
+        try {
+            builtAt = Math.min(builtAt, fs.statSync(path.join(root, rel)).mtimeMs);
+        } catch {
+            missing.push(rel);
+        }
+    }
+
+    let newestSource = null;
+    let newestAt = 0;
+    (function walk(dir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch { return; /* unreadable directory cannot make a bundle stale */ }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (!CORE_NON_SOURCE_DIRS.has(entry.name)) walk(full);
+                continue;
+            }
+            if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue;
+            let mtimeMs;
+            try { ({ mtimeMs } = fs.statSync(full)); } catch { continue; }
+            if (mtimeMs > newestAt) { newestAt = mtimeMs; newestSource = full; }
+        }
+    })(path.join(root, "src"));
+
+    if (missing.length) {
+        return { stale: true, missing, builtAt: null, newestSource: newestSource && relative(newestSource), newestAt };
+    }
+    return {
+        stale: newestAt > builtAt + CORE_FRESHNESS_SLACK_MS,
+        missing,
+        builtAt,
+        newestSource: newestSource && relative(newestSource),
+        newestAt,
+    };
+}
+
+/**
+ * One line for a human, or "" when the core bundle is current.
+ * @param {ReturnType<typeof inspectCoreBundle>} verdict
+ */
+function describeStaleCoreBundle(verdict) {
+    if (!verdict || !verdict.stale) return "";
+    if (verdict.missing.length) return `core (src/dist): missing ${verdict.missing.join(", ")}`;
+    return `core (src/dist): built ${new Date(verdict.builtAt).toISOString()}, but ` +
+        `${verdict.newestSource} changed ${new Date(verdict.newestAt).toISOString()}`;
+}
+
 /**
  * Server-side bundling.
  *
@@ -628,6 +706,8 @@ const BuildLogic = {
     },
 
     inspectWorkspaceBundle,
+    inspectCoreBundle,
+    describeStaleCoreBundle,
 
     spawnAsync,
 };

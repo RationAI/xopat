@@ -75,6 +75,38 @@ const STARTUP_VERSION = readStartupVersion();
 const DEV_MODE = constants.SERVER.DEV_MODE === true;
 
 /**
+ * Dev mode only: is the core bundle about to be served older than its sources?
+ *
+ * The server does not build — the dev watcher does — so it can hand the browser
+ * a `src/dist` that predates the UI bundle and module files it ships in the same
+ * page. That fails at boot with an error that names a symptom
+ * (`APPLICATION_CONTEXT.x is undefined`), never the cause. The page gets the
+ * verdict so its boot-failure screen can say which it is.
+ *
+ * Lazily required and memoized: the build helpers are dev tooling that a
+ * packaged release does not carry, and the check walks `src/`, which is not
+ * something to repeat on every page load.
+ * @return {string[]} one line per stale bundle; empty when current or unknowable
+ */
+const STALE_BUNDLE_MEMO_MS = 5000;
+let staleBundleMemo = { at: 0, value: [] };
+function devStaleBundles() {
+    if (!DEV_MODE) return [];
+    const now = Date.now();
+    if (now - staleBundleMemo.at < STALE_BUNDLE_MEMO_MS) return staleBundleMemo.value;
+    let value = [];
+    try {
+        const { inspectCoreBundle, describeStaleCoreBundle } = require("../utils/mixins/build-logic");
+        const line = describeStaleCoreBundle(inspectCoreBundle());
+        if (line) value = [line];
+    } catch (e) {
+        // No build tooling here (packaged build): nothing can be said, so say nothing.
+    }
+    staleBundleMemo = { at: now, value };
+    return value;
+}
+
+/**
  * Are we one of several processes serving the same deployment?
  *
  * `cluster.isWorker` covers `cluster-index.js`. It does NOT cover the other
@@ -1921,7 +1953,10 @@ ${EMBEDDING.cookielessSessions
         // is still a credential, which is why the response is `no-store`.
         ? `window.XOPAT_SESSION_ID = ${jsonForScript(session ? session.id : "")};\n`
         : ""}window.XOPAT_DEV_MODE = ${jsonForScript(DEV_MODE)};
-window.xserver = window.xserver || XOpatServerRPC.createClient({
+${DEV_MODE && !core.CORE.client.production
+        // The per-file dev serving path only: production serves the release bundle.
+        ? `window.XOPAT_STALE_BUNDLES = ${jsonForScript(devStaleBundles())};\n`
+        : ""}window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
 </script>

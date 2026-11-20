@@ -421,6 +421,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // errors to a non-blocking, deduped, rate-limited toast instead.
     wireGlobalRuntimeErrorHandler();
 
+    // Dev mode only (the server emits the list for nothing else): the core bundle
+    // is older than its sources. Boot survived this time, so say it here — a stale
+    // core that happens not to crash is otherwise indistinguishable from a code
+    // change that "did nothing". The crashing case is the boot-failure screen in
+    // server/templates/index.html.
+    const staleBundles = (window as any).XOPAT_STALE_BUNDLES;
+    if (Array.isArray(staleBundles) && staleBundles.length) {
+        Dialogs.show($.t("messages.staleBundle", { detail: staleBundles.map(String).join("; ") }), 15000, Dialogs.MSG_WARN);
+    }
+
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/

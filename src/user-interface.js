@@ -387,6 +387,10 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                 // see `errorMessageNode`: part of this content is session-supplied.
                 const titleNode = document.getElementById("system-message-title");
                 if (titleNode) titleNode.replaceChildren(errorMessageNode(title));
+                // Only the boot-failure screen (server/templates/index.html) writes
+                // the subtitle; a later error must not inherit its text.
+                const subtitleNode = document.getElementById("system-message-subtitle");
+                if (subtitleNode) subtitleNode.textContent = "";
                 const detailNode = document.getElementById("system-message-details");
                 if (detailNode) detailNode.replaceChildren(errorMessageNode(description));
                 document.getElementById("system-message")?.classList.remove("hidden");
