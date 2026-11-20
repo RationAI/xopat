@@ -380,7 +380,9 @@ redaction and the same `sinks.stream` destination as everything the server saw.
     "ingest": true,
     "maxRecordsPerBatch": 200,
     "maxRecordBytes": 32768,
-    "maxRecordsPerMinute": 2000
+    "maxRecordsPerMinute": 2000,
+    "attachments": false,            // accept BYTES the browser sends
+    "maxAttachmentBytes": 4194304
   },
   "channels": { "client": "info", "client:module.chat": "debug" }
 }
@@ -405,6 +407,29 @@ This is the **only inbound path into the logs**, which decides its shape:
 
 The response reports `accepted` / `dropped` / `oversized` / `throttled`, so a
 forwarder that is silently losing records is visible from the client too.
+
+### Client attachments
+
+A browser record may carry **bytes** — a dictation recording, a screenshot, a
+session snapshot — written with `log.attachment(...)` on the client. They reach
+`logger.attachment`'s own path here, so a `sinks.stream` destination with
+`attachments: true` writes them as files beside the NDJSON and one without
+records the refusal on the line. There is no browser-specific storage policy.
+
+`client.attachments` is a **second opt-in beyond `ingest`**: accepting lines is
+accepting text the caps already bound, accepting files is accepting whatever a
+caller decides to upload. Three consequences worth knowing:
+
+- Attachment bytes are separated **before** the record is measured — they are the
+  one field deliberately past `maxRecordBytes`, which bounds a log line and not a
+  file. They have their own `maxAttachmentBytes` instead.
+- `ingestClientLogs` gets a body limit sized from that cap (base64 inflation
+  included) and keeps the plain 256 kB default while attachments are off, so an
+  oversized upload is a 413 naming the limit rather than a 502.
+- A refused attachment does **not** drop the record: the line goes through with
+  `attachment.stored: false` and a reason (`not-accepted`, `too-large`,
+  `bad-encoding`). The response's `attachments` block reports the same totals to
+  the client.
 
 ## Reading logs at runtime
 

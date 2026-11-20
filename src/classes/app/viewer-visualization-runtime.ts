@@ -1,6 +1,37 @@
 import { BackgroundConfig } from "../background-config";
 import { validateVisualizations } from "./visualization-validation";
 
+/**
+ * Remove `<` / `>` from the display text of shader controls (`title`, option labels).
+ *
+ * flex-renderer interpolates these unescaped into HTML that xOpat mounts via
+ * innerHTML (`UIControls.renderTitle`, the select `<option>` labels — see
+ * UPSTREAM.md), and they arrive from session / POST_DATA / peer bundles (§7).
+ * Both sinks are element-text context, where only `<` can open markup, so dropping
+ * the angle brackets is sufficient. Stripping (not entity-escaping) is idempotent:
+ * live-config-sync writes the renderer's config back into the session, and an
+ * escaped title would gain one more `&amp;` on every reopen. Mutates `params`
+ * (callers pass their own deep copy). Remove once the library escapes.
+ */
+function stripControlMarkup(params: Record<string, any>, depth = 0): void {
+    if (depth > 6) return;
+    const strip = (value: any) => typeof value === "string" ? value.replace(/[<>]/g, "") : value;
+    for (const key of Object.keys(params)) {
+        const value = params[key];
+        if (key === "title") {
+            params[key] = strip(value);
+        } else if (key === "options" && Array.isArray(value)) {
+            params[key] = value.map((opt: any) => opt && typeof opt === "object" && "label" in opt
+                ? { ...opt, label: strip(opt.label) }
+                : strip(opt));
+        } else if (key === "options" && value && typeof value === "object") {
+            for (const optKey of Object.keys(value)) value[optKey] = strip(value[optKey]);
+        } else if (value && typeof value === "object" && !Array.isArray(value)) {
+            stripControlMarkup(value, depth + 1);
+        }
+    }
+}
+
 export class ViewerVisualizationRuntime {
     constructor(private readonly appContext: ApplicationContext) {}
 
@@ -65,6 +96,85 @@ export class ViewerVisualizationRuntime {
             Dialogs.show(message, 12000, Dialogs.MSG_WARN);
         }
     }
+
+    /**
+     * Surface flex-renderer's diagnostics as one toast.
+     *
+     * The renderer degrades on its own — a control that fails to build, a palette that
+     * is not a palette, a layer it cannot assemble — so the viewer looks healthy while
+     * showing something other than what was configured. Those fallbacks arrive through
+     * `UIControls.setReporter` (wired in `src/app.ts`) as {@link reportRendererDiagnostic};
+     * the few paths the library still only logs to the console are caught from the
+     * logging broker's `console` channel by {@link RENDERER_CONSOLE_DIAGNOSTIC}.
+     *
+     * Debounced: one rebuild reports per layer, per viewer and per pass, and all of it
+     * is one problem to the user.
+     */
+    watchRendererDiagnostics(debounceMs = 750) {
+        const logging: any = (this.appContext as any).logging;
+        this._diagnosticDebounceMs = debounceMs;
+        if (this._stopDiagnostics || typeof logging?.onRecord !== "function") {
+            return;
+        }
+        const pattern = ViewerVisualizationRuntime.RENDERER_CONSOLE_DIAGNOSTIC;
+        this._stopDiagnostics = logging.onRecord((record: any) => {
+            if (record.channel === "console" && (record.level === "warn" || record.level === "error")
+                && pattern.test(record.message)) {
+                this._countDiagnostic();
+            }
+        });
+    }
+
+    /**
+     * Reporter for `UIControls.setReporter(fn)`: logs the fallback on the
+     * `flex-renderer` channel and counts it toward the toast.
+     *
+     * `cache-value-rejected` is logged only: the renderer dropped a saved value that did
+     * not fit its control and rendered the configured default — the layer now looks the
+     * way the session author intended, so telling the user otherwise would be wrong.
+     */
+    reportRendererDiagnostic(level: string, code: string, details: Record<string, any> = {}) {
+        const log: any = (this.appContext as any).log?.("flex-renderer");
+        const { message, value, error, ...fields } = details || {};
+        const write = level === "error" ? log?.error : log?.warn;
+        if (write) {
+            write.call(log, { ...fields, code }, message || code, ...(error !== undefined ? [error] : []));
+        } else {
+            (level === "error" ? console.error : console.warn)(`[FlexRenderer] ${message || code}`);
+        }
+        if (code !== "cache-value-rejected") {
+            this._countDiagnostic();
+        }
+    }
+
+    private _countDiagnostic() {
+        this._diagnosticCount++;
+        if (this._diagnosticTimer) return;
+        this._diagnosticTimer = setTimeout(() => {
+            this._diagnosticTimer = null;
+            const total = this._diagnosticCount;
+            this._diagnosticCount = 0;
+            if (typeof Dialogs !== "undefined" && Dialogs?.show) {
+                Dialogs.show($.t("error.visualizationRendererWarnings", { count: total }), 15000, Dialogs.MSG_WARN);
+            }
+        }, this._diagnosticDebounceMs);
+    }
+
+    /**
+     * Messages of flex-renderer failures that still bypass `UIControls.report` and go
+     * straight to the console (shader construction, second-pass HTML controls, invalid
+     * channel — UPSTREAM.md). Drop each alternative once the library reports it.
+     */
+    static readonly RENDERER_CONSOLE_DIAGNOSTIC = new RegExp([
+        "^Failed to construct shader",
+        "^Second pass HTML controls error",
+        "^Invalid channel\\b",
+    ].join("|"));
+
+    private _stopDiagnostics: (() => void) | null = null;
+    private _diagnosticCount = 0;
+    private _diagnosticTimer: any = null;
+    private _diagnosticDebounceMs = 750;
 
     clearVisualizationCaches(shaderConfigMap: Record<string, any>) {
         let clearedAny = false;
@@ -184,6 +294,9 @@ export class ViewerVisualizationRuntime {
 
                     if (typeof layer.name !== "string" || !layer.name) {
                         layer.name = shaderKey || layer.type;
+                    }
+                    if (layer.params && typeof layer.params === "object") {
+                        stripControlMarkup(layer.params);
                     }
 
                     if (layer.dataReferences !== undefined) {

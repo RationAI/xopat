@@ -5,6 +5,12 @@ lives in [`modules/empaia-workbench`](../../modules/empaia-workbench/README.md);
 this plugin is the panel. For the manual test matrix — which tutorial app
 exercises what, and what to look for on screen — see [`TESTING.md`](TESTING.md).
 
+> **Separate AigoPath variant.** AigoPath ships its own plugin with the same id
+> `empaia-app-ui` (its repo's `plugins/empaia-app-ui`). It talks to its own
+> backend through `modules/aigopath-workbench`, without the Workbench client
+> API, and has its own UI. It is not meant to replace this one; both are
+> maintained for their own deployment.
+
 Two surfaces, split by how often they are used:
 
 - **Plugins → EMPAIA Analysis** (`AppBar.Plugins.setMenu`) — set-up: the
@@ -47,16 +53,17 @@ the right tool at that point, not scrolling.
 
 ## Regions of interest are ordinary annotations
 
-The plugin owns no geometry. "Draw region" does exactly two things through the
+The plugin owns no geometry. "Draw region" does exactly three things through the
 annotation module's existing API:
 
 ```js
-presets.selectPreset(roiPresetId, true);   // preset carries the factory + colour
+presets.selectPreset(roiPresetId, true);   // the class: colour + name
+annotations.setActiveFactory(roiFactory);  // the shape; the user's tool is restored afterwards
 annotations.setMode(annotations.Modes.CUSTOM);
 ```
 
-The preset is bound to the factory the app's EAD asks for
-(`rectangle → rect`, `polygon → polygon`, `circle → ellipse`) and coloured from
+The shape is the factory the app's EAD asks for
+(`rectangle → rect`, `polygon → polygon`, `circle → ellipse`); the preset is coloured from
 the EAD's rendering hints. Everything the annotation module already provides
 therefore works on ROIs for free: undo/redo, the annotation board, the canvas
 context menu, measurements, presets, layers, and the fixed-area mode.

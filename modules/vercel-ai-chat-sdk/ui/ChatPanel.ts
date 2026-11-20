@@ -262,6 +262,8 @@ export class ChatPanel extends BaseComponent {
     _voicePromptTerms: string[] = [];
     /** The dictation's language once pinned (`voice-language`); "" until then. Gates the English glossary. */
     _voiceSessionLanguage = '';
+    /** The one consumer allowed to receive raw window audio. See setDictationAudioTap. */
+    _dictationAudioTap: ((window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void) | null = null;
     // Appended-but-not-yet-persisted transcript messages, re-applied over a
     // session hydration so a refresh can never wipe them (see _loadSession).
     _unpersistedAppends: Array<{ sessionId: string | null; message: ChatMessage }> = [];
@@ -964,6 +966,17 @@ export class ChatPanel extends BaseComponent {
                 this._emit("voice-error", { ...info });
             },
             onWindow: (window) => this._emit("voice-window", { ...window }),
+            // Audio is NOT emitted as an event. Every other voice signal here is a
+            // fact about the dictation; this is the dictation itself, and a
+            // broadcast that any listener receives is the wrong shape for PHI. One
+            // consumer registers for it explicitly (`setDictationAudioTap`) and is
+            // the only one that ever sees the bytes.
+            onWindowAudio: (window) => {
+                const tap = this._dictationAudioTap;
+                if (!tap) return;
+                try { tap(window); }
+                catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "dictation audio tap failed"); }
+            },
             language: voiceLanguage,
             prompt: buildVoicePrompt,
             silenceMs: voiceCfg.silenceMs,
@@ -1564,7 +1577,7 @@ export class ChatPanel extends BaseComponent {
             return;
         }
 
-        const consentsWrap = div({ class: "max-h-[15rem] overflow-x-auto" });
+        const consentsWrap = div({ class: "max-h-[15rem] overflow-y-auto" });
         allEntries.forEach(([namespace, value]: [string, ScriptConsentEntry]) => {
             const wrapper = div({ class: "flex flex-row gap-1 mt-2" });
 
@@ -1587,12 +1600,35 @@ export class ChatPanel extends BaseComponent {
                     span({ class: "badge badge-xs badge-warning" }, _t('sensitiveBadge')))
                 : span(value.title);
 
+            // Namespace descriptions are written for the model and run to a paragraph;
+            // the checklist shows one line and expands on demand.
+            const description = String(value.description || "");
+            // Line clamp, not `white-space: nowrap`: a nowrap line's intrinsic width is the whole
+            // paragraph, which widened the modal and cut every other row at its right edge.
+            const collapsed = "display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden;";
+            const descEl = div({ class: "text-[11px] text-base-content/70", style: collapsed }) as HTMLElement;
+            descEl.textContent = description;
+            let toggle: HTMLElement | null = null;
+            if (description.length > 90) {
+                let expanded = false;
+                toggle = a({
+                    href: "#",
+                    class: "link link-hover text-[11px] self-start",
+                    onclick: (e: Event) => {
+                        // Inside the <label>: do not toggle the checkbox.
+                        e.preventDefault();
+                        e.stopPropagation();
+                        expanded = !expanded;
+                        descEl.setAttribute("style", expanded ? "" : collapsed);
+                        toggle!.textContent = expanded ? _t('showLess') : _t('showDetails');
+                    },
+                }, _t('showDetails')) as HTMLElement;
+            }
+
             wrapper.appendChild(label({
-                style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; pl-1",
+                style: "display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-width: 0;",
                 for: "chat-namespace-consent-" + namespace,
-            }, titleRow, value.description
-                ? span({ class: "text-[11px] text-base-content/70" }, value.description)
-                : span()));
+            }, titleRow, description ? descEl : span(), toggle || span()));
 
             consentsWrap.appendChild(wrapper);
         });
@@ -3409,6 +3445,18 @@ export class ChatPanel extends BaseComponent {
     }
 
     /**
+     * Register the single consumer that receives each archive window's audio as it
+     * seals (before the decode frees it). `null` unregisters.
+     *
+     * One tap, not a subscriber list: these are the raw bytes of clinical
+     * dictation, so who holds them is a decision that should be visible in one
+     * place rather than accumulated by whoever called `addHandler`.
+     */
+    setDictationAudioTap(tap: ((window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void) | null): void {
+        this._dictationAudioTap = typeof tap === "function" ? tap : null;
+    }
+
+    /**
      * Extra vocabulary for the transcription bias prompt, on top of the built-in
      * glossary. Rebuilt into the prompt at the next capture (it is resolved lazily per
      * session), so a consumer can keep this in step with what it has learned.
@@ -3753,7 +3801,7 @@ export class ChatPanel extends BaseComponent {
      * posted it as a message.
      *
      * Each piece was already reported as an accepted `continuous` segment while it
-     * was being captured, so an observer (the mixture report extractor) has it
+     * was being captured, so an observer (e.g. a report extractor) has it
      * banked. Re-report it PER PIECE with the original text and
      * `mode: "discarded"`, which is the only signal that lets that observer match
      * and remove what it banked. `accepted: false` keeps the invariant that a
@@ -4535,7 +4583,7 @@ export class ChatPanel extends BaseComponent {
     _streamPreviewProse(raw: string): string {
         // Same tag set the extractor accepts (shared/script-text.ts), so the preview never shows
         // code the runtime is about to take.
-        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)[\s\S]*?(?:```|$)/gi, "");
+        let text = String(raw || "").replace(/```(?:xopat-script|xopat-host-script|javascript|js|typescript|ts)(?![\w-])[\s\S]*?(?:```|$)/gi, "");
         text = this._stripAssistantReasoning(text);
         return String(this.chat?.presentTextForUser?.(text) ?? text).trim();
     }

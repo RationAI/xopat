@@ -322,6 +322,22 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         // viewer is currently displaying.
         openSourceMirror(viewerHandle.viewer, init, namespace, () => { shaderRowsEnabled = true; });
 
+        // The playground viewer never runs the open-pipeline's state binding
+        // (viewer-state-binding-controller), which is what fills the header
+        // select for real viewers — without this it only offers [no overlays].
+        // The list holds just the visualization under edit: switching to
+        // another one is structural and refused by onShaderChange above.
+        const editedVisualization = pickActiveVisualization(init);
+        if (editedVisualization) {
+            try {
+                menuInstance?.getShadersTab?.()?.updateVisualizationList?.(
+                    [{ name: editedVisualization.name }], 0
+                );
+            } catch (e) {
+                console.warn("[PlaygroundPage] failed to populate visualization select", e);
+            }
+        }
+
         // Edit watcher: any 'cache-applied' / shader UI mutation should mark dirty.
         // FlexRenderer raises 'render' on every redraw; we instead listen for a
         // small set of explicit edit signals to avoid spamming dirty=true.
@@ -464,15 +480,28 @@ function mergeLiveStateIntoShaderMap(
         const live = liveLayers[id];
         if (live) {
             if (live.cache !== undefined) node.cache = deepClone(live.cache);
-            if (live.state !== undefined) {
-                node.state = { ...(node.state || {}), ...deepClone(live.state) };
-            }
+            // `state` is the LIVE payload's envelope (visible, use_mode, filters, pipeline),
+            // not a layer field: the renderer schema rejects it. Writing it onto the layer
+            // made every visualization that passed through a review fail validation on the
+            // next scripted change. Fold it into the layer the way the canonical serializer
+            // does (`mergeRuntimeIntoStructuralShader`, canonical-scene.ts).
+            foldLiveState(node, live.state);
+        }
+        // Layers saved by the earlier behaviour still carry the envelope.
+        if (node.state !== undefined) {
+            foldLiveState(node, node.state);
+            delete node.state;
         }
 
         if (node.shaders && typeof node.shaders === "object" && !Array.isArray(node.shaders)) {
             mergeLiveStateIntoShaderMap(node.shaders, liveLayers);
         }
     }
+}
+
+function foldLiveState(node: any, state: any): void {
+    if (!state || typeof state !== "object") return;
+    (window as any).UTILITIES?.applySnapshotState?.(node, deepClone(state));
 }
 
 function $t(key: string, fallback: string): string {

@@ -66,10 +66,13 @@ class Dropdown extends BaseSelectableComponent {
             : iconComponentFor(this.icon);
 
         this._headerIconComp = inIcon;
-        this._headerLabelSpan = span(this.title);
+        // Single-line label: never wrap under the icon (btn is flex-wrap).
+        this._headerLabelSpan = span({ class: "whitespace-nowrap" }, this.title);
 
+        // Icon and label side by side. A column stack (icon over label) does
+        // not fit the fixed 35px app bar and got clipped at fractional DPR.
         let dropdownIcon = undefined,
-            buttonClasses = {flex: "flex flex-col items-center", padding: ""};
+            buttonClasses = {flex: "flex flex-row flex-nowrap items-center", padding: ""};
         if (this._useActiveSelection) {
             dropdownIcon = i(
                 { "data-dropdown-arrow": "1", class: "ml-0 pr-3" },
@@ -81,7 +84,7 @@ class Dropdown extends BaseSelectableComponent {
         return new Button({
             id: this.parentId + "-b-" + this.id,
             size: Button.SIZE.SMALL,
-            extraProperties: {title: this.title, style: "gap: 3px !important;"},
+            extraProperties: {title: this.title, style: "gap: 4px !important;"},
             extraClasses: buttonClasses,
         }, inIcon, this._headerLabelSpan, dropdownIcon);
     }

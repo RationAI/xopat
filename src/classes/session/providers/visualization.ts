@@ -20,10 +20,10 @@
 //     viewer — overwrites cache, applies state, swaps type via the renderer's
 //     `_applyShaderConfigMutationRequest`, restores layer order, then
 //     rebuilds. No `Loading` overlay.
-//   - heavy: `APPLICATION_CONTEXT.openViewerWith` (full reopen) when the
-//     number of viewers, the data array, the visualization shape, or any
-//     layer's type differs. Followed by a light pass to restore per-viewer
-//     cache on top.
+//   - heavy: `APPLICATION_CONTEXT.openViewerWith` when the number of
+//     viewers, the data array, the visualization shape, or any layer's type
+//     differs. Sources the new state still uses are kept. Followed by a
+//     light pass to restore per-viewer cache on top.
 //
 // Echo-suppression: the polling tick skips emission while
 // `applyingRemote` is true; per-viewer importLiveVisualization runs with
@@ -120,14 +120,14 @@ function dataSignature(data: unknown[]): string {
 /**
  * Decide whether the snapshot can be applied in place (cheap: write
  * cache/state into each viewer's live shader configs and rebuild) or
- * needs a full re-open (heavy: triggers Loading overlay).
+ * needs to go through `openViewerWith` (heavy: may trigger Loading overlay).
  *
  * Light apply is correct only when the per-layer set + types match;
  * a different number of viewers, a different data array, a different
  * active visualization, a different visualization shape, or a layer
- * `type` change requires the heavy path so tile sources, drawers and
- * shader programs are rebuilt cleanly. (We still chain a light pass
- * after heavy to restore per-viewer cache.)
+ * `type` change requires the heavy path so the world and shader programs
+ * are brought in line; tile sources still in use are kept. (We still chain
+ * a light pass after heavy to restore per-viewer cache.)
  */
 function needsHeavyApply(next: SnapshotPayload): boolean {
     const ctx: any = (globalThis as any).APPLICATION_CONTEXT;

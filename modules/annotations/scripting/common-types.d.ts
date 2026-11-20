@@ -17,21 +17,33 @@ export type AnnotationRecord = Record<string, unknown> & {
     id?: string;
     incrementId?: number;
     internalID?: number;
+    /** Annotation kind as the user drew it ("point", "rect", "polygon", ...). Filter by kind with THIS field. */
     factoryID?: string;
+    /** Low-level rendering shape (a point is an "ellipse"). Not the annotation kind — use factoryID. */
     type?: string;
+    /** The class: look up its name in getPresets() (preset.meta.category.value). */
     presetID?: string;
     layerID?: string;
+    /** Free per-annotation value, usually empty. Not the class — the class is presetID. */
     label?: string | number;
     color?: string;
     author?: string | { id?: string; name?: string } | null;
     created?: string | number | Date | null;
     private?: boolean;
     /**
+     * The user's own lock. By default the annotation stops responding to the canvas
+     * — it is not hit-tested and not selectable, so one can draw straight over it —
+     * and every mutation is refused. Releasable again, unlike `readOnly`. What a
+     * lock means is deployment-overridable, so do not assume these exact effects.
+     */
+    locked?: boolean;
+    /**
      * The annotation may be read but not changed or removed — an analysis job's
      * output, a record owned elsewhere, or anything a rights resolver locked.
      * Enforced by the annotations module's IO guard on every mutation path, so a
-     * write attempt is refused rather than silently diverging. Unrelated to
-     * `private`, which controls export.
+     * write attempt is refused rather than silently diverging. Unlike `locked` it
+     * is imposed, not placed by this user, and cannot be lifted here. Both are
+     * unrelated to `private`, which is about who else may see the annotation.
      */
     readOnly?: boolean;
     comments?: AnnotationCommentRecord[];
@@ -43,6 +55,7 @@ export type AnnotationRecord = Record<string, unknown> & {
 
 export type AnnotationPresetRecord = {
     presetID: string;
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, { name?: string; value?: string }>;
@@ -170,6 +183,7 @@ export type AnnotationCreateInput = {
 
     meta?: AnnotationMeta;
     private?: boolean;
+    locked?: boolean;
     label?: string | number;
     author?: string | { id?: string; name?: string } | null;
     created?: string | number | Date | null;
@@ -177,9 +191,15 @@ export type AnnotationCreateInput = {
     layerID?: string | number | null;
 };
 
+/**
+ * Any field other than `locked` is refused (throws) while the annotation is locked or
+ * readOnly. `locked: false` is applied before the edits and `locked: true` after them.
+ */
 export type AnnotationMutablePatch = {
     presetID?: string;
     private?: boolean;
+    /** Refused (throws) when the resolved lock state is not releasable. */
+    locked?: boolean;
     label?: string | number;
     meta?: AnnotationMeta;
     author?: string | { id?: string; name?: string } | null;
@@ -196,6 +216,7 @@ export type PresetMetaPatchValue =
 export type AnnotationPresetCreateInput = {
     presetID?: string;
     category?: string;
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, PresetMetaPatchValue>;
@@ -204,6 +225,7 @@ export type AnnotationPresetCreateInput = {
 };
 
 export type AnnotationPresetUpdateInput = {
+    /** @deprecated Default annotation type only; it does not decide what the user draws. */
     factoryID?: string;
     color?: string;
     meta?: Record<string, PresetMetaPatchValue>;

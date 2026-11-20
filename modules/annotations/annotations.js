@@ -22,7 +22,43 @@
  * 	borderDashing: number,
  * 	ignoreCustomStyling: boolean
  * }} AuthorConfig
+ *
+ * @typedef {{
+ * 	locked: boolean,
+ * 	interactive: boolean,
+ * 	mutable: boolean,
+ * 	releasable: boolean,
+ * 	reason: string,
+ * 	code: string|null
+ * }} AnnotationLockState
  */
+
+/**
+ * Lock states, as frozen singletons.
+ *
+ * {@link OSDAnnotations#getAnnotationLockState} runs per annotation per visibility
+ * evaluation, so the no-policy path must not allocate. `reason` is a getter and not a
+ * baked value because this executes at module load, when `$.t` is still the placeholder
+ * translator that returns the key's last segment (see AGENTS.md §3).
+ * @private
+ */
+const lockState = (locked, interactive, mutable, releasable, key, code) => Object.freeze({
+    locked, interactive, mutable, releasable, code,
+    get reason() { return key ? $.t(key, { ns: 'annotations' }) : ''; },
+});
+/** Not locked: the ordinary annotation. @private */
+const LOCK_NONE = lockState(false, true, true, false, null, null);
+/** The user's own lock: out of the canvas's way entirely, and releasable again. @private */
+const LOCK_USER = lockState(true, false, false, true, 'lock.refused', 'W_ANNOTATION_LOCKED');
+/** Imposed from outside: still readable and commentable, never editable, never releasable. @private */
+const LOCK_READONLY = lockState(true, true, false, false, 'readOnly.refused', 'W_ANNOTATION_READONLY');
+/**
+ * Both at once. The restrictive half of each wins: non-interactive from the user's lock,
+ * non-releasable from the imposed one — a user may not lift a lock they did not place.
+ * @private
+ */
+const LOCK_BOTH = lockState(true, false, false, false, 'readOnly.refused', 'W_ANNOTATION_READONLY');
+
 window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     constructor() {
@@ -103,12 +139,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // deployment config is reported and downgraded once here instead of
         // throwing inside Convertor.get() on every bundle flush. A runtime
         // choice (setIOOption, itself validated) still wins.
+        // `ctx.format` is the pipeline's answer: the format the destination
+        // takes, was pinned to, or returned — for a sink that takes any format
+        // and has no pin, the deployment `defaultFormat` handed over below.
+        // Absent, the user's choice (download dialog) applies only to the local
+        // file route; a stored destination never follows a UI preference.
         const formatOf = (ctx) => {
-            if (ctx.meta && ctx.meta.format) return ctx.meta.format;
-            const fallback = this.defaultFormat;
-            return this.getExportOptions()?.format || fallback;
+            if (ctx.format?.id) return ctx.format.id;
+            if (ctx.route === "local") return this.getExportOptions()?.format || this.defaultFormat;
+            return this.defaultFormat;
         };
         await this.initIO({
+            // Deployment `convertors.format` (validated), else native. What a
+            // format-agnostic sink (GitHub, MLflow, http-rest) stores when
+            // neither the binding nor the sink's own config pins a format.
+            defaultFormat: () => this.defaultFormat,
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
             // auto-fires flush-on-leave + restore-on-enter when the active
@@ -121,7 +166,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return undefined;
-                return fabric.export({ format: formatOf(ctx) }, true, true);
+                // The binding's `formatOptions` (only those it sets; they win over
+                // the user's values) and the dispatch itself go to the format: a format
+                // that needs slide-scoped data resolves it from `io`.
+                return fabric.export({ ...ctx.format?.options, format: formatOf(ctx), io: ctx }, true, true);
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
@@ -153,18 +201,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 if (data === undefined || data === null) return;
                 try {
-                    // Payload-specific sinks (e.g. DICOM SR) wrap their content
-                    // as `{ format, meta, buffer }` so they can carry both the
-                    // wire-format hint and any decoder-side metadata (slide
-                    // pixel spacing, FrameOfReferenceUID, …). Unwrap here so
-                    // the convertor receives the raw payload + its meta.
-                    const isWrapped = typeof data === "object"
-                        && data !== null
-                        && typeof data.format === "string"
-                        && "buffer" in data;
-                    const importOptions = isWrapped
-                        ? { format: data.format, meta: data.meta }
-                        : { format: formatOf(ctx) };
+                    // The pipeline has already resolved what this payload is
+                    // (`ctx.format`: the sink's own tag, the binding, or
+                    // detection) and merged any decoder-side metadata the sink
+                    // returned (slide pixel spacing, FrameOfReferenceUID, …)
+                    // into `ctx.meta`.
+                    // The binding's `formatOptions` apply both ways, so a value
+                    // written with one setting is read back with the same one.
+                    const importOptions = { ...ctx.format?.options, format: formatOf(ctx), meta: ctx.meta, io: ctx };
                     // Slide-aware restores aren't user actions; skip history
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path
@@ -180,8 +224,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                         importOptions.history = false;
                         importOptions.presetMode = 'merge';
                     }
-                    const payload = isWrapped ? data.buffer : data;
-                    await fabric.import(payload, importOptions, true);
+                    await fabric.import(data, importOptions, true);
                 } catch (e) {
                     // Rethrow so the IO pipeline surfaces the failure to the
                     // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
@@ -301,29 +344,31 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // bulk `import()` (which raises the same events per preset) replayed
         // every hydrated preset straight back at the bound sink.
 
-        this._registerReadOnlyGuard();
+        this._registerLockGuard();
         this._mirrorPipelineFailures();
     }
 
     /**
-     * Make `annotation.readOnly` mean something on every mutation path at once.
+     * Make a lock mean something on every mutation path at once.
      *
-     * A read-only annotation is one this user may look at but not change: an
-     * analysis job's output, a record another scope owns, anything a rights
-     * resolver has locked. Enforcing that at the IO checkpoint rather than at each
-     * UI entry point is what makes it exhaustive — delete, edit commit, preset
-     * change and even *entering* edit mode all pass through `pre-update` /
+     * A locked annotation is one this user may look at but not change — their own
+     * lock, an analysis job's output, a record another scope owns, anything a
+     * rights resolver has locked. Enforcing that at the IO checkpoint rather than
+     * at each UI entry point is what makes it exhaustive — delete, edit commit,
+     * preset change and even *entering* edit mode all pass through `pre-update` /
      * `pre-delete` with a consistent `meta.kind`, so one guard covers paths that
-     * have not been written yet.
+     * have not been written yet. What exactly is refused comes from
+     * {@link getAnnotationLockState}, so an integration's lock policy is enforced
+     * here too.
      *
      * Comments are deliberately allowed through: they are annotation metadata, not
      * the annotation, and a locked finding is still discussable.
      * @private
      */
-    _registerReadOnlyGuard() {
+    _registerLockGuard() {
         const pipeline = globalThis.IO_PIPELINE;
         if (!pipeline?.registerGuard) return;
-        this._readOnlyGuard = pipeline.registerGuard({
+        this._lockGuard = pipeline.registerGuard({
             ownerId: this.uid,
             resource: "annotation",
             direction: "*",
@@ -335,12 +380,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
                 if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
                 const target = ctx.meta?.object ?? ctx.meta?.previous;
-                if (!target?.readOnly) return { ok: true };
+                const state = this.getAnnotationLockState(target);
+                if (state.mutable) return { ok: true };
+                // The lock toggle itself is the one mutation a releasable lock must let
+                // through — otherwise the flag that makes an annotation immutable also
+                // makes itself unwritable and nothing could ever be unlocked. Gated on
+                // `releasable` rather than on the kind alone: a blanket exemption (as
+                // comments get) would let anyone clear an imposed `readOnly`.
+                if (ctx.meta?.kind === 'lock-change' && state.releasable) return { ok: true };
                 return {
                     ok: false, refused: true,
-                    reason: "annotation is read-only",
-                    userMessage: $.t('readOnly.refused', { ns: 'annotations' }),
-                    code: "W_ANNOTATION_READONLY",
+                    reason: "annotation is locked",
+                    userMessage: state.reason,
+                    code: state.code,
                 };
             },
         });
@@ -634,21 +686,38 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this._ioArgs;
     }
 
-    async exportViewerData(viewer, key, viewerTargetID) {
-        const fabric = this.getFabric(viewer);
-        return fabric.export();
+    /**
+     * Set a value for one of a format's own options (those it declares in
+     * `IOFormat.options`). Held per format for this session and merged into
+     * every export/import that uses the format.
+     * @param {string} format registered format id
+     * @param {string} name option name
+     * @param {*} value
+     */
+    setFormatOption(format, name, value) {
+        if (!this._formatOptions) this._formatOptions = {};
+        (this._formatOptions[format] || (this._formatOptions[format] = {}))[name] = value;
     }
 
-    async importViewerData(viewer, key, viewerTargetID, data) {
-        if (data === undefined || data === null) return;
-
-        const fabric = this.getFabric(viewer);
-        const options = { inheritSession: true, history: false };
-        await fabric.import(data, options);
+    /**
+     * The values set through {@link setFormatOption} for one format.
+     * Declared defaults are applied by the registry, not here.
+     * @param {string?} format
+     * @return {object}
+     */
+    getFormatOptions(format) {
+        return (format && this._formatOptions?.[format]) || {};
     }
 
+    /**
+     * File extension (with the leading dot) the given format is written with.
+     * @param {string?} format default the module's format
+     * @return {string}
+     */
 	getFormatSuffix(format=undefined) {
-		return OSDAnnotations.Convertor.getSuffix(format);
+		const registered = IO_PIPELINE.formats.get(OSDAnnotations.Convertor.DOMAIN,
+			format || this._ioArgs.format || this.defaultFormat);
+		return registered?.extensions[0] || "";
 	}
 
 	/**
@@ -761,10 +830,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         for (let instance of OSDAnnotations.FabricWrapper.instances()) {
             instance.setMouseOSDInteractive(isOSDInteractive);
         }
-        if (isOSDInteractive) {
-            if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-            if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
-        }
+        if (isOSDInteractive) this.getActiveFactory().finishIndirect();
 		this.mouseOSDInteractive = isOSDInteractive;
 		if (_raise) this.raiseEvent('osd-interactivity-toggle');
 	}
@@ -786,6 +852,51 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
 		return undefined;
+	}
+
+	/**
+	 * The drawing tool: the factory a click creates an annotation with. It is
+	 * independent of the active preset (class) - selecting a preset never changes
+	 * it. Shared by both mouse buttons.
+	 *
+	 * Resolution: explicitly set factory -> the one cached from the last session
+	 * -> the active preset's (deprecated) default factory -> polygon. Whatever is
+	 * resolved first is latched, so the tool also stays put for a user who never
+	 * picked a shape.
+	 * @param {boolean} [isLeftClick=true] which button's preset supplies the default
+	 * @return {OSDAnnotations.AnnotationObjectFactory}
+	 */
+	getActiveFactory(isLeftClick=true) {
+		let factory = this._activeFactoryID && this.getAnnotationObjectFactory(this._activeFactoryID);
+		if (factory) return factory;
+
+		// Factories may register late; an id that does not resolve (yet) is not latched.
+		factory = this.getAnnotationObjectFactory(this.cache.get('tool.factory'));
+		if (!factory) {
+			const preset = this.presets.getActivePreset(isLeftClick) || this.presets.getActivePreset(!isLeftClick);
+			factory = preset?.objectFactory;
+			// Nothing to derive from: answer polygon, but leave the latch open for a preset.
+			if (!factory) return this.polygonFactory;
+		}
+		this._activeFactoryID = factory.factoryID;
+		return factory;
+	}
+
+	/**
+	 * Set the drawing tool, see getActiveFactory().
+	 * @event active-factory-change
+	 * @param {OSDAnnotations.AnnotationObjectFactory|string} factory instance or factoryID
+	 * @return {boolean} false if the factory is not registered
+	 */
+	setActiveFactory(factory) {
+		if (typeof factory === "string") factory = this.getAnnotationObjectFactory(factory);
+		if (!factory) return false;
+		if (this._activeFactoryID === factory.factoryID) return true;
+
+		this._activeFactoryID = factory.factoryID;
+		this.cache.set('tool.factory', factory.factoryID);
+		this.raiseEvent('active-factory-change', {factory});
+		return true;
 	}
 
 	/**
@@ -1320,6 +1431,213 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._applyAnnotationFiltersToAllViewers();
     }
 
+    /********************* LOCK POLICY **********************/
+
+    /**
+     * Resolve what "locked" currently means for one annotation.
+     *
+     * Two flags feed it. `object.locked` is the **user's** lock, behind the padlock in
+     * the annotation's toolbar: by default the annotation stops responding to the canvas
+     * entirely — it is not hit-tested and not selectable, so the user can draw straight
+     * over it — every mutation is refused, and the user may release it again.
+     * `object.readOnly` is a lock the user did not place and cannot lift (an analysis
+     * job's output, a record another scope owns): it stays selectable, readable and
+     * commentable but refuses every mutation.
+     *
+     * Integrations redefine the *meaning* rather than the flag — see
+     * {@link registerLockPolicy}. Everything downstream reads this one descriptor
+     * (hit-testing, selectability, editability, the IO guard, the padlock icon, the board
+     * badge), so a policy moves all of them at once.
+     *
+     * Allocation-free while no policy is registered; a registered policy costs one object
+     * spread per annotation per evaluation.
+     *
+     * @param {fabric.Object} object
+     * @return {AnnotationLockState} `locked` — draw the padlock closed; `interactive` —
+     *   may be hit-tested and selected on the canvas; `mutable` — `pre-update` /
+     *   `pre-delete` may pass; `releasable` — this user may turn the lock off;
+     *   `reason` / `code` — user-facing refusal message and IO refusal code
+     */
+    getAnnotationLockState(object) {
+        const imposed = !!object?.readOnly, own = !!object?.locked;
+        let state = imposed ? (own ? LOCK_BOTH : LOCK_READONLY) : (own ? LOCK_USER : LOCK_NONE);
+        const policies = this._lockPolicies;
+        if (!policies?.size) return state;
+        for (const [ownerId, policy] of policies) {
+            try {
+                const patch = policy(object, state);
+                if (patch && typeof patch === "object") state = Object.freeze({ ...state, ...patch });
+            } catch (e) {
+                console.warn(`[annotations] lock policy of '${ownerId}' threw:`, e);
+            }
+        }
+        return state;
+    }
+
+    /**
+     * Redefine what locking means, owner-scoped.
+     *
+     * The core answer is deliberately thin — the user's lock takes an annotation out of
+     * the canvas's way, `readOnly` makes one immutable — because the real rule belongs to
+     * whoever owns the data: who may lock, who may release, and whether a locked record
+     * still answers the mouse are questions only an integration can settle.
+     *
+     * Why this rather than writing `evented` / `selectable` / `visible` directly: those
+     * are *derived* in {@link OSDAnnotations.FabricWrapper#_applyAnnotationVisibilityState},
+     * so a directly written flag is silently overwritten by the next filter pass, layer
+     * toggle, zoom or edit. A policy is the only way to state a persistent rule — the same
+     * reason {@link registerVisibilityGate} exists.
+     *
+     * `policy(object, stateSoFar)` returns a **partial** override, or nothing for "no
+     * opinion"; policies compose in registration order, so a later one sees the earlier
+     * one's answer. Throwing is treated as no opinion, so a broken policy cannot lock the
+     * whole canvas. Must be cheap and side-effect free — it runs per annotation per
+     * visibility evaluation.
+     *
+     * @example <caption>Job output stays clickable, but only its owner releases it</caption>
+     * annotations.registerLockPolicy(this.id, (o, state) =>
+     *     o.empaiaJobId ? { interactive: true, releasable: false } : undefined);
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object, AnnotationLockState): (Object|undefined)} policy
+     * @return {function(): void} dispose — unregisters and re-derives interactivity
+     */
+    registerLockPolicy(ownerId, policy) {
+        if (typeof policy !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._lockPolicies = this._lockPolicies || new Map();
+        this._lockPolicies.set(id, policy);
+        this.reapplyVisibility();
+        return () => {
+            if (this._lockPolicies?.get(id) === policy) {
+                this._lockPolicies.delete(id);
+                this.reapplyVisibility();
+            }
+        };
+    }
+
+    /********************* VISUAL POLICY **********************/
+
+    /**
+     * The common visuals one annotation renders with, after owner policies.
+     *
+     * Allocates the copy `updateRendering` is allowed to modify; a registered policy
+     * adds one call per annotation per visual refresh.
+     *
+     * @param {fabric.Object} object
+     * @return {OSDAnnotations.CommonAnnotationVisuals} own copy, safe to modify
+     */
+    resolveAnnotationVisuals(object) {
+        const visuals = {...this.presets.commonAnnotationVisuals};
+        const policies = this._visualPolicies;
+        if (!policies?.size) return visuals;
+        for (const [ownerId, policy] of policies) {
+            try {
+                Object.assign(visuals, policy(object, visuals));
+            } catch (e) {
+                console.warn(`[annotations] visual policy of '${ownerId}' threw:`, e);
+            }
+        }
+        return visuals;
+    }
+
+    /**
+     * Style annotations by a state only their owner knows, owner-scoped.
+     *
+     * Why this rather than writing `fill` / `stroke` on the object: those are *derived*
+     * from the preset in {@link OSDAnnotations.FabricWrapper#updateSingleAnnotationVisuals},
+     * so a directly written value is silently overwritten by the next selection change,
+     * preset change, import or change of the common visuals. A policy is the only way to
+     * state a persistent rule — the same reason {@link registerLockPolicy} exists.
+     *
+     * `policy(object, visualsSoFar)` returns a **partial** override of the common visuals
+     * (`modeOutline`, `stroke`, `opacity`, `originalStrokeWidth`), or nothing for "no
+     * opinion". `dashPattern` is an extra key: dash lengths in multiples of the stroke
+     * width, so a pattern keeps its look at every zoom. Policies compose in registration
+     * order; throwing is treated as no opinion. Must be cheap and side-effect free.
+     * The result is not exported: the owner derives it again after an import.
+     *
+     * @example <caption>A region being processed is a dashed outline</caption>
+     * annotations.registerVisualPolicy(this.id, o =>
+     *     o.processing ? { modeOutline: true, opacity: 1, dashPattern: [4, 3] } : undefined);
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @param {function(fabric.Object, OSDAnnotations.CommonAnnotationVisuals): (Object|undefined)} policy
+     * @return {function(): void} dispose — unregisters and refreshes the visuals
+     */
+    registerVisualPolicy(ownerId, policy) {
+        if (typeof policy !== "function") return () => {};
+        const id = String(ownerId ?? "");
+        this._visualPolicies = this._visualPolicies || new Map();
+        this._visualPolicies.set(id, policy);
+        this.reapplyVisuals();
+        return () => {
+            if (this._visualPolicies?.get(id) === policy) {
+                this._visualPolicies.delete(id);
+                this.reapplyVisuals();
+            }
+        };
+    }
+
+    /**
+     * Refresh annotation visuals on every viewer. For a policy owner whose state changed
+     * on many objects; for one object, call
+     * {@link OSDAnnotations.FabricWrapper#updateSingleAnnotationVisuals}.
+     */
+    reapplyVisuals() {
+        for (const instance of OSDAnnotations.FabricWrapper.instances()) instance.updateAnnotationVisuals();
+    }
+
+    /********************* PRIVACY **********************/
+
+    /**
+     * Declare that something in this deployment implements annotation privacy.
+     *
+     * `annotation.private` is a flag xOpat carries but cannot act on: hiding a record
+     * from *other users* is a storage decision, and standalone xOpat has no other users
+     * to hide it from. So the flag is inert — and therefore invisible — until an owner
+     * registers here; without this, "mark as private" would be a toggle whose only
+     * observable effect was that the annotation quietly vanished from exports, which is
+     * worse than not offering it.
+     *
+     * Registering makes the private toggle appear in the annotation's context menu.
+     * Enforcement stays with the registering integration. Export exclusion does NOT
+     * depend on registration — see {@link getPrivacyExcludesExport}.
+     *
+     * @param {string} ownerId registering element's id; re-registering replaces
+     * @return {function(): void} dispose
+     */
+    registerPrivacyProvider(ownerId) {
+        const id = String(ownerId ?? "");
+        this._privacyProviders = this._privacyProviders || new Map();
+        const record = {};
+        this._privacyProviders.set(id, record);
+        return () => {
+            if (this._privacyProviders?.get(id) === record) this._privacyProviders.delete(id);
+        };
+    }
+
+    /**
+     * Whether `annotation.private` means anything here, i.e. whether to offer the toggle.
+     * @return {boolean}
+     */
+    isPrivacySupported() {
+        return !!this._privacyProviders?.size;
+    }
+
+    /**
+     * Whether private annotations must be left out of exports.
+     *
+     * Decided by the deployment alone, through the `exportPrivate` static meta
+     * (default `true`: private annotations ARE exported). With `exportPrivate: false`
+     * every annotation flagged `private` is withheld, whether or not a provider is
+     * registered — provider presence never decides what leaves the viewer.
+     * @return {boolean}
+     */
+    getPrivacyExcludesExport() {
+        return !this._exportPrivateAnnotations;
+    }
+
     /** Current point-snap settings (live; reflects cache-restored state). */
     getSnap() {
         return { enabled: !!this.snapEnabled, radiusPx: this.snapRadiusPx };
@@ -1785,6 +2103,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             }
 			if (this.isHelperAnnotation) return;
 			this._factory()?.onZoom(this, zoom, _realZoom);
+			if (this.dashPattern) this.applyDashPattern(this.dashPattern);
+		}
+		/**
+		 * Dash the stroke in multiples of its width, see `registerVisualPolicy`.
+		 * @param {number[]} [pattern] nothing removes the dash
+		 */
+		fabric.Object.prototype.applyDashPattern = function(pattern) {
+			this.dashPattern = pattern;
+			this.set("strokeDashArray", pattern ? pattern.map(length => length * this.strokeWidth) : null);
 		}
 
 		// fabric's stock calcOCoords composes a [1/vpt[0],0,0,1/vpt[3],0,0]
@@ -1893,7 +2220,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationAutoIncrement = 0;
         this._annotationLabelIncrement = 0;
         this._annotationFilters = [];
-		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", true) !== false;
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
@@ -2141,8 +2468,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_setModeToAuto(switching) {
 		this._wasModeFiredByKey = false;
-		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+		this.getActiveFactory().finishIndirect();
 
 		if (this.mode.setToAuto(switching)) {
 			// Assign first: a handler reading `context.mode` must not see the mode
@@ -2439,7 +2765,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2464,7 +2791,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 */
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		//do nothing
@@ -3081,8 +3409,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	handleMouseMove(e, point) {
 		//todo experiment with this condition, also is it necessary for fft?
 		if (this.context.isMouseOSDInteractive()) {
-			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);
-			if (this.context.presets.right) this.context.presets.right.objectFactory.updateCreate(point.x, point.y);
+			// the in-flight shape keeps its own factory even if the tool changed meanwhile
+			(this._lastUsed || this.context.getActiveFactory()).updateCreate(point.x, point.y);
 			this.context.fabric.rerender();
 		}
 	}

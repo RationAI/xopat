@@ -24,10 +24,12 @@
  *     same answer the client gives, reached the same way.
  *
  * The resolution ALGORITHM is not reimplemented. `src/classes/user-roles-core.ts`
- * is dependency-free precisely so this file can borrow it; it is transformed to
- * CommonJS in memory on first use. Two copies of a cascade this subtle would
- * drift, and the drift would be a silent authorization difference between what
- * the UI shows and what the server enforces.
+ * is dependency-free precisely so this file can borrow it: `grunt serverBuild`
+ * emits it as `src/dist/user-roles-core.cjs` and that artifact is what loads,
+ * with an in-memory TypeScript transform kept only as a dev convenience. Two
+ * copies of a cascade this subtle would drift, and the drift would be a silent
+ * authorization difference between what the UI shows and what the server
+ * enforces.
  *
  * See src/USER_ROLES.md.
  */
@@ -35,42 +37,109 @@
 const fs = require("fs");
 const path = require("path");
 const Module = require("module");
+const constants = require("./constants");
 
 const CORE_SRC = path.join(__dirname, "..", "..", "src", "classes", "user-roles-core.ts");
+/**
+ * The prebuilt resolver, emitted by `grunt serverBuild`.
+ *
+ * CJS whatever format element bundles use: it is required synchronously from CJS
+ * core and `loadCore()` cannot await. A packaged build has no esbuild, so the
+ * in-memory transform below is not a fallback there — it is a dev convenience,
+ * and this artifact is the only way role capabilities resolve at all in a
+ * binary. (`src/**` is packaged already; it also has to be listed in
+ * `pkg.scripts` to be require-able by path.)
+ */
+const CORE_ARTIFACT = path.join(__dirname, "..", "..", "src", "dist", "user-roles-core.cjs");
 
 /** `{ rolesFromClaims, resolveCapabilities }` once loaded, `null` while unknown. */
 let _core;
 /** Why the load failed, for the refusal message (and so we only try once). */
 let _coreError = null;
 
+/** Both loaders answer `null` unless the exports are the real resolver. */
+function validateCore(exports, origin) {
+    if (exports && typeof exports.rolesFromClaims === "function"
+        && typeof exports.resolveCapabilities === "function") {
+        return exports;
+    }
+    // Without this a stale or half-written module loads "successfully" and leaves
+    // `_coreError` null, so the (correct) fail-closed in `can()` reports
+    // "role resolver unavailable (unknown reason)" — a refusal naming no cause.
+    _coreError = `${origin} does not export rolesFromClaims/resolveCapabilities`;
+    return null;
+}
+
+/** The prebuilt CJS artifact. The only route in a packaged build. */
+function requireArtifact() {
+    try {
+        return validateCore(require(CORE_ARTIFACT), path.basename(CORE_ARTIFACT));
+    } catch (error) {
+        if (constants.PACKAGED) {
+            // No compiler here, and no source to compile either. Name the real
+            // cause: it used to report "esbuild unavailable", which reads as a
+            // dependency problem rather than a build that was never run.
+            _coreError = `prebuilt ${path.basename(CORE_ARTIFACT)} is missing from this build`
+                + ` — role capabilities cannot be resolved (rebuild with npm run build and repackage)`;
+        } else if (!_coreError) {
+            _coreError = error && error.message ? error.message : String(error);
+        }
+        return null;
+    }
+}
+
 /**
- * Load the shared resolver, transforming the TypeScript source in memory.
+ * The TypeScript source, transformed in memory.
  *
  * `transformSync` rather than a bundle: the file imports nothing, so there is
  * nothing to bundle, and skipping the on-disk build cache removes a lock, a
  * freshness check and a temp directory from a path that runs once per process.
- *
- * @returns the module exports, or `null` when esbuild is unavailable
  */
-function loadCore() {
-    if (_core !== undefined) return _core;
+function transformSource() {
     try {
         const esbuild = require("esbuild");
         const source = fs.readFileSync(CORE_SRC, "utf8");
         const { code } = esbuild.transformSync(source, {
             loader: "ts",
             format: "cjs",
-            target: "node18",
+            target: "node22",
         });
         const mod = new Module(CORE_SRC, null);
         mod.filename = CORE_SRC;
         mod.paths = Module._nodeModulePaths(path.dirname(CORE_SRC));
         mod._compile(code, CORE_SRC);
-        _core = mod.exports;
+        return validateCore(mod.exports, "src/classes/user-roles-core.ts");
     } catch (error) {
         _coreError = error && error.message ? error.message : String(error);
-        _core = null;
+        return null;
     }
+}
+
+/**
+ * Load the shared resolver: the SOURCE in a source tree, the artifact in a binary.
+ *
+ * Source-first on purpose. The artifact was preferred unconditionally and the
+ * transform was reached only when `require` THREW — never when it returned
+ * something stale. So a `src/dist/user-roles-core.cjs` built from an earlier
+ * `user-roles-core.ts` shadowed the edited source for the life of the process:
+ * change the role cascade, restart, and the old policy kept being enforced until
+ * someone remembered `grunt serverBuild`. A freshness check would be a third
+ * place that has to agree about what "fresh" means; not preferring the artifact
+ * where the source exists cannot go wrong at all. A packaged build carries no
+ * compiler, so there the artifact is the only route — and the whole reason it
+ * exists.
+ *
+ * @returns the module exports, or `null` with `_coreError` set
+ */
+function loadCore() {
+    if (_core !== undefined) return _core;
+    if (constants.PACKAGED) return (_core = requireArtifact());
+    // The artifact still answers in a source tree with no esbuild installed.
+    _core = transformSource() || requireArtifact();
+    // A fallback that worked leaves no complaint behind: `_coreError` is read only
+    // when there is no resolver, and the first loader's message would otherwise
+    // outlive the failure it described.
+    if (_core) _coreError = null;
     return _core;
 }
 

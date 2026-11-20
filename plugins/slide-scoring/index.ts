@@ -53,7 +53,7 @@ const BUNDLE_VERSION = 1;
  *
  * `tileSourceId` first — DICOMweb shares `baseUrl` across slides, so a URL key
  * collides. But it is only the *app-wide* convention, not a universal one:
- * tile sources set it themselves (webtiff, empaia, mixture, the generic
+ * tile sources set it themselves (webtiff, empaia, the generic
  * protocol path in `slide-protocols.ts`) and the WSI-Service source does not —
  * it carries the service's own slide id as `fileId` instead, the dual
  * convention `viewer-depth-controller.ts` already reconciles. Without `fileId`

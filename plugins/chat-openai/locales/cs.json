@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "OpenAI chat a přepis",
+    "description": "Nativní integrace poskytovatele OpenAI (chatovací modely GPT + přepis Whisper). baseUrl / apiKey / modely nastavte v server.json — jsou pouze na straně serveru."
+  }
+}

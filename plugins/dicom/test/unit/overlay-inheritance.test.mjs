@@ -108,6 +108,36 @@ test("opening a derived series as its own background drops the inherited overlay
     expect(event.visualizationIndex).toBe(null);
 });
 
+test("the reuse marker survives the session serializers @unit", () => {
+    // `safeStringify` (src/app.ts) and the renderer export drop every key starting
+    // with `_`. An underscore-prefixed marker was gone after each reload, so each
+    // reload appended another copy of the visualization and its data entries.
+    expect(marker().startsWith("_")).toBe(false);
+});
+
+test("rebuilding a slide's overlays reuses its data entries @unit", async () => {
+    const DERIVED = "1.2.840.999.7";
+    globalThis.APPLICATION_CONTEXT.config = { data: [] };
+    const self = {
+        constructor: Captured,
+        t: (key) => key,
+        _derivedIndexFor: async () => ({
+            smSeriesCount: 1,
+            derived: [{ seriesUID: DERIVED, kind: "seg", segments: [], referencedSeries: [SLIDE_A] }],
+        }),
+        _makeDataOverride: Captured.prototype._makeDataOverride,
+    };
+    const build = () => Captured.prototype._buildOverlayVisualization.call(
+        self, STUDY, SLIDE_A, "Slide A", [DERIVED]);
+
+    const first = await build();
+    const second = await build();
+    const refs = (viz) => Object.values(viz.shaders).flatMap(s => s.dataReferences);
+
+    expect(globalThis.APPLICATION_CONTEXT.config.data.length).toBe(1);
+    expect(refs(second)).toEqual(refs(first));
+});
+
 test("a session that asked for no overlays at all is not touched @unit", async () => {
     const event = { visualizationIndex: 0, background: { name: "Slide B" } };
     globalThis.APPLICATION_CONTEXT.config = { visualizations: [generated(SLIDE_A)] };

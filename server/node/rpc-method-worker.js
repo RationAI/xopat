@@ -1,18 +1,15 @@
 "use strict";
 
 const { parentPort, workerData } = require("node:worker_threads");
-const { pathToFileURL } = require("node:url");
-const path = require("node:path");
 const { installGlobalServerHelpers } = require("./server-helpers");
+const { loadServerModuleFromFile } = require("./server-module-loader");
 
-async function loadModule(loadPath) {
-    const ext = path.extname(loadPath).toLowerCase();
-    if (ext === ".mjs") {
-        return import(pathToFileURL(loadPath).href + `?v=${Date.now()}`);
-    }
-    delete require.cache[require.resolve(loadPath)];
-    return require(loadPath);
-}
+// The one loader, rather than a private copy of it: this file's own version
+// dispatched on the extension and had no `.ts` branch at all, so a TypeScript
+// server method would have been `require`d as TypeScript. `workerData.runtime`
+// is a structured clone — it carries `registry`/`cacheDir`/`serverBuildDirName`,
+// which is all the artifact lookup needs.
+const loadModule = (loadPath) => loadServerModuleFromFile(loadPath, workerData.runtime);
 
 (async () => {
     try {

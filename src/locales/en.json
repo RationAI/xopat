@@ -8,7 +8,15 @@
         "remember7Days": "7 days",
         "remember30Days": "30 days"
       },
+      "ui": {
+        "invokeTitle": "Allow the script to use the interface?",
+        "invokeDescription": "The script wants to trigger \"{{label}}\" for you, as if you clicked it.",
+        "invokeConfirm": "Allow"
+      },
       "visualization": {
+        "backgroundUpdateTitle": "Allow changing how the slide is rendered?",
+        "backgroundUpdateDescription": "The script wants to change the rendering of the slide itself in the current viewer.",
+        "backgroundUpdateUndo": "The change can be undone from the history.",
         "critiqueSystem": "You are judging how well a scientific image visualization reads, not what the specimen is. Comment only on the rendering: contrast, dynamic range, colour choice, whether an overlay is distinguishable from the image beneath it, and whether structure is lost to saturation or washed out. Do not diagnose, do not name tissue types, and do not speculate about the specimen. Answer in at most four short sentences.",
         "critiquePrompt": "Describe what is wrong with how this view is rendered and what would make the data easier to read.",
         "critiqueQuestion": "Describe what is wrong with how this view is rendered, focusing on: {{question}}",
@@ -42,6 +50,8 @@
       "detailsBtn": "details",
       "dismissBtn": "dismiss",
       "unknown": "Unknown error",
+      "bootFailedTitle": "The viewer could not start.",
+      "bootFailedDescription": "The application files look incomplete or out of date. Reload the page; if it keeps happening, the application needs to be rebuilt.",
       "regionRenderQueueTimeout": "The slide region could not be rendered: it waited {{ms}}ms for its turn without starting. Off-screen renders are serialized per viewer, so this means the queue is congested, not that the region is unreadable.",
       "reachUs": "The viewer has run into an unexpected error. Please contact us and provide the error details.",
       "handlerFault": "A component ({{owner}}) failed while handling '{{event}}'. Some of its features might not work.",
@@ -61,6 +71,8 @@
       "ioNoDestination": "Storage for {{what}} is misconfigured — none of the configured destinations exist, so data is being discarded.",
       "ioSinkNotReady": "{{count}} change(s) are waiting: the storage destination is not connected yet. Nothing has been lost — they will be sent as soon as it is available.",
       "ioOffline": "{{count}} change(s) are waiting to be sent — you appear to be offline. Nothing has been lost.",
+      "ioRefusedNoReason": "Your change to {{what}} was refused and has not been saved.",
+      "ioSlideHashKey": "Storage is misconfigured: data is addressed by slide, but the deployment sets no slide hash key.",
       "nothingToRender": "No data to view.",
       "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "shaderProgramFailed": "The visualization could not be compiled and the change was not applied. This usually means too many layers, or too many colormap / advanced slider controls, for what this device supports.",
@@ -90,8 +102,10 @@
       "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
       "sessionExpiredReloading": "Your session expired or became invalid. Reloading…",
       "viewerFilesNotConfigured": "Viewer does not show all files - some were not properly configured!",
-      "visualizationShaderSkipped": "Some visualization layers cannot be displayed in this deployment and were skipped.",
+      "visualizationForeignSlide": "An overlay belonging to a different slide was bound to this slide and has been hidden.",
+      "visualizationShaderSkipped":"Some visualization layers cannot be displayed in this deployment and were skipped.",
       "visualizationValidationIssues": "Some visualization layers are invalid and were not displayed.",
+      "visualizationRendererWarnings": "The visualization reported {{count}} problem(s) while rendering — some layers may not look as configured (e.g. default colors instead of the configured palette). If a layer shows a broom icon, clearing its saved values may help; the session export lists the details.",
       "visualizationParamsIgnored": "Some visualization settings are not recognised by their shader. The layers are still rendered, but those settings may have no effect — see the console for details.",
       "visualizationIndexMissing": "The requested visualization (#{{index}}) does not exist; the image is shown without overlays.",
       "slide": {
@@ -159,9 +173,7 @@
         "emptyHiddenBody": "Every panel that lives here is hidden right now.",
         "showAllPanels": "Show all panels",
         "dragToOpen": "Open the menu: click or drag",
-        "hoverToOpen": "Hover or focus to open the menu",
-        "pinDock": "Pin menu (dock beside viewer)",
-        "unpinDock": "Unpin menu (overlay on hover)"
+        "clickToOpen": "Click to open the menu"
       },
       "menu": {
         "configMenu": "Menu options",
@@ -176,23 +188,31 @@
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
-        "faultyViz": "Invalid Data",
-        "focalPlane": "Focal plane",
-        "focalPlaneCount": "{{count}} planes",
-        "focalPlaneHint": "Alt + scroll or [ ] to change plane"
+        "faultyViz": "Invalid Data"
+      },
+      "depthRuler": {
+        "title": "Focal plane",
+        "hint": "Focal plane: drag or scroll here, Alt + scroll on the slide, or press [ ]",
+        "position": "{{index}} / {{count}}",
+        "offsetUm": "{{value}} µm",
+        "previous": "Previous focal plane",
+        "next": "Next focal plane"
       },
       "scalebar": {
         "home": "Fit the whole slide",
+        "resetView": "Reset rotation and fit the whole slide",
         "zoomTo": "Zoom to {{mag}}",
         "zoomToLevel": "Zoom to level {{level}}",
         "digitalZoomHint": "{{mag}} — beyond the scanned resolution, the image is interpolated",
         "minimize": "Minimize",
         "expand": "Expand",
         "rotationHint": "Rotation in degrees — type a value and press Enter",
+        "magnificationHint": "Magnification — type a value and press Enter",
         "slideLabel": "Slide label (hover to enlarge)",
         "slideLabelAlt": "Slide label",
         "noLabel": "no label",
-        "noLabelTitle": "No slide label available"
+        "noLabelTitle": "No slide label available",
+        "closeViewer": "Close this viewport"
       },
       "shaders": {
         "title": "Layers",
@@ -201,7 +221,7 @@
         "blendingExplain": "Toggle blending (default: mask)",
         "defaultBlending": "Custom blending (default: mask)",
         "maskEnable": "Enable mask",
-        "maskDisable": "Enable mask",
+        "maskDisable": "Disable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
         "notAvailable": "No visualization available.",
@@ -240,11 +260,29 @@
         "cacheStale": "",
         "cacheTitle": "Layer visuals are cached",
         "cacheInfo": "The layer remembers parameter values set before.",
+        "cacheSaved": "Parameter values saved with this session override the layer defaults. Clear them if the layer looks wrong.",
         "noVisualization": "[no overlays]",
         "select": "Select shader",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
+        },
+        "controls": {
+          "image": {
+            "hint": "The atlas starts empty. Upload an image to create a new atlas entry.",
+            "selected": "Selected:",
+            "upload": "Upload image",
+            "noFile": "No file selected"
+          },
+          "icon": {
+            "pickerTitle": "Icon picker",
+            "close": "Close",
+            "searchPlaceholder": "Search icons, aliases, glyphs",
+            "color": "Icon color",
+            "tintColor": "Tint color (applied over original colors)",
+            "tintBadge": "tint",
+            "unknown": "Unknown icon"
+          }
         }
       },
       "bar": {
@@ -308,6 +346,8 @@
       "slideDownloadEmpty": "The server returned an empty file.",
       "slideDownloadFailed": "Could not download the slide: {{error}}",
       "urlInvalid": "Invalid link",
+      "deploymentFallback": "The requested deployment is not available on this server. The session was opened under '{{id}}' instead, so some slides, layers or tools may differ.",
+      "staleBundle": "Development: the application build is older than its sources, so the viewer is running out-of-date code. Start the dev watcher (npm run dev) or check its output. {{detail}}",
       "sessionOtherDeployment": "This session was created on a different deployment configuration. It was opened anyway, but some slides or layers may not load here. Clear the address bar to start a fresh session.",
       "viewportCopied": "Viewport position copied — paste the shortcut in another viewer to jump there.",
       "clipboardBlocked": "Clipboard access is blocked by the browser.",
@@ -333,7 +373,7 @@
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "valueCopied": "The value was copied to your clipboard.",
       "viewerDuplicateDataSource": "Two viewports ({{slots}}) display the same data source. Saving or exporting targets this data once — actions from either viewport write to the same output and may overwrite each other.",
-      "scrollRequiresCtrl": "Hold Ctrl (or Cmd) and scroll to zoom the viewer.",
+      "scrollRequiresClick": "Click the viewer first to zoom with the mouse wheel.",
       "joystickOn": "Joystick navigation on — press and hold the mouse button, then move to pan.",
       "joystickOff": "Joystick navigation off.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
@@ -420,7 +460,7 @@
       "globalMenu": "Show Global Menu",
       "sideMenuCompact": "Compact Side Menu (icons only)",
       "disablePluginsUi": "Hide Plugin Catalogue",
-      "scrollRequiresCtrl": "Require Ctrl to Zoom",
+      "scrollRequiresClick": "Click Viewer Before Wheel Zoom",
       "reverseScroll": "Reverse Scroll Direction",
       "snapZoomToMagnification": "Snap Zoom to Magnification",
       "scrollSpeed": "Zoom Speed",
@@ -487,6 +527,51 @@
       "layerStencil": "Stencil",
       "noLayers": "No first-pass layers available for this frame."
     },
+    "adjustments": {
+      "panelTitle": "Data",
+      "title": "Adjustments",
+      "quickTitle": "Adjust background",
+      "unsupported": "Display adjustments need a newer renderer build (per-layer module pipeline). Sampling already works.",
+      "black": "Black point",
+      "white": "White point",
+      "gamma": "Gamma",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "saturation": "Saturation",
+      "hue": "Hue",
+      "temperature": "Temperature",
+      "tint": "Tint",
+      "invert": "Invert",
+      "histogram": "Histogram of the current view — click to refresh",
+      "auto": "Auto",
+      "autoHint": "Set black and white points from the visible data (0.5% / 99.5% percentiles)",
+      "reset": "Reset",
+      "resetHint": "Remove these adjustments",
+      "resetAllHint": "Remove the adjustments of every layer in this viewer",
+      "adjusted": "adjusted",
+      "noData": "Nothing is displayed in this viewer.",
+      "link": "Link viewers",
+      "linkHint": "Apply every adjustment to the matching layers of all viewers",
+      "copyToViewersHint": "Copy this viewer's adjustments to all other viewers",
+      "beforeAfter": "Before/after",
+      "beforeAfterHint": "Toggle the original look of this viewer (hold B on the canvas for a quick peek)",
+      "presets": "Presets",
+      "applyPreset": "Apply preset…",
+      "presetName": "Preset name",
+      "savePreset": "Save the current adjustments as a preset",
+      "sampling": "Sampling",
+      "samplingHint": "How this data is interpolated and how it looks when zoomed out",
+      "samplingMode": {
+        "auto": "Default",
+        "brightfield": "Brightfield",
+        "fluorescence": "Fluorescence (keep bright detail)",
+        "pixelated": "Pixelated (label maps)"
+      },
+      "role": {
+        "background": "Background",
+        "visualization": "Overlay"
+      }
+    },
     "keymap": {
       "title": "Keymap",
       "search": "Search shortcuts",
@@ -527,6 +612,7 @@
         "undo": "Undo",
         "redo": "Redo",
         "screenshot": "Screenshot",
+        "toggleGlobalMenu": "Show / hide the global menu",
         "viewportCopy": "Copy / align viewport",
         "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
         "peek": "Peek at background",
@@ -535,8 +621,12 @@
         "interactionLensDesc": "Hold to hand the pointer to shaders that follow it, such as the fisheye lens. Panning and click-zoom are suspended while held so the lens stays put; wheel zoom still works.",
         "zDepthNext": "Next focal plane",
         "zDepthPrev": "Previous focal plane",
+        "zDepthWheel": "Focal plane by scrolling",
+        "zDepthWheelDesc": "Hold this modifier and scroll to step through focal planes on slides with a z-stack. Elsewhere the wheel zooms as usual.",
         "toggleJoystick": "Toggle joystick navigation",
-        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster."
+        "toggleJoystickDesc": "Toggle joystick navigation mode. While on, press and hold the primary mouse button to drop an anchor, then move the mouse to pan continuously — the further from the anchor, the faster.",
+        "adjustmentsBypass": "Before/after adjustments (hold)",
+        "adjustmentsBypassDesc": "Hold to see the focused viewer without its display adjustments (levels, brightness, saturation …)."
       }
     },
     "plugins": {
@@ -616,7 +706,6 @@
       "dock": "Dock toolbar to the app bar",
       "float": "Undock toolbar",
       "switch": "Switch toolbar",
-      "embedNoRoom": "Not enough room in the app bar — the toolbar will dock automatically when the window is wide enough.",
       "collapse": "Collapse toolbar",
       "open": "Open toolbar"
     },
@@ -631,6 +720,7 @@
       "consentDescription": "A script wants to send a snapshot of the current slide to a pathology model.",
       "consentDriver": "Model driver: {{driver}}",
       "consentTask": "Task: {{task}}",
+      "consentAssistantDriver": "This driver is the chat assistant's own model: the snapshot goes to the same AI provider as the chat, as a separate request without the conversation.",
       "consentContext": "Slide context sent with the snapshot: {{context}}",
       "consentContextUnknown": "Slide context: not established — the model will be told the stain and specimen site are unknown, and forbidden from naming them.",
       "consentConfirm": "Send",
@@ -703,6 +793,8 @@
       "summaryNotExamined": "NOT AN EXAMINATION: no region was read at a resolution that can answer these questions. The lines below say what was asked, not what the tissue shows — 'not assessable' means never seen, which is not a negative finding.",
       "warnNoProgress": "The walk stopped with {{unspent}} vision call(s) unused while questions were still open — it never found a region it could read closely, so the tissue was NOT examined in detail. Do not present this as a completed examination; the budget was not the limit, so re-running it unchanged will do the same thing. refineOverview with a region or a higher maxDepth is what can still get closer.",
       "warnPlannedNotRead": "{{count}} planned field(s) were never read, so part of the examined area was skipped. Treat the absence of a finding there as 'not examined', not as 'not present'. refineOverview reads them without repeating anything already done.",
+      "assistantDriverLabel": "Chat assistant (its own model)",
+      "assistantDriverSystem": "You are the vision step of a pathology assistant. You are shown one rendered region of a whole-slide pathology image. Describe only what is visible at this resolution, use correct histopathology terminology, say plainly when the resolution or the render does not support a judgement, and never state a definitive clinical diagnosis — frame findings as observations for expert review.",
       "checklistSystem": "You turn a pathologist's question into a short, machine-readable checklist of the features that would answer it. You do not answer the question yourself and you never examine an image.",
       "checklistPrompt": "The reviewer is examining a pathology slide (stain: {{stain}}; site: {{organ}}) and asks: \"{{query}}\". List at most 6 features whose presence or absence would answer that question. Reply with ONLY a JSON array, each entry {\"id\": \"<short_snake_case_id>\", \"label\": \"<short human label>\", \"question\": \"<one question to ask of a single field of view>\", \"requiredMpp\": <micrometres per pixel needed to judge it: about 2 for tissue architecture, 1 for growth pattern, 0.5 for glandular and cellular detail, 0.25 for nuclear detail>, \"weight\": <0..1, how much this feature matters to the question>}. Order the features from most to least decisive. {{finest}}",
       "checklistSlideFinest": "For reference, the finest resolution this particular scan holds is {{finest}} µm/px; a feature needing finer detail than that cannot be judged on this slide, so prefer a requirement this scan can meet unless the feature genuinely requires more.",
@@ -757,6 +849,10 @@
       "menuManual": "Calibrate manually…",
       "menuClear": "Clear this viewport's alignment",
       "pickPoints": "Click three matching points to calibrate sync. Drag to pan, Backspace undoes the last point, Esc cancels.",
+      "pickPointsFirst": "Mark three landmarks on the first viewport — every other viewport is then matched to them. Drag to pan, Backspace undoes the last point, Esc cancels.",
+      "pickPointsThenReference": "Click three landmarks on this slide; you will then mark the same three on the reference slide. Drag to pan, Backspace undoes the last point, Esc cancels.",
+      "pickMatchingOnReference": "Now click the same three points on the reference slide, in the order numbered on the slide you are aligning. Drag to pan, Backspace undoes the last point, Esc cancels.",
+      "pickMatchingPoints": "Click the same three points here, in the order numbered on the reference slide. Drag to pan, Backspace undoes the last point, Esc cancels.",
       "calibrationSaved": "Calibration saved",
       "calibrationTimeout": "Sync calibration timed out",
       "resetTitle": "Clear this viewport's alignment — the next LINK re-aligns it by hand",
@@ -764,12 +860,12 @@
       "sessionCleared": "Sync session cleared — LINK again to pick points",
       "resetFailed": "Reset failed",
       "autoSyncAll": "Auto-align all viewports",
-      "autoSyncAllHint": "Register every open slide against the active one and link their viewports",
+      "autoSyncAllHint": "Register every open slide against the active one and link their viewports. Replaces any existing alignment, manual ones included",
       "autoSyncDone": "{{aligned}} viewports aligned",
       "autoSyncPartial": "{{aligned}} viewports aligned, {{failed}} failed, {{approximate}} approximate",
       "autoSyncNone": "No viewports could be aligned automatically",
-      "recalibrate": "Calibrate sync manually",
-      "recalibrateHint": "Pick three matching points to align the active viewport",
+      "recalibrate": "Calibrate all viewports manually",
+      "recalibrateHint": "Mark three points on the first viewport, then the same three on every other one. Replaces any existing alignment",
       "resetAll": "Clear sync session",
       "resetAllHint": "Unlink all viewports and drop every stored alignment — the next LINK re-aligns by hand"
     },

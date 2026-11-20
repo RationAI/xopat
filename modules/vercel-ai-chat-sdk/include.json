@@ -10,7 +10,7 @@
   // Operator's preferred provider to auto-select when the user has no remembered choice (null = first
   // available, or a server provider tagged metadata.role="default-provider").
   // Accepts a provider REFERENCE, not just an instance id: a managed key
-  // ("<plugin>:<type>:default"), a plugin id ("chat-mixture") or a provider type id ("mixture").
+  // ("<plugin>:<type>:default"), a plugin id ("chat-my-provider") or a provider type id ("my-provider").
   // Instance ids are re-minted on every server start, so a reference is the only durable form.
   // It must name a provider the picker can DISPLAY — a reference to a hidden provider is ignored
   // here and the next rule applies. See modules/vercel-ai-chat-sdk/README.md.

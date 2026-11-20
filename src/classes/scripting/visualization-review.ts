@@ -38,6 +38,13 @@ export interface VisualizationReviewOptions {
     rationale?: string;
     /** Forwarded to applyVisualizationStateSnapshot when the user accepts. */
     historyLabel?: string;
+    /**
+     * Index of the visualization under review. Without it the first selected index in the
+     * snapshot is used — which, with several viewers, is whatever the FIRST viewer shows,
+     * not necessarily what the caller changed: the edit would be reviewed against, and on
+     * accept written over, another viewer's visualization.
+     */
+    targetIndex?: number;
 }
 
 export type VisualizationReviewDecision =
@@ -81,7 +88,7 @@ export async function reviewVisualizationProposal(
     inFlight = true;
 
     try {
-        const activeIndex = resolveActiveIndex(proposed);
+        const activeIndex = resolveActiveIndex(proposed, options.targetIndex);
         const proposedViz = proposed.visualizations?.[activeIndex];
         if (!proposedViz) {
             throw new Error("Proposed snapshot has no visualization at the active index.");
@@ -122,7 +129,13 @@ export async function reviewVisualizationProposal(
             source: {
                 kind: "viewer-with-override",
                 viewer,
-                snapshot: cloneJson(proposed),
+                // The playground previews ONE viewer and reads "the active visualization" as
+                // the first selected index. The proposal's selection is per viewer, so its
+                // first entry is whatever the first viewer shows — hand over a selection
+                // that names the visualization under review instead, or the preview (and
+                // the object returned on accept) is another viewer's visualization drawn
+                // over this viewer's slide.
+                snapshot: { ...cloneJson(proposed), activeVisualizationIndex: [activeIndex] },
                 visualization: cloneJson(proposedViz),
                 data: proposed.data,
                 background: sourceBackgrounds,
@@ -135,7 +148,7 @@ export async function reviewVisualizationProposal(
                     primary: true,
                     onClick: (ctx: any) => {
                         const page = ctx.activePage;
-                        const editedSnapshot = composeEditedSnapshot(proposed, page);
+                        const editedSnapshot = composeEditedSnapshot(proposed, page, activeIndex);
                         outcome = { decision: "accept", appliedSnapshot: editedSnapshot };
                         // Fire-and-forget: close the modal right away so the user sees the
                         // source viewer update without waiting for applySnapshot to settle.
@@ -155,7 +168,7 @@ export async function reviewVisualizationProposal(
                         const feedback = await promptForFeedback();
                         if (!feedback) return; // user cancelled the sub-dialog; keep playground open
                         const page = ctx.activePage;
-                        const editedSnapshot = composeEditedSnapshot(proposed, page);
+                        const editedSnapshot = composeEditedSnapshot(proposed, page, activeIndex);
                         outcome = { decision: "feedback", feedback, editedSnapshot };
                         ctx.closeModal("feedback");
                     },
@@ -191,7 +204,8 @@ export async function reviewVisualizationProposal(
 
 // ---------------------------------------------------------------------------
 
-function resolveActiveIndex(snapshot: VisualizationStateSnapshot): number {
+function resolveActiveIndex(snapshot: VisualizationStateSnapshot, targetIndex?: number): number {
+    if (Number.isInteger(targetIndex) && (targetIndex as number) >= 0) return targetIndex as number;
     const idx = snapshot.activeVisualizationIndex;
     if (Array.isArray(idx)) {
         for (const entry of idx) {
@@ -213,12 +227,13 @@ function resolveActiveIndex(snapshot: VisualizationStateSnapshot): number {
 function composeEditedSnapshot(
     proposed: VisualizationStateSnapshot,
     page: any,
+    targetIndex?: number,
 ): VisualizationStateSnapshot {
     const editedViz = page?.getVisualization?.();
     if (!editedViz) return cloneSnapshot(proposed);
 
     const out = cloneSnapshot(proposed);
-    const idx = resolveActiveIndex(out);
+    const idx = resolveActiveIndex(out, targetIndex);
     out.visualizations = Array.isArray(out.visualizations) ? [...out.visualizations] : [];
     out.visualizations[idx] = editedViz;
     return out;

@@ -257,9 +257,26 @@ class SyncFacade {
         this.capability = capability;
         this.bypassFlag = bypassFlag;
     }
+    private scoped = false;
     protected kv(): IOKVHandle {
-        return this.handle ??= pipeline().kv(this.uid, this.capability);
+        if (this.handle) return this.handle;
+        const handle = pipeline().kv(this.uid, this.capability);
+        return this.handle = this.scoped ? handle.deploymentScoped() : handle;
     }
+    /**
+     * The same store with keys confined to the served deployment (see
+     * `IOKVHandle.deploymentScoped`). Memoized per façade.
+     */
+    deploymentScoped(): this {
+        if (this.scoped) return this;
+        if (!this.scopedView) {
+            const view = Object.create(Object.getPrototypeOf(this)) as this;
+            Object.assign(view, this, { handle: null, scoped: true, scopedView: null });
+            this.scopedView = view;
+        }
+        return this.scopedView as this;
+    }
+    private scopedView: SyncFacade | null = null;
     get<T = any>(key: string, defaultValue?: T): T | string | boolean | null | undefined {
         if (bypassed(this.bypassFlag)) return defaultValue;
         return this.kv().get(key, defaultValue) as any;

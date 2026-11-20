@@ -4,9 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
+const constants = require("./constants");
 const {
     findNearestItemRoot,
     getServerBuildDir,
+    SERVER_FILE_RE,
+    manifestHasSource,
     loadServerModuleFromFile: loadServerModuleFile,
 } = require("./server-module-loader");
 
@@ -30,6 +33,9 @@ const {
 } = require("./logging");
 
 const roles = require("./roles");
+const {
+  currentDeployment, setDefaultDeployment, deploymentState, partitionStorage, partitionCache,
+} = require("./deployment-scope");
 
 /**
  * The viewer core config a role decision resolves against.
@@ -97,8 +103,6 @@ function escapeHtml(value) {
     return String(value === undefined || value === null ? "" : value)
         .replace(HTML_UNSAFE_CHARS, (ch) => HTML_ESCAPES[ch]);
 }
-
-const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
 function getItemServerBuildDir(runtime, file) {
     return getServerBuildDir(runtime, file);
@@ -178,10 +182,21 @@ function getSecureItemConfig(ctx, explicitId) {
 // config rather than the last published build.
 const CONFIG_SNAPSHOT_KEY = "__XOPAT_SERVER_CONFIG_SNAPSHOT__";
 
-/** Publish the composed server config. Called by core on every core build. */
-function setServerConfigSnapshot(core) {
+/**
+ * Publish the composed server config. Called by core on every core build.
+ *
+ * Kept per named deployment (`server/templates/javascript/deployments.js`):
+ * `core.server.secure` may differ between them. The default deployment is fixed
+ * by core at boot (`asDefault`), or — before that — by a build that resolved the
+ * default because it named none. A request naming a deployment never moves it:
+ * otherwise the first request after a restart decided which deployment's config
+ * every ctx-free reader (verifiers, timers, module load) would see.
+ */
+function setServerConfigSnapshot(core, { asDefault = false } = {}) {
   const secure = core?.CORE?.server?.secure || core?.CORE_SECURE || {};
-  globalThis[CONFIG_SNAPSHOT_KEY] = {
+  const deployment = core?.DEPLOYMENT || core?.CORE?.deployment || { id: "base" };
+  const store = globalThis[CONFIG_SNAPSHOT_KEY] || { byDeployment: {}, defaultId: null };
+  store.byDeployment[deployment.id] = {
     CORE: {
       server: { secure, devMode: core?.CORE?.server?.devMode === true },
     },
@@ -190,11 +205,25 @@ function setServerConfigSnapshot(core) {
       ? core.objectMergeRecursiveDistinct.bind(core)
       : undefined,
   };
+  if (asDefault) store.defaultFixed = true;
+  if (asDefault || (!store.defaultFixed && (!deployment.requested || deployment.fellBack))) {
+    store.defaultId = deployment.id;
+  }
+  globalThis[CONFIG_SNAPSHOT_KEY] = store;
+  if (store.defaultId) setDefaultDeployment(store.defaultId);
 }
 
-/** A synthetic ctx over the published snapshot, or `null` before the first build. */
-function snapshotCtx(kind, itemId) {
-  const core = globalThis[CONFIG_SNAPSHOT_KEY];
+/**
+ * A synthetic ctx over the published snapshot, or `null` before the first build.
+ * Without `deploymentId` the default deployment's. Never another deployment's:
+ * a deployment with no snapshot reads as unconfigured rather than borrowing the
+ * default's secure config (core publishes every deployment at boot, so this is
+ * only reachable before boot finished).
+ */
+function snapshotCtx(kind, itemId, deploymentId) {
+  const store = globalThis[CONFIG_SNAPSHOT_KEY];
+  if (!store) return null;
+  const core = deploymentId ? store.byDeployment[deploymentId] : store.byDeployment[store.defaultId];
   if (!core) return null;
   return { core, kind, itemId, secure: core.CORE.server.secure };
 }
@@ -202,10 +231,11 @@ function snapshotCtx(kind, itemId) {
 /**
  * The composed (author ⊕ deployer) server config of a plugin/module, without a
  * request ctx. Returns `{}` before core has published a snapshot — treat that as
- * "defaults", never as "configured empty".
+ * "defaults", never as "configured empty". Reads the running deployment's config
+ * (`deployment-scope.js`); `deploymentId` overrides that for core's own callers.
  */
-function getStaticItemConfig(kind, id) {
-  const ctx = snapshotCtx(kind, id);
+function getStaticItemConfig(kind, id, deploymentId) {
+  const ctx = snapshotCtx(kind, id, deploymentId ?? currentDeployment());
   return ctx ? getSecureItemConfig(ctx, id) : {};
 }
 
@@ -306,15 +336,33 @@ function getItemFromRuntime(runtime, kind, id) {
   return runtime.registry[kind][id];
 }
 
+/** Source extensions probed for a cross-element server target, in priority order. */
+const SERVER_TARGET_EXTS = [".server.ts", ".server.mts", ".server.cts", ".server.mjs", ".server.js", ".server.cjs"];
+
+/**
+ * Does this server source exist?
+ *
+ * A packaged build does not ship sources — only the built bundles and the
+ * manifest that records which source produced each — so `existsSync` would
+ * answer "no" for every candidate and break every cross-element server import
+ * (four chat plugin hosts resolve
+ * `module:vercel-ai-chat-sdk/server/providerRegistration.server.ts` this way).
+ * The manifest is the packaged stand-in; the candidate list and its order are
+ * identical in both modes, so dev and release resolve to the same file.
+ */
+function serverSourceExists(file) {
+  return constants.PACKAGED ? manifestHasSource(file) : fs.existsSync(file);
+}
+
 function tryServerFile(basePath) {
   const candidates = [];
   if (SERVER_FILE_RE.test(basePath)) {
     candidates.push(basePath);
   } else {
-    candidates.push(`${basePath}.server.ts`, `${basePath}.server.mjs`, `${basePath}.server.js`);
-    candidates.push(path.join(basePath, "index.server.ts"), path.join(basePath, "index.server.mjs"), path.join(basePath, "index.server.js"));
+    candidates.push(...SERVER_TARGET_EXTS.map(ext => `${basePath}${ext}`));
+    candidates.push(...SERVER_TARGET_EXTS.map(ext => path.join(basePath, `index${ext}`)));
   }
-  return candidates.find(p => fs.existsSync(p)) || null;
+  return candidates.find(serverSourceExists) || null;
 }
 
 function resolveServerFile(runtime, ctx, target) {
@@ -387,7 +435,7 @@ const CACHE_SUBDIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
  * is the escape hatch, not the default.
  */
 function getServerCacheDir(runtime, subdir) {
-  const base = runtime?.cacheDir || path.join(process.cwd(), "server/.cache");
+  const base = runtime?.cacheDir || constants.DEFAULT_CACHE_DIR;
   if (subdir === undefined || subdir === null || subdir === "") {
     fs.mkdirSync(base, { recursive: true });
     return path.resolve(base);
@@ -428,8 +476,8 @@ function createServerHelpers(runtime) {
     // Ctx-free reads of the same config, for lazily-built state that has no
     // request in scope. Prefer the ctx variants when a ctx exists.
     getStaticItemConfig,
-    getStaticModuleConfig: (id) => getStaticItemConfig("module", id),
-    getStaticPluginConfig: (id) => getStaticItemConfig("plugin", id),
+    getStaticModuleConfig: (id, deploymentId) => getStaticItemConfig("module", id, deploymentId),
+    getStaticPluginConfig: (id, deploymentId) => getStaticItemConfig("plugin", id, deploymentId),
     getSecureValue,
     requireSecureValue,
     getRpcAuthConfig,
@@ -484,9 +532,12 @@ function createServerHelpers(runtime) {
     // bounded, lost on restart by design); `storage` for anything that should be
     // bounded AND survivable AND operator-routable. A bare module-level `Map` is
     // neither, which is how the server grew unbounded in the first place.
+    // `state` holds what is neither: plain long-lived objects of a module.
+    // All three are per named deployment, without the caller doing anything.
     // See server/STORAGE.md.
-    storage: stores.storage,
-    cache: stores.cache,
+    state: deploymentState,
+    storage: stores.storage && partitionStorage(stores.storage),
+    cache: stores.cache && partitionCache(stores.cache),
     StorageConfigError,
     // Server-side logging. `log(channel)` for a module-scoped logger
     // ("module.<id>[:sub]"); inside an RPC method prefer the pre-scoped `ctx.log`,

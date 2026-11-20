@@ -14,33 +14,24 @@
  * does not wrap it: `$.GeoJSONTileSource.configure` already passes an explicit
  * `width`/`height` through, so the layer lands on the slide with no help.
  *
- * MVT is the exception, and the reason is geometry. `MVTTileSource.configure`
- * derives the world as `width = height = 2^maxLevel * tileSize` — square,
- * because web-map tiling is square. A slide is not: the demo's is 105185 x
- * 221772, an aspect of 1:2.108. OpenSeadragon normalizes every tiled image to
- * viewport width 1, so a square vector world aligned 1:1 with that slide covers
- * only its top 47%, and rescaling to cover the height instead puts the layer at
- * 2.108x the slide's scale — which looks plausible and is wrong.
+ * MVT needs one thing TileJSON cannot say: which tiles exist. The geometry is
+ * no longer the problem — `MVTTileSource.configure` honours a declared
+ * `width`/`height` (the demo slide is 105185 x 221772, not square) and the TMS
+ * row flip uses the level's real row count — and this source reuses that
+ * `configure` for everything it reads from the descriptor.
  *
- * A factory protocol sidesteps it entirely: `AbstractMVTTileSource` passes its
- * options straight to `super()`, so constructing the source directly with an
- * explicit `width`/`height` bypasses `configure()` and its square derivation.
- * The tiles are generated on that same non-square grid by
- * `test/harness/data/derive.mjs`, so the alignment is exact.
+ * The generator (`test/harness/data/derive.mjs`) writes only tiles that carry
+ * geometry — 1981 of the ~119 000 the zoom range implies. TileJSON assumes a
+ * dense pyramid, so every other tile is requested and 404s. That is not "empty
+ * here": the client cannot distinguish a missing tile from a broken server, and
+ * `ViewerFaultySourceRegistry` rightly marks a source faulty once enough of its
+ * tiles fail. Rather than teach the client to swallow 404s, the descriptor
+ * *declares* the sparse layout in `tileIndex` and this source turns it into a
+ * `tileExists` predicate, so the absent tiles are never asked for and a 404
+ * stays an error.
  *
- * ## The second thing TileJSON cannot say: which tiles exist
- *
- * The generator writes only tiles that carry geometry — 1981 of the ~119 000 the
- * zoom range implies. TileJSON assumes a dense pyramid, so every other tile is
- * requested and 404s. That is not "empty here": the client cannot distinguish a
- * missing tile from a broken server, and `ViewerFaultySourceRegistry` rightly
- * marks a source faulty once enough of its tiles fail. Rather than teach the
- * client to swallow 404s, the descriptor *declares* the sparse layout in
- * `tileIndex` and this source turns it into a `tileExists` predicate, so the
- * absent tiles are never asked for and a 404 stays an error.
- *
- * The request for TileJSON to be able to describe a non-square world is written
- * down in `UPSTREAM.md`; this module goes away when it lands.
+ * A generic `tileIndex` option on the library's MVT source is requested in
+ * `UPSTREAM.md`; this module goes away when it lands.
  *
  * @module demo-vector-layers
  */
@@ -153,8 +144,7 @@ export function tileIndexHas(levels, level, x, y) {
 }
 
 /**
- * MVT source that reads its geometry from the descriptor instead of deriving a
- * square world from the zoom range.
+ * MVT source that honours the descriptor's sparse-tile declaration.
  *
  * Self-configuring in the sense of `src/tile-source.ts`: it fetches its own
  * descriptor from `getImageInfo` and configures `this` in place, rather than
@@ -189,7 +179,7 @@ function defineTileSource(OpenSeadragon) {
          *
          * Overrides OpenSeadragon's version wholesale rather than supplying a
          * `configure()`: the base implementation re-runs `determineType` on the
-         * response and would build a stock `MVTTileSource`, square world and all.
+         * response and would build a stock `MVTTileSource`, losing `tileExists`.
          */
         async getImageInfo(url) {
             try {
@@ -203,36 +193,25 @@ function defineTileSource(OpenSeadragon) {
                         "whole reason this protocol exists");
                 }
 
-                const template = this.__resolveTemplate(descriptor, url);
-                const tileSize = Number(descriptor.tileSize) || 512;
-                const maxLevel = Number.isFinite(descriptor.maxzoom)
-                    ? descriptor.maxzoom
-                    : Math.ceil(Math.log2(Math.max(width, height) / tileSize));
+                // The library's TileJSON reading: template resolution, tile size,
+                // zoom range, and the declared (non-square) world.
+                const geometry = OpenSeadragon.MVTTileSource.prototype.configure.call(this, descriptor, url);
 
-                this.width = width;
-                this.height = height;
-                this.tileSize = tileSize;
-                this.minLevel = Number.isFinite(descriptor.minzoom) ? descriptor.minzoom : 0;
-                this.maxLevel = maxLevel;
+                this.width = geometry.width;
+                this.height = geometry.height;
+                this.tileSize = geometry.tileSize;
+                this.minLevel = geometry.minLevel;
+                this.maxLevel = geometry.maxLevel;
                 this.tileOverlap = 0;
                 this.tileSourceId = url;
                 this.__tileIndex = decodeTileIndex(descriptor.tileIndex);
 
-                // `getTileUrl` computes the TMS row flip as `1 << z`, which only
-                // holds for a square world. Refuse rather than silently request
-                // the wrong row; the generator emits `xyz` anyway.
-                const scheme = descriptor.scheme === "tms" ? "tms" : "xyz";
-                if (scheme === "tms") {
-                    throw new Error("the `tms` scheme assumes a square world (getTileUrl flips " +
-                        "rows against `1 << z`) and cannot describe this pyramid; use `xyz`");
-                }
-
                 this._initVectorPipeline({
-                    template,
-                    scheme,
-                    extent: Number(descriptor.extent) || 4096,
-                    style: descriptor.style || null,
-                    useNativeLines: descriptor.useNativeLines === true,
+                    template: geometry.template,
+                    scheme: geometry.scheme,
+                    extent: geometry.extent,
+                    style: geometry.style,
+                    useNativeLines: geometry.useNativeLines,
                     httpAdapter: null,
                 });
                 this._pipelineReady = true;
@@ -271,16 +250,6 @@ function defineTileSource(OpenSeadragon) {
             // proxy policy, and returns the parsed body — not a Response wrapper.
             const body = await client.request(url, { method: "GET", expect: "json" });
             return typeof body === "string" ? JSON.parse(body) : body;
-        }
-
-        /** Resolve the tile template against the descriptor's own URL. */
-        __resolveTemplate(descriptor, url) {
-            const templates = Array.isArray(descriptor.tiles) ? descriptor.tiles : [];
-            if (!templates.length) throw new Error(`descriptor at ${url} lists no tile templates`);
-
-            const template = templates[0];
-            if (/^https?:\/\//i.test(template)) return template;
-            return url.replace(/[^/]*$/, "") + template.replace(/^\/+/, "");
         }
 
         /**

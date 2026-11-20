@@ -158,7 +158,8 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE, $I18N_LANG, 
             require_core("env");
             echo "<script>window.XOPAT_CSRF_TOKEN = "
                 . json_encode($_SESSION['csrf_token'], JSON_HEX_TAG | JSON_HEX_APOS)
-                . ";</script>";
+                . ";</script>\n";
+            require_branding_css();
             break;
 
         case "app":

@@ -4,7 +4,8 @@ const {
     expandIncludeGlobs,
     resolvePluginSelectionMode,
     requiredConfigSatisfied,
-    buildProdIncludes
+    buildProdIncludes,
+    collectStaticModuleImports
 } = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, i18n) {
@@ -284,8 +285,12 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
         const includesList = ((core.parseBool(production) === true) && Array.isArray(item["prodIncludes"]))
             ? item["prodIncludes"] : item["includes"];
 
+        // Local ES-module entries whose static import graph is preloaded below.
+        const moduleEntries = [];
+
         for (let file of includesList) {
             if (isType(file, "string")) {
+                if (file.endsWith(".mjs")) moduleEntries.push(file);
                 result += file.endsWith(".mjs") ?
                     `    <script src="${directory}${item["directory"]}/${file}?v=${version}" type="module"></script>\n` :
                     `    <script src="${directory}${item["directory"]}/${file}?v=${version}"></script>\n`;
@@ -300,6 +305,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     }
                     if (file.src.endsWith(".mjs")) {
                         file.type = "module";
+                        moduleEntries.push(file.src);
                     }
                     file.src = `${directory}${item["directory"]}/${file.src}?v=${version}`;
                 }
@@ -313,10 +319,23 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
             }
         }
 
-        // todo consider testing name pattern and pre-loading workers and wasm
-        //   or in general support preloading on assets (needs to be implemented in loader.js too!)
-        // <link rel="modulepreload" href="/x.worker.mjs">
-        // <link rel="modulepreload" href="/x_wasm.mjs">
+        // Flatten the sub-module import waterfall: one round trip instead of one per
+        // import level. No `?v=` — the href must equal the URL the import statement
+        // resolves to, or the browser fetches the module a second time.
+        if (moduleEntries.length) {
+            const rootAbs = (directory === core.MODULES_FOLDER ? core.ABS_MODULES : core.ABS_PLUGINS)
+                + item["directory"] + "/";
+            const preloaded = new Set();
+            for (const entry of moduleEntries) {
+                for (const dep of collectStaticModuleImports(rootAbs, entry, fileExists, readFile)) {
+                    if (preloaded.has(dep)) continue;
+                    preloaded.add(dep);
+                    result += `    <link rel="modulepreload" href="${directory}${item["directory"]}/${dep}">\n`;
+                }
+            }
+        }
+        // todo consider pre-loading workers and wasm
+        //   (needs to be implemented in loader.js too!)
         // <link rel="preload" href="/x_wasm.wasm" as="fetch" type="application/wasm" crossorigin>
         return result;
     }

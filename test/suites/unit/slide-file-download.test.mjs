@@ -95,6 +95,6 @@ test("the synthesized name is filesystem-safe and never double-extended @unit", 
 });
 
 test("an unknown type falls back to the URL's own extension @unit", () => {
-    expect(resolveFileName({ url: "https://mixture/data/WSI_original/12-1.svs" }, response({}), "Slide"))
+    expect(resolveFileName({ url: "https://slides.example/data/WSI_original/12-1.svs" }, response({}), "Slide"))
         .toBe("Slide.svs");
 });

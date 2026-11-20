@@ -99,6 +99,13 @@ export const handlerMethods = {
             this._refreshAllBoardPanels?.();
         });
 
+        // The padlock icon and the row badge both read the resolved lock state, and
+        // interactivity was already re-derived by the setter — this is the repaint.
+        this.context.addFabricHandler('annotation-lock-change', () => {
+            this.context.fabric.rerender();
+            this._refreshAllBoardPanels?.();
+        });
+
         this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
             this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
                 this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =

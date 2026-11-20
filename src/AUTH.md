@@ -634,7 +634,11 @@ Two places use it:
   and the first slide open, under one shared deadline. Only `autoLogin` contexts
   qualify — a context declared merely as *required* has nothing driving a login at
   boot, so waiting for it would only burn the timeout. A deployment with no auth
-  module resolves immediately and pays nothing.
+  module resolves immediately and pays nothing. The one exception to the shared
+  deadline is a **started navigating login**: the barrier holds on it (up to
+  `NAVIGATION_HOLD_MS`, 30 s) even when the deadline is already spent — typically by
+  a hidden-frame probe timing out — because opening the viewer on a page that is
+  unloading only fires bare slide requests the upstream bounces into its own login.
 
   **Contexts that arrive late.** A broker declares its contexts *after* the barrier
   would have looked — because they come from a server RPC (`oidc-server-ts`,

@@ -72,7 +72,7 @@ export interface EmpaiaSinkDeps {
     noteLocked?(empaiaId: string, detail?: string): void;
 }
 
-type IOResultLike = { ok: true; payload?: unknown } | {
+type IOResultLike = { ok: true; payload?: unknown; format?: string; meta?: Record<string, unknown> } | {
     ok: false; refused: true; reason: string; userMessage?: string; code?: string;
 };
 
@@ -157,6 +157,41 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
         return !!mapping.roiPresetId && String(presetID ?? "") === mapping.roiPresetId;
     };
 
+    /** Server ids this sink has already deleted on the way to a re-post. */
+    const retired = new Set<string>();
+
+    /**
+     * Post the class record for a just-stored annotation; if that fails, take
+     * the annotation back before reporting the failure.
+     *
+     * An annotation and its class are two requests but one user action. Leaving
+     * the annotation behind when the class was refused meant the failure was
+     * reported (and the local change reverted) while the server kept an
+     * unclassified orphan — and the retry wrapper then posted it again.
+     */
+    const postClassOrWithdraw = async (
+        client: Wbs3Client,
+        mapping: AnnotationMappingContext,
+        classSource: any,
+        empaiaId: string,
+        localId: string | undefined,
+    ): Promise<void> => {
+        const cls = nativeToEmpaiaClass(classSource, empaiaId, mapping);
+        if (!cls) return;
+        try {
+            await client.postClasses([cls]);
+        } catch (e) {
+            try {
+                await client.deleteAnnotation(empaiaId);
+                deps.linkAnnotation(localId, undefined);
+            } catch (cleanupError: any) {
+                console.warn("[empaia-workbench] could not withdraw an annotation whose class was refused:",
+                    cleanupError?.message ?? cleanupError);
+            }
+            throw e;
+        }
+    };
+
     /**
      * Retire the server record and post `mapped` in its place.
      *
@@ -172,7 +207,13 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
     ): Promise<IOResultLike> => {
         const { localId, existing, mapped, classSource, asRoi } = options;
         try {
-            if (existing) await client.deleteAnnotation(existing);
+            // `retired` makes the delete idempotent across retries: when the
+            // re-post below fails, the retry arrives with the same `existing`,
+            // and deleting it again is a 404 that would fail every attempt.
+            if (existing && !retired.has(existing)) {
+                await client.deleteAnnotation(existing);
+                retired.add(existing);
+            }
             const [created] = await client.postAnnotations([mapped], { isRoi: asRoi });
             const empaiaId = typeof created?.id === "string" ? created.id : undefined;
             // The dispatch is keyed by the object being replaced, but the one
@@ -180,10 +221,7 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             // moves the link to its id; here we only retire the old entry.
             deps.linkAnnotation(localId, empaiaId);
 
-            if (empaiaId) {
-                const cls = nativeToEmpaiaClass(classSource, empaiaId, mapping);
-                if (cls) await client.postClasses([cls]);
-            }
+            if (empaiaId) await postClassOrWithdraw(client, mapping, classSource, empaiaId, localId);
             return { ok: true, payload: { id: empaiaId } };
         } catch (e: any) {
             // An update is a delete + re-post, so it hits the same lock as a
@@ -208,6 +246,10 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             owners: [ANNOTATIONS_OWNER_ID],
             resources: ["annotation"],
         },
+        // Bundles travel in the EMPAIA model: the pipeline asks the annotations
+        // module for this format when it flushes to us, whatever format the
+        // module (or the user's own file export) is otherwise set to.
+        formats: { [ANNOTATIONS_OWNER_ID]: ["empaia"] },
 
         // Only genuinely runtime conditions belong here — the static routing is
         // declared above. A session that has not resolved yet says so, rather than
@@ -253,10 +295,7 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                 const empaiaId = typeof created?.id === "string" ? created.id : undefined;
                 deps.linkAnnotation(localIdOf(ctx), empaiaId);
 
-                if (empaiaId) {
-                    const cls = nativeToEmpaiaClass(item, empaiaId, mapping);
-                    if (cls) await client.postClasses([cls]);
-                }
+                if (empaiaId) await postClassOrWithdraw(client, mapping, item, empaiaId, localIdOf(ctx));
                 return { ok: true, payload: { id: empaiaId } };
             } catch (e: any) {
                 return refuse(
@@ -463,14 +502,22 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             if (!pending.length) return { ok: true, payload: { created: 0 } };
 
             try {
-                const created = await client.postAnnotations(pending.map(p => p.item));
                 const classes: Array<Partial<EmpaiaClass>> = [];
-
-                created.forEach((record, i) => {
-                    const link = pending[i]?.link;
+                let createdCount = 0;
+                // One request per annotation (the client does that anyway), linked
+                // as each one lands. Two reasons it is not one batch call:
+                //  - `is_roi` is a per-request flag; an unflagged batch stored a
+                //    region of interest as an ordinary annotation, unusable as a
+                //    job input;
+                //  - a batch that fails halfway throws away the ids of what it
+                //    already stored, so the retry posted those a second time.
+                for (const { item, link } of pending) {
+                    const [record] = await client.postAnnotations([item], { isRoi: !!link.isRoi });
                     const empaiaId = typeof record?.id === "string" ? record.id : undefined;
-                    deps.linkAnnotation(link?.incrementId, empaiaId);
-                    if (empaiaId && link?.classValue) {
+                    deps.linkAnnotation(link.incrementId, empaiaId);
+                    if (!empaiaId) continue;
+                    createdCount++;
+                    if (link.classValue) {
                         classes.push({
                             type: "class",
                             value: link.classValue,
@@ -480,10 +527,10 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                             reference_type: "annotation",
                         });
                     }
-                });
+                }
 
                 if (classes.length) await client.postClasses(classes);
-                return { ok: true, payload: { created: created.length } };
+                return { ok: true, payload: { created: createdCount } };
             } catch (e: any) {
                 return refuse(
                     `EMPAIA annotation upload failed: ${e?.message ?? e}`,
@@ -494,10 +541,9 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
         },
 
         /**
-         * Whole-slide read for hydration. Returns the payload wrapped as
-         * `{ format, meta, buffer }` — the shape the annotations module already
-         * unwraps to pick a convertor (see its `importBundle`), so the bytes are
-         * decoded by the `empaia` convertor rather than the deployment default.
+         * Whole-slide read for hydration. Tagged `format: "empaia"`, so the
+         * annotations module decodes it with this module's format rather than
+         * whatever its own default happens to be.
          *
          * **Job output is excluded.** Which analysis is shown on the slide is
          * decided by the panel and applied by `syncJobAnnotations`, and the job list
@@ -539,11 +585,9 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
 
                 return {
                     ok: true,
-                    payload: {
-                        format: "empaia",
-                        meta: { slideId: mapping.slideId },
-                        buffer: JSON.stringify({ items }),
-                    },
+                    payload: JSON.stringify({ items }),
+                    format: "empaia",
+                    meta: { slideId: mapping.slideId },
                 };
             } catch (e: any) {
                 return refuse(

@@ -131,17 +131,66 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Export annotations and presets
-     * @param {{}} options options
-     * @param {string?} options.format a string that defines desired format ID as registered
-     *   in OSDAnnotations.Convertor, default 'native'
-     * @param {object?} options.bioformatsCroppingRect
-     * @param {boolean?} options.serialize rather internally used, true to serialize the output, false to optimize
-     *   encoding, ready for exportFinalize()
+     * Build the plain export model `{objects, presets}` — the native shape every
+     * registered format encodes from. What each object carries follows the
+     * format's traits (see convert/convertor.js).
+     *
+     * Sets `options.exportsObjects` / `options.exportsPresets` to what will
+     * actually be written, which is what a format's encode() reads.
+     *
+     * @param {{}} options
+     * @param {string?} options.format registered format id, default 'native'
+     * @param {boolean?} options.scopeSelected only the selected annotations / layers;
+     *   throws an Error with code 'EXPORT_NO_SELECTION' when nothing is selected
+     * @param {string[]?} options.props extra object properties to keep
      * @param {boolean} withAnnotations
      * @param {boolean} withPresets
-     * @return Promise(object) partially serialized data, ready to be finished with exportFinalize:
-     *   objects: [(string|any)] serialized or un
+     * @return {{objects: object[]|undefined, presets: object[]}}
+     */
+    toModel(options={}, withAnnotations=true, withPresets=true) {
+        const traits = OSDAnnotations.Convertor.traits(options.format || 'native');
+        options.exportsObjects = withAnnotations && traits.objects;
+        options.exportsPresets = withPresets && traits.presets;
+
+        let objects;
+        if (options.exportsObjects) {
+            let selectedIds;
+            if (options.scopeSelected) {
+                selectedIds = new Set();
+                const selected = (this.getSelectedAnnotations?.() || [])
+                    .concat((this.getSelectedLayers?.() || []).filter(Boolean).flatMap(l => l.getObjects?.() || []));
+                for (const o of selected) {
+                    const id = String(o?.id ?? '');
+                    if (id) selectedIds.add(id);
+                }
+                if (!selectedIds.size) {
+                    const err = new Error('No annotations selected');
+                    err.code = 'EXPORT_NO_SELECTION';
+                    throw err;
+                }
+            }
+
+            objects = this.toObject(
+                traits.allProps,
+                // Private annotations are withheld only when the deployment set
+                // `exportPrivate: false` — see OSDAnnotations#getPrivacyExcludesExport.
+                this.module.getPrivacyExcludesExport() && ((o) => !o.private),
+                ...traits.props, ...(options.props || [])
+            ).objects;
+            if (selectedIds) objects = objects.filter(o => selectedIds.has(String(o.id)));
+        }
+
+        return {
+            objects,
+            // Always present: a format that does not write presets may still
+            // read them (a class name comes from the object's preset).
+            presets: this.module.presets.toObject(),
+        };
+    }
+
+    /**
+     * First half of the former two-stage export.
+     * @deprecated use toModel() with IO_PIPELINE.formats.encode('annotations', ...), or export()
      */
     async exportPartial(options={}, withAnnotations=true, withPresets=true) {
         options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
@@ -155,7 +204,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Export annotations and presets
+     * Second half of the former two-stage export.
+     * @deprecated use export()
      * @param {object} data output of exportPartial(...) with a correct format!
      * @param {string?} format default 'native'
      */
@@ -170,27 +220,34 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     /**
      * Export annotations and presets
-     * @param {{}} options options
-     * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor,
-     *	note that serialize option is ignored, as export() serializes always
-     * @param {object?} options.bioformatsCroppingRect
+     * @param {{}} options options; module export options and the user's values
+     *   for the format's own options are merged in underneath
+     * @param {string?} options.format registered format id (IO_PIPELINE.formats, domain 'annotations'),
+     *   default the module's format
+     * @param {boolean?} options.scopeSelected only the selection, see toModel()
+     * @param {IOContext?} options.io the IO dispatch this export serves, handed to the format
      * @param {boolean} withAnnotations
      * @param {boolean} withPresets
-     * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
+     * @return Promise((string|Uint8Array|ArrayBuffer)) encoded data
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
         this.requestEndSelectionEdit();
 
-        options = OpenSeadragon.extend(true, {}, this.module.getExportOptions(), options);
-        //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
-        options.serialize = false;
-        let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
+        // `io` is handed over by reference, never deep-copied with the rest.
+        const { io, ...given } = options;
+        const format = given.format || this.module.getExportOptions().format || this.module.defaultFormat;
+        options = OpenSeadragon.extend(true, {},
+            this.module.getExportOptions(), this.module.getFormatOptions(format), given, { format });
+
+        const model = this.toModel(options, withAnnotations, withPresets);
+        // Kept for listeners that post-process the un-encoded data.
         this.module.raiseEvent('export-partial', {
             owner: this,
             options: options,
-            data: output
+            data: model
         });
-        output = OSDAnnotations.Convertor.encodeFinalize(options.format, output);
+        const output = await IO_PIPELINE.formats.encode(
+            OSDAnnotations.Convertor.DOMAIN, options.format, model, { options, context: this, io });
         this.module.raiseEvent('export', {
             owner: this,
             data: output
@@ -371,8 +428,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * 	- either object with 'presets' and/or 'objects' data content - arrays
      * 	- or a plain array, treated as objects
      * @param {{}} options options
-     * @param {string?} options.format a string that defines desired format ID as registered in OSDAnnotations.Convertor
-     * @param {object?} options.bioformatsCroppingRect
+     * @param {string?} options.format registered format id (IO_PIPELINE.formats, domain 'annotations'),
+     *   or 'auto' to detect it from options.filename and the content; default 'native'
+     * @param {string?} options.filename name of the file the data came from, a detection hint
      * @param {boolean} options.inheritSession set current session ID for the annotation if missing, default true
      * @param {('replace'|'merge')?} options.presetMode preset import semantics, default 'replace'
      *   (exact restore); slide-aware IO hydration passes 'merge' (upsert, never deletes)
@@ -384,42 +442,21 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const trackHistory = options.history !== false;
         const presetMode = options.presetMode || 'replace';
 
-        let toImport;
-        if (options.format === "auto") {
-            // Auto mode: try suffix-hinted format first, then fall back to every
-            // registered convertor in order. The first success wins and the
-            // resolved format is reported back to the caller via options.format.
-            const formats = OSDAnnotations.Convertor.formats.slice();
-            const hint = options.filename
-                ? OSDAnnotations.Convertor.detectFromFilename(options.filename)
-                : null;
-            if (hint) {
-                const i = formats.indexOf(hint);
-                if (i > 0) { formats.splice(i, 1); formats.unshift(hint); }
-            }
-
-            for (const format of formats) {
-                try {
-                    options.format = format;
-                    toImport = await OSDAnnotations.Convertor.decode(options, data, this);
-                    console.log("Auto-detected annotation format:", format);
-                    break;
-                } catch (_e) {
-                    // pass
-                }
-            }
-
-            if (!toImport) {
-                options.format = "auto";
-                throw new Error("Auto-detect failed: no registered convertor could parse the provided data.");
-            }
-        } else {
-            // Strict mode: do not silently substitute formats. If the chosen
-            // convertor cannot parse the file, propagate the error so the UI
-            // can show a clear message instead of pretending success with the
-            // wrong format.
-            toImport = await OSDAnnotations.Convertor.decode(options, data, this);
-        }
+        // "auto" detects from the file name and the content; a named format is
+        // strict — if it cannot parse the data the error propagates, so the UI
+        // shows a clear message instead of pretending success with another one.
+        // Either way the format actually used is reported back in options.format.
+        // `io` and `meta` are handed over by reference, never deep-copied: the
+        // dispatch context and a sink's metadata can hold live objects.
+        const { io, meta, ...given } = options;
+        const decodeOptions = OpenSeadragon.extend(true, {},
+            this.module.getExportOptions(), this.module.getFormatOptions(options.format), given);
+        decodeOptions.meta = meta;
+        const decoded = await IO_PIPELINE.formats.decode(
+            OSDAnnotations.Convertor.DOMAIN, options.format, data,
+            { options: decodeOptions, context: this, io, fileName: options.filename });
+        const toImport = decoded.model;
+        options.format = decoded.format;
 
         let imported = false;
         let inheritSession = options.inheritSession === undefined || options.inheritSession;
@@ -2169,8 +2206,36 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
         });
+        if (!result.ok) {
+            // A refused (or throwing) promotion must not leave the drawing on
+            // screen. It is still a frozen helper - non-selectable, excluded from
+            // export, never sent to a sink - so it would look saved, be
+            // impossible to interact with, and vanish on reload. The refusal
+            // itself has already been surfaced by the pipeline.
+            console.error('[annotations] annotation creation refused; drawing removed', result?.code, result?.reason);
+            this._discardFailedPromotion(annotation);
+            return false;
+        }
         this._settleAnnotationSync(annotation, result);
-        return !!result.ok;
+        return true;
+    }
+
+    /**
+     * Remove an object whose promotion did not complete. A refusal before
+     * `apply` leaves a plain helper; a throw inside `apply` may leave it half
+     * promoted (helper flag already dropped, maybe already in a layer).
+     * @private
+     */
+    _discardFailedPromotion(annotation) {
+        if (!annotation) return;
+        try {
+            if (annotation.isHelperAnnotation) this.deleteHelperAnnotation(annotation);
+            else this._deleteAnnotation(annotation, false);
+        } catch (e) {
+            console.error('[annotations] failed to remove an annotation whose creation was refused', e);
+            try { this.canvas.remove(annotation); } catch { /* already gone */ }
+        }
+        this.canvas.requestRenderAll();
     }
 
     /**
@@ -2238,10 +2303,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             && passesFilter && passesGates;
 
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
-        // A read-only annotation is never editable, whatever its factory says —
-        // the IO read-only guard would refuse the commit anyway, and letting the
-        // user drag a shape that then snaps back is worse than not moving it.
-        const isEditable = !!factory?.isEditable() && !object.readOnly;
+        // What "locked" means right now, including any integration's lock policy.
+        const lock = this.module.getAnnotationLockState(object);
+        // A locked annotation is never editable, whatever its factory says — the lock
+        // guard would refuse the commit anyway, and letting the user drag a shape that
+        // then snaps back is worse than not moving it.
+        const isEditable = !!factory?.isEditable() && lock.mutable;
         const isEdited = !!(this.isEditingObject(object) || this.isOngoingEditOf(object));
 
         object.visible = !!shouldShow;
@@ -2255,7 +2322,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (object.isHelperAnnotation) return;
 
         object.evented = !!shouldShow;
-        object.selectable = !!shouldShow;
+        object.selectable = !!shouldShow && lock.interactive;
+        // A non-interactive lock must stay rendered AND stay `evented`, yet drop out of
+        // hit-testing, so the user can draw straight over it. `evented = false` cannot
+        // express that: fabric's `_shouldClearSelection` discards the active object
+        // whenever the thing under the pointer is non-evented — and since `findTarget`
+        // consults `_findTargetCorner` first, the thing under the pointer when the user
+        // clicks the padlock IS this object, so the selection (and with it the toolbar
+        // carrying the padlock) would die on the very click meant to release the lock.
+        // The overlay's `_checkTarget` wrapper honours the flag below instead;
+        // `selectable` is what keeps a locked object out of rubber-band selections,
+        // which look at `selectable` and ignore `evented`.
+        object.__hitTestBlocked = !lock.interactive;
 
         if (!shouldShow) {
             object.lockMovementX = true;
@@ -2303,7 +2381,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // all, and they stopped trying. What is refused is a MUTATION, and the
         // IO read-only guard already says so, with a reason, at the moment one
         // is attempted.
-        if (object.readOnly) object.hoverCursor = 'pointer';
+        if (lock.locked) object.hoverCursor = 'pointer';
         else if (object.hoverCursor === 'pointer' || object.hoverCursor === 'not-allowed') {
             delete object.hoverCursor;
         }
@@ -2647,7 +2725,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * output, a record owned by another scope, anything a rights resolver locked.
      * The module's own IO guard refuses `pre-update`/`pre-delete` for such objects,
      * so the flag is enforced on every mutation path, not only the ones that
-     * bothered to check. Distinct from `private`, which controls *export*.
+     * bothered to check. Distinct from `private`, which controls *export*, and from
+     * `locked` ({@link setAnnotationLocked}), which the user places and may lift.
+     * {@link OSDAnnotations#getAnnotationLockState} resolves both into one answer.
+     *
+     * Unlike `locked` this is a direct write, not an IO dispatch: it is a projection
+     * of an owner's upstream policy applied while hydrating, so dispatching it would
+     * echo that owner's own state straight back at its sink.
      *
      * @param {fabric.Object} annotation Any annotation
      * @param {boolean} value New value
@@ -2661,6 +2745,61 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this._applyAnnotationVisibilityState(annotation);
         this.canvas.requestRenderAll();
         if (_raise) this.raiseEvent('annotation-readonly-change', {object: annotation, readOnly: value});
+    }
+
+    /**
+     * Lock an annotation, or release it.
+     *
+     * This is the **user's** lock, behind the padlock in the annotation's toolbar. By
+     * default it means "stop responding to the canvas": the annotation is no longer
+     * hit-tested or selectable — so the user can draw straight over it — and every
+     * mutation is refused by the module's lock guard. What it means is overridable per
+     * deployment, see {@link OSDAnnotations#registerLockPolicy}.
+     *
+     * Routed through `annotationResource.update` rather than written directly, because
+     * `locked` is in the export whitelist: a bound `crud:annotation` sink is the source
+     * of truth in those deployments, so a bare property write would show the lock now and
+     * lose it on the next hydration. Undo/redo and outbox persistence come with it. The
+     * guard lets `kind: 'lock-change'` through only while the resolved state is
+     * `releasable`, which is what keeps an imposed `readOnly` un-liftable by the user.
+     *
+     * @param {fabric.Object} annotation Any annotation
+     * @param {boolean} value New value
+     * @return {boolean} whether the change was accepted
+     * @event annotation-lock-change
+     */
+    setAnnotationLocked(annotation, value) {
+        value = !!value;
+        if (!annotation) return false;
+        // Measured against the RESOLVED state, not the raw `locked` flag, because
+        // that is what every caller computes its argument from (`objects.js`,
+        // the viewer menu: `setAnnotationLocked(target, !lock.locked)`). A
+        // `registerLockPolicy` that moves `locked` away from the flag — the whole
+        // reason the hook exists — made the padlock and the menu entry a silent
+        // no-op against the flag: `false` returned, no event, nothing on screen.
+        // Acceptance is still the guard's call (`kind: 'lock-change'` passes only
+        // while the state is `releasable`), so an imposed `readOnly` stays
+        // un-liftable; this is only the "nothing to do" shortcut.
+        if (this.module.getAnnotationLockState(annotation).locked === value) return false;
+
+        const commit = (locked) => {
+            annotation.locked = locked;
+            this._applyAnnotationVisibilityState(annotation);
+            this.canvas.requestRenderAll();
+            this.raiseEvent('annotation-lock-change', {
+                object: annotation, locked,
+                state: this.module.getAnnotationLockState(annotation),
+            });
+        };
+
+        const result = this.module.annotationResource.update(annotation.incrementId, { locked: value }, {
+            apply: () => commit(value),
+            inverseApply: () => commit(!value),
+            inversePayload: { locked: !value },
+            meta: { kind: 'lock-change', object: annotation, viewerId: this.viewer?.uniqueId },
+        });
+        this._settleAnnotationSync(annotation, result);
+        return !!result.ok;
     }
 
     /**
@@ -3668,8 +3807,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         if (!factory) return false;
 
-        const visuals = {...this.module.presets.commonAnnotationVisuals};
+        const visuals = this.module.resolveAnnotationVisuals(object);
         factory.updateRendering(object, preset, visuals, visuals, this.canvas);
+        if (visuals.dashPattern || object.dashPattern) object.applyDashPattern(visuals.dashPattern);
         factory.renderPresetText(object);
 
         const isSelected = this.isAnnotationSelected(object, selection);
@@ -3752,7 +3892,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 return;
             }
 
-            let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
+            let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             // Record whether a mode consumed this right-release so the canvas
             // context-menu provider can open only when the event was NOT handled
@@ -3784,7 +3924,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
             _this.module.cursor.mouseTime = Date.now();
 
-            let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
+            let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, false, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
@@ -3815,7 +3955,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 return;
             }
 
-            let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
+            let factory = _this.module.presets.left ? _this.module.getActiveFactory(true) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             if (_this.module.mode.handleClickUp(event, point, true, factory)) {
                 event.preventDefault();
@@ -3854,7 +3994,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             // "no preset" warning dialog. Prefers an existing preset; only
             // fabricates a default one when the deployment opts in.
             let preset = _this.module.presets.ensureActivePreset(true);
-            let factory = preset ? preset.objectFactory : undefined;
+            let factory = preset ? _this.module.getActiveFactory(true) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
             // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true

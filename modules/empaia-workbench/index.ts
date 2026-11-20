@@ -327,7 +327,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         });
 
         this._watchTabVisibility();
-        setAnnotationMappingContextProvider(() => this._mappingContext());
+        // Answered per dispatch: the slide a conversion is about, not the focused one.
+        setAnnotationMappingContextProvider((io) => this._mappingContextFor(io));
 
         this._readyPromise = this._boot().catch((e: any) => {
             this._failure = e?.message ?? String(e);
@@ -347,11 +348,11 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * added, and its emitter replays the last value to a late subscriber — so
      * there is no handshake race to guard against here.
      *
-     * Note the library does not validate the sender's origin. See the README;
-     * that is the library's posture and we adopt it. The one check kept below
-     * is not a security policy but a precondition of `HttpClient`: a `wbsUrl`
-     * that does not parse would surface as an unrelated failure deep in the
-     * request path.
+     * Note the library does not validate the sender (see the README and
+     * UPSTREAM.md), so any frame holding a handle to this window can push a
+     * `wbsUrl`. The client built from it carries the workbench token, so the
+     * URL is held to an operator allowlist (`wbsOrigins`) — otherwise a
+     * sibling frame winning the handshake race receives the real token.
      */
     private _listenToWorkbench(): void {
         addScopeListener((scope: Scope) => {
@@ -360,8 +361,14 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             this._resolveIfSessionReady();
         });
 
+        // Deployment-trusted (getStaticMeta, never getOption — §7). With a server
+        // proxy alias the wbsUrl is never requested, so there is nothing to vet.
+        const allowedOrigins = this.getStaticMeta("proxy", null)
+            ? null
+            : resolveAllowedWbsOrigins(this.getStaticMeta("wbsOrigins", null));
+
         addWbsUrlListener((wbsUrl: WbsUrl) => {
-            const parsed = parseBackendUrl(wbsUrl?.url);
+            const parsed = parseBackendUrl(wbsUrl?.url, allowedOrigins);
             if (!parsed) return;
             this._wbsUrl = parsed;
             this._resolveIfSessionReady();
@@ -1131,8 +1138,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * Make the drawing tool produce ROIs of the type the app wants.
      *
      * Everything here is existing annotation-module API — the preset carries the
-     * factory and the colour, `setMode` switches to the ordinary manual-create
-     * tool. No bespoke drawing code exists in this integration.
+     * colour, the active factory is the shape, `setMode` switches to the ordinary
+     * manual-create tool. No bespoke drawing code exists in this integration.
      */
     activateRoiTool(roiType?: EadAnnotationType): void {
         const annotations = this.getAnnotations();
@@ -1165,7 +1172,36 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             return false;
         }
         annotations.presets.selectPreset(preset.presetID, true);
+        this._armRoiFactory(annotations, preset.objectFactory);
         return true;
+    }
+
+    /** The user's own tool while the ROI shape is borrowed, see {@link _armRoiFactory}. */
+    private _roiToolLoan?: { previous: any; factory: any };
+
+    /**
+     * Selecting a preset does not change the drawing tool, so the ROI shape is
+     * set explicitly — and handed back once drawing ends (the mode returns to
+     * AUTO), unless the user picked another tool in the meantime.
+     */
+    private _armRoiFactory(annotations: any, factory: any): void {
+        const previous = annotations.getActiveFactory();
+        if (!factory || previous === factory) return;
+        annotations.setActiveFactory(factory);
+
+        if (this._roiToolLoan) {
+            // Still borrowed: only the ROI type changed, the user's tool is the same.
+            this._roiToolLoan.factory = factory;
+            return;
+        }
+        const loan = this._roiToolLoan = { previous, factory };
+        const giveBack = () => {
+            if (!annotations.isModeAuto()) return;
+            annotations.removeHandler("mode-changed", giveBack);
+            this._roiToolLoan = undefined;
+            if (annotations.getActiveFactory() === loan.factory) annotations.setActiveFactory(loan.previous);
+        };
+        annotations.addHandler("mode-changed", giveBack);
     }
 
     /** Preset id ROIs are drawn with — the plugin filters `annotation-create` on it. */
@@ -2890,7 +2926,11 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     private _configureAnnotationsModule(): void {
         const annotations = this.getAnnotations();
         if (!annotations) return;
-        annotations.setIOOption("format", "empaia");
+        // No `setIOOption("format", "empaia")` any more: the annotations sink
+        // declares the format it takes (`formats` in sink.ts) and the pipeline
+        // asks for it per destination. Flipping the module-wide format also
+        // changed the user's own file export, and broke this sink the moment
+        // the user picked another format in that dialog.
         this._disposeProps = annotations.registerPersistedProperties
             ? annotations.registerPersistedProperties(...REQUIRED_EXPORT_PROPS)
             : (REQUIRED_EXPORT_PROPS.forEach(p => { annotations.forceExportsProp = p; }), undefined);
@@ -3499,15 +3539,39 @@ function slideDisplayName(slide: Slide): string {
 }
 
 /**
- * Normalize the backend URL the workbench hands us.
- *
- * Not a security check — VACI does not validate the sender and neither do we
- * (see the README). This is a precondition of the code that consumes the value:
- * it becomes an `HttpClient` `baseURL`, so a value that does not parse, or that
- * is not http(s), has to be rejected here or it resurfaces as a confusing
- * failure deep inside the request path. Returns undefined when unusable.
+ * Resolve the `wbsOrigins` static meta into a set of allowed origins, or null
+ * for "any" (explicit `"*"` opt-out). Unset defaults to the origin this app UI
+ * was served from — the Workbench serves app frontends from the Workbench
+ * Service itself (`/v3/frontends/<JWT>/`). `location.origin` is read from the
+ * URL, so it is the real host even on the sandbox's opaque document origin.
  */
-function parseBackendUrl(raw: unknown): string | undefined {
+function resolveAllowedWbsOrigins(configured: unknown): Set<string> | null {
+    const list = Array.isArray(configured) ? configured
+        : typeof configured === "string" ? [configured]
+        : [window.location.origin];
+    if (list.includes("*")) return null;
+    const origins = new Set<string>();
+    for (const entry of list) {
+        try {
+            origins.add(new URL(String(entry)).origin);
+        } catch {
+            console.warn(`[empaia-workbench] ignoring unparseable wbsOrigins entry ${entry}`);
+        }
+    }
+    return origins;
+}
+
+/**
+ * Normalize and vet the backend URL the workbench hands us.
+ *
+ * VACI does not validate the sender (see the README), so this is the one
+ * security check on the value: its origin must be in `allowedOrigins` (null =
+ * any), because the `HttpClient` built from it carries the workbench token.
+ * It must also parse and be http(s) — it becomes a `baseURL`, and a malformed
+ * value would resurface as a confusing failure deep inside the request path.
+ * Returns undefined when unusable.
+ */
+function parseBackendUrl(raw: unknown, allowedOrigins: Set<string> | null): string | undefined {
     const value = typeof raw === "string" ? raw.trim() : "";
     if (!value) {
         console.warn("[empaia-workbench] ignoring empty wbsUrl from the workbench.");
@@ -3522,6 +3586,12 @@ function parseBackendUrl(raw: unknown): string | undefined {
     }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         console.warn(`[empaia-workbench] ignoring wbsUrl with unsupported scheme ${parsed.protocol}`);
+        return undefined;
+    }
+    if (allowedOrigins && !allowedOrigins.has(parsed.origin)) {
+        // Ignored, not fatal: a forged value must not abort the handshake the
+        // genuine workbench is still completing.
+        console.warn(`[empaia-workbench] ignoring wbsUrl from disallowed origin ${parsed.origin} (see wbsOrigins).`);
         return undefined;
     }
     // Trailing slashes are stripped: every route is composed as `${base}/v3/...`

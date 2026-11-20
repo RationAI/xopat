@@ -131,8 +131,16 @@ function createServerStorage({ cacheDir, getConfig, logger = console } = {}) {
     function handle(shape, HandleCtor, ownerUid, namespace, options = {}) {
         assertSegment(ownerUid, "owner");
         assertSegment(namespace, "namespace");
+        // `.dp-<id>` is how named deployments partition a namespace
+        // (deployment-scope.js); a name carrying it would alias another
+        // deployment's data.
+        if (String(namespace).includes(".dp-")) {
+            throw new Error(`Invalid namespace segment: ${JSON.stringify(namespace)} ('.dp-' is reserved)`);
+        }
         const capabilityId = `${shape}:${namespace}`;
-        const cacheKey = `${ownerUid}|${capabilityId}`;
+        // Bindings and retention follow the capability; only the data is partitioned.
+        const partition = options.partition || "";
+        const cacheKey = `${ownerUid}|${capabilityId}${partition}`;
         const existing = handles.get(cacheKey);
         if (existing) {
             // The cache key is (owner, capability) only, so a second open with
@@ -160,9 +168,9 @@ function createServerStorage({ cacheDir, getConfig, logger = console } = {}) {
         policy.assertSensitivity(ownerUid, capabilityId, options.sensitivity, primary);
 
         const ns = {
-            id: `${ownerUid}/${capabilityId}`,
+            id: `${ownerUid}/${capabilityId}${partition}`,
             ownerUid,
-            namespace,
+            namespace: assertSegment(`${namespace}${partition}`, "namespace"),
             shape,
             capabilityId,
             policy: policy.resolvePolicy(ownerUid, capabilityId, shape, options, options.authorDefaults),

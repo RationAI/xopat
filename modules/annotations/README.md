@@ -7,7 +7,7 @@ The complex functionality will be described later. This plugin allows to create,
 
 ### Formats
 The native format used comes from the underlying library and available features. To support multiple formats, 
-you can either use supported formats implemented as a build-in convertors, or provide a new convertor. 
+you can either use the built-in formats, or register a new one in the core format registry (`IO_PIPELINE.formats`, domain `"annotations"`). 
 Supported formats are `ASAP XML` annotations from the ASAP Viewer, and `GeoJSON` annotations. For Qpath, `qupath`
 GeoJSON annotation format is available too. Note that although supported, these are possibly lossy formats.
 More information can be found in `convert/README.md`.
@@ -22,8 +22,8 @@ object like this:
 > POST key: ``module[annotations]``
 > POST value: ``<serialized string>``
 
-where the actual serialized data depends on the target format used. xOpat can detect supported formats automatically, although
-it might take a while. So you can do something like ``module[annotations] = "<ASAP_Annotations><Annotations><Annotation Type=\"Polygon\" ..."``.
+where the actual serialized data depends on the target format used. xOpat detects the format of the supplied data
+from its content. So you can do something like ``module[annotations] = "<ASAP_Annotations><Annotations><Annotation Type=\"Polygon\" ..."``.
 Using the xOpat _native_ format is recommended if possible as other formats might be slow, or lossy.
 
 
@@ -125,23 +125,92 @@ Three things worth knowing:
 `0` and `false` are values, not absences — only `undefined`, `null` and `""` fall
 through to the next rule.
 
-### Read-only annotations
+### Locked annotations
 
-`annotation.readOnly` marks an annotation the user may see but not change — an
-analysis job's output, a record owned by another scope, anything a rights resolver
-locked. It is enforced at the IO checkpoint by a guard the module registers itself,
-so **every** mutation path is covered at once: delete, edit commit, preset change,
-and entering edit mode. Comments are deliberately still allowed; a locked finding is
-still discussable. Visually the object keeps its selection but cannot be dragged and
-shows a padlock instead of the `private` toggle.
+Two flags lock an annotation, and `getAnnotationLockState(object)` is the single
+answer every consumer reads — hit-testing, selectability, editability, the IO guard,
+the padlock icon, the board badge:
 
-Set it with `fabric.setAnnotationReadOnly(object, value)` or carry it in from a
-convertor. It lives in both `copiedProperties` and `necessaryProperties`, so it
-survives export, import and undo — a lock that evaporated on reload would be worse
-than no lock at all.
+| flag | who sets it | default meaning |
+|---|---|---|
+| `locked` | the user, via the padlock in the annotation's toolbar | does not respond to the canvas at all: not hit-tested, not selectable, so the user can **draw straight over it**; every mutation refused; releasable again |
+| `readOnly` | an owner — an analysis job's output, a record another scope owns, a rights resolver | stays selectable, readable and commentable; every mutation refused; **not** releasable by the user |
 
-Do not confuse it with `private`, which despite the padlock icon controls **export**,
-not mutability.
+Both are enforced at the IO checkpoint by a guard the module registers itself, so
+**every** mutation path is covered at once: delete, edit commit, preset change, and
+entering edit mode. Comments are deliberately still allowed; a locked finding is
+still discussable. The one mutation a releasable lock lets through is the lock
+toggle itself (`meta.kind: 'lock-change'`) — otherwise the flag that makes an
+annotation immutable would also make itself unwritable.
+
+Set them with `fabric.setAnnotationLocked(object, value)` (dispatched through the IO
+pipeline, so it syncs to a bound sink and is undoable) and
+`fabric.setAnnotationReadOnly(object, value)` (a direct write: it projects an owner's
+upstream policy during hydration, and dispatching it would echo that owner's own
+state back at its sink). Both live in `copiedProperties` and `necessaryProperties`,
+so they survive export, import and undo — a lock that evaporated on reload would be
+worse than no lock at all.
+
+A locked annotation is off the canvas's hit-test, so the padlock that released it is
+out of reach there: the **board row** is the way back — clicking it selects and
+centres the annotation (which brings its toolbar, and the padlock, back), and the
+row's `…` menu carries Lock/Unlock directly.
+
+#### Redefining what a lock means
+
+Who may lock, who may release, and whether a locked record still answers the mouse
+are questions only the owner of the data can settle. State the rule instead of
+writing `evented`/`selectable` yourself (those are derived, see *visibility gates*
+below for why a direct write does not survive):
+
+```js
+const dispose = annotations.registerLockPolicy(this.id, (object, stateSoFar) =>
+    object.jobId ? { interactive: true, releasable: false } : undefined);
+```
+
+The policy returns a **partial** override of
+`{locked, interactive, mutable, releasable, reason, code}`, or nothing for "no
+opinion". Policies compose in registration order; throwing is treated as no opinion,
+so a broken policy cannot lock the whole canvas. It runs per annotation per
+visibility evaluation — keep it cheap and side-effect free.
+
+#### Styling annotations by state
+
+Fill, stroke and opacity are derived from the preset and the common visuals, so a
+value written on the object is lost on the next selection change. To style
+annotations by a state only you know, state the rule:
+
+```js
+const dispose = annotations.registerVisualPolicy(this.id, object =>
+    object.processing ? { modeOutline: true, opacity: 1, dashPattern: [4, 3] } : undefined);
+// the state of one object changed:
+fabric.updateSingleAnnotationVisuals(object);
+// the state of many changed:
+annotations.reapplyVisuals();
+```
+
+The policy returns a **partial** override of the common visuals (`modeOutline`,
+`stroke`, `opacity`, `originalStrokeWidth`), or nothing for "no opinion".
+`dashPattern` holds dash lengths in multiples of the stroke width, so it looks the
+same at every zoom. Policies compose in registration order, and throwing is treated
+as no opinion. The result is not exported, so derive it again after an import.
+
+#### `private` is a different question
+
+`private` is about **who else may see** the annotation, which only a storage
+integration can enforce — and standalone xOpat has no other users to hide it from.
+So the flag is inert, and therefore not offered, until an owner says it means
+something:
+
+```js
+annotations.registerPrivacyProvider(this.id);
+```
+
+That makes the eye toggle appear in the annotation's `…` menu. Export exclusion does
+**not** depend on it: it is the deployment's `exportPrivate` static meta alone
+(default `true` — private annotations are exported). Set
+`ENV.modules.annotations.exportPrivate: false` to withhold every annotation flagged
+`private` from all exports, whether or not a provider is loaded right now.
 
 A read-only annotation can still be **evicted**: `fabric.dropAnnotations(objects)`
 removes local copies without dispatching to any sink, running guards, or pushing
@@ -271,6 +340,10 @@ handleClickUp(o, point, isLeftClick, objectFactory) {
     return this.clickUpResult(this._finish(this._lastUsed));  // false when discarded
 }
 ```
+
+The `objectFactory` argument is the module's active drawing tool (`getActiveFactory()`), or
+`undefined` when no preset is bound to the button. It is not the preset's own factory: a preset
+is a class, and selecting one never changes the tool.
 
 `OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
 implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied

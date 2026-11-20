@@ -48,6 +48,24 @@ interface ScriptNamespaceManifest {
     description?: string;
     /** Namespace exposes identifying / patient-sensitive data — never auto-expanded by intent hints. */
     sensitive?: boolean;
+    /**
+     * Assistant hints the namespace declares about itself (core `ScriptApiMetadata.assistant`).
+     * The chat renders these generically — it holds no per-namespace knowledge of its own.
+     */
+    assistant?: ScriptNamespaceAssistantHints;
+}
+
+interface ScriptNamespaceAssistantHints {
+    /** Keyword routing to pre-expand the namespace; never present on sensitive namespaces. */
+    intentPatterns?: Array<{ source: string; flags: string }>;
+    /** `"full"` renders the namespace in full on every step. */
+    promptTier?: 'full' | 'compact';
+    /** Always-on block while the namespace is allowed. */
+    framing?: string;
+    /** Workflow block, travels with the namespace's full rendering. */
+    guidance?: string;
+    /** One-line usage examples for the recommended-patterns list. */
+    examples?: string[];
 }
 
 interface AllowedScriptApiManifest {

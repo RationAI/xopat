@@ -1,0 +1,56 @@
+{
+  "$meta": {
+    "description": "Dictation through OpenAI gpt-4o-mini-transcribe on the chat-openai provider, with the vocabulary prompt enabled",
+    "dimension": "voice",
+    "requires": []
+  },
+  /**
+   * Rides the `chat/openai-server-key` fragment: the transcription request goes to the
+   * managed chat-openai provider (server-held key), so this layer holds no secret.
+   *
+   * Two prompt gates open here, and BOTH default to 0 = no prompt at all:
+   *   - `speech-to-text.promptMaxChars`             client, composed prompt cap (ceiling 1000)
+   *   - `providerDefaults.transcriptionPromptMaxChars` server, per provider    (ceiling 1000)
+   * They are off by default because on a self-hosted whisper-large-v3 the prompt made
+   * the decoder DROP audio in proportion to its length (modules/speech-to-text/README.md,
+   * "prompt-length measurement"). OpenAI's gpt-4o-transcribe family shows no such
+   * pathology in its documentation, but measure on your own dictations before trusting a
+   * high value: same audio, prompt 0 / 60 / 200 / 700 / 1000, look for dropped spans.
+   *
+   * `contextPromptChars` feeds the tail of what was already transcribed this session
+   * into the next segment's prompt, so a segment cut at a pause does not start blind.
+   * Same caveat — measured harmful on whisper-large-v3, unmeasured here.
+   *
+   * Model ids: use the BARE ids (`gpt-4o-mini-transcribe`, `gpt-4o-transcribe`). The
+   * pinned @ai-sdk/openai sends `response_format: json` only for exactly those two; a
+   * dated snapshot or `-diarize` id gets `verbose_json`, which the API rejects once a
+   * language/prompt hint is present. `json` also means no `noSpeechProb`/`avgLogprob`
+   * verdicts — the Silero VAD is the speech gate on this path.
+   */
+  "core": {
+    "server": {
+      "secure": {
+        "plugins": {
+          "chat-openai": {
+            "providerDefaults": {
+              "defaultTranscriptionModelId": "gpt-4o-mini-transcribe",
+              "transcriptionDefault": true,
+              "transcriptionPromptMaxChars": 1000
+            }
+          }
+        }
+      }
+    }
+  },
+  "modules": {
+    "speech-to-text": {
+      "enabled": true,
+      "driver": "vercel",
+      /* A provider REFERENCE — the plugin id is the stable form; instance ids are
+         re-minted on every server start. */
+      "vercel": { "providerId": "chat-openai", "model": "gpt-4o-mini-transcribe" },
+      "promptMaxChars": 1000,
+      "contextPromptChars": 160
+    }
+  }
+}

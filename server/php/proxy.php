@@ -6,6 +6,10 @@ if (!defined( 'ABSPATH' )) {
 
 require_once ABSPATH . "server/php/inc/init.php";
 
+// The deployment comes from the header only and must be one the session
+// entered — see xopat_requested_deployment / xopat_session_may_use_deployment.
+define('XOPAT_VIEWER_ISSUED_REQUEST', true);
+
 if (!count($_POST)) {
     try {
         $_POST = (array)json_decode(file_get_contents("php://input"), false);

@@ -175,20 +175,11 @@ test.describe("error rendering", () => {
         expect(state.hasInstantiationFaulty).toBe(true);
         expect(state.hasConfig).toBe(false);
 
-        // Which message depends on whether OSD surfaced a `statusCode` on
-        // `add-item-failed`: with one, the handler classifies it as a 404; with
-        // none, it falls through to the generic failure. Either is correct —
-        // the property under test is that *neither* is silent, which is exactly
-        // what the no-statusCode branch used to be (a bare `console.info`).
-        const [notFound, failed] = await Promise.all([
-            translate(xopat, "error.slide.404"),
-            translate(xopat, "error.slide.failed"),
-        ]);
-        await xopat.page.waitForFunction(
-            ([a, b]) => (window.__dialogs ?? []).some(m => m.includes(a) || m.includes(b)),
-            [notFound, failed],
-            { timeout: 30_000 },
-        );
+        // A background is reported on the failure overlay, the navigator title
+        // and the switcher flag — deliberately not as a toast too
+        // (`viewer-error-wiring.ts`, the `tile-source-failed` handler skips
+        // backgrounds). "Not swallowed" therefore means the overlay carries the
+        // upstream reason, asserted below.
 
         // Nothing opened, so the viewer falls back to the full-viewport overlay.
         // It must read as an incident report, not a product landing page: the
@@ -207,6 +198,7 @@ test.describe("error rendering", () => {
         expect(overlay, "a viewer with nothing open shows the overlay").toBeTruthy();
         expect(overlay.text).toContain(await translate(xopat, "error.demoPage.failureTitle"));
         expect(overlay.text, "it names the image that failed").toContain("Absent");
+        expect(overlay.text, "it carries the upstream reason").toContain("404");
         expect(overlay.text).toContain(await translate(xopat, "error.demoPage.whatFailed"));
         expect(overlay.reasons, "reasons are nodes, not an innerHTML blob").toBeGreaterThan(0);
         expect(overlay.banner, "no marketing banner on a failure").toBe(0);
@@ -217,9 +209,10 @@ test.describe("error rendering", () => {
 
         // The case that decides whether failure handling is *containment* or
         // just a nicer way to lose the viewer: one background resolves, one
-        // 404s, both open into the same viewer. The dead slot must become an
-        // inert placeholder without taking the good image — or the demo
-        // overlay, which only belongs on a viewer where NOTHING opened — with it.
+        // 404s. `activeBackgroundIndex: [0, 1]` opens one viewer per background,
+        // so the dead slot must become an inert placeholder in its own viewer
+        // without taking the good one — or the demo overlay, which only belongs
+        // on a viewer where NOTHING opened — with it.
         await xopat.launch(session({
             data: [slide.dataId, "absent.dzi"],
             background: [
@@ -231,36 +224,39 @@ test.describe("error rendering", () => {
         await xopat.waitForViewer();
 
         const state = await xopat.page.evaluate(() => {
-            const viewer = window.VIEWER;
-            const items = [];
-            for (let i = 0; i < viewer.world.getItemCount(); i++) {
-                const item = viewer.world.getItemAt(i);
-                const source = item.source;
-                const key = source?.tileSourceId || source?.url || item.__xopatLoadKey;
-                items.push({
-                    name: item.__xopatFaultyBackground?.name ?? null,
-                    placeholder: typeof item.getConfig === "function" ? item.getConfig() === undefined : null,
-                    error: viewer.__faultySources?.getError(key) ?? source?.getMetadata?.()?.error ?? null,
-                    width: source?.width ?? null,
-                });
-            }
-            return { items, demoOverlay: Boolean(document.getElementById("demo-ad-" + viewer.id)) };
+            return window.VIEWER_MANAGER.viewers.map(viewer => {
+                const items = [];
+                for (let i = 0; i < viewer.world.getItemCount(); i++) {
+                    const item = viewer.world.getItemAt(i);
+                    const source = item.source;
+                    const key = source?.tileSourceId || source?.url || item.__xopatLoadKey;
+                    items.push({
+                        name: item.__xopatFaultyBackground?.name ?? null,
+                        placeholder: typeof item.getConfig === "function" ? item.getConfig() === undefined : null,
+                        error: viewer.__faultySources?.getError(key) ?? source?.getMetadata?.()?.error ?? null,
+                        width: source?.width ?? null,
+                    });
+                }
+                return { items, demoOverlay: Boolean(document.getElementById("demo-ad-" + viewer.id)) };
+            });
         });
 
-        expect(state.items.length, "both slots are represented").toBe(2);
+        expect(state.length, "one viewer per active background").toBe(2);
+        const [healthy, deadViewer] = state;
 
-        const dead = state.items.filter(i => i.placeholder);
-        const alive = state.items.filter(i => !i.placeholder);
-        expect(dead.length).toBe(1);
-        expect(alive.length).toBe(1);
-        expect(dead[0].name, "the dead slot still names the background it was meant to hold").toBe("Dead");
-        expect(dead[0].error, "and carries why").toBeTruthy();
-        expect(alive[0].width, "the healthy slide opened at its real dimensions").toBe(slide.width);
-
+        expect(healthy.items.length).toBe(1);
+        expect(healthy.items[0].placeholder).toBe(false);
+        expect(healthy.items[0].width, "the healthy slide opened at its real dimensions").toBe(slide.width);
         expect(
-            state.demoOverlay,
+            healthy.demoOverlay,
             "the demo/failure overlay belongs only to a viewer where nothing opened",
         ).toBe(false);
+
+        expect(deadViewer.items.length).toBe(1);
+        const dead = deadViewer.items[0];
+        expect(dead.placeholder).toBe(true);
+        expect(dead.name, "the dead slot still names the background it was meant to hold").toBe("Dead");
+        expect(dead.error, "and carries why").toBeTruthy();
     });
 
     test("one dead visualization layer does not take the others down", { tag: TAGS }, async ({ xopat }) => {

@@ -1,3 +1,5 @@
+import { BackgroundConfig } from "../background-config";
+
 export class ViewerSelectionState {
     static normalizeSelectionValue(value: any): Array<number | undefined> | undefined {
         if (value == null) {
@@ -65,6 +67,39 @@ export class ViewerSelectionState {
         const bg: any = backgrounds[bgIdx as number];
         const v = bg?.visualizationIndex;
         return Number.isInteger(v) ? v as number : undefined;
+    }
+
+    /**
+     * Whether a visualization is offered for a background — the same rule the
+     * open pipeline enforces, see {@link BackgroundConfig.visualizationAppliesTo}.
+     */
+    static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
+        return BackgroundConfig.visualizationAppliesTo(visualization, background, data);
+    }
+
+    /**
+     * The visualizations a viewer's selector offers: those applying to its
+     * background, plus the selected one regardless. Entries keep their index
+     * in `config.visualizations`, which is what a selection stores.
+     */
+    static getViewerVisualizationChoices(
+        viewer: OpenSeadragon.Viewer,
+        appContext: ApplicationContext,
+        viewerManager: any = window.VIEWER_MANAGER
+    ): Array<{ index: number, name?: string }> {
+        const config: any = appContext.config;
+        const visualizations: any[] = Array.isArray(config.visualizations) ? config.visualizations : [];
+        const bgIdx = ViewerSelectionState.getViewerSelectionIndex(
+            viewer, "activeBackgroundIndex", appContext, viewerManager
+        );
+        const bg = Number.isInteger(bgIdx) ? config.background?.[bgIdx as number] : undefined;
+        const selected = ViewerSelectionState.getViewerVisualizationIndex(viewer, appContext, viewerManager);
+        const data = Array.isArray(config.data) ? config.data : [];
+        return visualizations
+            .map((visualization, index) => ({ visualization, index }))
+            .filter(({ visualization, index }) => index === selected
+                || ViewerSelectionState.visualizationAppliesTo(visualization, bg, data))
+            .map(({ visualization, index }) => ({ index, name: visualization?.name }));
     }
 
     /**

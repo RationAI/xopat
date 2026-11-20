@@ -165,6 +165,12 @@ export interface ChatVoiceControllerOptions {
      */
     onWindow?: (window: { index: number; text: string; fromSegment: number; toSegment: number; final: boolean }) => void;
     /**
+     * Each archive window's AUDIO as it seals, before the decode frees it. Raw
+     * dictation — only wire this where the consumer has a reason to hold the
+     * bytes (a debug archive), and never by default.
+     */
+    onWindowAudio?: (window: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void;
+    /**
      * Every recorded segment that did NOT reach the transcript, with why — the module's
      * `segment-empty` / `-gated` / `-discarded` / `-filtered` / `-trimmed` events,
      * forwarded for the capture this controller owns. A trace without these cannot tell
@@ -438,6 +444,47 @@ export class ChatVoiceController {
         }
         // Resolve the standalone module if it is loaded; absent => controls hide.
         this._stt = (window as any).singletonModule?.("speech-to-text") || null;
+        // This controller existing IS the signal that dictation is plausible on this
+        // page, which the speech module itself does not have. Start the ~16 MB VAD
+        // model early: a capture waits only a short grace for it before falling back
+        // to the amplitude gate, and the engine is chosen once per session — so a
+        // model that lands after the first `startAuto` costs that whole dictation its
+        // gate. But not during boot: on a slow link the model download competed with
+        // slide tiles and stalled every concurrent request for ~11 s. See
+        // `_schedulePrewarm`; a pointer on the voice controls cuts the wait short.
+        if (this._stt) this._schedulePrewarm();
+    }
+
+    private _prewarmed = false;
+
+    /** Start the VAD model download now. Idempotent. */
+    private _prewarmNow = (): void => {
+        if (this._prewarmed) return;
+        this._prewarmed = true;
+        try { this._stt?.prewarmVad?.(); } catch (_e) { /* best-effort */ }
+    };
+
+    /**
+     * Prewarm once the slides are open and the browser is idle — tiles and
+     * overlays first, the model after. Falls back to a timer when there is no
+     * viewer manager (a standalone chat page).
+     */
+    private _schedulePrewarm(): void {
+        const w = window as any;
+        const whenIdle = () => {
+            if (typeof w.requestIdleCallback === "function") {
+                w.requestIdleCallback(this._prewarmNow, { timeout: 5000 });
+            } else {
+                setTimeout(this._prewarmNow, 2000);
+            }
+        };
+        const manager = w.VIEWER_MANAGER;
+        const alreadyOpen = !!manager?.viewers?.some?.((v: any) => v?.world?.getItemCount?.() > 0);
+        if (alreadyOpen || typeof manager?.addOnceHandler !== "function") {
+            whenIdle();
+            return;
+        }
+        manager.addOnceHandler("after-open", whenIdle);
     }
 
     /** True once the module reports a usable driver + mic permission. */
@@ -690,6 +737,10 @@ export class ChatVoiceController {
         this._root.appendChild(this._micBtnEl);
         this._root.appendChild(this._autoBtnEl);
         this._root.classList.add("hidden"); // shown once availability resolves
+        // A pointer or keyboard focus on the voice controls is intent: don't wait
+        // for the idle-time prewarm.
+        this._root.addEventListener("pointerenter", this._prewarmNow, { once: true });
+        this._root.addEventListener("focusin", this._prewarmNow, { once: true });
 
         // Reflect the capture→transcribe transition on the mic tooltip.
         try {
@@ -1423,6 +1474,12 @@ export class ChatVoiceController {
                     this._noteAlive();
                     try { this._opts.onWindow?.(w); }
                     catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onWindow handler failed"); }
+                },
+                // The sealed window's bytes, for a consumer that archives them. Not
+                // awaited and not allowed to delay the decode chain behind it.
+                onWindowAudio: (w: any) => {
+                    try { this._opts.onWindowAudio?.(w); }
+                    catch (error) { APPLICATION_CONTEXT.log("module.vercel-ai-chat-sdk:voice").error(error, "onWindowAudio handler failed"); }
                 },
                 speechFloorMult: this._opts.speechFloorMult,
                 minSpeechMs: this._opts.minSpeechMs,

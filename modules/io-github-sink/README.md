@@ -203,16 +203,48 @@ The module composes its sink options on every dispatch. Latest layer wins;
 Path / commit placeholders (resolved by `IO_PIPELINE.formatPath`, shared with
 every other sink): `{ownerId}` `{ownerUid}` `{xoType}` `{direction}`
 `{capabilityId}` `{capabilityGroup}` `{viewerId}` `{backgroundId}` `{key}`
-`{resourceName}` `{itemId}`. `{viewerId}` resolves to `_global` for
-global-scope bundles, `{backgroundId}` to `_any` when the owner is not
-slide-scoped.
+`{resourceName}` `{itemId}` `{slideHash}` `{slideName}` `{ext}`. `{ext}` is the
+file extension of the format the binding is pinned to — `{"sink": "github",
+"format": "geo-json", "config": {"pathTemplate": "cases/{slideHash}.{ext}"}}`
+stores GeoJSON as `.geojson`-style files — and `json` when no format is known
+(see `src/IO_PIPELINE.md` → *Formats*).
+
+**Choosing the format.** GitHub stores whatever it is handed, so pick the
+format per owner in the sink's own config — this works with a plain binding
+(`"bundle-export": ["github"]`):
+
+```json
+"modules": { "io-github-sink": { "github": {
+    "formats": { "annotations": "geo-json" }
+} } }
+```
+
+An entry may be `{ "id": "geo-json", "options": { … } }`; `"*"` applies to any
+owner. The same key works in `ENV.client.io.sinkOverrides.github` and in a
+binding's `config`. A binding's `{ "sink": "github", "format": … }` overrides it.
+Unpinned, the owner's deployment default is stored (for annotations,
+`convertors.format`, else `native`) — never the user's download-dialog choice —
+and the console warns once. `{viewerId}` resolves
+to `_global` for global-scope bundles, `{backgroundId}` to `_any` when the owner
+is not slide-scoped. `{slideHash}` / `{slideName}` describe the slide
+itself (`UTILITIES.slideIdentityFor`): `{slideHash}` is 16 hex of HMAC-SHA256 of
+the slide's data entry, keyed by the operator secret `ENV.client.io.slideHashKey`
+(`env/parts/io/github.json` injects `<% XOPAT_SLIDE_HASH_KEY %>`) — stable across
+sessions, unaffected by an explicit background `id`, and not reversible by
+guessing paths without the key, so use it to address per-slide data. Without the
+key a template using `{slideHash}` refuses (`W_IO_SLIDE_HASH_KEY`); changing the
+key re-addresses every stored file. `{slideName}` is the file name — readable,
+but the same file name in two folders collides and it may carry a case number;
+anyone who can read the repository (paths and commit history) sees it, so keep
+it out of templates for sensitive data. With no slide behind the dispatch,
+`{slideHash}` is `_any` and `{slideName}` empty.
 
 > **Use `{capabilityGroup}`, not `{capabilityId}`, in a path.** Exports carry
 > `bundle-export` and restores carry `bundle-import`, so `{capabilityId}` reads
 > back from a different file than it wrote. Both collapse to `bundle` in
 > `{capabilityGroup}`.
 
-> **Slide-scoped owners need `{backgroundId}` (or `{key}`).** Owners with
+> **Slide-scoped owners need `{slideHash}`, `{backgroundId}` or `{key}`.** Owners with
 > `bundleScope: "per-viewer-background"` — annotations among them — are
 > dispatched once per (viewer, slide). A template without a slide dimension
 > resolves every one of those dispatches to the same file, and the last slide

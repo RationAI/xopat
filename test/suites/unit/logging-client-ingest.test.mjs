@@ -125,6 +125,9 @@ test("the caps are policy, readable by the RPC handler @unit", () => {
     }));
     expect(broker.clientIngestPolicy()).toEqual({
         ingest: true, maxRecordsPerBatch: 10, maxRecordBytes: 1024, maxRecordsPerMinute: 100,
+        // Attachment bytes are a separate decision with a separate cap — see the
+        // attachment tests below. `maxRecordBytes` bounds a log LINE and never them.
+        attachments: false, maxAttachmentBytes: 4 * 1024 * 1024,
     });
 });
 
@@ -148,4 +151,63 @@ test("a client record reaches the stream sink like any other @unit", async () =>
     const record = JSON.parse(sent[0].trim());
     expect(record.channel).toBe("client:app");
     expect(record.message).toBe("client-side crash");
+});
+
+// ---- attachments ---------------------------------------------------------------
+
+test("accepting client attachments is a second opt-in beyond ingest @unit", () => {
+    // Accepting lines is accepting text the caps already bound; accepting files is
+    // accepting whatever a caller decides to upload. Turning on `ingest` must not
+    // quietly turn on the second.
+    const broker = makeBroker(base());
+    const policy = broker.clientIngestPolicy();
+    expect(policy.ingest).toBe(true);
+    expect(policy.attachments, "off unless asked for separately").toBe(false);
+    expect(policy.maxAttachmentBytes, "and it has a cap of its own").toBe(4 * 1024 * 1024);
+});
+
+test("a client attachment takes the same path a server-side one takes @unit", () => {
+    // Not a browser-specific storage policy: the bytes go to `emit`'s payload
+    // channel, so a destination that can hold them writes the file and one that
+    // cannot records the refusal — exactly as for `logger.attachment`.
+    const broker = makeBroker(base({
+        allowSensitive: true,
+        client: { ingest: true, attachments: true },
+    }));
+    const entry = broker.ingestClientRecord({
+        channel: "plugin.report-assist:trace",
+        level: "trace",
+        sensitive: true,
+        message: "DICTATION_AUDIO",
+        fields: { attachment: { file: "report/s1/audio/window-0001.webm", size: 8 } },
+    }, {}, { bytes: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]), file: "report/s1/audio/window-0001.webm" });
+
+    expect(entry, "the record is emitted").not.toBe(null);
+    expect(entry.channel).toBe("client:plugin.report-assist:trace");
+    expect(entry.fields.attachment.file).toBe("report/s1/audio/window-0001.webm");
+    expect(entry.sensitive).toBe(true);
+});
+
+test("an attachment record still obeys the sensitive gate @unit", () => {
+    // The gate lives here, where a client cannot reach it. Otherwise `sensitive:
+    // true` in a request body would be a switch for logging patient payloads.
+    const broker = makeBroker(base({ client: { ingest: true, attachments: true } }));
+    const entry = broker.ingestClientRecord({
+        channel: "plugin.report-assist:trace", level: "trace", sensitive: true,
+        message: "DICTATION_AUDIO", fields: { attachment: { file: "a.webm", size: 8 } },
+    }, {}, { bytes: Buffer.from([1, 2]), file: "a.webm" });
+
+    expect(entry, "no allowSensitive, no record — and no bytes").toBe(null);
+});
+
+test("bytes are gated as sensitive trace whatever the client claimed @unit", () => {
+    // `logger.attachment` is sensitive-at-trace by definition. A client that sends
+    // bytes on an `info`, non-sensitive record must not slip them past that gate.
+    const broker = makeBroker(base({ client: { ingest: true, attachments: true } }));
+    const entry = broker.ingestClientRecord({
+        channel: "plugin.report-assist", level: "info", sensitive: false,
+        message: "DICTATION_AUDIO", fields: { attachment: { file: "a.webm", size: 2 } },
+    }, {}, { bytes: Buffer.from([1, 2]), file: "a.webm" });
+
+    expect(entry, "no allowSensitive, no record — and no bytes").toBe(null);
 });

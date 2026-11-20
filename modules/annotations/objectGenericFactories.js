@@ -124,6 +124,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick) {
+        // A gesture whose release never arrived must not orphan its helper.
+        this.discardCreate();
         this._origX = x;
         this._origY = y;
         this._current = this.create({
@@ -181,9 +183,18 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             return true;
         }
 
-        this._context.fabric.promoteHelperAnnotation(obj);
+        // Clear first: promotion raises `annotation-create`, and a handler that
+        // switches mode synchronously re-enters finishIndirect() - with
+        // `_current` still set that would promote the same object twice.
         this._current = undefined;
+        this._context.fabric.promoteHelperAnnotation(obj);
         return true;
+    }
+
+    // A mode/tool switch mid-drag (e.g. the next quick-draw key) commits the
+    // shape. The inherited no-op left the helper frozen on the canvas forever.
+    finishIndirect() {
+        this.finishDirect();
     }
 
     /**
@@ -405,6 +416,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
+        // A gesture whose release never arrived must not orphan its helper.
+        this.discardCreate();
         this._origX = x;
         this._origY = y;
         this._origScreen = this._imageToWindowPoint(x, y);
@@ -476,9 +489,18 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             return true;
         }
 
-        this._context.fabric.promoteHelperAnnotation(obj);
+        // Clear first: promotion raises `annotation-create`, and a handler that
+        // switches mode synchronously re-enters finishIndirect() - with
+        // `_current` still set that would promote the same object twice.
         this._current = undefined;
+        this._context.fabric.promoteHelperAnnotation(obj);
         return true;
+    }
+
+    // A mode/tool switch mid-drag (e.g. the next quick-draw key) commits the
+    // shape. The inherited no-op left the helper frozen on the canvas forever.
+    finishIndirect() {
+        this.finishDirect();
     }
 
     /**

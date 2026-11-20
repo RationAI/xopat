@@ -1,0 +1,149 @@
+{
+  "meta": {
+    "name": "Actions",
+    "description": "Keep scripts as your own buttons, menu items and keyboard shortcuts — written by you, your assistant, or provided by the deployment."
+  },
+  "capabilities": {
+    "run": "Run saved actions",
+    "author": "Create and change saved actions"
+  },
+  "group": "My actions",
+  "tools": {
+    "section": "Actions",
+    "manage": "Manage actions…"
+  },
+  "contextMenu": {
+    "title": "My actions"
+  },
+  "shortcut": {
+    "title": "{{label}}",
+    "category": "My actions"
+  },
+  "surface": {
+    "quick": "Top bar button",
+    "tools": "Tools menu",
+    "context-menu": "Right-click menu",
+    "viewer-control": "Viewer button",
+    "shortcut": "Keyboard shortcut"
+  },
+  "output": {
+    "auto": "Automatic",
+    "toast": "Notification",
+    "window": "Window",
+    "silent": "Nothing",
+    "key": "Name",
+    "value": "Value",
+    "truncated": "Showing {{shown}} of {{total}}."
+  },
+  "run": {
+    "busy": "“{{label}}” is still running.",
+    "failed": "“{{label}}” failed: {{error}}",
+    "done": "“{{label}}” finished.",
+    "details": "Details"
+  },
+  "panel": {
+    "title": "Actions",
+    "userTitle": "My actions",
+    "userHint": "Saved scripts you can run from a button, a menu or a keyboard shortcut. Ask the assistant to create or fix one, or write it yourself.",
+    "deploymentTitle": "Provided by this deployment",
+    "noUser": "You have no actions yet.",
+    "noDeployment": "This deployment provides no actions.",
+    "new": "New action",
+    "import": "Import…",
+    "exportAll": "Export all",
+    "run": "Run",
+    "running": "Running…",
+    "review": "Review",
+    "edit": "Edit",
+    "duplicate": "Duplicate",
+    "enable": "Enable",
+    "disable": "Disable",
+    "export": "Export",
+    "delete": "Delete",
+    "badgeAssistant": "by assistant",
+    "badgePending": "needs approval",
+    "badgeDisabled": "disabled",
+    "badgeConflict": "shortcut taken",
+    "neverRun": "Not run yet",
+    "lastRunOk": "Last run {{when}}: OK",
+    "lastRunFailed": "Last run {{when}} failed: {{error}}"
+  },
+  "editor": {
+    "titleNew": "New action",
+    "titleEdit": "Edit action",
+    "id": "Identifier",
+    "idHint": "Lowercase letters, digits and dashes. Cannot be changed later.",
+    "label": "Label",
+    "description": "Description",
+    "icon": "Icon",
+    "iconHint": "A Phosphor icon name, e.g. ph-chart-bar.",
+    "script": "Script",
+    "scriptHint": "Same language as assistant scripts. Return the value to show; the trigger is in the global `input`.",
+    "surfaces": "Show it in",
+    "pinned": "pin",
+    "onlySelection": "only with a selection",
+    "output": "Show the result as",
+    "save": "Save…",
+    "cancel": "Cancel"
+  },
+  "approve": {
+    "title": "Save this action?",
+    "titleRepair": "Apply changes to this action?",
+    "warningAssistant": "The assistant wants to save this script as an action. It will run with your permissions whenever you use it. Read it before approving.",
+    "warningImport": "This action comes from a file. It will run with your permissions whenever you use it. Read it before approving.",
+    "warningUser": "This script will run with your permissions whenever you use the action.",
+    "label": "Label",
+    "description": "Description",
+    "surfaces": "Shown in",
+    "noSurfaces": "Only in the Actions panel",
+    "conflict": "Shortcut in use by",
+    "namespaces": "Uses",
+    "unknownNamespaces": "Unknown names the script calls: {{list}}. It may fail.",
+    "script": "Script",
+    "scriptDiff": "Changes to the script (click a change to decline it)",
+    "accept": "Approve and save",
+    "decline": "Decline"
+  },
+  "consent": {
+    "deleteTitle": "Delete action?",
+    "deleteDescription": "“{{label}}” will be removed from all places it is shown."
+  },
+  "import": {
+    "done": "Imported {{imported}} action(s), {{rejected}} rejected. Imported actions are disabled until you review them.",
+    "failed": "The file is not a valid actions export."
+  },
+  "errors": {
+    "runDenied": "You are not allowed to run actions.",
+    "authorDenied": "You are not allowed to change actions.",
+    "notRunnable": "This action is disabled or not approved.",
+    "idChanged": "The identifier of an existing action cannot change.",
+    "notObject": "not an object",
+    "unknownField": "unknown field",
+    "badId": "use lowercase letters, digits and dashes (max 48)",
+    "badLabel": "required",
+    "labelTooLong": "too long",
+    "badDescription": "must be text",
+    "descriptionTooLong": "too long",
+    "badIcon": "use a Phosphor icon name like ph-chart-bar",
+    "badScript": "required",
+    "scriptTooLarge": "too large",
+    "badPlacements": "invalid",
+    "tooManyPlacements": "too many",
+    "badPlacement": "invalid",
+    "badSurface": "unknown place",
+    "surfaceDisabled": "not allowed in this deployment",
+    "duplicateSurface": "listed twice",
+    "badPinned": "invalid",
+    "badWhen": "invalid",
+    "badCombo": "use a combination like Alt+KeyC",
+    "badOutput": "invalid",
+    "badTimeout": "invalid",
+    "badEnabled": "invalid",
+    "badFlag": "invalid",
+    "badOrigin": "invalid",
+    "badNumber": "invalid",
+    "reservedId": "used by a deployment action",
+    "tooManyActions": "limit of saved actions reached",
+    "syntax": "the script does not parse"
+  }
+}

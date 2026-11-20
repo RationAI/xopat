@@ -272,6 +272,11 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
         "createOpenAICompatibleTranscriptionModel"
     );
     const { safeFetch, validateUpstreamUrl } = XS;
+    // Model transport. The SDK forwards the chat turn's own deadline (tuning.attemptTimeoutMs)
+    // as `init.signal`; safeFetch's default deadline (XOPAT_SSRF_TIMEOUT_MS, 120 s, total — it
+    // covers the streamed body too) would otherwise cut every longer model call at 120 s.
+    const modelFetch = (url: any, init: any = {}) =>
+        safeFetch(url, init?.signal ? { timeoutMs: 0, ...init } : init);
 
     const typeId = pick(defaults.id, input.typeId, "openai-compatible")!;
     const label = pick(defaults.label, input.label, "OpenAI-compatible")!;
@@ -444,7 +449,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                 // their backend accepts `stream_options` turns this on. Anything other than
                 // an explicit true stays false, so a stray string can never enable it.
                 const includeUsage = config.includeUsage === true || config.includeUsage === "true";
-                return providerFactoryFor(instance.id, baseURL, apiKey, headers, includeUsage, safeFetch)(modelId);
+                return providerFactoryFor(instance.id, baseURL, apiKey, headers, includeUsage, modelFetch)(modelId);
             },
             // OPTIONAL transcription capability: `@ai-sdk/openai-compatible`
             // ships no transcription model, so the module's reusable shim

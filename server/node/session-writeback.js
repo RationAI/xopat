@@ -16,6 +16,10 @@
  */
 const SESSION_SHARED_KEYS = Object.freeze(new Set([
     "id", "csrfToken", "createdAt", "lastSeenAt", "allowedProxies",
+    // Named deployments this session entered by a page load (deployments.js
+    // `bindSessionDeployment`). Identity, not module state: every worker must
+    // refuse a request for a deployment the session never entered.
+    "deployments",
 ]));
 
 /**

@@ -8,7 +8,7 @@ const cluster = require("node:cluster");
  * ONE sweep timer for the whole process.
  *
  * Before this, every bounded map on the server ran its own interval on its own
- * schedule (`index.js` sessions, `ssrf-guard`, `saml-flow`, `mixture-interface`,
+ * schedule (`index.js` sessions, `ssrf-guard`, `saml-flow`,
  * the chat caches). A single pass over registered namespaces replaces all of
  * them, and — more usefully — gives one place to see what reclaimed what.
  *

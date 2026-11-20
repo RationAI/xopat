@@ -125,6 +125,11 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
         "ensureManagedPluginProvider"
     );
     const { safeFetch, validateUpstreamUrl } = XS;
+    // Model transport. The SDK forwards the chat turn's own deadline (tuning.attemptTimeoutMs)
+    // as `init.signal`; safeFetch's default deadline (XOPAT_SSRF_TIMEOUT_MS, 120 s, total — it
+    // covers the streamed body too) would otherwise cut every longer model call at 120 s.
+    const modelFetch = (url: any, init: any = {}) =>
+        safeFetch(url, init?.signal ? { timeoutMs: 0, ...init } : init);
 
     const typeId = pick(defaults.id, input.typeId, "anthropic-claude")!;
     const label = pick(defaults.label, input.label, "Anthropic")!;
@@ -338,7 +343,7 @@ export async function ensureChatProviderRegistered(ctx: any, _clientInput: any =
                     // Route the SDK's own transport through the core SSRF guard; vetting
                     // `resolvedBaseUrl` alone leaves every request the SDK derives from it
                     // on the global `fetch`. See the same wiring in chat-openai.
-                    fetch: safeFetch,
+                    fetch: modelFetch,
                 })(modelId);
             },
         },

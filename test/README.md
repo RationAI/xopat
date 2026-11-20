@@ -438,8 +438,11 @@ server's log level through the normal logging broker (see `server/LOGGING.md`).
 boots `node index.js` against whatever is compiled into `src/dist`; it does not
 build. `src/**/*.ts` is compiled by the watcher (`npm run dev`), so with the dev
 server down, an edit to `src/classes/**` is invisible to every browser project.
-Check the timestamp of `src/dist/app.js` against your edit before believing a
-red test.
+The `xopat` fixture enforces this: a browser test refuses to start when
+`src/dist` or `ui/index.js` is older than its newest source file
+(`test/harness/bundle-freshness.mjs`), naming the bundle and the file. Start
+`npm run dev` and let it rebuild, or set `XOPAT_TEST_ALLOW_STALE_BUNDLE=1` to run
+against the old bundle on purpose.
 
 ---
 

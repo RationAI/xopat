@@ -1,0 +1,11 @@
+{
+  "name": "user-actions-module",
+  "version": "1.0.0",
+  "description": "Persistent, script-backed user actions (shortcuts and automations) for xOpat",
+  "keywords": [],
+  "buildEntry": "index.ts",
+  "author": "RationAI",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

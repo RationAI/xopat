@@ -5,20 +5,21 @@
 //
 // Config: server.secure.modules["saml-auth"].contexts.<ctx> — see README.md.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { createRequire } from "node:module";
 
-// These three are loaded through createRequire, NOT a static import, on purpose.
-// The server-module-loader bundles us with esbuild as `format: "esm"`, and
-// node-saml pulls in `debug`, which does `require("tty")` at load time — a
-// dynamic require of a builtin, which esbuild cannot express in ESM output and
-// which therefore throws "Dynamic require of \"tty\" is not supported" the moment
-// the bundle is imported (the whole module then 404s every RPC). Requiring them
-// at runtime keeps them OUT of the bundle and lets Node resolve them normally
-// from the hoisted node_modules. Do not "tidy" these back into imports.
-const _require = createRequire(import.meta.url);
-const { SAML } = _require("@node-saml/node-saml");
-const { DOMParser } = _require("@xmldom/xmldom");
-const xpath = _require("xpath");
+// Static imports, so these three are INLINED into the bundle.
+//
+// They used to be `createRequire` calls, because server bundles were ESM and
+// node-saml pulls in `debug`, which does `require("tty")` at load time: a
+// dynamic require of a builtin that esbuild cannot express in ESM output, so the
+// bundle threw `Dynamic require of "tty" is not supported` on import and the
+// module 404'd every RPC. Server bundles are CJS now (see
+// `server/node/server-module-loader.js` → BUILD_FORMAT), where that require is
+// expressible — and keeping them out of the bundle became the worse failure:
+// a packaged binary has no `node_modules` to resolve them from, so SAML
+// registration died with `Cannot find module '@node-saml/node-saml'`.
+import { SAML } from "@node-saml/node-saml";
+import { DOMParser } from "@xmldom/xmldom";
+import * as xpath from "xpath";
 
 /** node-saml's SAML instance — typed loosely because it is required at runtime. */
 type SamlSp = any;
@@ -41,7 +42,7 @@ interface BoundedCacheLike<V> {
     readonly size: number;
 }
 
-function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number }): BoundedCacheLike<V> {
+function boundedCache<V>(name: string, options: { maxEntries?: number; ttlMs?: number; crossDeployment?: boolean }): BoundedCacheLike<V> {
     const create = (globalThis as any).XOPAT_SERVER?.cache?.create;
     if (typeof create === "function") return create({ name, ...options });
     console.warn(`[${MODULE_ID}] XOPAT_SERVER.cache unavailable — '${name}' is unbounded.`);
@@ -225,6 +226,9 @@ export interface SpUrls { callbackUrl: string; logoutCallbackUrl: string }
  */
 export async function spFor(ctx: any, contextId: string, urls: SpUrls): Promise<SamlSp> {
     const cfg = getContextConfig(ctx, contextId);
+    // No config in the key: core partitions `spCache` per named deployment
+    // (server/STORAGE.md "Named deployments"), so one deployment's SP never
+    // serves another's, and a deployment's config is fixed until restart.
     const key = `${normalizeContextId(contextId)}\n${urls.callbackUrl}`;
     const cached = spCache.get(key);
     if (cached) return cached;
@@ -339,7 +343,7 @@ export function verifyRelayState(cfg: any, relay: string | null | undefined): Re
 // grown past 5000 and only removed already-expired entries, so a burst of live
 // assertions pushed it past the threshold and kept it there — the "cap" was a
 // sweep trigger, never a bound.
-const seenAssertions = boundedCache<number>("saml:seen-assertions", { maxEntries: 5000 });
+const seenAssertions = boundedCache<number>("saml:seen-assertions", { maxEntries: 5000, crossDeployment: true });
 
 export function assertAssertionUnseen(assertionId: string | null | undefined, ttlMs: number): void {
     if (!assertionId) throw new Error("Assertion has no ID — refusing (cannot detect replay).");
@@ -379,7 +383,7 @@ export function assertionIdOf(profile: any): string | null {
 const HANDOFF_TTL_MS = 60_000;
 // TTL + cap are the cache's job; parking a result no longer walks the whole map.
 const handoff = boundedCache<{ payload: any; exp: number }>(
-    "saml:acs-handoff", { maxEntries: 1000, ttlMs: HANDOFF_TTL_MS });
+    "saml:acs-handoff", { maxEntries: 1000, ttlMs: HANDOFF_TTL_MS, crossDeployment: true });
 
 export function parkResult(payload: any): string {
     const code = b64url(randomBytes(24));

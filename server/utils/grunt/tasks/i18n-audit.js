@@ -65,7 +65,7 @@ module.exports = function (grunt) {
         // recorded as an empty set so every key in that element is reported once
         // rather than crashing the task.
         // The i18next namespace is the element's DECLARED id, which need not
-        // match its directory (`plugins/questionaire-new` declares id
+        // match its directory (`plugins/questionaire` declares id
         // `questionaire`). Build the id -> directory map from include.json,
         // falling back to the directory name when the file is unreadable.
         const dirIndex = { plugins: new Map(), modules: new Map() };

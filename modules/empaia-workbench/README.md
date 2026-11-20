@@ -156,21 +156,29 @@ Pinned at `^0.1.34` — npm's latest. The upstream monorepo carries an unpublish
 
 **VACI does not validate the sender's origin.** It listens for any `message`
 event, dispatches on `data.type` alone, and adopts the sender's origin as its
-reply target. We adopt that posture rather than working around it, because in
-this embedding it is a narrow exposure: the Workbench serves the app UI on an
-**opaque origin** inside a sandboxed iframe, behind a signed-token path
-(`/v3/frontends/<JWT>/`), so the realistic — and intended — sender is the
-Workbench parent frame.
+reply target. Its listener is installed at import and hands us only the
+payload, so the sender cannot be checked here without patching the library —
+the request is recorded in [`UPSTREAM.md`](../../UPSTREAM.md).
 
-If you deploy this module somewhere the frame is *not* sandboxed and other
-origins can obtain a handle to the window, that assumption no longer holds.
+The exposure is narrow but real: the viewer is a sandboxed frame behind a
+signed path (`/v3/frontends/<JWT>/`), yet any other frame on the Workbench page
+can reach it through `window.top.frames[i]`. A frame that wins the handshake
+race with a forged `wbsUrl` would have the genuine token sent to its own host.
+So what is checked:
 
-Two things are still checked, neither of them a security policy:
-
+- **`wbsUrl` origin allowlist** (`wbsOrigins` in `include.json`, static meta
+  only). Unset, the URL must share the origin the app UI was served from; list
+  origins explicitly when the Workbench Service lives elsewhere, or `["*"]` to
+  disable. An unlisted value is ignored, not fatal, so a forged message cannot
+  abort the genuine handshake. Irrelevant when `proxy` is set — the raw
+  `wbsUrl` is then never requested.
 - `wbsUrl` must parse and be `http:`/`https:` before it becomes an `HttpClient`
-  `baseURL` (`parseBackendUrl` in `index.ts`) — otherwise a malformed value
-  resurfaces as a confusing failure deep in the request path;
+  `baseURL` (`parseBackendUrl` in `index.ts`);
 - the token is never logged, persisted, or put in a URL.
+
+Still open (upstream): a forged `scope` or `token` can be injected the same way.
+That swaps the session's data source or breaks requests, but cannot move the
+genuine token off the allowlisted host.
 
 ### One upstream quirk
 

@@ -1,4 +1,4 @@
-const { div, span, input, select, option, button, i } = globalThis.van.tags;
+const { div, span, input, button, i } = globalThis.van.tags;
 
 const ROW_BASE = "rounded-md border border-base-300/70 bg-base-100 hover:border-primary/50 transition-all";
 const ROW_SELECTED = "rounded-md border border-primary bg-base-100 ring-1 ring-primary/30";
@@ -10,9 +10,9 @@ function iconNode(icon, extraClass = "", style = "") {
 
 /**
  * One annotation preset rendered as a collapsible row. Collapsed state is
- * a single line (color • title • factory icon • delete). Selecting the row
- * expands an editor that exposes the factory select, metadata fields, and
- * "add field" affordance.
+ * a single line (color • title • delete). Selecting the row expands an editor
+ * that exposes the metadata fields and "add field" affordance. The drawing
+ * shape is not a class property - it is the toolbar's tool.
  *
  * View only: domain logic flows through `callbacks` so the card stays
  * decoupled from the plugin.
@@ -27,11 +27,10 @@ function iconNode(icon, extraClass = "", style = "") {
  * @property {string} [reason] tooltip explaining why
  */
 export class PresetCard extends UI.BaseComponent {
-    constructor({ preset, isSelected, enableModify, allowedFactories, t, callbacks, lock }) {
+    constructor({ preset, isSelected, enableModify, t, callbacks, lock }) {
         super({ extraClasses: {} });
         this.preset = preset;
         this.enableModify = !!enableModify;
-        this.allowedFactories = allowedFactories || [];
         this.t = typeof t === "function" ? t : (k) => k;
         this.cb = callbacks || {};
         this.lock = {
@@ -100,12 +99,6 @@ export class PresetCard extends UI.BaseComponent {
                 title: this.lock.title ? this.lock.reason : undefined,
             }, preset.meta.category?.value || (this.t("annotations.presets.unnamed") || "Unnamed Class"));
 
-        const factoryIcon = iconNode(
-            preset.objectFactory.getIcon?.() || "ph-shapes",
-            "text-xs opacity-70 shrink-0",
-            `color: ${preset.color};`
-        );
-
         const metaCount = Object.keys(preset.meta).filter(k => k !== "category").length;
         const metaBadge = metaCount > 0
             ? span({ class: "badge badge-ghost badge-xs shrink-0", title: `${metaCount} fields` }, String(metaCount))
@@ -128,24 +121,11 @@ export class PresetCard extends UI.BaseComponent {
         return div({
             class: "group flex items-center gap-2 px-2 py-0.5 cursor-pointer",
             onclick: () => this.cb.onSelect?.(this.preset.presetID, this),
-        }, this._chevron, colorChip, titleNode, factoryIcon, metaBadge, deleteBtn);
+        }, this._chevron, colorChip, titleNode, metaBadge, deleteBtn);
     }
 
     _renderEditor() {
         const preset = this.preset;
-
-        const factorySelect = select({
-            class: "select select-bordered select-xs flex-1 font-medium",
-            disabled: !this.enableModify,
-            onclick: (e) => e.stopPropagation(),
-            onchange: (e) => this.cb.onFactoryChange?.(preset.presetID, e.target.value),
-        }, ...this.allowedFactories.map((factoryId) => {
-            const factory = this.cb.getFactory?.(factoryId);
-            return factory ? option({
-                value: factory.factoryID,
-                selected: factory.factoryID === preset.objectFactory.factoryID,
-            }, factory.title()) : null;
-        }));
 
         const metaList = div({ class: "flex flex-col gap-1" });
         const otherMetaEntries = Object.entries(preset.meta).filter(([key]) => key !== "category");
@@ -161,10 +141,6 @@ export class PresetCard extends UI.BaseComponent {
             class: `flex flex-col gap-2 px-2 pb-2 pt-1 border-t border-base-200 ${this._expanded ? "" : "hidden"}`,
             onclick: (e) => e.stopPropagation(),
         },
-            div({ class: "flex items-center gap-2" },
-                span({ class: "text-xs opacity-60 shrink-0 w-12" }, this.t("annotations.presets.typeLabel") || "Type"),
-                factorySelect,
-            ),
             otherMetaEntries.length > 0 ? div({ class: "flex items-start gap-2" },
                 span({ class: "text-xs opacity-60 shrink-0 w-12 pt-1" }, this.t("annotations.presets.fieldsLabel") || "Fields"),
                 metaList,

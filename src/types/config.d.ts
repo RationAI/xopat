@@ -26,9 +26,15 @@ type XOpatClientConfig = {
      * in the template — or an object
      * `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`
      * whose *remaining* fields are forwarded verbatim to `new HttpClient({…})`.
-     * The object form makes every request issued by this protocol's TileSource
-     * (metadata + tiles) flow through the configured HttpClient — gaining proxy
-     * routing, CSRF injection, and JWT/auth headers uniformly; and
+     * Both forms route every request issued by this protocol's TileSource
+     * (metadata + tiles) through an HttpClient — gaining proxy routing, CSRF
+     * injection, and JWT/auth headers uniformly. The string form has no options
+     * to configure one from, so its transport is INFERRED: the origin its
+     * template resolves to becomes the `baseURL` and the main auth context
+     * supplies the credential. The object form is how a deployment overrides
+     * that (`proxy`, a different `auth.contextId`, `auth.types: []` for none) —
+     * and it is required when the template is relative or when the upstream
+     * varies per slide, since neither yields a single origin to bind. And
      * `tileSourceClass` names the TileSource class to construct directly,
      * skipping OSD autodetection so per-slide `options` can shape the metadata
      * request (operator-only — see `SlideProtocolUrlTemplateEntry`).
@@ -164,6 +170,17 @@ type XOpatSetup = {
      */
     sessionCacheKey?: string | null;
     locale?: string | null;
+    /**
+     * Per-sink IO for this session. An entry is `true`/`false` ("is this
+     * destination plugged in"), or an object `{enabled?, ...settings}` whose
+     * settings the sink reads via `IO_PIPELINE.sessionSinkConfig(id)` (core never
+     * interprets them). Honoured only for sinks the deployment marked
+     * `io.sinks.<id>.sessionControllable`; otherwise the operator's
+     * `io.sinks.<id>.enabled` stands and settings are not handed out, which is
+     * how a deployment pins a sink against an untrusted session bundle. See
+     * `src/IO_PIPELINE.md`.
+     */
+    ioSinks?: Record<string, boolean | ({ enabled?: boolean } & Record<string, unknown>)> | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
     webglDebugMode?: boolean | null;
@@ -192,10 +209,14 @@ type XOpatSetup = {
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
     /**
-     * If true, the viewer only zooms on `Ctrl/Cmd + wheel`; plain wheel scrolls
-     * the host page through. Intended for notebook / scrollable-host embeddings
-     * where unintentional viewer zoom hijacks page scroll.
+     * If true, the wheel scrolls the host page until the user clicks into the
+     * viewer; the viewer releases it again when the pointer leaves. Intended for
+     * notebook / scrollable-host embeddings where unintentional viewer zoom
+     * hijacks page scroll. Gates on a click rather than a modifier so that
+     * modifier+wheel (focal planes) means the same in every mode.
      */
+    scrollRequiresClick?: boolean | null;
+    /** @deprecated Former name of {@link scrollRequiresClick}; still honoured. */
     scrollRequiresCtrl?: boolean | null;
     /**
      * If true, the scroll-to-zoom direction is inverted: scrolling down zooms in
@@ -213,7 +234,7 @@ type XOpatSetup = {
     /**
      * Multiplier on the normalized wheel delta (default `1`). Values above 1
      * cover more zoom range per wheel turn, below 1 tame an over-sensitive
-     * device. Applies to continuous zoom, magnification snapping and Alt+wheel
+     * device. Applies to continuous zoom, magnification snapping and modifier+wheel
      * z-stack scrubbing alike.
      */
     scrollSpeed?: number | null;
@@ -306,6 +327,13 @@ type XOpatSetup = {
     zRepaintOffViewport?: "cached-only" | "fetch" | null;
     webGlPreferredVersion?: string | null;
     /**
+     * First-pass sampling of tiles drawn below their texture resolution.
+     * `"default"` (single tap) suits brightfield; `"max"` keeps the per-channel
+     * maximum over the texel footprint so sparse bright features (fluorescence)
+     * do not vanish when zoomed out. Forwarded to every FlexRenderer drawer.
+     */
+    webGlMinificationFilter?: "default" | "max" | null;
+    /**
      * How many viewer cells may hold their own WebGL context instead of sharing
      * one. A private context removes the per-frame `readPixels` + `putImageData`
      * transfer a shared context needs; cells past the budget fall back to the
@@ -337,6 +365,18 @@ type XOpatSetup = {
         maskIcon?: string | null;
         maskIconColor?: string | null;
         logo?: string | null;
+        /**
+         * DaisyUI theme names used for the light / dark mode instead of
+         * `xOpat-light` / `xOpat-dark`. The themes themselves come from an
+         * element's `tailwind.preset.js` (see ui/README.md "Theming").
+         * Names must be plain identifiers (`[A-Za-z0-9_-]`).
+         */
+        themes?: { light?: string | null; dark?: string | null } | null;
+        /**
+         * Stylesheets emitted in the page head AFTER the core CSS, in order.
+         * Page-root-relative paths or absolute http(s) URLs.
+         */
+        css?: string[] | null;
     } | null;
     /**
      * Fast-access icon-only actions pinned into the top app bar, referenced by
@@ -480,12 +520,24 @@ type XOpatServerConfig = {
  */
 type XOpatPluginSelectionMode = "all" | "whitelist" | "available";
 
+type XOpatServedDeployment = {
+    id: string;
+    requested: string | null;
+    fellBack: boolean;
+};
+
 type XOpatCoreConfig = {
     name: string;
     version: string;
     gateway: string;
     active_client: string;
     client: XOpatClientConfig | Record<string, XOpatClientConfig>;
+    /**
+     * Served named deployment (server-stamped, read-only). See env/README.md
+     * "Multiple deployments". `id` is "base" when the env defines none or the
+     * base ENV is the default; `requested` echoes the request's (untrusted) name.
+     */
+    deployment?: XOpatServedDeployment;
     setup: XOpatSetup;
     server: XOpatServerConfig;
     monaco: string;
@@ -610,6 +662,11 @@ interface XOpatSessionConfig {
     background?: BackgroundItem[];
     visualizations?: VisualizationItem[];
     plugins?: Record<string, unknown>;
+    /**
+     * Named deployment to open this session under — an id the operator defined
+     * in the env `deployments` map. Unknown or absent: the deployment default.
+     */
+    deployment?: string;
 }
 
 /**

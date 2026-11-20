@@ -12,12 +12,6 @@ function textNode(value) {
 }
 
 export const presetMethods = {
-    validatePresetFactory(preset) {
-        if (!this._allowedFactories.find((t) => preset.objectFactory.factoryID === t)) {
-            preset.objectFactory = this.context.getAnnotationObjectFactory('polygon');
-        }
-    },
-
     updatePresetEvent() {
         this.updatePresetsHTML();
     },
@@ -88,13 +82,11 @@ export const presetMethods = {
         const right = document.getElementById('annotations-right-click');
 
         if (leftPreset) {
-            this.validatePresetFactory(leftPreset);
             this._setContainerContent(left, this.getPresetControlHTML(leftPreset, true));
         } else {
             this._setContainerContent(left, this.getMissingPresetHTML(true));
         }
         if (rightPreset) {
-            this.validatePresetFactory(rightPreset);
             this._setContainerContent(right, this.getPresetControlHTML(rightPreset, false));
         } else {
             this._setContainerContent(right, this.getMissingPresetHTML(false));
@@ -130,7 +122,7 @@ export const presetMethods = {
                         this._clickPresetSelect(false, preset.presetID);
                     }
                 },
-                iconNode(preset.objectFactory.getIcon(), 'text-sm', `color: ${preset.color};`),
+                iconNode('ph-tag', 'text-sm', `color: ${preset.color};`),
                 span({class: 'truncate flex-1 text-left'}, preset.meta['category']?.value || 'Unnamed Class'),
 
                 // Functional "Remove" Icons
@@ -159,12 +151,14 @@ export const presetMethods = {
     },
 
     getPresetControlHTML(preset, isLeftClick) {
-        const category = preset.getMetaValue('category') || preset.objectFactory.title();
+        // The chip shows what the button draws: the active tool in the class colour.
+        const tool = this.context.getActiveFactory(isLeftClick);
+        const category = preset.getMetaValue('category') || tool.title();
         return div({
                 class: 'group flex items-center gap-2 bg-base-300 hover:bg-base-100 px-2 py-1 rounded-lg transition-all cursor-pointer border border-base-content/10',
                 onclick: () => this.showPresets(isLeftClick)
             },
-            iconNode(preset.objectFactory.getIcon(), 'text-xs', `color: ${preset.color};`),
+            iconNode(tool.getIcon(), 'text-xs', `color: ${preset.color};`),
             span({ class: 'text-xs font-bold truncate max-w-[80px]' }, category),
             button({
                 class: 'btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100 min-h-0 h-5 w-5',
@@ -261,7 +255,7 @@ export const presetMethods = {
 
             // Small tinted icon carries the preset colour. Set via DOM to keep a
             // user-supplied colour out of an attribute string.
-            const icon = iconNode(preset.objectFactory.getIcon(), 'text-base shrink-0');
+            const icon = iconNode('ph-tag', 'text-base shrink-0');
             icon.style.color = preset.color || '';
 
             const bindBtn = (bound, asLeft, tone) => button({
@@ -270,8 +264,16 @@ export const presetMethods = {
                     onclick: (e) => { e.stopPropagation(); this._clickPresetSelect(asLeft, preset.presetID); }
                 }, asLeft ? 'L' : 'R');
 
+            // The row binds with the button it is clicked with: left click -> left
+            // mouse button, right click -> right. The L/R buttons stay for touch
+            // and for discoverability.
             rows.push(div({
-                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim()
+                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors cursor-pointer ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim(),
+                    onclick: () => this._clickPresetSelect(true, preset.presetID),
+                    oncontextmenu: (e) => {
+                        e.preventDefault();
+                        this._clickPresetSelect(false, preset.presetID);
+                    }
                 },
                 icon,
                 span({ class: 'truncate flex-1 text-xs font-medium' },
@@ -317,22 +319,6 @@ export const presetMethods = {
         return this.getPresetHTML(preset, this.context.presets.getActivePreset(isLeftClick), index);
     },
 
-    _createFactorySelect(preset) {
-        const opts = this._allowedFactories.map((factoryId) => {
-            const factory = this.context.getAnnotationObjectFactory(factoryId);
-            return factory ? option({
-                value: factory.factoryID,
-                selected: factory.factoryID === preset.objectFactory.factoryID
-            }, factory.title()) : null;
-        });
-
-        return select({
-            class: 'select select-bordered select-xs w-full font-medium',
-            disabled: !this.enablePresetModify,
-            onchange: (e) => this.updatePresetWith(preset.presetID, 'objectFactory', e.target.value)
-        }, ...opts);
-    },
-
     _metaFieldHtml(presetId, key, metaObject, allowDelete = true, classes = '') {
         const container = div({ class: 'relative group/meta' });
 
@@ -366,15 +352,12 @@ export const presetMethods = {
             preset,
             isSelected,
             enableModify: this.enablePresetModify,
-            allowedFactories: this._allowedFactories,
             lock: this._presetCardLock(preset),
             t: (key) => this.t(key),
             callbacks: {
-                getFactory: (id) => this.context.getAnnotationObjectFactory(id),
                 onSelect: (id) => this._selectPresetCard(id),
                 onDelete: (id, instance) => this._removePresetCard(id, instance),
                 onColorChange: (id, value) => this.updatePresetWith(id, 'color', value),
-                onFactoryChange: (id, value) => this.updatePresetWith(id, 'objectFactory', value),
                 onMetaChange: (id, key, value) => this.updatePresetWith(id, key, value),
                 onMetaDelete: (id, key, rowEl) => this._deleteMetaField(id, key, rowEl),
                 onMetaAdd: (id, name) => this._addMetaField(id, name),
@@ -437,24 +420,14 @@ export const presetMethods = {
 
     updatePresetWith(id, propName, value) {
         if (!this.enablePresetModify) return;
-        const preset = this.context.presets.get(id);
-        if (!preset) return;
+        // The preset's factory is a deprecated default, not editable from the UI:
+        // the drawing shape is the toolbar's tool (context.setActiveFactory).
+        if (propName === 'objectFactory') return;
+        if (!this.context.presets.get(id)) return;
 
-        if (propName === 'objectFactory') {
-            // objectFactory stores a factory instance, not the id string —
-            // keep this path inline and raise preset-update manually so
-            // the IO pipeline still sees the change.
-            const next = this.context.getAnnotationObjectFactory(value);
-            if (next && next !== preset.objectFactory) {
-                preset.objectFactory = next;
-                this.context.raiseEvent('preset-update', { preset });
-            }
-        } else {
-            // PresetManager.updatePreset writes the property and raises
-            // preset-update only when something actually changed.
-            this.context.presets.updatePreset(id, { [propName]: value });
-        }
-
+        // PresetManager.updatePreset writes the property and raises
+        // preset-update only when something actually changed.
+        this.context.presets.updatePreset(id, { [propName]: value });
         this.updatePresetEvent();
     },
 

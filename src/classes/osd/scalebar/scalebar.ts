@@ -67,7 +67,7 @@ import {
     isDefined,
     toSignedRotation,
 } from "./units";
-import { addQuickZoomChrome, addSyncMenuChrome } from "./chrome";
+import { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField, ZOOM_READOUT_SHIFT_PX } from "./chrome";
 import { ViewportSyncAPI } from "./viewport-sync-api";
 
 /**
@@ -79,11 +79,16 @@ OSD.Viewer.prototype.makeScalebar = function(options) {
     options = options || {};
     options.viewer = this;
 
+    // The scalebar is rebuilt for every slide (new calibration), but the strip
+    // reserved under it belongs to the viewer, not to one slide: carry it over,
+    // or the first slide change drops the dock back onto whatever reserved it.
+    const bottomInset = this.scalebar?._bottomInset || 0;
     if (this.scalebar) {
         this.scalebar.destroy();
     }
 
     this.scalebar = new OSD.Scalebar(options);
+    if (bottomInset) this.scalebar.setBottomInset(bottomInset);
 };
 
 OSD.ScalebarType = {
@@ -188,7 +193,7 @@ OSD.Scalebar = function(options) {
         // the dock's height never has to be measured — the panel may grow or
         // collapse freely without a reflow on this per-frame path.
         var location = this.getScalebarLocation();
-        const bottom = this._contH - (location.y + this._barH);
+        const bottom = this._contH - (location.y + this._barH) + (this._bottomInset || 0);
         if (location.x !== this._lastLocX || bottom !== this._lastBottom) {
             this._lastLocX = location.x;
             this._lastBottom = bottom;
@@ -532,7 +537,7 @@ OSD.Scalebar.prototype = {
                 );
                 // Sensible anchor before the first refreshHandler frame lands.
                 this.dock.style.left = (this.xOffset || 5) + "px";
-                this.dock.style.bottom = (this.yOffset || 5) + "px";
+                this.dock.style.bottom = ((this.yOffset || 5) + (this._bottomInset || 0)) + "px";
             }
             this._applyDockLayout();
             this.viewer.container.appendChild(this.dock);
@@ -570,7 +575,6 @@ OSD.Scalebar.prototype = {
 
                     const viewport = this.viewer.viewport;
                     const inside = "oklch(var(--b1))";
-                    const outside = "oklch(var(--er))";
 
                     this.magnificationContainer = document.createElement("div");
                     this.magnificationContainer.id = this.id + "-magnification";
@@ -582,8 +586,7 @@ OSD.Scalebar.prototype = {
                     // the parent stacking context and overlap menus.
                     this.magnificationContainer.classList.add(
                         // `relative` (not absolute): the panel is a flex child of
-                        // the dock now, and it must still be the containing block
-                        // for the absolutely-positioned sync header. z-[1] keeps
+                        // the dock. z-[1] keeps
                         // the header's z-index:3 and the label's hover z-index:40
                         // trapped in a local stacking context.
                         "relative",
@@ -609,17 +612,10 @@ OSD.Scalebar.prototype = {
 
                     // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                     const rotCol = document.createElement("div");
-                    rotCol.className = "flex flex-col items-center pb-2 pl-1";
+                    rotCol.className = "flex flex-col items-center pb-2 pl-2";
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
-                    rotReadout.type = "number";
-                    rotReadout.min = "-180";
-                    rotReadout.max = "180";
-                    rotReadout.step = "1";
-                    rotReadout.style.width = "50px";
-                    rotReadout.className =
-                        "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -628,8 +624,8 @@ OSD.Scalebar.prototype = {
 
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(rotReadout, rotSliderContainer);
-                    this.magnificationContainer.appendChild(rotCol);
+                    rotCol.append(readoutField(rotReadout, "°", 32), rotSliderContainer);
+                    this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += ' noUi-reverse';
                     noUiSlider.create(rotSliderContainer, {
@@ -781,12 +777,7 @@ OSD.Scalebar.prototype = {
 
                     let percentNative = ((nativeVal - range.min) / totalRange) * 100;
                     percentNative = Math.max(0, Math.min(100, percentNative));
-                    const bgStyle = `linear-gradient(to top,
-  ${inside} 0%,
-  ${inside} ${percentNative}%,
-  ${outside} ${percentNative}%,
-  ${outside} 100%
-)`;
+                    const bgStyle = digitalZoomTrack(inside, percentNative);
 
                     const sliderContainer = document.createElement("span");
                     sliderContainer.className = "relative flex-1 w-1.5 my-2";
@@ -800,26 +791,16 @@ OSD.Scalebar.prototype = {
                     this._ui.collapsibles.push(magCol);
 
                     const magInput = document.createElement("input");
-                    magInput.type = "number";
-                    magInput.inputMode = "decimal";
-                    magInput.step = "0.1";
-                    magInput.className = "input input-xs";
-                    magInput.min = String(minMag);
-                    magInput.max = String(maxMag);
-                    magInput.style.width = "45px";
-                    magInput.style.transform = "translate(14px, 0)";
-                    magInput.className =
-                        "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
-                    magInput.style.padding = "0";
-                    magInput.style.height = "24px";
-                    magInput.style.fontSize = "11px";
+                    magInput.title = window.$.t('main.scalebar.magnificationHint');
 
-                    sliderWrap.appendChild(magInput);
+                    const magField = readoutField(magInput, "×", 28);
+                    magField.style.transform = `translate(${ZOOM_READOUT_SHIFT_PX}px, 0)`;
+                    sliderWrap.appendChild(magField);
 
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
 
-                    this.magnificationContainer.appendChild(magCol);
+                    this._ui.slidersBox.appendChild(magCol);
                     // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
                     this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
@@ -999,8 +980,7 @@ OSD.Scalebar.prototype = {
                     // the parent stacking context and overlap menus.
                     this.magnificationContainer.classList.add(
                         // `relative` (not absolute): the panel is a flex child of
-                        // the dock now, and it must still be the containing block
-                        // for the absolutely-positioned sync header. z-[1] keeps
+                        // the dock. z-[1] keeps
                         // the header's z-index:3 and the label's hover z-index:40
                         // trapped in a local stacking context.
                         "relative",
@@ -1024,17 +1004,10 @@ OSD.Scalebar.prototype = {
                     addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                     const rotCol = document.createElement("div");
-                    rotCol.className = "flex flex-col items-center pb-2 pl-1";
+                    rotCol.className = "flex flex-col items-center pb-2 pl-2";
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
-                    rotReadout.type = "number";
-                    rotReadout.min = "-180";
-                    rotReadout.max = "180";
-                    rotReadout.step = "1";
-                    rotReadout.style.width = "50px";
-                    rotReadout.className =
-                        "input input-xs w-14 text-center text-xs font-bold px-1 rounded-lg bg-base-200 shadow text-base-content";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -1042,8 +1015,8 @@ OSD.Scalebar.prototype = {
                     rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(rotReadout, rotSliderContainer);
-                    this.magnificationContainer.appendChild(rotCol);
+                    rotCol.append(readoutField(rotReadout, "°", 32), rotSliderContainer);
+                    this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += " noUi-reverse";
                     noUiSlider.create(rotSliderContainer, {
@@ -1156,19 +1129,13 @@ OSD.Scalebar.prototype = {
                     const levelReadout = document.createElement("input");
                     levelReadout.type = "text";
                     levelReadout.readOnly = true;
-                    levelReadout.className =
-                        "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
-                    levelReadout.style.padding = "0";
-                    levelReadout.style.height = "24px";
-                    levelReadout.style.fontSize = "11px";
-                    levelReadout.style.width = "56px";
-                    levelReadout.style.transform = "translate(14px, 0)";
-
-                    sliderWrap.appendChild(levelReadout);
+                    const levelField = readoutField(levelReadout, "", 48);
+                    levelField.style.transform = `translate(${ZOOM_READOUT_SHIFT_PX}px, 0)`;
+                    sliderWrap.appendChild(levelField);
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
 
-                    this.magnificationContainer.appendChild(magCol);
+                    this._ui.slidersBox.appendChild(magCol);
                     // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
                     this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
@@ -1317,6 +1284,10 @@ OSD.Scalebar.prototype = {
                 // Per-frame handler (see addQuickZoomChrome) — not the 'zoom' event.
                 this.viewer.removeHandler("update-viewport", this._ui.onZoomQuick);
             }
+            // Drop the ViewerControls subscription of this strip's slot.
+            this._ui.unmountControls?.();
+            // Portaled to <body>: it would outlive the strip it hangs on.
+            this._ui.closeLabelPopover?.();
 
             // Destroy rotation slider
             if (this._ui.rotSliderEl?.noUiSlider) {
@@ -1376,6 +1347,28 @@ OSD.Scalebar.prototype = {
             this._viewerDestroyHandlerBound = false;
         }
         this._init({destroy: true});
+    },
+
+    /**
+     * Reserve a strip along the bottom edge of the viewer for other chrome
+     * (e.g. the focal-plane ruler): the whole dock is lifted by `px`.
+     * @param {number} px height of the reserved strip, 0 to release it
+     */
+    setBottomInset: function(px) {
+        px = Math.max(0, Number(px) || 0);
+        const previous = this._bottomInset || 0;
+        if (px === previous) return;
+        this._bottomInset = px;
+        // Move the dock here rather than through `refreshHandler`: that one
+        // needs an open, measured viewer, and this is called while a slide is
+        // still opening. The next frame recomputes the same value anyway.
+        if (!this.dock) return;
+        if (this._lastBottom !== undefined) {
+            this._lastBottom = this._lastBottom - previous + px;
+            this.dock.style.bottom = this._lastBottom + "px";
+        } else {
+            this.dock.style.bottom = ((this.yOffset || 5) + px) + "px";
+        }
     },
 
     setActive: function(active) {

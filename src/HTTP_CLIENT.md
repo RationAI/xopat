@@ -158,15 +158,22 @@ Where:
 
 - `path` (string)  
   Path relative to `baseURL` (if set). For proxy mode, this is the path after `/proxy/<alias>/`.
+  A relative path must stay under `baseURL`: one whose dot segments (`..`, `%2e%2e`) resolve
+  outside it throws instead of carrying this client's credentials to another route or proxy alias.
+  `HTTPError` messages show the URL without query string, fragment or userinfo; read
+  `error.response.url` for the exact one.
 
 - `options` (object)
 
   {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", // default "GET"
   headers: { ... },      // extra headers
-  body: any,             // will be JSON.stringify’d if object
+  body: any,             // object/string → sent as JSON (application/json);
+                         // FormData, Blob/File, URLSearchParams, ArrayBuffer, typed arrays → sent as-is,
+                         // no Content-Type set (browser picks it, e.g. multipart boundary).
+                         // A caller-supplied Content-Type header always wins.
   query: { ... },        // optional query string object — appended via URLSearchParams; arrays become repeated keys
-  expect: "json" | "text" | "auto", // default "auto" — drives response parsing
+  expect: "json" | "text" | "bytes" | "auto", // default "auto" — drives response parsing
   }
 
 `expect` in detail:
@@ -175,6 +182,8 @@ Where:
   bare `SyntaxError`), so it surfaces immediately instead of being replayed by the
   retry arm.
 - `"text"` — `res.text()`, verbatim.
+- `"bytes"` — `res.arrayBuffer()`. Use it for anything binary: reading bytes as text
+  corrupts them irreversibly.
 - `"auto"` (default) — a JSON content-type parses as JSON; otherwise the body is
   read once, parsed as JSON opportunistically, and returned as **text** when that
   fails. An empty body returns `{}`.
@@ -265,7 +274,7 @@ When a request is sent:
 
 1. Cross-origin URLs (an absolute URL outside `baseURL`'s origin) drop **all** auth headers, with one warning per foreign origin.
 2. If `awaitContext` is on and no secret exists yet, the client waits (bounded, abortable) for `APPLICATION_CONTEXT.auth.whenContextSettled(contextId)`.
-3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`).
+3. `_authHeaders` iterates the resolved secret types (explicit `auth.types`, else `getSecretTypes(contextId)`, else `["jwt"]`). An explicitly **empty** `auth.types` means *no credential*: it is the only way to say so, and length is deliberately not part of that test — reading `[]` as "unset" sent the context's JWT to an endpoint that had asked for none.
 4. For each type:
     - Looks up a secret `getSecret(type, contextId)`.
     - If found, calls the handler with `{ secret, type, contextId, url, method }`.

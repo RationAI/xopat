@@ -8,8 +8,8 @@
  * browser and in Node's full ICU); where it is missing, runs of letters/digits are the
  * words, which is today's behaviour for English.
  *
- * Deliberately duplicated in the chat and mixture modules (`shared/text-words.ts`,
- * `text-words.mjs`): modules do not import each other.
+ * Deliberately duplicated in the chat module (`shared/text-words.ts`):
+ * modules do not import each other.
  */
 
 export interface WordSpan {

@@ -817,12 +817,22 @@ export class SessionSyncController implements SessionSync {
 
 // ── pure helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Unguessable: the session id names the BroadcastChannel a host accepts answers
+ * on, and any same-origin tab — of any deployment — can open a channel by name.
+ */
+function randomToken(): string {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+}
+
 function makeSessionId(): string {
-    return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    return `s_${Date.now().toString(36)}_${randomToken()}`;
 }
 
 function makeIntentId(): string {
-    return `i_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+    return `i_${Date.now().toString(36)}_${randomToken()}`;
 }
 
 function toIntent(delta: SessionDelta): SessionIntent {

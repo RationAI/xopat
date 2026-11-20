@@ -48,11 +48,13 @@ const dns = require("node:dns/promises");
 const net = require("node:net");
 const { createBoundedCache } = require("./storage/bounded-cache");
 
-// Default socket-idle timeout for guarded outbound requests. LLM streaming,
+// Default TOTAL deadline for guarded outbound requests (not an idle timeout: for
+// `safeFetch` it also covers reading a streamed body). LLM streaming,
 // vision inference and slow model-discovery endpoints routinely exceed the old
 // 30s value, so the default is generous and operator-tunable via
 // XOPAT_SSRF_TIMEOUT_MS. Callers with their own budget (transcription, vision)
-// still pass an explicit `timeoutMs` that overrides this. Floored at 1000ms so a
+// still pass an explicit `timeoutMs` that overrides this; a caller that owns its own
+// deadline through `signal` (an LLM SDK transport) passes `timeoutMs: 0`. Floored at 1000ms so a
 // misconfigured env cannot make every request fail instantly.
 const DEFAULT_SSRF_TIMEOUT_MS = (() => {
     const raw = Number.parseInt(String(process.env.XOPAT_SSRF_TIMEOUT_MS || ""), 10);

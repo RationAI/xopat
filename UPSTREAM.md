@@ -625,6 +625,55 @@ deferred timer. It stays until the timer is tracked and cancelled in `destroy()`
 
 ---
 
+## flex-renderer — legacy `use_mode` aliases resolve only inside a private instance method
+
+**Library:** `src/libs/flex-renderer/flex-renderer.js` — `ShaderLayer#_resolveLegacyUseMode`.
+**Status:** open
+**Raised:** 2026-11-11
+
+### Why
+
+The renderer maps `mask` → `blend` and `mask_clip` / `clip_mask` → `clip`, but only in a
+private instance method. UI code reading a raw shader config (`params.use_mode`) has no public
+way to get the resolved mode, so it showed a `mask_clip` layer as blend.
+
+### What xOpat does meanwhile
+
+`ui/classes/components/shaderLayer.mjs` duplicates the mapping in `ShaderLayer.normalizeUseMode`
+(also used by `shaderSideMenu.mjs`). A new alias added in the library would silently diverge.
+
+### The change
+
+Expose a static, side-effect-free helper (e.g. `FlexRenderer.ShaderLayer.normalizeUseMode(raw)`)
+and have `_resolveLegacyUseMode` call it. xOpat's helper then delegates to it.
+
+---
+
+## flex-renderer — no way to tell a cached default from a user override
+
+**Library:** `src/libs/flex-renderer/flex-renderer.js` — `SimpleUIControl#init`, `ShaderLayer#cache`.
+**Status:** open
+**Raised:** 2026-11-11
+
+### Why
+
+`SimpleUIControl#init` stores the control's default into `config.cache` on every program use,
+so a layer's cache is never empty. The UI cannot tell "user changed this" from "default was
+written back", and showed the clear-cache indicator on every layer.
+
+### What xOpat does meanwhile
+
+`ShaderLayer.hasCacheOverrides` (`ui/classes/components/shaderLayer.mjs`) walks the private
+`shader._controls` and compares each simple control's cached value with `control.params.default`.
+Advanced controls (cache keys `name + paramName`) are not compared.
+
+### The change
+
+Either stop writing defaults into the cache, or expose `ShaderLayer#hasCacheOverrides()` that
+each control answers for its own keys.
+
+---
+
 ## flex-renderer — `MVTTileSource` cannot describe a non-square world
 
 `MVTTileSource.configure` (`src/libs/flex-renderer/flex-renderer.js` `~:25440`) derives

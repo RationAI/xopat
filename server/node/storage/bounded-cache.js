@@ -5,8 +5,8 @@
  *
  * Before this existed every server-side subsystem that needed to remember
  * something hand-rolled its own `Map` plus (sometimes) a bespoke sweeper: the
- * browser-session store, the SSRF host-verdict cache, the MIXTURE auth-verdict
- * cache, the chat model/media caches, the provider factory caches. Seven
+ * browser-session store, the SSRF host-verdict cache, plugin auth-verdict
+ * caches, the chat model/media caches, the provider factory caches. Seven
  * implementations, seven schedules, no introspection, and several of them
  * unbounded.
  *

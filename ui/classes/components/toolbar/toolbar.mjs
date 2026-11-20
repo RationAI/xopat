@@ -449,23 +449,6 @@ class Toolbar extends BaseComponent {
         root.style.display = this._managedVisible ? "" : "none";
     }
 
-    /**
-     * Width of the toolbar's content box when laid out horizontally, in px —
-     * what it would occupy inside a host bar (the drag handle / dock / close
-     * chrome is hidden when embedded and is deliberately not counted).
-     *
-     * Returns 0 while the toolbar is laid out vertically: a column's width says
-     * nothing about its horizontal footprint, and guessing would be worse than
-     * letting the caller fall back to its own cached measurement.
-     *
-     * @return {number}
-     */
-    getHorizontalContentWidth() {
-        const wrap = this._rootWrap;
-        if (!wrap || wrap.classList.contains("flex-col")) return 0;
-        return Math.ceil(wrap.scrollWidth || wrap.getBoundingClientRect().width || 0);
-    }
-
     _applyEmbeddedStyles() {
         const root = this.getRootNode();
         const wrap = this._rootWrap;

@@ -37,6 +37,15 @@ export function bootstrapIOPipeline(
     const IO_PIPELINE: IOPipeline = createIOPipeline({
         POST_DATA,
         getConfig: () => (ENV?.client as any)?.io,
+        // The session's per-sink on/off map. Read from POST_DATA rather than
+        // through `APPLICATION_CONTEXT.getOption` for two reasons: the pipeline is
+        // built BEFORE the context exists (see the file header), and `getOption`
+        // would add an AppCache layer — a destination switch must not outlive the
+        // session that asked for it. `src/app.ts` has already filtered
+        // `visualization.params` against the `setup` schema by the time this runs,
+        // and the operator still decides per sink whether the value is honoured at
+        // all (`ENV.client.io.sinks.<id>.sessionControllable`).
+        getSessionSinks: () => (POST_DATA?.visualization as any)?.params?.ioSinks,
         cookieAttributes: {
             path: ENV.client.js_cookie_path,
             domain: normalizeCookieDomain(ENV.client.js_cookie_domain || ENV.client.domain),

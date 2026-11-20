@@ -24,6 +24,7 @@
 
 const util = require("node:util");
 const crypto = require("node:crypto");
+const { currentDeployment } = require("./deployment-scope");
 
 const LEVELS = Object.freeze({ trace: 10, debug: 20, info: 30, warn: 40, error: 50, silent: 99 });
 const LEVEL_NAMES = Object.freeze(Object.keys(LEVELS));
@@ -208,6 +209,7 @@ class LogRingBuffer {
         const minLevel = query.minLevel !== undefined ? normalizeLevel(query.minLevel, null) : null;
 
         let filtered = this.entries.filter(entry => entry.id > afterId);
+        if (typeof query.deployment === "string") filtered = filtered.filter(entry => entry.deployment === query.deployment);
         if (levels && levels.size) filtered = filtered.filter(entry => levels.has(entry.level));
         if (minLevel !== null) filtered = filtered.filter(entry => normalizeLevel(entry.level, 0) >= minLevel);
         if (channels && channels.size) {
@@ -743,6 +745,12 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                 maxRecordsPerBatch: Math.max(1, Number(raw.client?.maxRecordsPerBatch) || 200),
                 maxRecordBytes: Math.max(256, Number(raw.client?.maxRecordBytes) || 32_768),
                 maxRecordsPerMinute: Math.max(10, Number(raw.client?.maxRecordsPerMinute) || 2_000),
+                // Bytes the browser sends along with a record — a dictation
+                // window, a screenshot. A SECOND opt-in beyond `ingest`: accepting
+                // lines is accepting text the caps already bound, accepting files
+                // is accepting whatever a caller decides to upload.
+                attachments: raw.client?.attachments === true,
+                maxAttachmentBytes: Math.max(1024, Number(raw.client?.maxAttachmentBytes) || 4 * 1024 * 1024),
             },
             // Serialization caps. Raising these is how you get a full conversation
             // dump out of a `sensitive` record instead of a truncated one.
@@ -925,6 +933,9 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
             channel,
             message: formatMessage(messageArgs, cfg.redact, cfg.extraKeyRe, sensitive),
             pid,
+            // Named deployment the emitting code ran in, so a log reader can be
+            // confined to its own (server/templates/javascript/deployments.js).
+            deployment: currentDeployment(),
         };
         if (fields) record.fields = fields;
         if (bound?.requestId) record.requestId = bound.requestId;
@@ -1133,6 +1144,10 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
                 : (ctx?.user?.id ? `user:${ctx.user.id}` : null);
             if (principal && principals.includes(principal)) return true;
             if (principal && ctx?.user?.id && principals.includes(String(ctx.user.id))) return true;
+            // `<contextId>:user:<sub>` pins the identity provider: a `sub` is only
+            // unique within one, and deployments may log in through different ones.
+            const contextId = ctx?.user?.contextId;
+            if (principal && contextId && principals.includes(`${contextId}:${principal}`)) return true;
 
             for (const [claim, expected] of Object.entries(claims)) {
                 const actual = ctx?.user?.[claim];
@@ -1144,6 +1159,10 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
             return false;
         },
         getEntries: (query) => ring.getEntries(query),
+        /** Whether `logging.access` lets an allowed reader see every deployment's records. */
+        readsAllDeployments() {
+            return resolveConfig().access?.allDeployments === true;
+        },
         /**
          * Push every stream destination now instead of at its next tick.
          *
@@ -1167,14 +1186,28 @@ function createLogging({ getConfig, getStorage, devMode = false, baseConsole = c
          * sink treat it exactly like a server record — which is the point of
          * accepting it at all.
          */
-        ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}) {
+        ingestClientRecord({ channel, level, message, fields, sensitive }, bound = {}, payload) {
             const cfg = resolveConfig();
             if (!cfg.client.ingest) return null;
-            if (sensitive && !cfg.allowSensitive) return null;
+            // Bytes are user content: whatever level/flag the browser claimed, a
+            // record carrying them is gated exactly like `logger.attachment` —
+            // sensitive, at trace. The client says what happened, never how
+            // sensitive it was.
+            const hasBytes = !!(payload && payload.bytes);
+            const isSensitive = sensitive === true || hasBytes;
+            if (isSensitive && !cfg.allowSensitive) return null;
             const name = `client:${normalizeChannel(channel || "app")}`;
             const args = fields && typeof fields === "object" ? [fields, String(message ?? "")] : [String(message ?? "")];
-            return emit(name, normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info)),
-                sensitive === true, args, { ...bound, source: "client" });
+            const levelLabel = hasBytes ? "trace"
+                : normalizeLevel(level, null) === null ? "info" : levelName(normalizeLevel(level, LEVELS.info));
+            return emit(name, levelLabel,
+                isSensitive, args, { ...bound, source: "client" },
+                // Bytes the browser sent with this record. They take the SAME path
+                // a server-side `logger.attachment` takes — a destination that can
+                // hold them writes the file, one that cannot says so on the line —
+                // so there is no second, browser-only storage policy to keep in
+                // sync. The caller has already checked the size and the opt-in.
+                payload && payload.bytes ? { bytes: payload.bytes, file: payload.file } : undefined);
         },
     };
     return api;

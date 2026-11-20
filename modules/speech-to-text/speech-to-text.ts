@@ -267,6 +267,25 @@ export interface ContinuousDictationOptions extends TranscriptionOptions {
     /** Called with each window's transcript as it lands (in seal order, best-effort; eager mode only). */
     onWindow?: (window: TranscribedWindow) => void;
     /**
+     * Called with each window's AUDIO the moment it seals, before anything is
+     * decoded — in both window modes, and whether or not the decode later
+     * succeeds.
+     *
+     * This is the only point the bytes can be taken: a window that transcribes
+     * frees its blob immediately (`w.blob = null`), so by the time `onWindow`
+     * fires the audio is already gone, and a window that never decodes never
+     * reaches `onWindow` at all. A consumer archiving the recording for review
+     * needs exactly the failing one.
+     *
+     * The blob is handed over, not copied — read it, do not retain it past the
+     * session. It is raw patient dictation: a consumer that ships it anywhere is
+     * making a PHI decision and owns it. Must not throw; must not block (the
+     * window chain is what transcribes the dictation).
+     */
+    onWindowAudio?: (window: {
+        index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean;
+    }) => void;
+    /**
      * This start CONTINUES the dictation the previous session belonged to — a resume after
      * an edit pause, an in-place restart after a microphone stall. The retained recording
      * and its windows are kept and the new capture's windows join them.
@@ -493,6 +512,14 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             };
         }
         this._capture = new AudioCapture({workletUrl, silero});
+        // NOT prewarmed here. This constructor runs at module load, on every page
+        // that includes speech-to-text, so prewarming made ~16 MB of ONNX/WASM (only
+        // the `.wasm` is compressed in transit) a boot cost for the majority of
+        // sessions that never dictate — competing with slide tiles for bandwidth
+        // exactly when the viewer needs it. The load stays on first use (capture
+        // start, alongside the permission prompt; memoized).
+        // A voice UI that knows dictation is imminent — a panel opening, a mic
+        // hover — should call `capture.prewarmVad()` itself at that moment.
         this._localeReady = this.loadLocale().catch((e: any) =>
             APPLICATION_CONTEXT.log("module.speech-to-text").warn(e, "locale load failed"));
 
@@ -788,6 +815,20 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
     }
 
     // ---- capability probe ----
+
+    /**
+     * Start fetching the VAD model now, because dictation is about to be likely.
+     *
+     * For a voice UI that has just been mounted or opened. Deliberately NOT called
+     * from this module's constructor: that runs on every page including this module,
+     * and made a ~16 MB download (the `.wasm` is compressed when the client negotiates
+     * `br`/`gzip`, the `.onnx` model never is) a boot cost for the majority of
+     * sessions that never dictate. Fire-and-forget, memoized, best-effort — a
+     * session that starts before it lands simply runs on the amplitude gate.
+     */
+    prewarmVad(): void {
+        try { this._capture.prewarmVad(); } catch (_e) { /* best-effort */ }
+    }
 
     /** True when capture is supported, permission is grantable, and a driver is reachable. */
     async isAvailable(): Promise<boolean> {
@@ -1373,7 +1414,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
                     // 15 s segment truncates a 90 s window too — and the whole-audio
                     // transcript is built from these. They get the PLAIN setting, never the
                     // A/B arm: the archive transcript is authoritative, not an experiment.
-                    ? (w) => this._enqueueWindow(w, {language: () => langPin.hint(), glossary, contextChars, onWindow: opts.onWindow, session: windowSession, lazy: opts.windowMode === "lazy"})
+                    ? (w) => this._enqueueWindow(w, {language: () => langPin.hint(), glossary, contextChars, onWindow: opts.onWindow, onWindowAudio: opts.onWindowAudio, session: windowSession, lazy: opts.windowMode === "lazy"})
                     : undefined,
                 // A capture-side discard is the one loss no layer above could see.
                 onDiscard: (meta, reason) => {
@@ -1627,7 +1668,7 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
      */
     private _enqueueWindow(
         w: { blob: Blob; index: number; fromSegment: number; toSegment: number; final: boolean },
-        ctx: { language?: () => string | undefined; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; session: number; lazy?: boolean },
+        ctx: { language?: () => string | undefined; glossary?: string; contextChars: number; onWindow?: (t: TranscribedWindow) => void; onWindowAudio?: (w: { index: number; blob: Blob; fromSegment: number; toSegment: number; final: boolean }) => void; session: number; lazy?: boolean },
     ): void {
         // Sealed after the recording it belongs to was cleared: the consumer has already
         // discarded that dictation, and its audio must not be uploaded now.
@@ -1637,6 +1678,14 @@ class SpeechToTextModule extends (XOpatModuleSingleton as any) {
             blob: w.blob as Blob | null, state: "pending", session: ctx.session,
         };
         this._windows.push(record);
+        // The audio tap fires HERE — before the decode, which frees the blob on
+        // success and keeps it only on failure. Anywhere later and the archive
+        // would hold exactly the windows that produced no text.
+        if (ctx.onWindowAudio) {
+            try {
+                ctx.onWindowAudio({index: w.index, blob: w.blob, fromSegment: w.fromSegment, toSegment: w.toSegment, final: w.final});
+            } catch (_e) { /* consumer error is theirs; the decode must still run */ }
+        }
         // Lazy: banked, not decoded. `transcribeSessionAudio` picks it up by `!text && blob`
         // if the consumer ever asks for the recording; until then nothing leaves the browser.
         if (ctx.lazy) return;

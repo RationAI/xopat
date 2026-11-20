@@ -1,7 +1,7 @@
 {
   "name": "xopat",
-  "version": "3.1.1",
-  "description": "A flexible multipurpose WSI viewer.",
+  "version": "3.2.2",
+  "description": "A flexible multipurpose high-resolution data viewing framework.",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
@@ -21,7 +21,6 @@
     "fixtures:derive": "node test/harness/data/derive.mjs",
     "fixtures:urls": "node test/harness/data/session-urls.mjs",
     "fixtures:serve": "node server/utils/node/slide-fileserver.mjs",
-
     "test:cypress": "npx cypress run --e2e",
     "test:cypress-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "test-env": "bash test/run-env.sh",
@@ -85,14 +84,23 @@
   "overrides": {
     "js-yaml": "^3.15.0",
     "minimatch": "^3.1.5",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5",
+    "adm-zip": "^0.6.1",
+    "uuid": "^11.1.1",
+    "@frsource/cypress-plugin-visual-regression-diff": {
+      "glob": "^14.0.6"
+    },
+    "sucrase": {
+      "glob": "^14.0.6"
+    }
   },
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
-    "@frsource/cypress-plugin-visual-regression-diff": "^4.1.1",
+    "@frsource/cypress-plugin-visual-regression-diff": "^4.3.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^25.5.0",
     "@types/openseadragon": "^5.0.2",
+    "@yao-pkg/pkg": "^6.25.0",
     "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
@@ -113,23 +121,51 @@
     "highlight.js": "^11.7.0",
     "i18n": "^0.15.1",
     "inquirer": "^12.1.0",
-    "jsdoc": "^4.0.2",
+    "jsdoc": "^4.0.5",
     "micromatch": "^4.0.8",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.32",
     "postcss-discard-duplicates": "^7.0.2",
     "postcss-merge-rules": "^7.0.6",
     "tailwindcss": "^3.4.14",
     "terser": "^5.44.0",
     "typescript": "^5.9.3"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "pkg": {
+    "targets": [
+      "node22-win-x64",
+      "node22-linux-x64"
+    ],
+    "scripts": [
+      "plugins/*/.server-dist/**/*.cjs",
+      "modules/*/.server-dist/**/*.cjs",
+      "plugins/*/.server-dist/node_modules/**/*.{js,cjs,json}",
+      "modules/*/.server-dist/node_modules/**/*.{js,cjs,json}",
+      "src/dist/user-roles-core.cjs"
+    ],
     "assets": [
       "server/templates/**/*",
+      "server/static/**/*",
+      "server/node/server-build-manifest.json",
       "plugins/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
       "modules/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "plugins/**/*.d.ts",
+      "modules/**/*.d.ts",
       "src/**/*",
       "ui/**/*",
+      "docs/assets/**/*",
+      "error.html",
+      "test/fixtures/sessions/*.json",
       "env/env.json"
     ]
+  },
+  "allowScripts": {
+    "esbuild@0.25.10": true,
+    "esbuild@0.28.2": true,
+    "core-js-pure": false,
+    "protobufjs": false,
+    "cypress": false
   }
 }

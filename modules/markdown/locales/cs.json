@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "name": "Markdown",
+    "description": "Bezpečně vykresluje text v markdownu a mění odkazy #xopat-… na akce, které může registrovat libovolný subsystém."
+  },
+  "links": {
+    "goToRegion": "Zobrazit tuto oblast v prohlížeči sklíček",
+    "regionUnavailable": "Tuto oblast sklíčka již nelze zobrazit — prohlížeč, na který odkazuje, není otevřen.",
+    "unavailable": "Tento odkaz již nelze otevřít."
+  }
+}

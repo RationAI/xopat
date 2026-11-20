@@ -122,6 +122,43 @@ class ViewportSyncAPI {
     }
 
     /**
+     * Degrees the sync session adds to this viewer's rotation relative to
+     * the reference viewer (`0` for the reference itself and for a viewer
+     * the session never posed). Persisted viewport state subtracts it: the
+     * session lives in memory only, so a stored rotation that includes the
+     * registration angle would outlive its cause and reopen the slide tilted.
+     *
+     * Reads the session directly — `_getSession()` would create one.
+     */
+    getRotationOffset() {
+        if (!this._poseApplied) return 0;
+        const t = ViewportSyncAPI._session?.transforms?.[this.master.uniqueId];
+        return t?.rotDeg ? -t.rotDeg : 0;
+    }
+
+    /**
+     * Take the registration's rotation / mirror back out of `viewer`, leaving
+     * it at the reference viewer's orientation (plus whatever the user turned
+     * by hand). Must run while the viewer's transform still exists and after
+     * it was unlinked — a linked viewer would push the correction to its peers.
+     */
+    _releasePose(viewer) {
+        const api = viewer?.scalebar?.ViewportSyncAPI;
+        if (!api?._poseApplied) return;
+        api._poseApplied = false;
+
+        const S = ViewportSyncAPI._session;
+        const id = viewer.uniqueId;
+        const t = S?.transforms?.[id];
+        const vp = viewer.viewport;
+        if (!t || !vp) return;
+
+        const rotDeg = t.rotDeg || 0;
+        if (rotDeg && isFinite(rotDeg)) vp.setRotation(vp.getRotation() + rotDeg, true);
+        if (S.flipParity?.[id] && typeof vp.setFlip === "function") vp.setFlip(!vp.getFlip());
+    }
+
+    /**
      * Join the sync session.
      *
      * `mode: "auto"` (default) derives the alignment from
@@ -142,7 +179,10 @@ class ViewportSyncAPI {
     async enable(opts = {}) {
         if (this.enabled) return { mode: "already-enabled", approximate: false };
 
-        const S = this._getSession();
+        // The session outlives layout changes; its reference viewer may not.
+        this._reconcileReference();
+
+        let S = this._getSession();
         const selfId = this.master.uniqueId;
         let mode = opts.mode === "manual" ? "manual" : "auto";
         if (this._pendingManual()[selfId] && opts.allowManual !== false) mode = "manual";
@@ -160,7 +200,7 @@ class ViewportSyncAPI {
             } else {
                 // First calibrated viewer defines the reference image space only.
                 this.__ui?.setProgress?.("0/3");
-                const refPts = await this.calibrateViewer(this.master);
+                const refPts = await this.calibrateViewer(this.master, { messageKey: opts.messageKey });
 
                 S.leaderId = selfId;
                 S.leaderPts = refPts;
@@ -187,6 +227,9 @@ class ViewportSyncAPI {
         // Calibration succeeded — the pending re-align has been honoured.
         delete this._pendingManual()[selfId];
 
+        // A manual calibration without reference points replaces the session.
+        S = this._getSession();
+
         // The reference viewer also uses the generic mapper so it can follow
         // any other viewer via the inverse registration.
         this.master.tools.link(S.context, (sourceViewer, sourceState) => {
@@ -194,6 +237,7 @@ class ViewportSyncAPI {
         });
 
         this.enabled = true;
+        this._poseApplied = true;
 
         // Make the newly joined viewer snap to the current synced pose using
         // whichever linked viewer is already active in the session.
@@ -286,39 +330,148 @@ class ViewportSyncAPI {
     }
 
     /**
-     * Three-point picker path. When the session reference was established
-     * automatically it has no points yet, so the reference viewer is
-     * calibrated first (on its own canvas) and only then this one.
+     * The reference viewer may have been closed since the session was built
+     * (grid layout change, slide switch). Promote an open, still-calibrated
+     * viewer so the remembered alignment keeps working; with none open there
+     * is nothing to align against and the session is dropped.
+     */
+    _reconcileReference() {
+        const S = ViewportSyncAPI._session;
+        if (!S?.leaderId || this._findViewerById(S.leaderId)) return;
+        this._reelectLeader(S.leaderId, { openOnly: true });
+    }
+
+    /**
+     * Three-point picker path.
+     *
+     * The picked points only mean something against the reference viewer's
+     * own three, so those are shown (numbered, zoomed to) while this viewer
+     * picks. A session without them — built by automatic registration, or
+     * restored from a scene that predates stored points — has nothing to
+     * show, so the order flips: this viewer, the one the user acted on,
+     * picks first, and the reference then marks the same three with this
+     * viewer's markers as the guide. Those become the session's reference
+     * points for later joiners.
+     *
+     * Either way only this viewer's transform changes. Every transform maps
+     * the reference image space to one viewer, so the alignment of the other
+     * viewers — automatic or manual — is untouched by how this one was made.
      */
     async _manualCalibrate() {
-        const S = this._getSession();
+        let S = this._getSession();
         const selfId = this.master.uniqueId;
-
-        if (!S.leaderPts) {
-            const refViewer = this._findViewerById(S.leaderId);
-            const refApi = refViewer?.scalebar?.ViewportSyncAPI;
-            if (!refViewer || !refApi) throw new Error("Sync reference viewer unavailable");
-
-            refApi.__ui?.setProgress?.("0/3");
-            const refPts = await refApi.calibrateViewer(refViewer);
-            S.leaderPts = refPts;
-            refApi.points.set(S.leaderId, refPts);
-            this._storeViewerTransform(S.leaderId, this._identityTransform());
-            this._setFlipParity(S.leaderId, false);
-        }
+        const refId = S.leaderId;
+        const refViewer = this._findViewerById(refId);
+        const refApi = refViewer?.scalebar?.ViewportSyncAPI;
+        if (!refViewer || !refApi) throw new Error("Sync reference viewer unavailable");
 
         this.__ui?.setProgress?.("0/3");
-        const tgtPts = await this.calibrateViewer(this.master);
+        let tgtPts;
+        if (S.leaderPts) {
+            const hideReferencePoints = this._showReferencePoints(refViewer, S.leaderPts);
+            try {
+                tgtPts = await this.calibrateViewer(this.master, { messageKey: 'sync.pickMatchingPoints' });
+            } finally {
+                hideReferencePoints();
+            }
+        } else {
+            tgtPts = await this.calibrateViewer(this.master, { messageKey: 'sync.pickPointsThenReference' });
+
+            const hideOwnPoints = this._showReferencePoints(this.master, tgtPts);
+            // The pick now runs on the reference viewer, but this is still
+            // this viewer's calibration: its own cancel must reach it.
+            this._activeCalibrationCancel = () => refApi.cancelCalibration();
+            let refPts;
+            try {
+                refPts = await refApi.calibrateViewer(refViewer, { messageKey: 'sync.pickMatchingOnReference' });
+            } finally {
+                this._activeCalibrationCancel = null;
+                hideOwnPoints();
+            }
+
+            // Two awaits later the session may be a different one.
+            S = this._getSession();
+            if (S.leaderId !== refId) throw new Error("Calibration cancelled");
+            S.leaderPts = refPts;
+            refApi.points.set(refId, refPts);
+        }
         this.points.set(selfId, tgtPts);
 
         const t = this._similarityFrom3(S.leaderPts, tgtPts);
         if (!t) throw new Error("Calibration invalid");
         this._storeViewerTransform(selfId, t);
 
-        const refViewer = this._findViewerById(S.leaderId);
         const refFlip = refViewer?.viewport?.getFlip?.() ?? false;
         const selfFlip = this.master?.viewport?.getFlip?.() ?? false;
         this._setFlipParity(selfId, this._xorBool(selfFlip, refFlip));
+    }
+
+    /**
+     * One numbered calibration marker at an IMAGE-space point.
+     * @return {?HTMLElement} the overlay element, for `viewer.removeOverlay`
+     */
+    _addPointMarker(viewer, imgPt, label) {
+        const item = viewer?.world?.getItemAt(0);
+        if (!item) return null;
+        // Overlays live in VIEWPORT coordinates.
+        const vpPt = item.imageToViewportCoordinates(
+            new OpenSeadragon.Point(imgPt.x, imgPt.y)
+        );
+
+        const el = document.createElement("div");
+        el.className =
+            "w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full " +
+            "bg-error ring-2 ring-base-100 shadow pointer-events-none";
+        el.style.display = "grid";
+        el.style.placeItems = "center";
+        el.style.fontSize = "10px";
+        el.style.fontWeight = "700";
+        el.style.color = "white";
+        el.textContent = String(label);
+
+        viewer.addOverlay({
+            element: el,
+            location: vpPt,
+            placement: OpenSeadragon.Placement.CENTER
+        });
+        return el;
+    }
+
+    /**
+     * Show the reference viewer's calibration points and bring them into
+     * view, so the user can click the same three, in the same order, on the
+     * viewer being aligned.
+     * @return {function(): void} removes the markers
+     */
+    _showReferencePoints(viewer, pts) {
+        const item = viewer?.world?.getItemAt(0);
+        if (!item || !Array.isArray(pts) || !pts.length) return () => {};
+
+        const markers = pts
+            .map((p, i) => this._addPointMarker(viewer, p, i + 1))
+            .filter(Boolean);
+
+        const vps = pts.map(p => item.imageToViewportCoordinates(new OpenSeadragon.Point(p.x, p.y)));
+        const minX = Math.min(...vps.map(p => p.x)), maxX = Math.max(...vps.map(p => p.x));
+        const minY = Math.min(...vps.map(p => p.y)), maxY = Math.max(...vps.map(p => p.y));
+        const w = maxX - minX, h = maxY - minY;
+        if ([minX, minY, w, h].every(isFinite)) {
+            if (w > 0 || h > 0) {
+                // Room around the points: a marker on the very edge of the
+                // view is as good as hidden.
+                const pad = Math.max(w, h) * 0.35;
+                viewer.viewport.fitBounds(
+                    new OpenSeadragon.Rect(minX - pad, minY - pad, w + 2 * pad, h + 2 * pad));
+            } else {
+                viewer.viewport.panTo(new OpenSeadragon.Point(minX, minY));
+            }
+        }
+
+        return () => {
+            for (const el of markers) {
+                try { viewer.removeOverlay(el); } catch {}
+            }
+        };
     }
 
     /**
@@ -347,6 +500,12 @@ class ViewportSyncAPI {
     /**
      * Align every open viewer automatically against one reference (the
      * active viewer by default). Used by the Tools menu.
+     *
+     * Starts from a clean session: "align everything" is a request to
+     * recompute, so an existing alignment — hand-picked points included —
+     * is replaced rather than kept wherever one happens to exist. Joining
+     * on top of it would also mix automatic transforms with a reference
+     * space defined by somebody's three clicks.
      * @return {Promise<{aligned:number, failed:number, approximate:number}>}
      */
     static async autoSyncAll(referenceViewer = null) {
@@ -357,6 +516,12 @@ class ViewportSyncAPI {
         const reference = referenceViewer && viewers.includes(referenceViewer)
             ? referenceViewer
             : (window.VIEWER_MANAGER?.get?.() || viewers[0]);
+
+        // Also unlinks everyone and hands each viewer its own rotation back,
+        // so registration below starts from unposed viewers. It arms a manual
+        // re-align on every viewer; `allowManual: false` below overrides that
+        // for the batch, and it stays armed only where automation failed.
+        reference.scalebar.ViewportSyncAPI.resetSession();
 
         // Reference first so the session's reference space is its image space.
         const ordered = [reference, ...viewers.filter(v => v !== reference)];
@@ -397,6 +562,42 @@ class ViewportSyncAPI {
         return result;
     }
 
+    /**
+     * Calibrate every open viewer by hand, in viewport order: the first one
+     * defines the reference points, each further one marks the same three.
+     * Used by the Tools menu; the per-viewer control calibrates one viewer.
+     *
+     * Replaces the session, like `autoSyncAll`. A cancelled pick rejects with
+     * the picker's "cancelled" error; viewers calibrated before it stay linked.
+     * @return {Promise<{aligned:number, total:number}>}
+     */
+    static async manualSyncAll() {
+        const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(v => v?.scalebar?.ViewportSyncAPI);
+        const result = { aligned: 0, total: viewers.length };
+        if (viewers.length < 2) return result;
+
+        viewers[0].scalebar.ViewportSyncAPI.resetSession();
+
+        for (const [index, viewer] of viewers.entries()) {
+            const api = viewer.scalebar.ViewportSyncAPI;
+            // Point the user at the viewport that is waiting for clicks.
+            window.VIEWER_MANAGER?.setActive?.(viewer, 'manual');
+            // Busy, so the viewer's own button cancels rather than toggles.
+            api.__ui?.setBusy?.(true);
+            try {
+                await api.enable({
+                    mode: "manual",
+                    messageKey: index === 0 ? 'sync.pickPointsFirst' : undefined,
+                });
+            } finally {
+                api.__ui?.setBusy?.(false);
+                api.__ui?.setProgress?.("");
+            }
+            result.aligned++;
+        }
+        return result;
+    }
+
     /** @see OpenSeadragon.ViewportRegistration.registerProvider */
     static registerProvider(id, provider) {
         return OpenSeadragon.ViewportRegistration?.registerProvider(id, provider);
@@ -421,8 +622,19 @@ class ViewportSyncAPI {
      * automatic registration the user just rejected.
      */
     resetViewer(viewerId = this.master.uniqueId) {
+        this._cancelActiveCalibrations();
         const S = this._getSession();
         const peerApis = this._allSyncViewers().map(v => v.scalebar.ViewportSyncAPI);
+
+        const viewer = this._findViewerById(viewerId) || this.master;
+        const api = viewer?.scalebar?.ViewportSyncAPI;
+        if (api?.enabled) {
+            viewer.tools?.unlink?.(S.context);
+            api.enabled = false;
+        }
+        // While its transform is still known: give the viewer its own
+        // orientation back, or the registration angle stays baked in.
+        if (viewer?.uniqueId === viewerId) this._releasePose(viewer);
 
         delete S.transforms?.[viewerId];
         delete S.flipParity?.[viewerId];
@@ -432,13 +644,6 @@ class ViewportSyncAPI {
             api.points.delete(viewerId);
         }
         this._pendingManual()[viewerId] = true;
-
-        const viewer = this._findViewerById(viewerId) || this.master;
-        const api = viewer?.scalebar?.ViewportSyncAPI;
-        if (api?.enabled) {
-            viewer.tools?.unlink?.(S.context);
-            api.enabled = false;
-        }
 
         if (S.leaderId === viewerId) this._reelectLeader(viewerId);
 
@@ -458,14 +663,23 @@ class ViewportSyncAPI {
      * `ref = invA_Y · (img_Y - b_Y)` gives
      *   `A'_V = A_V · invA_Y`, `b'_V = b_V - A'_V · b_Y`,
      * with `Y` itself collapsing to the identity.
+     *
+     * @param {string} oldLeaderId
+     * @param {object} [opts]
+     * @param {boolean} [opts.openOnly=false] promote open viewers only
      */
-    _reelectLeader(oldLeaderId) {
+    _reelectLeader(oldLeaderId, opts = {}) {
         const S = this._getSession();
-        const newLeaderId = Object.keys(S.transforms || {}).find(id => id !== oldLeaderId);
+        // `openOnly`: the old reference is gone rather than cleared, so only
+        // a viewer that is actually open can stand in for it. Transforms of
+        // closed viewers (the old reference included) are kept and re-based.
+        const newLeaderId = Object.keys(S.transforms || {}).find(id =>
+            id !== oldLeaderId && (!opts.openOnly || this._findViewerById(id)));
         if (!newLeaderId) {
             // Nobody left to reference — nothing to re-base onto.
             for (const v of this._allSyncViewers()) {
                 v.tools?.unlink?.(S.context);
+                this._releasePose(v);
                 const api = v.scalebar.ViewportSyncAPI;
                 api.enabled = false;
                 api.transforms.clear();
@@ -531,16 +745,22 @@ class ViewportSyncAPI {
      * per-viewer transforms and flip parity. Every viewer is unlinked
      * and reverts to LINK state.
      *
+     * Each viewer also gets its own orientation back: the registration
+     * angle a follower was turned by has no meaning without the session.
+     *
      * Like the per-viewer clear, this arms a manual re-align on every
      * viewer: a user who throws the whole alignment away is telling us the
      * automatic estimate was wrong, so the next LINK must ask for points
      * rather than recompute the same answer.
      */
     resetSession() {
+        this._cancelActiveCalibrations();
         const S = this._getSession();
         const pending = this._pendingManual();
         for (const v of this._allSyncViewers()) {
             v.tools?.unlink?.(S.context);
+            // Unlinked first, so the correction stays on this viewer.
+            this._releasePose(v);
             const peerApi = v.scalebar.ViewportSyncAPI;
             peerApi.enabled = false;
             peerApi.transforms.clear();
@@ -556,7 +776,12 @@ class ViewportSyncAPI {
         this._refreshAllChrome();
     }
 
-    async calibrateViewer(viewer) {
+    /**
+     * @param {OpenSeadragon.Viewer} viewer
+     * @param {object} [pickOpts]
+     * @param {string} [pickOpts.messageKey] i18n key of the instruction toast
+     */
+    async calibrateViewer(viewer, pickOpts = {}) {
         return new Promise((resolve, reject) => {
             const settle = (fn, arg) => {
                 this._activeCalibrationCancel = null;
@@ -576,12 +801,24 @@ class ViewportSyncAPI {
                 (current, total) => {
                     this.__ui?.setProgress?.(`${current}/${total}`);
                 },
-                { timeoutMs: 15000 }
+                { messageKey: pickOpts.messageKey }
             );
             // Handle so the UI can abort an in-flight point pick (clicking
             // SYNC again while busy).
             this._activeCalibrationCancel = cleanupPick;
         });
+    }
+
+    /**
+     * Abort every in-flight point pick, on any viewer. A clear invalidates
+     * what a running calibration is being measured against: left alone, the
+     * picker — and the reference markers shown for it — would linger until
+     * its idle timeout, then store a transform into a session that no longer
+     * holds the points it was matched to.
+     */
+    _cancelActiveCalibrations() {
+        for (const v of this._allSyncViewers()) v.scalebar.ViewportSyncAPI.cancelCalibration?.();
+        this.cancelCalibration();
     }
 
     /**
@@ -617,7 +854,11 @@ class ViewportSyncAPI {
         const overlays = [];
         const total = 3;
 
-        const timeoutMs = Math.max(1000, opts.timeoutMs ?? 30000); // “reasonable time”
+        // Idle limit, not a deadline: every click and every viewport movement
+        // restarts it (see `restartTimeout`), so it only fires on a picker the
+        // user walked away from. Finding a landmark that matches a numbered
+        // point on the reference slide takes far longer than a few seconds.
+        const timeoutMs = Math.max(1000, opts.timeoutMs ?? 120000);
         let timeoutRef = null;
 
         // Distance, not duration: OSD's own `event.quick` also demands the
@@ -640,6 +881,7 @@ class ViewportSyncAPI {
             viewer.removeHandler("canvas-click", handler);
             viewer.removeHandler("canvas-press", pressHandler);
             viewer.removeHandler("canvas-drag", dragHandler);
+            viewer.removeHandler("animation", restartTimeout);
             window.removeEventListener("keydown", keyHandler, true);
             if (viewer.container) viewer.container.style.cursor = prevCursor;
             if (timeoutRef) clearTimeout(timeoutRef);
@@ -664,30 +906,9 @@ class ViewportSyncAPI {
             }, timeoutMs);
         };
 
-        const addMarker = (imgPt, item) => {
-            // Convert IMAGE coords -> VIEWPORT coords for overlays
-            const vpPt = item.imageToViewportCoordinates(
-                new OpenSeadragon.Point(imgPt.x, imgPt.y)
-            );
-
-            const el = document.createElement("div");
-            el.className =
-                "w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full " +
-                "bg-error ring-2 ring-base-100 shadow pointer-events-none";
-            el.style.display = "grid";
-            el.style.placeItems = "center";
-            el.style.fontSize = "10px";
-            el.style.fontWeight = "700";
-            el.style.color = "white";
-            el.textContent = String(pts.length);
-
-            viewer.addOverlay({
-                element: el,
-                location: vpPt, // <-- viewport coords
-                placement: OpenSeadragon.Placement.CENTER
-            });
-
-            overlays.push({ el, img: imgPt });
+        const addMarker = (imgPt) => {
+            const el = this._addPointMarker(viewer, imgPt, pts.length);
+            if (el) overlays.push({ el, img: imgPt });
         };
 
         const removeLast = () => {
@@ -746,7 +967,7 @@ class ViewportSyncAPI {
             pts.push({ x: img.x, y: img.y });
             onProgress?.(pts.length, total);
 
-            addMarker(img, item);
+            addMarker(img);
             restartTimeout();
 
             if (pts.length >= total) finish();
@@ -754,12 +975,14 @@ class ViewportSyncAPI {
         };
 
         // single instruction toast once (you already do this pattern)
-        Dialogs?.show?.(window.$.t('sync.pickPoints'), 5000, Dialogs.MSG_INFO);
+        Dialogs?.show?.(window.$.t(opts.messageKey || 'sync.pickPoints'), 5000, Dialogs.MSG_INFO);
         onProgress?.(0, total);
 
         viewer.addHandler("canvas-click", handler);
         viewer.addHandler("canvas-press", pressHandler);
         viewer.addHandler("canvas-drag", dragHandler);
+        // Panning/zooming towards a landmark counts as activity.
+        viewer.addHandler("animation", restartTimeout);
         window.addEventListener("keydown", keyHandler, true);
         if (viewer.container) viewer.container.style.cursor = "crosshair";
         restartTimeout();

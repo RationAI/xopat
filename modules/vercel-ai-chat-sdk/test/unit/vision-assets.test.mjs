@@ -156,7 +156,7 @@ test("the context describes the image on the attachment too @unit", { tag: ["@un
 });
 
 test("a call with no context still produces a usable record @unit", { tag: ["@unit"] }, () => {
-    // Callers other than the pathology broker (mixture extraction) pass none.
+    // Callers other than the pathology broker (e.g. text extraction) pass none.
     const logger = spyLogger();
     logVisionCall(logger, "req-1", { ...INPUT, context: null }, OUTCOME);
 

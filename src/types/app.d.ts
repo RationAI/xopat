@@ -45,6 +45,11 @@ interface DataOverride {
      */
     imageSmoothingEnabled?: boolean;
     /**
+     * Per-data override of `setup.webGlMinificationFilter`: `"max"` for sparse bright data
+     * (fluorescence) over a brightfield background that keeps `"default"`. Unset inherits.
+     */
+    minificationFilter?: "default" | "max";
+    /**
      * How many pixels of the stack's REFERENCE image (its background) ONE pixel
      * of this image covers. `2` means half-resolution; `512` means each pixel is
      * one 512-px prediction square.
@@ -321,6 +326,12 @@ interface VisualizationItem {
     shaders: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
+    /**
+     * Backgrounds this visualization belongs to: background `id`s or the data
+     * ids they show. Omitted = offered for every background. Only narrows the
+     * viewer's visualization selector; it does not block opening.
+     */
+    backgrounds?: string[];
     [key: string]: any;
 }
 
@@ -600,6 +611,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -640,6 +656,12 @@ interface ApplicationContext {
     auth: XOpatAuthLike;
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
+    /**
+     * Display adjustments broker (`classes/app/adjustments.ts`): per-layer levels,
+     * brightness/contrast, saturation, … as post-pipeline modules, and per-data-item
+     * sampling. Always viewer-explicit. See src/README.md → "Display adjustments".
+     */
+    adjustments: import("../classes/app/adjustments").Adjustments;
     /**
      * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
      * until the Render Debug window is opened, gated on `debugMode`.
@@ -718,6 +740,11 @@ interface ApplicationContext {
         selection: ViewerSelectionPatch,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    /**
+     * Close one viewport of a multi-viewport grid and reopen the rest.
+     * Resolves false when `viewer` is not open or is the last one.
+     */
+    closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -988,6 +1015,13 @@ interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
     currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
+    /**
+     * Stable identity of the slide behind a background id: `hash` (16 hex of
+     * HMAC-SHA256(`hashKey`, data entry) — use for addressing; absent without a
+     * key) and `name` (file name — labels only; may collide and may carry a
+     * case number). `undefined` for an unknown id.
+     */
+    slideIdentityFor(backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;

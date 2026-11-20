@@ -1,11 +1,11 @@
-FROM ubuntu:jammy AS viewer-build-deps
+FROM ubuntu:noble AS viewer-build-deps
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
 ENV NVM_DIR=/usr/local/nvm
-ENV NODE_VERSION=18.7.0
+ENV NODE_VERSION=24.22.3
 ENV NODE_PATH=$NVM_DIR/versions/node/v$NODE_VERSION/lib/node_modules
 ENV PATH=$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 
@@ -32,7 +32,7 @@ WORKDIR /usr/app
 RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     # Node (see https://stackoverflow.com/questions/25899912/how-to-install-nvm-in-docker)
     && mkdir $NVM_DIR \
-    && curl https://raw.githubusercontent.com/creationix/nvm/v0.39.1/install.sh | bash \
+    && curl https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash \
     && . $NVM_DIR/nvm.sh \
     && nvm install $NODE_VERSION \
     && nvm alias default $NODE_VERSION \
@@ -49,8 +49,9 @@ COPY . /tmp/xopat
 # production min artifacts (index.min.js / index.min.mjs / index.workspace.min.js
 # / src/dist/xopat-core.min.js / ui/index.min.js) that viewer-standalone copies.
 # They are only *served* when the deployment sets client.production: true, so the
-# viewer-dev image built from this stage is unaffected.
-RUN cd /tmp/xopat && npm ci && npm run minify
+# viewer-dev image built from this stage is unaffected. `themeCss` rebuilds
+# tailwind.min.css only when an element ships a tailwind.preset.js.
+RUN cd /tmp/xopat && npm ci && npm run minify && npx grunt themeCss
 
 ##################
 # VIEWER: DEV  ###
@@ -68,7 +69,6 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         php-curl \
         php-mbstring \
         php-json \
-        php-mime-type \
         vim \
         nano \
         # Ssh+dev
@@ -104,7 +104,7 @@ CMD apache2ctl -D FOREGROUND
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
 # Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
-FROM ubuntu:jammy AS viewer-git
+FROM ubuntu:noble AS viewer-git
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -126,7 +126,6 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         php-curl \
         php-mbstring \
         php-json \
-        php-mime-type \
         vim \
         nano \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \

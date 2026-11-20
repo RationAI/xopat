@@ -106,6 +106,9 @@ export function ensureViewerOwnsVisualization(viewer: any, cfg: any): number | u
         console.warn("[live-config-sync] visualization fork failed to clone:", e);
         return vizIdx as number;
     }
+    // The fork is this background's own edit: offering it to the others would
+    // list a near-duplicate goal in every viewer's selector.
+    if (bg.id) clone.backgrounds = [bg.id];
     visualizations.push(clone);
     const newIdx = visualizations.length - 1;
     bg.visualizationIndex = newIdx;
@@ -122,7 +125,7 @@ function refreshVisualizationDropdowns(cfg: any): void {
     for (const viewer of viewers) {
         try {
             viewer.getMenu?.()?.getShadersTab?.()?.updateVisualizationList?.(
-                cfg.visualizations,
+                ViewerSelectionState.getViewerVisualizationChoices(viewer, APP, VM),
                 ViewerSelectionState.getViewerVisualizationIndex(viewer, APP, VM),
             );
         } catch (e) {

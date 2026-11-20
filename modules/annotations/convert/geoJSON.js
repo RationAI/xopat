@@ -1,16 +1,13 @@
-OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Convertor.IConvertor {
-    static title = 'GeoJSON Annotations';
-    static description = 'Annotations in GeoJSON format.';
-
-    static getSuffix() {
-        return 'xo.geo.json';
+OSDAnnotations.GeoJSONCodec = class {
+    /** @param {IOFormatContext} fctx */
+    constructor(fctx) {
+        this.options = fctx.options;
+        this.module = fctx.context?.module || OSDAnnotations.instance();
     }
-
-    static includeAllAnnotationProps = false;
 
     //linear ring has the first and last vertex equal, geojson uses arrays
     _asGEOJsonFeature(object, type="Polygon", deleteProps=[], asLinearRing=false) {
-        const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
+        const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS)
         if (poly?.length > 0) {
             if (asLinearRing) { //linear ring
@@ -56,13 +53,13 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
     //encode all supported factory types
     //todo support default object by export strategy
     encoders = {
-        "rect": (object, preset) => {
-            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+        "rect": (object) => {
+            const res = this._asGEOJsonFeature(object, "Polygon", [], true);
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
-        "ellipse": (object, preset) => {
-            const res = this._asGEOJsonFeature(object, preset, "Polygon", [], true);
+        "ellipse": (object) => {
+            const res = this._asGEOJsonFeature(object, "Polygon", [], true);
             res.geometry.coordinates = [res.geometry.coordinates]; //has to be nested, the first array is the outer linear ring
             return res;
         },
@@ -92,7 +89,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         // the vertex by convention — keep the order, downstream consumers
         // (and the native decoder below) rely on it.
         "angle": (object) => {
-            const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
+            const factory = this.module.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
             return {
                 geometry: {
@@ -106,7 +103,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         // endpoints on import (it sits on the first point), so only the two
         // shaft points are exported.
         "arrow": (object) => {
-            const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
+            const factory = this.module.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
             return {
                 geometry: {
@@ -232,72 +229,40 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         },
     }
 
-    static encodeFinalize(output) {
-        let result = {
-            type: "FeatureCollection",
-            features: []
-        };
-        let list = result.features;
-
-        if (Array.isArray(output.objects)) {
-            for (let obj of output.objects) {
-                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
-                list.push(data);
-            }
+    /**
+     * One native annotation as a GeoJSON Feature, or undefined when it has no
+     * representation (helper objects, objects without a preset).
+     */
+    encodeItem(obj) {
+        if (!obj?.factoryID || obj.factoryID.startsWith("_")) return undefined;
+        // noinspection JSUnresolvedVariable
+        if (!Number.isInteger(obj.presetID) && !(typeof obj.presetID === "string" && obj.presetID !== "")) {
+            return undefined;
         }
-
-        if (Array.isArray(output.presets)) {
-            for (let obj of output.presets) {
-                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
-                list.push(data);
-            }
-        }
-        return JSON.stringify(result);
+        const encoded = this.encoders[obj.factoryID]?.(obj);
+        if (encoded) encoded.type = "Feature";
+        return encoded;
     }
 
-    async encodePartial(annotationsGetter, presetsGetter) {
-        const result = {};
-        if (this.options.exportsObjects) {
-            const annotations = annotationsGetter();
-            if (Array.isArray(annotations)) {
-                result.objects = [];
-                // for each object (annotation) create new annotation element with coresponding coordinates
-                for (let obj of annotations) {
-                    if (!obj.factoryID || obj.factoryID.startsWith("_")) {
-                        continue;
-                    }
-
-                    // noinspection JSUnresolvedVariable
-                    if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                        let encoded = this.encoders[obj.factoryID]?.(obj);
-                        if (encoded) {
-                            encoded.type = "Feature";
-                            result.objects.push(this.options.serialize ? JSON.stringify(encoded) : encoded);
-                        }
-                    }
-                }
+    encode(model) {
+        const features = [];
+        if (this.options.exportsObjects !== false && Array.isArray(model.objects)) {
+            for (let obj of model.objects) {
+                const encoded = this.encodeItem(obj);
+                if (encoded) features.push(encoded);
             }
         }
-
-        if (this.options.exportsPresets) {
-            const presets = presetsGetter();
-            if (Array.isArray(presets)) {
-                result.presets = presets.map(p => this.options.serialize ? JSON.stringify({
-                    type: "Feature",
-                    geometry: null,
-                    properties: p
-                }) : {
-                    type: "Feature",
-                    geometry: null,
-                    properties: p
-                });
+        // Presets travel as geometry-less Features.
+        if (this.options.exportsPresets !== false && Array.isArray(model.presets)) {
+            for (let preset of model.presets) {
+                features.push({ type: "Feature", geometry: null, properties: preset });
             }
         }
-        return result;
+        return JSON.stringify({ type: "FeatureCollection", features });
     }
 
-    async decode(data) {
-        data = JSON.parse(data);
+    decode(data) {
+        if (typeof data === "string") data = JSON.parse(data);
 
         const parseFeature = function (object, presets, annotations) {
             if (object.geometry === null && object.properties.presetID) {
@@ -329,7 +294,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             parseFeature(data, presets, annotations);
         } else {
             const o = this.decoders[data.type]?.(data);
-            if (!o) throw "Unsupported global GEOJson Text Type " + data.type;
+            if (!o) throw new Error("Unsupported global GEOJson Text Type " + data.type);
             annotations.push(o);
         }
 
@@ -338,4 +303,30 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
              presets: Object.values(presets)
         };
     }
+};
+
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "geo-json",
+    title: 'GeoJSON Annotations',
+    description: 'Annotations in GeoJSON format.',
+    // The first is what we write; the others are what the rest of the world does.
+    extensions: [".xo.geo.json", ".geojson", ".geo.json"],
+    contentType: "application/geo+json",
+    traits: { allProps: false },
+
+    encode: (model, fctx) => new OSDAnnotations.GeoJSONCodec(fctx).encode(model),
+    decode: (data, fctx) => new OSDAnnotations.GeoJSONCodec(fctx).decode(data),
+    encodeItem: (item, fctx) => new OSDAnnotations.GeoJSONCodec(fctx).encodeItem(item),
+
+    sniff(_data, hint) {
+        const json = hint.json;
+        if (!json || typeof json !== "object" || Array.isArray(json)) return 0;
+        const features = json.type === "FeatureCollection" ? (json.features || [])
+            : json.type === "Feature" ? [json] : null;
+        if (!features) return typeof json.type === "string" && Array.isArray(json.coordinates) ? 0.5 : 0;
+        // QuPath's dialect marks its features; that one has its own format.
+        if (features.slice(0, 20).some(f => f?.properties?.objectType)) return 0;
+        return 0.6;
+    },
 });

@@ -178,8 +178,8 @@ export async function runVisionInference(ctx: any, input: RunVisionInferenceInpu
     resolveUserScope(ctx);
 
     const registry = ChatServerRegistry.instance();
-    // Reference-tolerant: this provider id comes from deployment config (a pathology driver's
-    // `providerId`, mixture-report-assist's `extractionProviderId`), and a managed instance id is
+    // Reference-tolerant: this provider id comes from deployment config (e.g., a pathology driver's
+    // `providerId`), and a managed instance id is
     // re-minted on every server start, so config can only name a provider by a stable reference.
     const runtime = await registry.resolveProviderRuntime(input.providerId, { ctx, userScope: safeUserScope(ctx) });
     const adapter = registry.getAdapter(runtime.type.adapter);

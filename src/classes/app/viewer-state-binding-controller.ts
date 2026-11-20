@@ -24,12 +24,21 @@ export class ViewerStateBindingController {
     constructor(private readonly appContext: ApplicationContext) {}
 
     /**
+     * Keys are slide references, so the map stays in the deployment that wrote
+     * it — browser storage is shared by every deployment on the origin.
+     */
+    private viewportStore() {
+        const cache: any = this.appContext.AppCache;
+        return cache?.deploymentScoped?.() ?? cache;
+    }
+
+    /**
      * Read the viewport map, dropping entries that aged out.
      * Anything unparseable degrades to an empty map — this is a convenience
      * cache and must never be able to break a viewer open.
      */
     private readViewportCache(): Record<string, { viewport: any; t: number }> {
-        const raw = this.appContext.AppCache.get(VIEWPORT_CACHE_KEY, null);
+        const raw = this.viewportStore().get(VIEWPORT_CACHE_KEY, null);
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
         const now = Date.now();
         const out: Record<string, { viewport: any; t: number }> = {};
@@ -52,7 +61,7 @@ export class ViewerStateBindingController {
                 .slice(VIEWPORT_CACHE_LIMIT)
                 .forEach(k => { delete map[k]; });
         }
-        this.appContext.AppCache.set(VIEWPORT_CACHE_KEY, map);
+        this.viewportStore().set(VIEWPORT_CACHE_KEY, map);
     }
 
     /**
@@ -189,7 +198,7 @@ export class ViewerStateBindingController {
 
             if (this.appContext.config.visualizations.length > 0) {
                 viewer.getMenu().getShadersTab().updateVisualizationList(
-                    this.appContext.config.visualizations,
+                    ViewerSelectionState.getViewerVisualizationChoices(viewer, this.appContext),
                     ViewerSelectionState.getViewerVisualizationIndex(viewer, this.appContext)
                 );
             }
@@ -238,7 +247,15 @@ export class ViewerStateBindingController {
                 // would file every later slide's viewport under the first one.
                 const save = UTILITIES.makeThrottled(() => {
                     try {
-                        this.writeViewportCache(viewportCacheKey(viewerRef), snapshotViewport(viewerRef));
+                        const viewport = snapshotViewport(viewerRef);
+                        // Cross-viewport sync turns a follower by its registration
+                        // angle, and that session is memory-only: stored as is, the
+                        // angle would reopen the slide tilted with nothing to explain it.
+                        const syncRotation = (viewerRef as any).scalebar?.ViewportSyncAPI?.getRotationOffset?.() || 0;
+                        if (viewport && syncRotation) {
+                            viewport.rotation = (viewport.rotation || 0) - syncRotation;
+                        }
+                        this.writeViewportCache(viewportCacheKey(viewerRef), viewport);
                     } catch (e) {
                         console.warn("Failed to cache viewport", e);
                     }

@@ -64,7 +64,7 @@ export interface RequestOptions {
     body?: any;
     headers?: Record<string, string>;
     /** @default "auto" */
-    expect?: "json" | "text" | "auto";
+    expect?: "json" | "text" | "bytes" | "auto";
     /**
      * Caller-owned abort signal. Composed with the client's internal timeout —
      * the request aborts on whichever fires first, so a caller signal never
@@ -157,7 +157,8 @@ declare interface Window {
 }
 
 /**
- * The two headers that name this browser's xOpat session to our own server.
+ * The headers that name this browser's xOpat session (and served deployment)
+ * to our own server.
  *
  * `X-XOPAT-CSRF` is the long-standing one. `X-XOPAT-Session` exists because a
  * viewer embedded in a third-party page may have **no cookie jar at all** —
@@ -173,7 +174,66 @@ function xopatSessionHeaders(): Record<string, string> {
     if (typeof csrf === "string" && csrf) out["X-XOPAT-CSRF"] = csrf;
     const sessionId = window?.XOPAT_SESSION_ID;
     if (typeof sessionId === "string" && sessionId) out["X-XOPAT-Session"] = sessionId;
+    // Named deployment the page was served under: the proxy resolves its
+    // (per-deployment) `core.server.secure` against the same one.
+    const deploymentId = (window as any)?.APPLICATION_CONTEXT?.env?.deployment?.id;
+    if (typeof deploymentId === "string" && deploymentId) out["X-XOPAT-Deployment"] = deploymentId;
     return out;
+}
+
+/**
+ * The form of a URL that may appear in an error message.
+ *
+ * `HTTPError.message` reaches the console, toasts, logs and LLM transcripts, so it
+ * drops the query string and fragment (tokens, signed-URL signatures, ids passed as
+ * parameters) and any userinfo. Code that needs the exact URL reads
+ * `HTTPError.response.url`.
+ */
+function urlForMessage(url: string): string {
+    const cut = url.search(/[?#]/);
+    const head = cut < 0 ? url : url.slice(0, cut);
+    return head.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^\/@]*@/i, "$1");
+}
+
+/**
+ * Turn a caller's `body` into what `fetch` sends, and the `Content-Type` that
+ * goes with it.
+ *
+ * Bodies `fetch` already encodes itself — `FormData`, `Blob`/`File`,
+ * `URLSearchParams`, `ArrayBuffer` and typed-array views — pass through
+ * untouched and carry NO content type: the browser sets it, and for `FormData`
+ * only the browser knows the multipart boundary. JSON-encoding them instead
+ * sends `"{}"` (a `FormData` has no enumerable fields), and the JSON content type
+ * makes a cross-origin call non-simple, so an upstream without CORS answers the
+ * preflight `OPTIONS` with 405 and the request never happens. That is how the
+ * `remote` speech-to-text driver failed against a self-hosted Whisper server.
+ *
+ * Strings keep their historical `application/json`; everything else is
+ * `JSON.stringify`-ed. A caller-supplied `Content-Type` header still wins.
+ */
+function encodeBody(body: unknown): { body: BodyInit; contentType?: string } {
+    if (typeof body === "string") return { body, contentType: "application/json" };
+    if ((typeof FormData !== "undefined" && body instanceof FormData)
+        || (typeof Blob !== "undefined" && body instanceof Blob)
+        || (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams)
+        || body instanceof ArrayBuffer
+        || ArrayBuffer.isView(body)) {
+        return { body: body as BodyInit };
+    }
+    return { body: JSON.stringify(body), contentType: "application/json" };
+}
+
+/**
+ * The `Content-Type` to add for an encoded body, or `undefined` when the caller
+ * already supplied one. Header names are case-insensitive: a plain object holding
+ * both `Content-Type` and `content-type` becomes ONE header in `fetch`'s `Headers`,
+ * with the two values joined (`application/json, application/xml`) — so the
+ * caller's value must suppress ours, whatever its casing.
+ */
+function generatedContentType(callerHeaders: Record<string, string> | undefined, contentType?: string): string | undefined {
+    if (!contentType) return undefined;
+    const supplied = !!callerHeaders && Object.keys(callerHeaders).some(k => k.toLowerCase() === "content-type");
+    return supplied ? undefined : contentType;
 }
 
 /**
@@ -265,12 +325,14 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * @param url the request URL; falls back to `baseURL` when a caller has none
      */
     private _isAppOriginUrl(url?: string): boolean {
-        if (this.usingProxy) return true;
+        const target = url ?? this.baseURL;
+        if (!target) return false;
+        // The proxy base IS the app origin — but only for URLs that stay on it. An
+        // absolute foreign URL handed to a proxied client is not our code talking.
+        if (this.usingProxy && !this.isCrossOriginUrl(target)) return true;
         try {
             const appUrl = (globalThis as any).APPLICATION_CONTEXT?.url;
             if (typeof appUrl !== "string" || !appUrl) return false;
-            const target = url ?? this.baseURL;
-            if (!target) return false;
             return new URL(target, appUrl).origin === new URL(appUrl).origin;
         } catch (_) {
             return false;
@@ -326,9 +388,15 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * `RPC_NO_SESSION` / `RPC_BAD_CSRF` from an RPC fell straight through to the
      * refresh arm. A cross-origin upstream's 401 is still never read as an xOpat
      * session expiry.
+     *
+     * "Our origin" is the APP origin ({@link _isAppOriginUrl}), not this client's
+     * `baseURL`: a client configured for a foreign upstream sees all of its own
+     * requests as same-origin, so that test let any upstream answering 401
+     * `RPC_NO_SESSION` / 403 "invalid csrf token" (stock Express `csurf` text)
+     * reload the viewer — in a loop when the call runs at boot.
      */
     private _tryHandleSessionExpiry(status: number, textData?: string, url?: string): boolean {
-        if (url !== undefined ? this.isCrossOriginUrl(url) : !this.usingProxy) return false;
+        if (!this._isAppOriginUrl(url)) return false;
 
         const payload = this._parseErrorPayload(textData);
         const code = payload?.code;
@@ -407,8 +475,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
      * @param path - path relative to baseURL (can also be absolute)
      */
     async request(path: string, { method = "GET", query, body, headers = {}, expect = "auto", signal, timeoutMs: timeoutOverride, priority = "normal" }: RequestOptions = {}): Promise<any> {
-        const isAbsolute = /^https?:\/\//i.test(path);
-        let url = isAbsolute ? path : `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
+        // `resolveUrl` refuses a relative path that escapes `baseURL` via dot segments.
+        let url = this.resolveUrl(path);
 
         if (query && typeof query === "object") {
             const usp = new URLSearchParams();
@@ -422,7 +490,10 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
 
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
+        const encoded = hasBody ? encodeBody(body) : undefined;
+        const contentType = generatedContentType(headers, encoded?.contentType);
         const crossOrigin = this.isCrossOriginUrl(url);
+        const shownUrl = urlForMessage(url);
 
         // The credentials this attempt is carrying, recorded as the headers are built.
         // Reset on every rebuild (i.e. after a refresh) so a 401 always reports the
@@ -432,7 +503,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const getBaseHeaders = async (headerSignal?: AbortSignal) => {
             sentSecrets = {};
             return {
-                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(contentType ? { "Content-Type": contentType } : {}),
                 ...(await this._authHeaders(url, method, headerSignal, sentSecrets)),
                 ...headers,
                 ...(!crossOrigin && this.usingProxy ? xopatSessionHeaders() : {})
@@ -445,7 +516,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         let currentHeaders = await getBaseHeaders(signal ?? undefined);
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
-            console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
+            console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", urlForMessage(path));
         }
 
         // Compose the caller signal with the timeout backstop: a caller signal
@@ -471,8 +542,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 } catch (_e) {
                     abort.dispose();
                     throw new HTTPError(abort.timedOut()
-                        ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
-                        : `HTTP ${method} ${url} aborted`);
+                        ? `HTTP ${method} ${shownUrl} aborted after ${effTimeout} ms`
+                        : `HTTP ${method} ${shownUrl} aborted`);
                 }
             }
         }
@@ -482,7 +553,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
             headers: currentHeaders,
             signal: effectiveSignal,
             ...(!crossOrigin && this.usingProxy ? { credentials: "same-origin" } : {}),
-            ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
+            ...(encoded ? { body: encoded.body } : {}),
         });
 
         let attempt = 0;
@@ -497,7 +568,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     const text = await this._readErrorBody(res);
 
                     if (this._tryHandleSessionExpiry(res.status, text, url)) {
-                        throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                        throw new HTTPError(`HTTP ${method} ${shownUrl} failed: ${res.status}`, res, text);
                     }
 
                     if (this.refreshesOnStatus(res.status) && !refreshed) {
@@ -515,7 +586,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         continue;
                     }
 
-                    throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                    throw new HTTPError(`HTTP ${method} ${shownUrl} failed: ${res.status}`, res, text);
                 }
 
                 // Headers are in and the response is OK — the body read below is
@@ -527,6 +598,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
 
                 const ct = (res.headers.get("content-type") || "").toLowerCase();
                 if (expect === "text") return await res.text();
+                // Binary bodies (images, DICOM, recordings): never decoded as text.
+                if (expect === "bytes") return await res.arrayBuffer();
                 if (expect === "json") {
                     try {
                         return await res.json();
@@ -536,7 +609,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         // The caller asked for JSON and the server did not send it:
                         // that is definitive, so surface it as an HTTPError.
                         throw new HTTPError(
-                            `HTTP ${method} ${url} returned ${ct || "an unparseable body"} where JSON was expected`,
+                            `HTTP ${method} ${shownUrl} returned ${ct || "an unparseable body"} where JSON was expected`,
                             res);
                     }
                 }
@@ -554,7 +627,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     // See HTML_CONTENT_TYPE: a document is an intermediary's page,
                     // not this endpoint's data. Refuse rather than hand markup back.
                     throw new HTTPError(
-                        `HTTP ${method} ${url} returned an HTML document where a data response was expected`,
+                        `HTTP ${method} ${shownUrl} returned an HTML document where a data response was expected`,
                         res, text.slice(0, HttpClient.ERROR_BODY_LIMIT));
                 }
                 try { return JSON.parse(text); } catch (_) {}
@@ -564,8 +637,8 @@ export class HttpClient extends XOpatRemoteEndpoint {
                     // Distinguish our own timeout from a caller abort — the latter
                     // must not be blamed on timeoutMs.
                     throw new HTTPError(abort.timedOut()
-                        ? `HTTP ${method} ${url} aborted after ${effTimeout} ms`
-                        : `HTTP ${method} ${url} aborted`);
+                        ? `HTTP ${method} ${shownUrl} aborted after ${effTimeout} ms`
+                        : `HTTP ${method} ${shownUrl} aborted`);
                 }
                 // A deliberate throw from the `!res.ok` branch above — the retry
                 // decision was already made there by `_isRetriable` (a retriable
@@ -655,6 +728,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const method = (init.method || "GET").toUpperCase();
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
         const crossOrigin = this.isCrossOriginUrl(url);
+        const shownUrl = urlForMessage(url);
 
         // See `request`: reset per rebuild so a 401 reports the credential this
         // attempt actually carried, not one a concurrent refresh has since installed.
@@ -670,7 +744,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
         };
 
         if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
-            console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
+            console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", urlForMessage(path));
         }
 
         // Headers first, timeout second: building them may wait for the auth
@@ -703,7 +777,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         const text = await this._readErrorBody(res, true);
 
                         if (this._tryHandleSessionExpiry(res.status, text, url)) {
-                            throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                            throw new HTTPError(`HTTP ${method} ${shownUrl} failed: ${res.status}`, res, text);
                         }
 
                         if (this.refreshesOnStatus(res.status) && !refreshed) {
@@ -721,7 +795,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                             continue;
                         }
 
-                        throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                        throw new HTTPError(`HTTP ${method} ${shownUrl} failed: ${res.status}`, res, text);
                     }
 
                     this._reportAuthAccepted();
@@ -729,7 +803,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                 } catch (err: any) {
                     if (err instanceof HTTPError) throw err;
                     if (err?.name === "AbortError") {
-                        throw new HTTPError(`HTTP ${method} ${url} aborted`);
+                        throw new HTTPError(`HTTP ${method} ${shownUrl} aborted`);
                     }
                     if (attempt < maxRetries) {
                         attempt += 1;
@@ -776,13 +850,15 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
 
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
+        const encoded = hasBody ? encodeBody(body) : undefined;
+        const contentType = generatedContentType(headers, encoded?.contentType);
         const res = await this.fetchRaw(path, {
             method,
             headers: {
-                ...(hasBody ? { "Content-Type": "application/json" } : {}),
+                ...(contentType ? { "Content-Type": contentType } : {}),
                 ...headers,
             },
-            ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
+            ...(encoded ? { body: encoded.body } : {}),
             signal: ownController.signal,
         });
 
@@ -796,7 +872,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
             },
             lines: async function* (): AsyncGenerator<any, void, unknown> {
                 const bodyStream = res.body;
-                if (!bodyStream) throw new HTTPError(`HTTP ${method} ${path}: response has no readable body`, res);
+                if (!bodyStream) throw new HTTPError(`HTTP ${method} ${urlForMessage(path)}: response has no readable body`, res);
                 const reader = bodyStream.getReader();
                 // stream:true keeps multi-byte UTF-8 sequences split across chunk
                 // boundaries intact — never slice bytes manually.
@@ -826,7 +902,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         try {
                             yield JSON.parse(residual);
                         } catch (_) {
-                            throw new HTTPError(`HTTP ${method} ${path}: NDJSON stream truncated mid-record`, res);
+                            throw new HTTPError(`HTTP ${method} ${urlForMessage(path)}: NDJSON stream truncated mid-record`, res);
                         }
                     }
                 } finally {

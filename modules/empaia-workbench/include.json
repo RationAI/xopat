@@ -82,6 +82,14 @@
     // the workbench is reachable from the browser.
     "proxy": null,
 
+    // Origins the Workbench Service URL (`wbsUrl`) may have. VACI accepts it
+    // from any frame without checking the sender, and the client built from it
+    // carries the workbench token, so an unlisted origin is ignored. null =
+    // the origin this app UI was served from (the Workbench serves app
+    // frontends itself). List origins when the WBS lives elsewhere; ["*"]
+    // disables the check. Unused when `proxy` is set.
+    "wbsOrigins": null,
+
     // Open the scope's first slide automatically once the bridge resolves.
     "autoOpenFirstSlide": true,
 

@@ -122,9 +122,10 @@ export function resolveSideMenuCompact() {
  * deterministic for returning users sets it in the session `params.ui`.
  *
  * @param {string} tabId
+ * @param {boolean} [fallback=true] open state when nothing above decides
  * @returns {boolean}
  */
-export function resolveSideMenuTabOpen(tabId) {
+export function resolveSideMenuTabOpen(tabId, fallback = true) {
     const readUi = (source) => {
         const value = source?.ui?.sideMenuTabs;
         if (value === undefined || value === null) return undefined;
@@ -142,5 +143,5 @@ export function resolveSideMenuTabOpen(tabId) {
     if (cached !== undefined && cached !== null) return cached === true || cached === "true";
     const fromDefaults = readUi(APPLICATION_CONTEXT.config?.defaultParams);
     if (fromDefaults !== undefined) return fromDefaults;
-    return true;
+    return fallback;
 }

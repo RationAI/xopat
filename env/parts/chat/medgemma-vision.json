@@ -1,6 +1,12 @@
 {
   "$meta": {
     "description": "Self-hosted MedGemma vision provider — composes alongside any chat/* choice",
+    "hint": "Needs a MedGemma endpoint at MEDGEMMA_BASE_URL; a loopback one also needs XOPAT_SSRF_ALLOWED_HOSTS=localhost",
+    "env": {
+      "MEDGEMMA_API_KEY": "API key for the MedGemma endpoint, when it wants one",
+      "MEDGEMMA_BASE_URL": "Base URL of the OpenAI-compatible MedGemma endpoint (e.g. Ollama)",
+      "MEDGEMMA_MODEL": "Model name the MedGemma endpoint serves"
+    },
     "defaults": { "MEDGEMMA_BASE_URL": "http://localhost:11434/v1", "MEDGEMMA_MODEL": "medgemma-4b-it" }
   },
   /**

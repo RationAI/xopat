@@ -251,6 +251,11 @@ export interface AuthContextRequirement {
 }
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * How long the boot barrier holds on a started navigating login before giving up on
+ * the page unloading. A redirect that has not left the page by then never will.
+ */
+const NAVIGATION_HOLD_MS = 30 * 1000;
 const DEFAULT_SECRET_TYPES = ["jwt"];
 /** How long a required context waits for a real broker before a fallback lands. */
 const CONTEXT_GRACE_MS = 3000;
@@ -1780,6 +1785,7 @@ export class XOpatAuth {
         const navPolicy = this.canNavigateAway();
 
         const attempts: Promise<void>[] = [];
+        let navigating: Promise<void> | null = null;
         for (const id of candidates) {
             if (navigators.includes(id) && id !== winner) {
                 // Demoted to on-demand rather than gated: the appbar user menu
@@ -1816,7 +1822,8 @@ export class XOpatAuth {
                 result.verdicts[id] = false;
                 continue;
             }
-            attempts.push((async () => {
+            const navigates = navPolicy.ok && navigators.includes(id);
+            const attempt = (async () => {
                 try {
                     // `login` re-runs the silent rung, but `_tryLoginSilent`
                     // coalesces and memoizes it, so phase 1's answer is reused rather
@@ -1833,7 +1840,7 @@ export class XOpatAuth {
                         // Decided once, above, for the whole phase — including the
                         // one-navigation arbitration, which an individual provider
                         // cannot see.
-                        mayNavigate: navPolicy.ok && navigators.includes(id),
+                        mayNavigate: navigates,
                     });
                     result.verdicts[id] = ok;
                     if (!ok && this.isInteractionRequired(id)) result.deferred.push(id);
@@ -1841,7 +1848,18 @@ export class XOpatAuth {
                     console.warn(`XOpatAuth: automatic login for '${id}' failed`, e);
                     result.verdicts[id] = false;
                 }
-            })());
+            })();
+            attempts.push(attempt);
+            if (navigates) navigating = attempt;
+        }
+        // A navigating login unloads this document. Opening the viewer meanwhile only
+        // fires slide requests from a page that is already leaving — each one bare,
+        // each one bounced by the upstream into its own login redirect chain. The boot
+        // deadline is usually spent by then (a hidden-frame probe that times out at
+        // 10 s outlasts it), so hold on the navigation itself, bounded so a redirect
+        // that never commits still lets the viewer open.
+        if (navigating) {
+            await this._raceDeadline(navigating, Math.max(deadline, Date.now() + NAVIGATION_HOLD_MS));
         }
         // Raced, not awaited. One provider that never settles must not hold the boot
         // barrier open — the viewer would sit on a spinner with nothing on screen to

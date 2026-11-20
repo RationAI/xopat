@@ -1108,8 +1108,8 @@ Four further losses, independent of shape:
 - **Labels truncate at 64 characters**, and are attached as `TextValue` on the SCOORD3D item
   itself. A content item's value attribute follows its value type, so another viewer will not show
   the label at all — it belongs on a child TEXT item.
-- **Non-geometric properties are dropped**: `author`, `created`, `comments`, `readOnly`, `private`,
-  `meta`, `layerID`, `id`, `zoomAtCreation`. Only points, factory, preset and text are encoded.
+- **Non-geometric properties are dropped**: `author`, `created`, `comments`, `locked`, `readOnly`,
+  `private`, `meta`, `layerID`, `id`, `zoomAtCreation`. Only points, factory, preset and text are encoded.
 - **Class and colour survive only through a private extension** — two codes in scheme `99XOPAT`
   (`XOPAT.PRESETS` holding the preset definitions, `XOPAT.PRESETID` pointing each annotation at
   one). Standards-conformant and inert for other readers, but invisible to them. The preset pointer

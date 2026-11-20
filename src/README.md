@@ -90,6 +90,7 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`magnification`** — the image's *native optical magnification* (e.g. `40` for a 40x objective). Omit it (`undefined`) when unknown: the core then guesses one from the pixel size against a whole-slide optics table, and warns that the image looks like a macro image when it cannot. Set it to **`null`** when magnification does not apply to the modality at all — a CT/MR/PT has no objective, and without the explicit `null` every such image opens with a spurious "this is a macro image" warning and a meaningless magnification ladder. A tile source may declare the same field from `getMetadata()`; the data specification wins when both are present.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode. This is also how a session mixes upstreams **with different credentials**: the protocol entry owns the `HttpClient`, hence the auth context, so per-item auth = per-item `protocol`. A session never names an auth context directly (§7 of `AGENTS.md`) — see *Slide protocols* below and [`AUTH.md`](AUTH.md).
 - **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
+- **`minificationFilter`** — `"max"` \| `"default"`; overrides `setup.webGlMinificationFilter` for this data source only, e.g. `"max"` on a fluorescence overlay above an H&E background that keeps `"default"`. Unset inherits the deployment value. Honored by drawers that implement `setTiledImageMinificationFilter` (currently FlexDrawer).
 - **`pixelScale`** — how many pixels of the stack's **reference image** (its background) one pixel of this image covers. `2` = half-resolution; `512` = each pixel is one 512-px prediction square. OpenSeadragon normalizes every image in the world to viewport width 1, so an overlay lands on its background only when their aspect ratios match — and an overlay covering a whole number of blocks of a slide whose width is *not* a whole number of blocks never matches: its edge block hangs past the slide, OSD squeezes it back to fit, and every cell ends up slightly small with the error accumulating across the image. Declaring the scale is what lets the overlay overhang instead. Scalar or `{x, y}` (only `x` is used — OSD derives height from the image's own aspect). Meaningless on a background, which *is* the reference. Composes with a virtual-region crop rather than replacing it: the widths multiply. Absent, zero, negative or non-finite means "no opinion" and places the image exactly as before the field existed; session-supplied, so it is range-checked (`src/classes/app/overlay-pixel-scale.ts`).
 - **`croppingContext`** — present only on a *virtual* (cropped) source resolved through the `virtual-region` protocol; carries the crop rectangle + alignment. Authored by the virtual-viewport machinery, not by hand — see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md).
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
@@ -104,12 +105,13 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 |---|---|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`.                                                                                                                                                                                                                                                                                                                                   |
 | `locale` | string | `"en"` | i18next locale.                                                                                                                                                                                                                                                                                                                                                                                  |
-| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.)                                                                                                                                                                                                                                                                       |
+| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. Theme names per mode come from `branding.themes` (see `ui/README.md` → Theming). (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.)                                                                                                                                                                                                                                                                       |
 | `customBlending` | bool | `false` | Allow user-programmed blending.                                                                                                                                                                                                                                                                                                                                                                  |
 | `debugMode` | bool | `false` | Verbose runtime instrumentation.                                                                                                                                                                                                                                                                                                                                                                 |
 | `webglDebugMode` | bool | `false` | Debug post-processing.                                                                                                                                                                                                                                                                                                                                                                           |
 | `webGlPreferredVersion` | string | — | Select WebGL backend version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `webGlPrecision` | string | `"unorm8"` | First-pass render target precision: `"unorm8"` \| `"auto"` \| `"float16"`. `"auto"` lets float data (16-bit/floating-point TIFF, DICOM parametric maps) render unquantized; the offscreen colour array doubles, per renderer. This is the option the renderer's console notice about `precision: 'auto'` refers to. Required by `plugins/dicom` parametric maps and by low-range TIFF windowing. |
+| `webGlMinificationFilter` | string | `"default"` | How tiles drawn below their resolution are sampled: `"default"` (one tap) \| `"max"` (per-channel max over the texel footprint, up to 4×4 taps). `"max"` keeps sparse bright features (fluorescence) visible when zoomed out but washes out dark detail on brightfield; override per data item with `minificationFilter`. Works best with OSD's default `minPixelRatio: 0.5`. |
 | `valueInspectorEnabled` | bool | `false` | Hover value inspector.                                                                                                                                                                                                                                                                                                                                                                           |
 | `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay.                                                                                                                                                                                                                                                                                                                                                                    |
 | `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`).                                                                                                                                                                                                                                                                                                                          |
@@ -119,8 +121,8 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. Runtime canonical shape is an array; an explicit `[]` means "nothing open" (distinct from an absent value, which falls back to this default). |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view.                                                                                                                                                                                                                                                                                          |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply).                                                                                                                                                                                                                                                                                                                                    |
-| `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier.                                                                                                                                                                                                             |
-| `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresCtrl`.                                                                                                                                                                                                                                                                         |
+| `scrollRequiresClick` | bool | `false` | The wheel scrolls the host page until the user clicks into the viewer; leaving the viewer with the pointer releases it again. Use for notebook / scrollable-host embeddings. A throttled toast tells users to click first. Gated on a click, not a modifier, so modifier+wheel (focal planes) means the same in every mode. Former name `scrollRequiresCtrl` is still honoured. |
+| `reverseScroll` | bool | `false` | Invert the scroll-to-zoom direction — scroll down to zoom in, scroll up to zoom out. Composes with `scrollRequiresClick`.                                                                                                                                                                                                                                                                         |
 | `snapZoomToMagnification` | bool | `true` | Snap scroll-to-zoom between standard magnification stops (5x/10x/20x/40x…) instead of scaling continuously — only when the slide has a resolved native magnification (calibrated MPP); uncalibrated slides keep continuous zoom. Composes with `reverseScroll`.                                                                                                                                  |
 | `scrollSpeed` | number | `1` | Multiplier on the normalized wheel delta. Above 1 covers more zoom range per wheel turn, below 1 tames an over-sensitive device.                                                                                                                                                                                                                                                                 |
 | `scrollPixelsPerNotch` | number | `120` | Wheel pixels counted as one full zoom step (the conventional mouse notch). Trackpad deltas are smaller and apply fractionally, which keeps them smooth without throttling.                                                                                                                                                                                                                       |
@@ -139,7 +141,7 @@ Every key below is also a **deployment default**: `core.setup.<key>` in `env/env
 | `backgroundColor` | string | — | Hex `#RGB`/`#RGBA` canvas clear color (e.g. fluorescence). Transparent if unset. Session-wide; a single slide overrides it with `background[i].fill`.                                                                                                                                                                                                                                              |
 | `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions.                                                                                                                                                                                                                                                                                                                                                         |
 | `bypassCookies` | bool | `false` | Skip cookie-backed user state.                                                                                                                                                                                                                                                                                                                                                                   |
-| `bypassCloseConfirmation` | bool | `false` | Avoid browser close confirmation popup in dirty (data modified) state.                                                                                                                                                                                                                                                                                                               |
+| `bypassCloseConfirmation` | bool | `true`  | Avoid browser close confirmation popup in dirty (data modified) state. Set `false` to get the "Leave site?" prompt on unsaved changes.                                                                                                                                                                                                                                                                                                               |
 | `bypassCache` | bool | `false` | Never reuse cached values.                                                                                                                                                                                                                                                                                                                                                                       |
 | `bypassCacheLoadTime` | bool | `false` | Skip the **cold-load** session restore: a boot with no session of its own does not adopt `xoSessionCache`. Eviction and saving still run, so a boot that arrives *with* a session (auth-redirect return, POST, hash) is unaffected. Deployment-side (`ENV.setup`) — a cold load carries no `params` by definition.                                                                                 |
 | `historySize` | number | `50` | Cap on the history stack (`src/classes/history.ts`).                                                                                                                                                                                                                                                                                                                                             |
@@ -174,8 +176,13 @@ embeddings. `params.ui: true` is equivalent to leaving the field unset.
 
 `params.ui.globalMenuMode` (`"overlay"` \| `"docked"`, string — not a boolean flag,
 so it is read directly by `MainLayout`, not via `getUiOption`) picks how that dock
-behaves: `"overlay"` (default) hides it to a thin edge rail that floats over the
-viewer on hover/focus; `"docked"` keeps it as a flex sibling that pushes the viewer.
+behaves: `"overlay"` (default) rests it as an edge rail beside the viewer and floats
+the panel over the viewer on demand; `"docked"` keeps it as a flex sibling that pushes
+the viewer. In overlay mode, clicking the rail or the *Show / hide the global menu* shortcut
+(`core.app.toggleGlobalMenu`, `Alt+M`, pinnable as a quick action) opens the panel.
+It closes on Escape, a click on the viewer, a second toggle, or about a second after
+the pointer leaves it for the viewer (moving back in time keeps it open). Hovering the rail opens
+nothing — it sits beside the outermost viewer's side menu.
 The user's runtime pin toggle (persisted in AppCache) overrides this default.
 
 `params.ui.sideMenuTabs` (bool \| `Record<string, boolean>`) picks which panels of
@@ -216,6 +223,7 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
     - **`fixed`** — if `false`, user can change the shader type; default `true`.
     - **`params`** — shader-specific defaults; invalid entries fall back silently.
 - **`name`** — goal label.
+- **`backgrounds`** — background `id`s (or the data ids they show) this goal belongs to. A viewer's goal selector lists only goals that apply to its background, so overlays built for one slide (e.g. job masks) are not offered on another. Omitted = offered everywhere. Forks made by editing a shared goal are bound to the editing background.
 
 > Which visualization a viewer slot renders is not stored here — it is the per-background `visualizationIndex` binding above.
 
@@ -224,6 +232,16 @@ WebGL composition goals over the data group (`VisualizationItem` in `src/types/a
 ### `plugins`
 
 Plugin-id → plugin-config map; consult each plugin's README.
+
+### `deployment` — named deployment (optional)
+
+The id of a deployment the operator defined in the env `deployments` map
+(`env/README.md` → *Multiple deployments in one env*), e.g. `"deployment": "dicom"`.
+The server serves that configuration (client block, setup, plugins, modules);
+an unknown or absent id falls back to the deployment default and never fails the
+load. The served one is `APPLICATION_CONTEXT.env.deployment`, and exported
+sessions carry it so they reopen under the same deployment. Links can use
+`?deployment=<id>` instead.
 
 <details>
 <summary>Advanced features</summary>
@@ -238,7 +256,9 @@ Plugin-id → plugin-config map; consult each plugin's README.
 - a URL template string with `data` in scope (non-secure mode only — rejected in secure mode), or
 - an object `{ url, tileSourceClass?, tileSourceOptions?, proxy?, baseURL?, auth?, … }`. `tileSourceClass` / `tileSourceOptions` are described below; **every other** field is forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
 
-  An `auth` block needs a transport to bind to: with neither `proxy` nor `baseURL` no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported — core declares every such entry at `before-app-init`, not lazily on first slide) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md). Omit `auth.types`: they are resolved per request from the auth module owning the context.
+  **The string form gets a client too — an inferred one.** An entry that names its upstream in its own template should not have to repeat that origin as `baseURL` to be authenticated, so the registry renders the template with a sentinel id, takes the origin out of the result, and binds `{baseURL: <that origin>}` against the main auth context (one `console.debug` naming the origin, so it is visible). Before this the string form resolved to a bare `fetch`: no credential, no CSRF, no refresh-on-401, no request scheduling — and because FastAPI answers **403** (not 401) for a *missing* `Authorization` header, the whole symptom of a mis-declared protocol was a 403 on a perfectly authenticated session. Nothing is inferred where the origin is not static — a relative template with no `proxy`, or `` `${data}` `` where each slide carries its own absolute URL — and those entries stay client-less until they declare the block. Declare it to override: `auth.contextId` for a different identity, `auth.types: []` to send no credential (what a public upstream needs, since an `Authorization` header it never asked for costs a CORS preflight it does not answer), `proxy` to route through the server.
+
+  An `auth` block still needs a transport to bind to: with neither `proxy` nor `baseURL` nor a derivable origin, no client is built and the TileSource falls back to an unauthenticated bare `fetch` — the registry warns once per entry when that happens. With `auth.required`, the entry also *declares the context requirement* (so an unclaimed context is reported — core declares every such entry at `before-app-init`, not lazily on first slide) and its requests wait for that context to finish authenticating instead of racing the login — see [`AUTH.md`](AUTH.md). Omit `auth.types`: they are resolved per request from the auth module owning the context.
 
   **The entry is the unit of credential.** One entry → one `HttpClient` → one auth context, so streaming from two upstreams that need *different* logins means **two entries**, and each data item selects its own with `protocol`:
 
@@ -306,7 +326,7 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `virtual-region-protocol.ts` — the built-in `virtual-region` factory protocol + `CroppedTileSource` (see [`VIRTUAL_VIEWPORTS_SPLIT.md`](VIRTUAL_VIEWPORTS_SPLIT.md)).
     - `background-config.ts` — `BackgroundConfig`, the normalized view over a `background[i]` entry.
     - `http-client.ts` + `remote-endpoint.ts` — `HttpClient` and its transport-agnostic proxy/auth base (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
-    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`.
+    - `osd/` — first-party extensions installed onto the `OpenSeadragon` namespace: `tools.ts` (`viewer.tools`), `viewport-registration.ts` (automatic multi-viewer alignment), `scalebar/` (the scalebar, its magnification chrome and `ViewportSyncAPI`). Side-effect-imported from `app.ts`. The magnification strip hosts the `USER_INTERFACE.ViewerControls` slot (`ui/services/viewerControls.mjs`) — register per-viewport buttons there, not on the scalebar.
     - `app/tutorial/` — the interactive tutorial overlay behind `USER_INTERFACE.Tutorials` = `APPLICATION_CONTEXT.tutorials` (see [`TUTORIALS.md`](TUTORIALS.md)).
     - `network-status.ts` — `APPLICATION_CONTEXT.networkStatus`, the online/offline source of truth.
     - `user-roles-core.ts` — roles & capability gating (see [`USER_ROLES.md`](USER_ROLES.md)).
@@ -488,6 +508,54 @@ re-applies that snapshot through `drawer.overrideConfigureAll(shaders, order)`, 
 `app.visualization` channel, and shows `error.shaderProgramFailedRestored`. The debounced
 config write-back is suppressed while recovering, so a configuration that cannot link never
 reaches `APPLICATION_CONTEXT.config` or a session export.
+
+### Display adjustments
+
+`APPLICATION_CONTEXT.adjustments` (`classes/app/adjustments.ts`) reads and writes how data is
+displayed, always for an explicit viewer:
+
+- **Per-layer adjustments** — black/white point, gamma, brightness, contrast, saturation, hue,
+  temperature/tint, invert. Each is a control of a vec4 → vec4 module in the layer's
+  `params.pipeline.post` chain (nodes `xadj_*`, canonical order levels → brightness/contrast →
+  saturation → hue → temperature → invert). Inserting a node is the one program rebuild; every
+  later change is `control.set(...)` plus `shader.invalidate()`, a uniform update. The engine is
+  the renderer's per-layer module pipeline (`ShaderLayer#resetPipeline` / `getPipelineControl`);
+  `adjustments.isSupported()` probes for it and refuses writes on an older renderer. Only the main
+  renderer is touched: the drawer's navigator sync mirrors node structure and values.
+  - Ranges (min/max/step) come from the module definitions in `ShaderModuleRegistry`; the
+    descriptor literals are a fallback. Identity values are xOpat's and are written into every
+    inserted node, because a module default is not necessarily an identity (`invert.amount`
+    defaults to `1`).
+- **Per-data-item sampling** — `setSampling(dataReference, "auto" | "brightfield" |
+  "fluorescence" | "pixelated")` writes `imageSmoothingEnabled` / `minificationFilter` onto
+  `config.data[i]` (see `data` above) and applies them to every viewer showing that item. Not a
+  module: GL filtering is per tiled image, fixed at texture upload.
+- `list(viewer)` — data items, background first, each with its layers and current values;
+  `set` / `setBackground` (all background layers, linked) / `reset`; `setBypass` /
+  `toggleBypass` (before/after: a transient uniform via `ShaderLayer#setPipelineBypass`, never
+  written to config/cache/history; applied to group children too; `isBypassSupported()` probes
+  for it on older renderers; `setPipelineEnabled` is deliberately not used, it persists); `setLinked` / `copyToViewers` (grid comparison:
+  background layers match by position, visualization layers by structural id);
+  `histogram` / `autoLevels` (0.5 % / 99.5 % percentiles over `visualization.probeData`, i.e.
+  the raw data of the layer's first data reference at the current view); presets per user in
+  `AppCache` (`listPresets` / `savePreset` / `applyPreset`).
+- New kinds of adjustment: `registerAdjustment({key, node: "xadj_…", module, control, min, max,
+  step, identity, labelKey, order})`. The UI renders descriptors generically.
+- `getOwnedControls(shader)` — the broker's controls on a layer. Generic control UIs skip them, so
+  each control is mounted once: the shader card shows a layer's own controls plus any other
+  pipeline nodes (authored nodes, and the legacy `use_gamma` / `use_exposure` / `use_logscale`
+  filters, which the renderer migrates to `legacy_*` pre nodes); the Data panel shows `xadj_*`.
+
+Persistence and undo need no extra wiring: structural changes emit `shader-config-update`,
+value changes raise the renderer's `visualization-change`, and the live snapshot
+(`UTILITIES.exportLiveVisualization`) carries `params.pipeline` and the legacy `use_gamma` /
+`use_exposure` / `use_logscale` filters in `state` (marked `structural: true`, so their absence
+means "none" on apply).
+
+UI: the per-viewer **Data** side tab (`ui/classes/components/dataAdjustmentsPanel.mjs`, closed by
+default), the hover-revealed sliders button in the navigator header (quick background panel),
+and the `adjustments` scripting namespace. Hold **B** on the canvas
+(`core.view.adjustmentsBypass`) for a before/after peek.
 
 ### Render Debug (dev only)
 

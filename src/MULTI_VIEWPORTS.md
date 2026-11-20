@@ -311,7 +311,16 @@ The picker keeps mouse navigation enabled, because the three landmarks are rarel
 - **Per-viewport eraser** (joined to the SYNC button in the scalebar chrome) → `resetViewer()`: drops *that* viewer's transform, unlinks it, flags it manual-pending, and evicts the matching entries from `ViewportRegistration._pairCache` (`clearCacheFor(viewer)`). Everything else stays synced. Clearing the **reference** viewer no longer destroys the session — `_reelectLeader` promotes a still-calibrated peer `Y` and re-bases every transform into `Y`'s image space (`A' = A · invA_Y`, `b' = b − A'·b_Y`, flip parity XOR-ed, leader points carried across), so the remaining viewports keep their relative alignment and the `REF` badge simply moves.
 - **Tools → Clear sync session** → `resetSession()`: unlinks *every* viewer (iterating a copy — `Tools.unlink` splices the live `subscribed` array), nulls the session, calls `ViewportRegistration.clearCache()`, and flags every viewer manual-pending.
 
-Both arm a manual re-align, on the principle that a user who discards an alignment is rejecting the automatic estimate — recomputing the same answer on the next LINK would be useless. Both repaint the chrome of all viewers, not only the linked ones.
+Both also **release the pose**: sync turns a follower by its registration angle (and mirrors it on odd flip parity), and `_releasePose` takes exactly that back out — after unlinking, before the transform is deleted — so the viewport returns to the reference's orientation while anything the user turned by hand survives. Unlinking alone (`disable()`) keeps the pose. For the same reason the per-slide viewport cache (`viewer-state-binding-controller.ts`) stores rotation minus `getRotationOffset()`: the session is memory-only, and a cached angle would reopen the slide tilted with no session left to explain it. The canonical scene keeps the true rotation, because it carries `sync` alongside.
+
+Both first abort any point pick in flight, on every viewer — the picker and the reference markers shown for it are measured against state the clear is about to remove. Both arm a manual re-align, on the principle that a user who discards an alignment is rejecting the automatic estimate — recomputing the same answer on the next LINK would be useless. Both repaint the chrome of all viewers, not only the linked ones.
+
+### Layout changes and late joiners
+
+The session is keyed by `viewer.uniqueId` and outlives the viewers it was built with, so reopening a slide gets its alignment back. Two things keep it honest against the viewers that are actually open:
+
+- **Reference reconciliation.** `enable()` first runs `_reconcileReference()`: if `leaderId` names a viewer that is no longer open, `_reelectLeader(id, {openOnly: true})` promotes an *open* calibrated viewer and re-bases every transform (the closed ones included — they stay remembered). With no open calibrated viewer the session is dropped.
+- **Manual join.** The three points a joining viewer picks only mean something against the reference's own three. If the session has them (`leaderPts`), the reference viewer shows them as numbered markers and zooms to fit while the joiner picks (`_showReferencePoints`). If it does not — it was built by automatic registration — the order flips: the joining viewer (the one the user acted on) picks first, then the reference marks the same three with the joiner's markers as the guide, and those become `leaderPts`. Only the joiner's transform changes in either case: every transform maps reference image space to one viewer, so the other viewers' alignment, automatic or manual, is untouched. Cancelling either pick changes nothing.
 
 ### Registration providers
 
@@ -331,7 +340,7 @@ OpenSeadragon.ViewportRegistration.registerProvider("my-registrar", {
 });
 ```
 
-UI entry points: per-viewer SYNC/REF button on the scalebar; session-wide *Auto-align all viewports* / *Calibrate sync manually* / *Clear sync session* in the app-bar **Tools** menu. The session is serialized into the canonical scene (`CanonicalScene.sync`), so exported sessions restore their alignment.
+UI entry points: per-viewer SYNC/REF button on the scalebar (right-click it, or use the caret beside it, for *link automatically* / *calibrate manually* / *clear alignment*); session-wide *Auto-align all viewports* / *Calibrate all viewports manually* / *Clear sync session* in the app-bar **Tools** menu. The scalebar entries act on that one viewport only; the Tools entries act on all. *Calibrate all* (`manualSyncAll`) resets the session, activates the first viewport for its three reference points, then walks the others in viewport order. *Auto-align all* (`autoSyncAll`) calls `resetSession()` first: it recomputes every alignment, hand-picked ones included, instead of skipping viewers that already hold one. The session is serialized into the canonical scene (`CanonicalScene.sync`, including `leaderPts` when calibrated by hand), so exported sessions restore their alignment.
 
 ---
 

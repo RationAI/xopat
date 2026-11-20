@@ -23,6 +23,14 @@ export interface PersistedOutboxEntry {
     attemptCount: number;
     rollbackOnAsyncRefuse: boolean;
     metaJson: string;
+    /**
+     * Deployment key (`classes/app/deployment-key.ts`) the op was made under.
+     * The database is origin-wide and one origin serves many deployments, each
+     * binding its own sinks: an op is replayed only under the deployment that
+     * made it. Absent on entries written before the field existed — those are
+     * never replayed and age out with `pruneOlderThan`.
+     */
+    deploymentKey?: string;
 }
 
 const DB_NAME = "xopat-io-outbox";

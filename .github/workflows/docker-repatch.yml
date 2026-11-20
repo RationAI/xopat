@@ -1,0 +1,203 @@
+name: Re-patch published Docker images
+
+# Keeps already-published release images on a security-patched runtime without
+# rebuilding the application. All logic lives in docker/repatch/repatch.sh (also usable
+# locally); this workflow only picks the targets and reports.
+#
+# For each <image>:<tag> the script detects the Node line inside the image, takes the
+# newest release of THAT line (never a major jump), applies OS package updates, smoke
+# tests, and moves the tag (original kept as <tag>-orig). Images on an end-of-life Node
+# line are reported `unsupported` and their GitHub releases get a security notice.
+#
+# Deployments pulling a moved tag pick up the fix on their next pull:
+# `docker compose pull && docker compose up -d`, or `kubectl rollout restart` with
+# imagePullPolicy: Always. Digest-pinned deployments are unaffected by design.
+
+run-name: >-
+  Re-patch ${{ github.event_name == 'schedule' && 'scheduled' || inputs.TAGS }}${{ inputs.DRY_RUN && ' (dry run)' || '' }}
+
+on:
+  schedule:
+    # Weekly, Monday 04:17 UTC: the newest releases, only where something changed.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      TAGS:
+        description: '"auto" (the newest LAST_N releases) or explicit tags, space separated'
+        required: true
+        default: 'auto'
+      LAST_N:
+        description: 'With TAGS=auto: how many newest releases are supported (older ones get a notice)'
+        required: false
+        default: '4'
+      IMAGES:
+        description: 'Images to patch (space separated)'
+        required: false
+        default: 'xopat xopat-php'
+      NODE_VERSION:
+        description: '"auto" = newest release of each image''s own Node line, or an exact version'
+        required: false
+        default: 'auto'
+      FORCE:
+        description: 'Rebuild even when the tag is already current'
+        type: boolean
+        default: false
+      WARN_UNSUPPORTED:
+        description: 'Prepend a security notice to releases that cannot be patched'
+        type: boolean
+        default: true
+      DRY_RUN:
+        description: 'Build and smoke-test only, push nothing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-repatch
+  cancel-in-progress: false
+
+env:
+  OWNER: rationai
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      older: ${{ steps.plan.outputs.older }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAGS: ${{ inputs.TAGS || 'auto' }}
+          LAST_N: ${{ inputs.LAST_N || '4' }}
+          IMAGES: ${{ inputs.IMAGES || 'xopat xopat-php' }}
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+          [[ "$LAST_N" =~ ^[0-9]+$ ]] || { echo "bad LAST_N"; exit 1; }
+          # every release tag published for any of the images
+          all="$(for img in $IMAGES; do
+                   [[ "$img" =~ ^[a-z0-9._-]+$ ]] || { echo "bad image $img" >&2; exit 1; }
+                   gh api --paginate "orgs/$OWNER/packages/container/$img/versions?per_page=100" \
+                     --jq '.[].metadata.container.tags[]'
+                 done | grep -E "$semver" | sort -uV)"
+          if [ "$TAGS" = "auto" ]; then
+            selected="$(printf '%s\n' "$all" | tail -n "$LAST_N")"
+            older="$(printf '%s\n' "$all" | head -n "-$LAST_N")"
+          else
+            selected="$(printf '%s\n' $TAGS | grep -E "$semver" || true)"
+            older=""
+          fi
+          [ -n "$selected" ] || { echo "no tags selected"; exit 1; }
+          # image:tag pairs that are actually published
+          targets="$(for img in $IMAGES; do
+                       have="$(gh api --paginate "orgs/$OWNER/packages/container/$img/versions?per_page=100" --jq '.[].metadata.container.tags[]')"
+                       for t in $selected; do grep -qxF "$t" <<<"$have" && echo "$img:$t"; done
+                     done | jq -R . | jq -sc .)"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "older=$(printf '%s\n' $older | jq -R . | jq -sc 'map(select(length>0))')" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan"
+            echo "Targets: \`$(jq -r 'join(" ")' <<<"$targets")\`"
+            [ -n "$older" ] && echo "Older (not patched, will be marked unsupported): \`$(echo $older)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  repatch:
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: ${{ fromJson(needs.plan.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-patch ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+          NODE_VERSION: ${{ inputs.NODE_VERSION || 'auto' }}
+          PUSH: ${{ !inputs.DRY_RUN }}
+          FORCE: ${{ inputs.FORCE == true }}
+        run: |
+          set -uo pipefail
+          args=(--node "$NODE_VERSION")
+          [ "$PUSH" = "true" ] && args+=(--push)
+          [ "$FORCE" = "true" ] || args+=(--if-needed)
+          bash docker/repatch/repatch.sh "${args[@]}" "$TARGET" | tee repatch.log
+          status=${PIPESTATUS[0]}
+          mkdir -p result
+          grep '^RESULT ' repatch.log | tail -n1 > "result/${TARGET//[:\/]/_}.txt" || true
+          sed -E 's/^RESULT ([^ ]+) ([^ ]+) ?(.*)$/| `\1` | \2 | \3 |/' "result/${TARGET//[:\/]/_}.txt" >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: repatch-result-${{ strategy.job-index }}
+          path: result/
+          retention-days: 7
+
+  report:
+    needs: [plan, repatch]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OLDER: ${{ needs.plan.outputs.older }}
+      WARN: ${{ github.event_name == 'schedule' || (inputs.WARN_UNSUPPORTED && !inputs.DRY_RUN) }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: repatch-result-*
+          merge-multiple: true
+          path: result
+
+      - name: Summary and release notices
+        run: |
+          set -euo pipefail
+          cat result/*.txt 2>/dev/null | sort > results.txt || true
+          {
+            echo "### Results"
+            echo "| Image | Status | Detail |"
+            echo "|---|---|---|"
+            sed -E 's/^RESULT ([^ ]+) ([^ ]+) ?(.*)$/| `\1` | \2 | \3 |/' results.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # tags to warn about: older than the supported window, plus anything on an EOL runtime
+          { jq -r '.[]' <<<"$OLDER"
+            awk '$3=="unsupported"{split($2,a,":"); print a[2]}' results.txt
+          } | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV > warn.txt || true
+          supported="$(awk '$3=="patched"||$3=="current"||$3=="built"{split($2,a,":"); print a[2]}' results.txt | sort -uV | paste -sd, - | sed 's/,/, /g')"
+
+          if [ "$WARN" != "true" ] || [ ! -s warn.txt ]; then
+            echo "No release notices to write."; exit 0
+          fi
+          marker='<!-- xopat-unsupported-image -->'
+          while read -r rel; do
+            body="$(gh release view "$rel" -R "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null)" \
+              || { echo "no GitHub release for $rel"; continue; }
+            case "$body" in *"$marker"*) continue;; esac
+            {
+              echo "$marker"
+              echo "> [!CAUTION]"
+              echo "> The Docker images of this release (\`ghcr.io/$OWNER/xopat:$rel\`, \`ghcr.io/$OWNER/xopat-php:$rel\`) no longer receive security updates and may run an end-of-life Node.js or OS runtime. Upgrade to a supported release${supported:+ ($supported)}, whose images are re-patched with current security releases."
+              echo
+              printf '%s\n' "$body"
+            } > notes.md
+            gh release edit "$rel" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+            echo "- marked release \`$rel\` unsupported" >> "$GITHUB_STEP_SUMMARY"
+          done < warn.txt

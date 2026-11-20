@@ -22,7 +22,12 @@ interface SlideProtocolHttpClientOptions {
     maxRetries?: number;
     auth?: {
         contextId?: string;
-        /** Omit to follow the auth module owning `contextId` (recommended). */
+        /**
+         * Omit to follow the auth module owning `contextId` (recommended).
+         * An EMPTY array means no credential at all — the way to opt a public
+         * upstream out of the main context's token (and out of the preflight an
+         * unasked-for `Authorization` header triggers).
+         */
         types?: string[];
         refreshOn401?: boolean;
         /**
@@ -120,6 +125,14 @@ interface SlideProtocolUrlTemplateEntry {
      * TileSources resolved through this entry (metadata + tiles) route through
      * a per-entry `HttpClient` constructed from these options. The rendered
      * `urlTemplate` result is joined onto the client's `baseURL` when relative.
+     *
+     * When ABSENT, the registry derives `{baseURL: <origin the template resolves
+     * to>}` and binds a client anyway — an entry that names its upstream in the
+     * template should not have to repeat it to be authenticated, and before this
+     * such an entry fell back to a bare `fetch` that carried no credential at
+     * all. Nothing is derived when the origin is not static (a relative
+     * template, or `${data}` carrying the whole URL): those keep the
+     * client-less behaviour and must declare the block to gain a transport.
      */
     httpClient?: SlideProtocolHttpClientOptions;
     /**

@@ -1,5 +1,5 @@
 
-import { nowMs, sanitizeMetricKey, ensureArray } from "./utils.mjs";
+import { nowMs, sanitizeMetricKey, ensureArray, buildTagFilter } from "./utils.mjs";
 
 /** Run management + logging */
 export class RunsAPI {
@@ -81,7 +81,8 @@ export class RunsAPI {
         if (!experiment_id) throw new Error("getOrCreateRunByTag: experiment_id is required");
         if (!identifierTag || !identifierTag.key) throw new Error("getOrCreateRunByTag: identifierTag {key,value} is required");
 
-        const filter = `tags.${identifierTag.key} = "${String(identifierTag.value).replace(/"/g, '\\"')}"`;
+        // Key and value are frequently untrusted — never splice them raw.
+        const filter = buildTagFilter(identifierTag.key, identifierTag.value);
         const found = await this.search({ experiment_ids: [experiment_id], filter, max_results: 1 });
         const run = found?.runs?.[0];
         if (run?.info?.run_id) return run.info.run_id;

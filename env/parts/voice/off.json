@@ -1,0 +1,13 @@
+{
+  "$meta": {
+    "description": "No dictation: the speech-to-text module stays unloaded",
+    "dimension": "voice",
+    "requires": []
+  },
+  /* The explicit "none" of the voice dimension, so a preset can state it. A deployment
+     that names no voice layer at all behaves the same — the module is off unless a
+     layer enables it. */
+  "modules": {
+    "speech-to-text": { "enabled": false }
+  }
+}

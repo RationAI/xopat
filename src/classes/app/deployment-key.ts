@@ -11,8 +11,10 @@
 //   - `xoSessionCache`      (src/parse-input.js)
 //   - `__xopat_session__`   (src/app.ts + application-lifecycle-controller.ts)
 //   - the `_plugins` autoload cookie (src/loader.ts + the same controller)
-// It does NOT scope `kv:*` (AppCache/AppCookies/plugin caches). Those stay
-// keyed by `<ownerUid>::<key>` only.
+//   - the persistent IO outbox (src/classes/io/io-resource.ts)
+//   - `kv:*` values read through `IOKVHandle.deploymentScoped()` (consents,
+//     option preferences, drafts, …)
+// Plain `kv:*` handles stay keyed by `<ownerUid>::<key>` only.
 //
 // Loaded from `src/store.ts` so it lands in `dist/store.js`, the FIRST app
 // script on the page (`src/config.json` → `js.src.loader`). That is what lets
@@ -81,11 +83,19 @@ export function resolveDeploymentKey(
 ): string {
     const env = ENV || {};
     const client = env.client || {};
+    // Named deployment served by this page (server/templates/javascript/deployments.js).
+    // One env file serving several deployments must not share caches between
+    // them, even under a pinned key — each one is a different configuration.
+    const deploymentId = typeof env.deployment?.id === "string" ? env.deployment.id : "base";
+    // `~` is outside what `sanitize` lets through, so a pinned key can never
+    // spell another deployment's suffix (`x.dp-a` pinned on the base used to
+    // equal `x` pinned on deployment `a`). Ids are `[a-z0-9_-]` by the server.
+    const suffix = deploymentId === "base" ? "" : `~dp-${deploymentId}`;
 
     // Operator override. `sessionCacheKey` is the historical spelling, kept
     // working for deployments that already set it.
     const explicit = client.cacheKey ?? client.sessionCacheKey ?? env.setup?.sessionCacheKey;
-    if (typeof explicit === "string" && explicit) return sanitize(explicit);
+    if (typeof explicit === "string" && explicit) return sanitize(explicit) + suffix;
 
     return "v3-" + fnv1a(stableStringify({
         domain: client.domain || "",
@@ -106,7 +116,7 @@ export function resolveDeploymentKey(
         // the deployment.
         plugins: enabledIds(PLUGINS),
         modules: enabledIds(MODULES),
-    }));
+    })) + suffix;
 }
 
 /**
@@ -129,7 +139,7 @@ export function initDeploymentKey(
  * an unscoped (and therefore refused) entry rather than a match.
  */
 export function deploymentKey(): string {
-    return _cached ?? (window as any).XOPAT_DEPLOYMENT_KEY ?? "";
+    return _cached ?? (typeof window !== "undefined" ? (window as any).XOPAT_DEPLOYMENT_KEY : undefined) ?? "";
 }
 
 /**
@@ -146,9 +156,13 @@ export function pluginsCookieKey(): string {
 /** The pre-scoping cookie name, deleted once on first boot after the upgrade. */
 export const LEGACY_PLUGINS_COOKIE = "_plugins";
 
-(window as any).XOpatDeploymentKey = {
-    resolve: resolveDeploymentKey,
-    init: initDeploymentKey,
-    get: deploymentKey,
-    pluginsCookieKey,
-};
+// Guarded: the IO pipeline imports this module, and it is also loaded outside a
+// browser (Node tests, workers) where there is no `window` to publish onto.
+if (typeof window !== "undefined") {
+    (window as any).XOpatDeploymentKey = {
+        resolve: resolveDeploymentKey,
+        init: initDeploymentKey,
+        get: deploymentKey,
+        pluginsCookieKey,
+    };
+}

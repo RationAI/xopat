@@ -17,6 +17,7 @@ import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-
 import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
+import { slideHashOf } from "./classes/io/slide-hash";
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
@@ -320,6 +321,27 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
     function scriptAlreadyPresent(key: string): boolean {
         return SCRIPT_INJECTIONS.has(key);
+    }
+
+    /**
+     * Are all of the element's files actually on this page? `loaded` is a registry flag and
+     * can outlive the page that set it (the `__xopat_session__` snapshot restores it), so a
+     * dependency walk must not take it on trust: a module reported loaded whose files never
+     * arrived leaves its dependents constructing against an undefined global.
+     */
+    function elementFilesPresent(record: XOpatElementRecord, folder: string): boolean {
+        const list = record.prodIncludes ?? record.includes ?? [];
+        return list.every((entry: any) => {
+            const src = typeof entry === "string" ? `${folder}${record.directory}/${entry}` : entry?.src;
+            if (!src) return true;
+            const key = scriptKey(src);
+            if (scriptAlreadyPresent(key)) return true;
+            // Server-rendered sections not yet indexed (see indexDocumentScripts).
+            return Array.from(document.scripts).some(node => {
+                const nodeSrc = node.getAttribute("src");
+                return !!nodeSrc && scriptKey(nodeSrc) === key;
+            });
+        });
     }
 
     // One listener for the whole loader instead of clobbering `window.onerror` per script.
@@ -1196,7 +1218,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         if (pending) return pending;
         // A quarantined module is not retried: `cleanUpModule` already removed its handlers
         // and dropped its singleton, and re-running a known-broken file only repeats that.
-        if (module.loaded || module.error) return Promise.resolve();
+        if (module.error) return Promise.resolve();
+        if (module.loaded && elementFilesPresent(module, MODULES_FOLDER)) return Promise.resolve();
         if (MODULE_LOAD_STACK.has(id)) return Promise.resolve();
 
         let settle: () => void, fail: (e: any) => void;
@@ -1740,6 +1763,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   restore-on-enter per (viewer, background) pair, driven by
          *   `viewer-open-pipeline` on slide change. `'all'` = global +
          *   per-viewer + per-viewer-background. See src/IO_PIPELINE.md.
+         * @param options.defaultFormat  the format (id registered under this
+         *   owner's domain in `IO_PIPELINE.formats`) a sink that takes any
+         *   format stores when neither the binding nor the sink's own config
+         *   pins one. Must be deployment-derived — never a user preference.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -1748,6 +1775,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+            defaultFormat?: () => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
@@ -1760,6 +1788,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 bundleScope: options.bundleScope,
                 exportBundle: options.exportBundle,
                 importBundle: options.importBundle,
+                defaultFormat: options.defaultFormat,
             });
             for (const cap of options.capabilities ?? []) {
                 IO_PIPELINE.registerCapability(this.__uid, cap);
@@ -2845,6 +2874,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
     let _sessionUrlSyncable: boolean | null = null;
 
+    /** JSON with object keys sorted, so equal data entries hash equally regardless of key order. */
+    const stableStringify = (value: any): string => {
+        if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+        if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+        return `{${Object.keys(value).sort()
+            .filter(k => value[k] !== undefined)
+            .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+    };
+    const _slideHashCache = new Map<string, string>();
+
     /**
      * @namespace UTILITIES
      */
@@ -2918,6 +2957,52 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // Virtual-region children key IO by the parent slide (see
             // explicitSlotBackgroundId) so all modes share one bundle.
             return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
+        },
+
+        /**
+         * Stable identity of the slide behind a background id, for naming stored
+         * data (`{slideHash}` / `{slideName}` in IO path templates).
+         *
+         * - `hash` — 16 hex chars of HMAC-SHA256(`hashKey`, data entry) (a path
+         *   string, or the object with its keys sorted). Independent of an
+         *   explicit background `id` and of the session, unique in practice.
+         *   Keyed because slide paths are guessable: an unkeyed hash lets anyone
+         *   holding the stored data match candidate paths offline. `undefined`
+         *   when no key is given (`ENV.client.io.slideHashKey` unset) — callers
+         *   must refuse rather than fall back to an unkeyed hash.
+         * - `name` — the data entry's file name (`FNB-766-24-….czi`), or for an
+         *   object entry what {@link nameFromBGOrIndex} finds. Readable, but two
+         *   folders holding the same file name collide, and it may carry a case
+         *   number: use it for labels, not for addressing.
+         *
+         * Background ids are not unique per entry, but entries sharing one name
+         * the same data locator (see `BackgroundConfig.processId`), so the first
+         * match is the slide. `undefined` when the id names no background.
+         */
+        slideIdentityFor: function (backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined {
+            if (!backgroundId) return undefined;
+            const bg = (APPLICATION_CONTEXT.config.background || []).find((b: any) => b?.id === backgroundId);
+            if (!bg) return undefined;
+            const item = BackgroundConfig.dataFromDataId(bg.dataReference);
+            if (item === undefined || item === null) return undefined;
+            const canonical = typeof item === "string" ? item : stableStringify(item);
+            let hash: string | undefined;
+            if (typeof hashKey === "string" && hashKey) {
+                // Keyed by key AND entry: the key is static per page, but a
+                // host rewriting ENV.client.io at runtime must not get stale hashes.
+                const cacheKey = `${hashKey.length}:${hashKey}\u0000${canonical}`;
+                hash = _slideHashCache.get(cacheKey);
+                if (!hash) {
+                    hash = slideHashOf(hashKey, canonical);
+                    if (_slideHashCache.size >= 512) _slideHashCache.clear();
+                    _slideHashCache.set(cacheKey, hash);
+                }
+            }
+            let name = typeof item === "string"
+                ? UTILITIES.fileNameFromPath(item, false)
+                : UTILITIES.nameFromBGOrIndex({ dataReference: item } as any, false);
+            if (name === "unknown" || name === "undefined" || name === "error") name = "";
+            return { hash, name };
         },
 
         /**
@@ -3380,11 +3465,21 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             try {
                 const outcome: IOResult[] = [];
                 const form = await UTILITIES.getForm("", undefined, false, outcome);
+                // Warnings and errors only: the ring also holds every adopted
+                // `console.log`, which routinely names slide paths — a file the
+                // user hands to someone else must not carry that by default.
+                // Escaped because log text is attacker-influenced (tile-server
+                // bodies, error messages) and this file runs its own <script>.
+                const logging = (APPLICATION_CONTEXT as any).logging;
+                const trace: string = logging?.getEntries
+                    ? logging.getEntries({ minLevel: "warn", limit: 2000 })
+                        .map((r: any) => `${r.level.toUpperCase().padEnd(5)} ${r.ts} [${r.channel}] ${r.message}\n`).join("")
+                    : ((console as any).appTrace || []).join("");
                 const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
-<body><!--Todo errors might fail to be stringified - cyclic structures!-->
-<div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
+<body>
+<div>Errors (if any): <pre>${escapeHtml(trace)}</pre></div>
 ${form}
 </body></html>`;
 
@@ -3623,10 +3718,12 @@ ${form}
                 if (!file) return reject("Invalid input file: no file.");
                 const fileReader = new FileReader();
                 fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
+                // Without this a failed read left the promise pending forever.
+                fileReader.onerror = () => reject(fileReader.error ?? new Error("File read failed."));
 
                 if (mode === "text") fileReader.readAsText(file);
                 else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
-                else throw "Invalid read file mode " + mode;
+                else reject(new Error("Invalid read file mode " + mode));
             });
         },
 
@@ -3894,6 +3991,14 @@ ${form}
             // Top level, NOT in `params`: app.ts sanitizes params against the `setup`
             // allowlist and would drop an unknown key with a warning.
             data.__envKey = window.XOPAT_DEPLOYMENT_KEY || undefined;
+
+            // The named deployment this session actually ran under, so a shared
+            // link / export reopens the same one (server/templates/javascript/deployments.js).
+            // The served id, not the requested one: after a fallback the session
+            // describes what was really loaded.
+            const deploymentId = (APPLICATION_CONTEXT.env as any)?.deployment?.id;
+            if (typeof deploymentId === "string" && deploymentId !== "base") data.deployment = deploymentId;
+            else delete data.deployment;
 
             // Canonical viewport snapshot (same ViewportSetup shape params.viewport expects).
             const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
@@ -4251,9 +4356,9 @@ form.submit();
     // pipeline, inspector controllers, ...) gets the browser's native
     // "Leave site?" prompt for free. Modern browsers ignore custom
     // messages; both setters are still required for the prompt to show.
-    // Embeddings that drive the viewer programmatically (e.g. notebooks)
-    // can suppress the prompt entirely with params.bypassCloseConfirmation —
-    // in that case we skip registering the listener altogether.
+    // Off by default: bypassCloseConfirmation defaults to true (src/config.json,
+    // ENV XOPAT_BYPASS_CLOSE_CONFIRMATION). Deployments opt in by setting it
+    // false; when bypassed we skip registering the listener altogether.
     if (!APPLICATION_CONTEXT.getOption('bypassCloseConfirmation')) {
         window.addEventListener('beforeunload', (event) => {
             if (!APPLICATION_CONTEXT.__cache.dirty) return;
@@ -5031,15 +5136,16 @@ form.submit();
 
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
-                webGlPreferredVersion: preferredWebGlVersion,
+                webGLPreferredVersion: preferredWebGlVersion,
                 // "auto" lets a float slide upgrade the first-pass target; see config.json.
                 precision: APPLICATION_CONTEXT.getOption("webGlPrecision"),
+                minificationFilter: APPLICATION_CONTEXT.getOption("webGlMinificationFilter"),
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 // A private context when the budget allows, the shared one otherwise.
                 // Private means the presentation canvas IS the WebGL canvas, so the
-                // per-frame readPixels + putImageData transfer that shared contexts
-                // require does not happen at all. See flex-renderer-context.ts.
+                // per-frame copy to a 2D canvas that shared contexts require does not
+                // happen at all. See flex-renderer-context.ts.
                 sharedContextKey: acquireFlexContextKey(cellId),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
@@ -5234,6 +5340,35 @@ form.submit();
             });
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
+            });
+
+            // Focal-plane (z-stack) ruler on the bottom edge of this viewport.
+            // It shows only for multi-plane slides and reserves its own strip:
+            // the scalebar dock and the side menu are lifted by its height
+            // instead of being overlapped.
+            const depthRuler = new UI.DepthRuler({
+                id: `${cellId}-depth-ruler`,
+                onInsetChange: (px: number) => {
+                    // The cell first: it cannot fail, and the side menu must
+                    // move even if the scalebar is mid-rebuild for a new slide.
+                    cell.style.setProperty("--xo-viewer-bottom-inset", `${px}px`);
+                    (viewer as any).scalebar?.setBottomInset?.(px);
+                },
+            });
+            depthRuler.attachTo(viewer.container);
+            depthRuler.onLayoutChange({ width: window.innerWidth });
+            depthRuler.init(viewer);
+            (viewer as any).__depthRuler = depthRuler;
+            const depthRulerChromeKey = `depthRuler::${(viewer as any).uniqueId ?? index}`;
+            let depthRulerHidden = false;
+            (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(depthRulerChromeKey, {
+                is:  () => !depthRulerHidden,
+                on:  () => { depthRulerHidden = false; depthRuler.setHidden(false); },
+                off: () => { depthRulerHidden = true; depthRuler.setHidden(true); },
+            });
+            viewer.addOnceHandler?.("destroy", () => {
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(depthRulerChromeKey);
+                depthRuler.destroy();
             });
 
             // Navigator visibility is owned by the right-side viewer

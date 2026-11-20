@@ -84,15 +84,33 @@ export const globalPluginWindowMethods = {
             osdPosition: { x: 0, y: 0 },
             pixelPosition: { x: 0, y: 0 },
             active: object,
+            // Named so a provider can tailor what it offers here. Asking the
+            // provider beats filtering its answer — the flyout path returns ONE
+            // nested "Annotation" parent, so a title filter over the top level
+            // matched nothing, and on the flat path it left the entry's group
+            // header behind as an inert row with nothing under it.
+            source: 'annotation-more',
         };
 
         const registry = window.CanvasContextMenu;
         const items = registry?.collect ? registry.collect(ctx) : [];
-        const filtered = items.filter((item) => {
-            const t = item?.title;
-            return t !== 'Mark as private' && t !== 'Unmark as private' && t !== 'Modify annotation:';
+        // A group header is an inert row (no `action`, no `children`), so any
+        // provider that declines part of a group can still leave one with nothing
+        // below it — a dead label the user can click forever. Pruned generically
+        // rather than by title, so it holds for every group the menu grows.
+        const hasBody = (item) => !!(item?.action || item?.children);
+        const pruned = items.filter((item, index) => {
+            const isHeader = item && !hasBody(item) && !!item.title;
+            if (!isHeader) return true;
+            for (let i = index + 1; i < items.length; i++) {
+                if (hasBody(items[i])) return true;      // the group has content
+                if (items[i]?.title) return false;       // next header, nothing between
+            }
+            return false;                                // nothing follows at all
         });
-        if (!filtered.length) return;
+        // ...and a separator with nothing after it is the same dead row one level down.
+        while (pruned.length && !hasBody(pruned[pruned.length - 1])) pruned.pop();
+        if (!pruned.length) return;
 
         // Prefer the van.js-based `ContextMenu` (cascading flyouts for items
         // with `children`); fall back to the legacy `window.DropDown` until
@@ -106,8 +124,8 @@ export const globalPluginWindowMethods = {
         // microtask, so the deferral is harmless either way.
         setTimeout(() => {
             const ctxMenu = window.ContextMenu;
-            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, filtered);
-            else window.DropDown?.open(syntheticEvent, filtered);
+            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, pruned);
+            else window.DropDown?.open(syntheticEvent, pruned);
         }, 0);
     },
 
@@ -209,17 +227,18 @@ export const globalPluginWindowMethods = {
                 }
             }).attachTo(gModes);
 
-            // Initial selection must reflect the *active preset's* factory,
-            // not factories[0] — otherwise the toolbar lies about state on
-            // page load, and a "first click" that happens to match the lying
-            // header gets short-circuited by updatePresetWith (same-value
-            // early-out).
-            const activeFactoryID = this.context.presets.getActivePreset(true)?.objectFactory?.factoryID;
+            // The shape picker mirrors the module's active tool, which is
+            // independent of the active preset (class). A tool this deployment
+            // does not offer (cached from elsewhere, a preset default) is
+            // replaced by the first allowed one, so the toolbar never lies.
+            if (factories.length && !factories.includes(this.context.getActiveFactory())) {
+                this.context.setActiveFactory(factories[0]);
+            }
 
             this._shapeChoice = new ui.ToolbarChoiceGroup({
                 headerMode: 'selectOrExpand',
                 itemID: 'cg-shapes',
-                defaultSelected: activeFactoryID || factories[0]?.factoryID || 'none',
+                defaultSelected: factories.length ? this.context.getActiveFactory().factoryID : 'none',
                 onChange: (factoryId) => {
                     this.switchModeActive(modes.CUSTOM.getId(), factoryId, true);
                 }
@@ -230,15 +249,19 @@ export const globalPluginWindowMethods = {
                 tooltip: `${modes.CUSTOM.getDescription()}: ${factory.title()}`
             }))).attachTo(gModes);
 
-            // Keep the toolbar in sync when the preset's factory changes from
-            // elsewhere (initial async preset selection, preset modal, etc.).
-            // fireOnChange=false avoids a recursive switchModeActive loop.
+            // Keep the toolbar in sync when the tool changes from elsewhere
+            // (quick-draw, scripts, other plugins). fireOnChange=false avoids a
+            // recursive switchModeActive loop.
             const syncShapeChoice = () => {
-                const f = this.context.presets.getActivePreset(true)?.objectFactory;
-                if (f?.factoryID) this._shapeChoice?.setSelected(f.factoryID, false);
+                this._shapeChoice?.setSelected(this.context.getActiveFactory().factoryID, false);
             };
+            this.context.addHandler('active-factory-change', () => {
+                syncShapeChoice();
+                this.updatePresetsMouseButtons?.();
+            });
+            // The first bound preset seeds the tool silently (no event): if the
+            // toolbar was built before any class was bound, catch up here.
             this.context.addHandler('preset-select', syncShapeChoice);
-            this.context.addHandler('preset-update', syncShapeChoice);
 
             this._gBrush = new ui.ToolbarGroup({ id: 'g-brush', itemID: 'g-brush', selectable: true },
                 new ui.ToolbarItem({
@@ -419,11 +442,8 @@ export const globalPluginWindowMethods = {
                     this._gModes.setSelected('g-brush', false);
                     this._gBrush.setSelected(modeId, false);
                 } else if (modeId === modes.CUSTOM.getId()) {
-                    const pl = this.context.presets.left;
-                    if (pl && pl.objectFactory && pl.objectFactory.factoryID) {
-                        this._gModes.setSelected('cg-shapes', false);
-                        this._shapeChoice.setSelected(pl.objectFactory.factoryID, false, false);
-                    }
+                    this._gModes.setSelected('cg-shapes', false);
+                    this._shapeChoice.setSelected(this.context.getActiveFactory().factoryID, false, false);
                 } else {
                     this._gModes.setSelected(`${modeId}`, false);
                 }
@@ -446,9 +466,10 @@ export const globalPluginWindowMethods = {
      *   pin it forever and make deployment config unchangeable.
      */
     setFormat(format, persist = false) {
+        // Deliberately NOT forwarded to the module (`setIOOption('format')`):
+        // that is the format bound IO sinks receive, and a pick made for one
+        // file download used to silently change what every sink stored.
         this.exportOptions.format = format;
-        // 'auto' is an import-time UI sentinel, not something the module can export with.
-        if (format !== 'auto') this.context.setIOOption('format', format);
         if (persist) this.cache.set('ioFormat', format);
     },
 

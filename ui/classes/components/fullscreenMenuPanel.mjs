@@ -12,6 +12,9 @@ const { div } = van.tags;
  * It keeps the service logic out of the component and reuses MainPanel/Menu styling.
  */
 export class FullscreenMenuPanel extends MainPanel {
+    /** Widest the navigation (sidebar, or one button of the collapsed strip) may get. */
+    static NAV_MAX_WIDTH = "15rem";
+
     constructor(options = undefined) {
         const normalizedOptions = options || {};
 
@@ -194,9 +197,20 @@ export class FullscreenMenuPanel extends MainPanel {
         // them below content, so button rows overflow their group box and the
         // next group paints over them (overlapping category buttons on narrow
         // windows). Sidebar mode restores shrink so long titles clip.
+        //
+        // Sidebar mode also stretches every group to the sidebar width. The
+        // header is a column aligned to `flex-start` (Menu), so each group was
+        // only as wide as its own longest title: the selected button of a
+        // short-titled group stopped short of the page it is meant to join.
         for (const group of header.querySelectorAll("[data-menu-namespace-group]")) {
             group.style.flexShrink = stackButtons ? "" : "0";
+            group.style.alignSelf = stackButtons ? "stretch" : "";
         }
+        // The sidebar is as wide as its longest title, up to a cap — past it
+        // titles ellipsise (the full title stays in the button tooltip). No
+        // padding on the page side, so the selected button touches the page.
+        header.style.maxWidth = stackButtons ? FullscreenMenuPanel.NAV_MAX_WIDTH : header.style.maxWidth;
+        header.style.paddingRight = stackButtons ? "0" : "";
         // The separator is a `border-t` horizontal rule for the stacked sidebar —
         // in a row it is a zero-width invisible div. Turn it into a vertical rule
         // spanning the strip (inline styles: the shipped Tailwind build is purged,
@@ -220,9 +234,22 @@ export class FullscreenMenuPanel extends MainPanel {
             // content width so the row keeps fitting.
             for (const btn of buttonRow.querySelectorAll("[data-menu-tab-id]")) {
                 btn.style.width = stackButtons ? "100%" : "";
-                btn.style.maxWidth = "100%";
+                btn.style.maxWidth = stackButtons ? "100%" : FullscreenMenuPanel.NAV_MAX_WIDTH;
                 btn.style.justifyContent = "flex-start";
                 btn.style.overflow = "hidden";
+                // Square on the page side so the selected button reads as one
+                // surface with the page it opens.
+                btn.style.borderTopRightRadius = stackButtons ? "0" : "";
+                btn.style.borderBottomRightRadius = stackButtons ? "0" : "";
+                // `overflow:hidden` on the button only cuts a long title off
+                // mid-letter; the label itself has to shrink and ellipsise.
+                const label = btn.lastElementChild;
+                if (label && label !== btn.firstElementChild) {
+                    label.style.minWidth = "0";
+                    label.style.overflow = "hidden";
+                    label.style.textOverflow = "ellipsis";
+                    label.style.whiteSpace = "nowrap";
+                }
                 // Re-assert the per-state background on the concrete node —
                 // pre-mount _setFocus/_removeFocus calls could not reach it.
                 this.tabs[btn.dataset.menuTabId]?._applyNavVisual?.(btn);

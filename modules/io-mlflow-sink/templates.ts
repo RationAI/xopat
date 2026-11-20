@@ -41,6 +41,14 @@ export type MapperOptions = {
     experimentTemplate: string;
     runTemplate: string;
     identifierTag: string;
+    /**
+     * True when the session fixed the run (`params.mlflowTarget.run`): records the
+     * template would spread over many runs (one per slide/viewer/owner) all land
+     * in ONE run. A mapper must then keep them apart in its metric/param/tag keys
+     * and artifact paths, or they overwrite each other. Optional for mappers
+     * written before the flag existed.
+     */
+    sharedRun?: boolean;
 };
 
 /**
@@ -180,7 +188,8 @@ function provenanceTags(ctx: IOContext, s: ScoreLike): KV[] {
 const slideScoring: MlflowMapper = (ctx, item, o) => {
     const s = asScore(item);
     const subject = subjectOf(ctx, s);
-    const key = scoreKeyOf(s);
+    // In a shared run every slide's score would otherwise be the same metric.
+    const key = o.sharedRun ? `${subject}.${scoreKeyOf(s)}` : scoreKeyOf(s);
     const value = toNumber(s.value);
     if (value === undefined) return null; // not a numeric score — decline cleanly
 
@@ -214,7 +223,8 @@ const runPerViewer: MlflowMapper = (ctx, item, o) => {
             extraTags: provenanceTags(ctx, s),
         },
         metrics: [{
-            key: sanitizeKey(`${scoreKeyOf(s)}.${subjectOf(ctx, s)}`),
+            // In a shared run, viewers' stepped histories would interleave.
+            key: sanitizeKey(`${o.sharedRun ? `${viewerId}.` : ""}${scoreKeyOf(s)}.${subjectOf(ctx, s)}`),
             value,
             step: toNumber(s.step) ?? 0,
             timestamp: toNumber(s.ts),
@@ -241,7 +251,7 @@ const runPerSession: MlflowMapper = (ctx, item, o) => {
             extraTags: provenanceTags(ctx, s),
         },
         params: [{
-            key: sanitizeKey(`${subjectOf(ctx, s)}.${scoreKeyOf(s)}${stamp ? `.${stamp}` : ""}`),
+            key: sanitizeKey(`${o.sharedRun ? `${ctx.ownerId}.` : ""}${subjectOf(ctx, s)}.${scoreKeyOf(s)}${stamp ? `.${stamp}` : ""}`),
             value: String(s.label ?? value),
         }],
     };
@@ -259,10 +269,28 @@ const bundleArtifact: MlflowMapper = (ctx, item, o) => {
     // them as-is — JSON-stringifying a typed array here would produce
     // `{"0":137,"1":80,…}` and inflate a recording by an order of magnitude.
     const binary = asBinaryPayload(item);
-    const bytes = binary ? toUint8(binary.bytes) : (typeof item === "string" ? item : JSON.stringify(item ?? null));
-    const ext = binary ? (binary.fileExt ?? "bin") : "json";
-    const contentType = binary ? (binary.contentType ?? "application/octet-stream") : "application/json";
+    // The format the binding is pinned to, when it is (`{sink, format}`). It
+    // names the artifact on the way out AND on the way back — the read path
+    // maps an empty item, so anything derived from the payload alone would
+    // look for a different file than the one that was written.
+    const format = (ctx as any).format as IOFormatDescriptor | undefined;
+    // Bare bytes are what a binary format encodes to.
+    const rawBytes = item instanceof ArrayBuffer || ArrayBuffer.isView(item)
+        ? toUint8(item as Uint8Array | ArrayBuffer) : undefined;
+    const bytes = rawBytes
+        ?? (binary ? toUint8(binary.bytes) : (typeof item === "string" ? item : JSON.stringify(item ?? null)));
+    const ext = binary ? (binary.fileExt ?? "bin") : (format?.fileExt || "json");
+    const contentType = binary
+        ? (binary.contentType ?? "application/octet-stream")
+        : (format?.contentType ?? "application/json");
     const size = typeof bytes === "string" ? bytes.length : bytes.byteLength;
+    // The default layout is one run per viewer; in a shared run, every viewer's
+    // bundle under the same slot would overwrite the last one's artifact.
+    const viewer = interpolate("{viewerId}", ctx);
+    const tagKey = o.sharedRun ? `xopat.bundle.${viewer}.${slot}` : `xopat.bundle.${slot}`;
+    const path = o.sharedRun
+        ? `xopat/${sanitizeKey(viewer)}/${sanitizeKey(slot)}.${sanitizeKey(ext)}`
+        : `xopat/${sanitizeKey(slot)}.${sanitizeKey(ext)}`;
 
     return {
         experiment: interpolate(o.experimentTemplate, ctx),
@@ -271,9 +299,9 @@ const bundleArtifact: MlflowMapper = (ctx, item, o) => {
             identifierTag: { key: o.identifierTag, value: ctx.viewerId ?? "_global" },
             extraTags: provenanceTags(ctx, asScore(item)),
         },
-        tags: [{ key: sanitizeKey(`xopat.bundle.${slot}`), value: `${size} bytes` }],
+        tags: [{ key: sanitizeKey(tagKey), value: `${size} bytes` }],
         artifacts: [{
-            path: `xopat/${sanitizeKey(slot)}.${sanitizeKey(ext)}`,
+            path,
             bytes,
             contentType,
         }],
