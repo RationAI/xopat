@@ -1624,7 +1624,10 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     exportsGeometry() {
-        return ["x1", "x2", "y1", "y2"];
+        // `fabric.Line.toObject()` writes x1..y2 centre-relative (`calcLinePoints`),
+        // so they only say which way the line runs. Without the frame the trimmed
+        // payload re-imports as a line centred on the image origin.
+        return ["x1", "x2", "y1", "y2", "left", "top", "width", "height"];
     }
 
     getLength(theObject) {
@@ -1821,13 +1824,39 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
         const U = OSDAnnotations.PolygonUtilities;
+        const framed = Number.isFinite(obj.left) && Number.isFinite(obj.top)
+            && Number.isFinite(obj.width) && Number.isFinite(obj.height);
+        // A bare `{x1, y1, x2, y2}` literal carries no frame: the endpoints are
+        // all there is, and they are absolute.
+        if (!framed) {
+            return this._emitPoints(
+                [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}], converter, digits);
+        }
+
+        // `x1..y2` are NOT a position. Fabric leaves them absolute on a freshly
+        // drawn line, but `Line.toObject()` writes them centre-relative
+        // (`calcLinePoints`) and a re-imported line keeps them that way. Only their
+        // ordering is stable — the frame (`left/top/width/height`) is the authority,
+        // which is exactly how fabric itself renders the line.
+        const sx = obj.x1 <= obj.x2 ? -1 : 1;
+        const sy = obj.y1 <= obj.y2 ? -1 : 1;
+        const hw = obj.width / 2, hh = obj.height / 2;
+        const local = [{x: sx * hw, y: sy * hh}, {x: -sx * hw, y: -sy * hh}];
+
         const m = U.transformMatrixOf(obj);
-        // A fabric Line keeps x1..y2 centre-relative in its local space, exactly like
-        // a polygon's points relative to pathOffset — so the same mapping applies.
-        const ends = m
-            ? U.absolutePoints(obj, [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}])
-            : [{x: obj.x1, y: obj.y1}, {x: obj.x2, y: obj.y2}];
-        return this._emitPoints(ends, converter, digits);
+        if (m) {
+            return this._emitPoints(local.map(p => U.absolutePoint(obj, p, m)), converter, digits);
+        }
+
+        // Serialized payload (what the IO pipeline hands a sink): no matrix to ask,
+        // so rebuild fabric's centre for the default left/top origin. `left` is the
+        // outer edge of the stroke, hence the stroke term.
+        const scaleX = obj.scaleX ?? 1, scaleY = obj.scaleY ?? 1;
+        const stroke = obj.strokeWidth || 0;
+        const cx = obj.left + (obj.width + stroke) * scaleX / 2;
+        const cy = obj.top + (obj.height + stroke) * scaleY / 2;
+        return this._emitPoints(
+            local.map(p => ({x: cx + p.x * scaleX, y: cy + p.y * scaleY})), converter, digits);
     }
 
     fromPointArray(points, deconvertor) {
