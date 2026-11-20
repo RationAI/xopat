@@ -264,8 +264,16 @@ export const presetMethods = {
                     onclick: (e) => { e.stopPropagation(); this._clickPresetSelect(asLeft, preset.presetID); }
                 }, asLeft ? 'L' : 'R');
 
+            // The row binds with the button it is clicked with: left click -> left
+            // mouse button, right click -> right. The L/R buttons stay for touch
+            // and for discoverability.
             rows.push(div({
-                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim()
+                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors cursor-pointer ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim(),
+                    onclick: () => this._clickPresetSelect(true, preset.presetID),
+                    oncontextmenu: (e) => {
+                        e.preventDefault();
+                        this._clickPresetSelect(false, preset.presetID);
+                    }
                 },
                 icon,
                 span({ class: 'truncate flex-1 text-xs font-medium' },
