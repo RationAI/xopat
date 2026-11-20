@@ -1138,8 +1138,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * Make the drawing tool produce ROIs of the type the app wants.
      *
      * Everything here is existing annotation-module API — the preset carries the
-     * factory and the colour, `setMode` switches to the ordinary manual-create
-     * tool. No bespoke drawing code exists in this integration.
+     * colour, the active factory is the shape, `setMode` switches to the ordinary
+     * manual-create tool. No bespoke drawing code exists in this integration.
      */
     activateRoiTool(roiType?: EadAnnotationType): void {
         const annotations = this.getAnnotations();
@@ -1172,7 +1172,36 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             return false;
         }
         annotations.presets.selectPreset(preset.presetID, true);
+        this._armRoiFactory(annotations, preset.objectFactory);
         return true;
+    }
+
+    /** The user's own tool while the ROI shape is borrowed, see {@link _armRoiFactory}. */
+    private _roiToolLoan?: { previous: any; factory: any };
+
+    /**
+     * Selecting a preset does not change the drawing tool, so the ROI shape is
+     * set explicitly — and handed back once drawing ends (the mode returns to
+     * AUTO), unless the user picked another tool in the meantime.
+     */
+    private _armRoiFactory(annotations: any, factory: any): void {
+        const previous = annotations.getActiveFactory();
+        if (!factory || previous === factory) return;
+        annotations.setActiveFactory(factory);
+
+        if (this._roiToolLoan) {
+            // Still borrowed: only the ROI type changed, the user's tool is the same.
+            this._roiToolLoan.factory = factory;
+            return;
+        }
+        const loan = this._roiToolLoan = { previous, factory };
+        const giveBack = () => {
+            if (!annotations.isModeAuto()) return;
+            annotations.removeHandler("mode-changed", giveBack);
+            this._roiToolLoan = undefined;
+            if (annotations.getActiveFactory() === loan.factory) annotations.setActiveFactory(loan.previous);
+        };
+        annotations.addHandler("mode-changed", giveBack);
     }
 
     /** Preset id ROIs are drawn with — the plugin filters `annotation-create` on it. */
