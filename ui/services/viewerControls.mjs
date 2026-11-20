@@ -37,8 +37,8 @@ export class ViewerControls {
      * @param {string} [opts.hint] longer description (Catalog only)
      * @param {string} [opts.kbd] key combo shown as "label (kbd)"
      * @param {number} [opts.order] ascending sort key, default 0
-     * @param {boolean} [opts.detached] render apart from the other controls, for an
-     *   action a slip of the pointer must not trigger (close, delete)
+     * @param {boolean} [opts.detached] render apart from the other controls and in the
+     *   error colour, for an action a slip of the pointer must not trigger (close, delete)
      * @param {function(OpenSeadragon.Viewer): boolean} [opts.visible] false hides it on that viewer
      * @param {function({viewer: OpenSeadragon.Viewer}): void} opts.onClick
      * @returns {string} the id
@@ -159,7 +159,7 @@ export class ViewerControls {
         const icon = componentIconNode(entry.icon);
         return button({
             type: "button",
-            class: "btn btn-xs join-item border-none px-1" + (entry.detached ? " btn-ghost" : ""),
+            class: "btn btn-xs join-item border-none px-1" + (entry.detached ? " text-error" : ""),
             title,
             "aria-label": title,
             "data-viewer-control": entry.id,

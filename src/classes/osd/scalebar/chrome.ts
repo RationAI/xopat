@@ -227,6 +227,14 @@ function digitalZoomTrack(solid, percentNative) {
 }
 
 /**
+ * How far the zoom readout is pushed right of its column's centre, so it sits
+ * over the slider *and* its pip labels rather than over the track alone. The
+ * reset button between the two readouts offsets itself by half of this to
+ * stay centred in the gap the shift opens.
+ */
+const ZOOM_READOUT_SHIFT_PX = 14;
+
+/**
  * Wrap a readout `<input>` into the panel's shared value box and append its
  * unit, so every readout looks the same and says what it measures.
  * @param {HTMLInputElement} input
@@ -485,6 +493,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
 
     const resetCol = document.createElement("div");
     resetCol.className = "flex flex-col items-center";
+    resetCol.style.paddingLeft = `${ZOOM_READOUT_SHIFT_PX / 2}px`;
     const reset = document.createElement("button");
     reset.type = "button";
     reset.className = "btn btn-xs btn-ghost border-none px-1";
@@ -823,4 +832,4 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._applyCollapsed();
 }
 
-export { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField };
+export { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField, ZOOM_READOUT_SHIFT_PX };

@@ -524,8 +524,8 @@ input[type="range"].range:focus-visible::-moz-range-thumb {
 /* Mobile bottom-bar toolbar host: keep the docked toolbar on a single row but
    swap the ugly native horizontal scrollbar (Firefox / OS-themed variants draw
    end-arrow buttons + a fat track) for a clean, arrow-less, touch-swipe scroll.
-   Only applied to the phone bottom-bar host; the desktop app-bar host uses
-   overflow:visible and never gets this class. */
+   Only applied to the phone bottom-bar host; the desktop app-bar host gets
+   .xopat-appbar-toolbar-scroll below instead. */
 .xopat-mobile-toolbar-scroll {
     scrollbar-width: none;              /* Firefox */
     -ms-overflow-style: none;           /* legacy Edge */
@@ -538,10 +538,34 @@ input[type="range"].range:focus-visible::-moz-range-thumb {
     max-height: 15vh;
     overflow-y: auto;
 }
-.xopat-mobile-toolbar-scroll::-webkit-scrollbar {
+.xopat-mobile-toolbar-scroll::-webkit-scrollbar,
+.xopat-appbar-toolbar-scroll::-webkit-scrollbar {
     display: none;                      /* Chrome / Safari */
     height: 0;
     width: 0;
+}
+
+/* Desktop app-bar toolbar host: a docked toolbar wider than its slot scrolls
+   horizontally in place (wheel / touch / trackpad). No scrollbar — the bar is
+   35px tall — so the clipped side(s) fade out to show there is more; the
+   data-clipped-* attributes come from trackScrollEdges (horizontalScroll.mjs). */
+.xopat-appbar-toolbar-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    overscroll-behavior-x: contain;
+    --xo-clip-fade: 20px;
+}
+.xopat-appbar-toolbar-scroll[data-clipped-end] {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--xo-clip-fade)), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--xo-clip-fade)), transparent);
+}
+.xopat-appbar-toolbar-scroll[data-clipped-start] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--xo-clip-fade));
+    mask-image: linear-gradient(to right, transparent, #000 var(--xo-clip-fade));
+}
+.xopat-appbar-toolbar-scroll[data-clipped-start][data-clipped-end] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--xo-clip-fade), #000 calc(100% - var(--xo-clip-fade)), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--xo-clip-fade), #000 calc(100% - var(--xo-clip-fade)), transparent);
 }
 
 .right-side-menu.mobile {

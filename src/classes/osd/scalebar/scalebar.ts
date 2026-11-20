@@ -67,7 +67,7 @@ import {
     isDefined,
     toSignedRotation,
 } from "./units";
-import { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField } from "./chrome";
+import { addQuickZoomChrome, addSyncMenuChrome, digitalZoomTrack, readoutField, ZOOM_READOUT_SHIFT_PX } from "./chrome";
 import { ViewportSyncAPI } from "./viewport-sync-api";
 
 /**
@@ -794,8 +794,7 @@ OSD.Scalebar.prototype = {
                     magInput.title = window.$.t('main.scalebar.magnificationHint');
 
                     const magField = readoutField(magInput, "×", 28);
-                    // Centred over the slider + its pip labels, not the track alone.
-                    magField.style.transform = "translate(14px, 0)";
+                    magField.style.transform = `translate(${ZOOM_READOUT_SHIFT_PX}px, 0)`;
                     sliderWrap.appendChild(magField);
 
                     magCol.appendChild(sliderWrap);
@@ -1131,7 +1130,7 @@ OSD.Scalebar.prototype = {
                     levelReadout.type = "text";
                     levelReadout.readOnly = true;
                     const levelField = readoutField(levelReadout, "", 48);
-                    levelField.style.transform = "translate(14px, 0)";
+                    levelField.style.transform = `translate(${ZOOM_READOUT_SHIFT_PX}px, 0)`;
                     sliderWrap.appendChild(levelField);
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
