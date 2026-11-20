@@ -73,14 +73,28 @@ test("a conditional re-request is cheap either way", {
 test("an unversioned asset is reusable for a bounded time, then revalidated", {
     tag: ["@integration"],
 }, async ({ xopatServer }) => {
-    // Unversioned assets are the dynamic `import()`s of element sub-modules,
-    // fonts, logos and model weights. They used to be `no-store`: every load
-    // re-downloaded them in full, a dozen serial round trips over a distant
-    // link. Bounded `max-age` keeps an edit-on-deploy visible within the hour.
-    const res = await fetch(`${xopatServer.baseURL}${ASSET}`);
+    // Unversioned non-code assets — fonts, logos, model weights. They used to
+    // be `no-store`: every load re-downloaded them in full, a dozen serial
+    // round trips over a distant link. Bounded `max-age` keeps an
+    // edit-on-deploy visible within the hour.
+    const res = await fetch(`${xopatServer.baseURL}/src/assets/logos/xopat-logo.png`);
     const cc = res.headers.get("cache-control") ?? "";
     expect(cc).not.toMatch(/no-store|immutable/);
     expect(cc).toMatch(/max-age=\d+/);
+    expect(res.headers.get("etag"), "revalidation needs a validator").toBeTruthy();
+});
+
+test("unversioned code is always revalidated", {
+    tag: ["@integration"],
+}, async ({ xopatServer }) => {
+    // Code (js/css/json/wasm/html) without `?v=` is the dynamic `import()` of an
+    // element sub-module. A `max-age` there would let a new release's entry file
+    // run against the previous release's sub-modules, so it is `no-cache`:
+    // reusable, but only after a (cheap, ETag) revalidation.
+    const res = await fetch(`${xopatServer.baseURL}${ASSET}`);
+    const cc = res.headers.get("cache-control") ?? "";
+    expect(cc).toMatch(/no-cache/);
+    expect(cc).not.toMatch(/no-store|immutable|max-age/);
     expect(res.headers.get("etag"), "revalidation needs a validator").toBeTruthy();
 });
 

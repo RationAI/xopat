@@ -13,9 +13,12 @@ OSDAnnotations.Preset = class {
      */
 
     /**
-     * Preset: object that pre-defines the type of annotation to be created, along with its parameters
+     * Preset: an annotation class - colour and metadata of the annotations created with it.
      * @param {string} id
-     * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory
+     * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory default type only.
+     *      Deprecated: the shape a click draws is the module's active tool
+     *      (OSDAnnotations#getActiveFactory / setActiveFactory), which this merely seeds
+     *      when no tool was chosen yet. Selecting a preset never changes the tool.
      * @param {string} category default category meta data
      * @param {string} color fill color
      */

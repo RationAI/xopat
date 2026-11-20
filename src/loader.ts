@@ -17,6 +17,7 @@ import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-
 import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
+import { slideHashOf } from "./classes/io/slide-hash";
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
@@ -1762,6 +1763,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   restore-on-enter per (viewer, background) pair, driven by
          *   `viewer-open-pipeline` on slide change. `'all'` = global +
          *   per-viewer + per-viewer-background. See src/IO_PIPELINE.md.
+         * @param options.defaultFormat  the format (id registered under this
+         *   owner's domain in `IO_PIPELINE.formats`) a sink that takes any
+         *   format stores when neither the binding nor the sink's own config
+         *   pins one. Must be deployment-derived — never a user preference.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -1770,6 +1775,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+            defaultFormat?: () => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
@@ -1782,6 +1788,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 bundleScope: options.bundleScope,
                 exportBundle: options.exportBundle,
                 importBundle: options.importBundle,
+                defaultFormat: options.defaultFormat,
             });
             for (const cap of options.capabilities ?? []) {
                 IO_PIPELINE.registerCapability(this.__uid, cap);
@@ -2867,6 +2874,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
     let _sessionUrlSyncable: boolean | null = null;
 
+    /** JSON with object keys sorted, so equal data entries hash equally regardless of key order. */
+    const stableStringify = (value: any): string => {
+        if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+        if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+        return `{${Object.keys(value).sort()
+            .filter(k => value[k] !== undefined)
+            .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+    };
+    const _slideHashCache = new Map<string, string>();
+
     /**
      * @namespace UTILITIES
      */
@@ -2940,6 +2957,52 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // Virtual-region children key IO by the parent slide (see
             // explicitSlotBackgroundId) so all modes share one bundle.
             return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
+        },
+
+        /**
+         * Stable identity of the slide behind a background id, for naming stored
+         * data (`{slideHash}` / `{slideName}` in IO path templates).
+         *
+         * - `hash` — 16 hex chars of HMAC-SHA256(`hashKey`, data entry) (a path
+         *   string, or the object with its keys sorted). Independent of an
+         *   explicit background `id` and of the session, unique in practice.
+         *   Keyed because slide paths are guessable: an unkeyed hash lets anyone
+         *   holding the stored data match candidate paths offline. `undefined`
+         *   when no key is given (`ENV.client.io.slideHashKey` unset) — callers
+         *   must refuse rather than fall back to an unkeyed hash.
+         * - `name` — the data entry's file name (`FNB-766-24-….czi`), or for an
+         *   object entry what {@link nameFromBGOrIndex} finds. Readable, but two
+         *   folders holding the same file name collide, and it may carry a case
+         *   number: use it for labels, not for addressing.
+         *
+         * Background ids are not unique per entry, but entries sharing one name
+         * the same data locator (see `BackgroundConfig.processId`), so the first
+         * match is the slide. `undefined` when the id names no background.
+         */
+        slideIdentityFor: function (backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined {
+            if (!backgroundId) return undefined;
+            const bg = (APPLICATION_CONTEXT.config.background || []).find((b: any) => b?.id === backgroundId);
+            if (!bg) return undefined;
+            const item = BackgroundConfig.dataFromDataId(bg.dataReference);
+            if (item === undefined || item === null) return undefined;
+            const canonical = typeof item === "string" ? item : stableStringify(item);
+            let hash: string | undefined;
+            if (typeof hashKey === "string" && hashKey) {
+                // Keyed by key AND entry: the key is static per page, but a
+                // host rewriting ENV.client.io at runtime must not get stale hashes.
+                const cacheKey = `${hashKey.length}:${hashKey}\u0000${canonical}`;
+                hash = _slideHashCache.get(cacheKey);
+                if (!hash) {
+                    hash = slideHashOf(hashKey, canonical);
+                    if (_slideHashCache.size >= 512) _slideHashCache.clear();
+                    _slideHashCache.set(cacheKey, hash);
+                }
+            }
+            let name = typeof item === "string"
+                ? UTILITIES.fileNameFromPath(item, false)
+                : UTILITIES.nameFromBGOrIndex({ dataReference: item } as any, false);
+            if (name === "unknown" || name === "undefined" || name === "error") name = "";
+            return { hash, name };
         },
 
         /**
@@ -3655,10 +3718,12 @@ ${form}
                 if (!file) return reject("Invalid input file: no file.");
                 const fileReader = new FileReader();
                 fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
+                // Without this a failed read left the promise pending forever.
+                fileReader.onerror = () => reject(fileReader.error ?? new Error("File read failed."));
 
                 if (mode === "text") fileReader.readAsText(file);
                 else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
-                else throw "Invalid read file mode " + mode;
+                else reject(new Error("Invalid read file mode " + mode));
             });
         },
 
@@ -5275,6 +5340,35 @@ form.submit();
             });
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
+            });
+
+            // Focal-plane (z-stack) ruler on the bottom edge of this viewport.
+            // It shows only for multi-plane slides and reserves its own strip:
+            // the scalebar dock and the side menu are lifted by its height
+            // instead of being overlapped.
+            const depthRuler = new UI.DepthRuler({
+                id: `${cellId}-depth-ruler`,
+                onInsetChange: (px: number) => {
+                    // The cell first: it cannot fail, and the side menu must
+                    // move even if the scalebar is mid-rebuild for a new slide.
+                    cell.style.setProperty("--xo-viewer-bottom-inset", `${px}px`);
+                    (viewer as any).scalebar?.setBottomInset?.(px);
+                },
+            });
+            depthRuler.attachTo(viewer.container);
+            depthRuler.onLayoutChange({ width: window.innerWidth });
+            depthRuler.init(viewer);
+            (viewer as any).__depthRuler = depthRuler;
+            const depthRulerChromeKey = `depthRuler::${(viewer as any).uniqueId ?? index}`;
+            let depthRulerHidden = false;
+            (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(depthRulerChromeKey, {
+                is:  () => !depthRulerHidden,
+                on:  () => { depthRulerHidden = false; depthRuler.setHidden(false); },
+                off: () => { depthRulerHidden = true; depthRuler.setHidden(true); },
+            });
+            viewer.addOnceHandler?.("destroy", () => {
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(depthRulerChromeKey);
+                depthRuler.destroy();
             });
 
             // Navigator visibility is owned by the right-side viewer

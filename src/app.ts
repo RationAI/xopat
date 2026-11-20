@@ -12,6 +12,7 @@ import { ViewerInspectorController } from "./classes/app/viewer-inspector-contro
 import { ViewerInteractionController } from "./classes/app/viewer-interaction-controller";
 import { ViewerJoystickController } from "./classes/app/viewer-joystick-controller";
 import { ROTATE_DRAG_SHORTCUT_ID } from "./classes/app/viewer-rotation-controller";
+import { Z_WHEEL_SHORTCUT_ID } from "./classes/app/viewer-scroll-zoom-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 import { initDeploymentKey } from "./classes/app/deployment-key";
 // TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
@@ -420,6 +421,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // errors to a non-blocking, deduped, rate-limited toast instead.
     wireGlobalRuntimeErrorHandler();
 
+    // Dev mode only (the server emits the list for nothing else): the core bundle
+    // is older than its sources. Boot survived this time, so say it here — a stale
+    // core that happens not to crash is otherwise indistinguishable from a code
+    // change that "did nothing". The crashing case is the boot-failure screen in
+    // server/templates/index.html.
+    const staleBundles = (window as any).XOPAT_STALE_BUNDLES;
+    if (Array.isArray(staleBundles) && staleBundles.length) {
+        Dialogs.show($.t("messages.staleBundle", { detail: staleBundles.map(String).join("; ") }), 15000, Dialogs.MSG_WARN);
+    }
+
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
@@ -817,7 +828,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             id: ROTATE_DRAG_SHORTCUT_ID, titleKey: "keymap.core.rotateDrag",
             descriptionKey: "keymap.core.rotateDragDesc",
             categoryPath: NAV_PATH, defaultCombos: ["Primary"], type: "press",
-            capture: "modifiers", scope: canvasScope,
+            capture: "modifiers", gesture: "drag", scope: canvasScope,
         });
 
         // Joystick navigation mode toggle. App-wide (all viewers); while on, a
@@ -837,9 +848,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
 
         // Focal-plane (z-stack) navigation. No-op on slides without a z-stack.
-        // Also driven by the navigator depth slider and the Alt+wheel gesture
-        // (see loader.ts canvas-scroll). Combos `]` / `[` match e.code so they
-        // sit next to the bracket keys regardless of layout.
+        // Also driven by the per-viewer DepthRuler and modifier+wheel (below).
+        // Combos `]` / `[` match e.code so they sit next to the bracket keys
+        // regardless of layout.
         const registerDepth = (name: string, combo: string, delta: number) => shortcuts.register({
             id: `core.viewport.zDepth${name}`, titleKey: `keymap.core.zDepth${name}`,
             categoryPath: NAV_PATH, defaultCombos: [combo], type: "press", trigger: "up",
@@ -848,6 +859,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         });
         registerDepth("Next", "BracketRight", 1);
         registerDepth("Prev", "BracketLeft", -1);
+
+        // Modifier + wheel → focal-plane steps (ViewerScrollZoomController).
+        // Same Primary as drag-rotate: one modifier for the slide's extra axes.
+        // Conflicts are per gesture, so the two never clash. Alt stays as a
+        // second default for setups where Primary+wheel is taken.
+        shortcuts.register({
+            id: Z_WHEEL_SHORTCUT_ID, titleKey: "keymap.core.zDepthWheel",
+            descriptionKey: "keymap.core.zDepthWheelDesc",
+            categoryPath: NAV_PATH, defaultCombos: ["Primary", "Alt"], type: "press",
+            capture: "modifiers", gesture: "wheel", scope: canvasScope,
+        });
 
         // Primary+S => global save. trigger "down" (not "up") so preventDefault()
         // suppresses the browser's native "Save page" dialog, which fires on keydown.
@@ -877,6 +899,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             descriptionKey: "keymap.core.viewportCopyDesc",
             categoryPath: APP_PATH, defaultCombos: ["Alt+KeyW"], type: "press", trigger: "down",
             handler: ({ viewer }) => viewportCopyOrAlign(viewer),
+        });
+        // The un-docked global menu rests as an edge rail; this is its
+        // keyboard / pinnable-button way in (opens sticky, see MainLayout).
+        shortcuts.register({
+            id: "core.app.toggleGlobalMenu", titleKey: "keymap.core.toggleGlobalMenu",
+            categoryPath: APP_PATH, defaultCombos: ["Alt+KeyM"], type: "press", trigger: "down",
+            icon: "ph-sidebar-simple", quickAction: true,
+            handler: () => (window as any).LAYOUT?.toggleGlobalMenu(),
         });
 
         // ── Peek at background: hold "h" to momentarily hide the visualization
@@ -920,6 +950,25 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     }
                 }
                 peekState.clear();
+            },
+        });
+
+        // Before/after for display adjustments: hold to see every layer of the
+        // focused viewer without its adjustment pipeline. A renderer uniform, so
+        // holding/releasing never relinks a program.
+        const adjustmentPeek = new Set<any>();
+        shortcuts.register({
+            id: "core.view.adjustmentsBypass", titleKey: "keymap.core.adjustmentsBypass",
+            descriptionKey: "keymap.core.adjustmentsBypassDesc",
+            categoryPath: VIEW_PATH, defaultCombos: ["KeyB"], type: "hold", scope: canvasScope,
+            onPress: ({ viewer }) => {
+                if (!viewer || adjustmentPeek.has(viewer) || APPLICATION_CONTEXT.adjustments.isBypassed(viewer)) return;
+                adjustmentPeek.add(viewer);
+                APPLICATION_CONTEXT.adjustments.setBypass(viewer, true);
+            },
+            onRelease: () => {
+                for (const viewer of adjustmentPeek) APPLICATION_CONTEXT.adjustments.setBypass(viewer, false);
+                adjustmentPeek.clear();
             },
         });
 
@@ -1021,19 +1070,29 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             icon: "ph-cursor-click",
             label: $.t('sync.recalibrate'),
             hint: $.t('sync.recalibrateHint'),
+            // Session-wide, like its neighbours here: every viewport, first
+            // one first. Calibrating a single viewport is that viewport's own
+            // SYNC menu.
             onClick: async () => {
-                const viewer: any = VIEWER_MANAGER.get?.() || VIEWER_MANAGER.viewers?.[0];
-                const api: any = viewer?.scalebar?.ViewportSyncAPI;
+                const api: any = anySyncApi();
                 if (!api) return;
+                if ((VIEWER_MANAGER.viewers?.length || 0) < 2) {
+                    Dialogs.show($.t('sync.needsTwoSlides'), 2000, Dialogs.MSG_INFO);
+                    return;
+                }
                 try {
-                    api.resetViewer();
-                    await api.enable({ mode: "manual" });
-                    Dialogs.show($.t('sync.enabled'), 1500, Dialogs.MSG_INFO);
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.recalibrate", true);
+                    const r = await api.constructor.manualSyncAll();
+                    Dialogs.show($.t('sync.autoSyncDone', r), 2000, Dialogs.MSG_INFO);
                 } catch (e: any) {
-                    if (!/cancel/i.test(e?.message || "")) {
+                    if (/cancel/i.test(e?.message || "")) {
+                        Dialogs.show($.t('sync.cancelled'), 1500, Dialogs.MSG_INFO);
+                    } else {
                         console.error(e);
                         Dialogs.show($.t('sync.failed'), 2500, Dialogs.MSG_WARN);
                     }
+                } finally {
+                    USER_INTERFACE.AppBar.Tools.setDisabled("core.sync.recalibrate", false);
                 }
             },
         });
@@ -1060,8 +1119,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         controls.register("core.closeViewer", {
             label: $.t('main.scalebar.closeViewer'),
             icon: "ph-x",
-            // Last in the strip, after any owner's controls.
+            // Last in the strip, after any owner's controls, and set apart
+            // from them: it sat flush against "next slide".
             order: 1000,
+            detached: true,
             visible: () => (VIEWER_MANAGER.viewers?.length || 0) > 1,
             onClick: ({ viewer }: { viewer: OpenSeadragon.Viewer }) => {
                 APPLICATION_CONTEXT.closeViewer(viewer).catch((e: any) =>

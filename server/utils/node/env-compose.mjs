@@ -202,7 +202,16 @@ function suggestions(selector, presets) {
  * hand-written deployment first-class — `up -- env/env.mine.json logging/chat`
  * layers a fragment over a whole custom ENV.
  *
- * @returns {{layers: Layer[], defaults: object, env: object, unresolvableVars: object[]}}
+ * One rule lets a preset be a starting point rather than a sealed unit: a
+ * selector given **directly** replaces whatever a preset put in the same
+ * dimension. `default chat/byok` is the default deployment with a different
+ * assistant — not a conflict between `chat/off` and `chat/byok`. Two direct
+ * selectors in one dimension are still two answers to one question, and still
+ * conflict. A preset's `override` block is kept as written; it is the preset's
+ * own last word and may now refer to a layer that is gone.
+ *
+ * @returns {{layers: Layer[], defaults: object, env: object, unresolvableVars: object[],
+ *            replaced: {replaced: string, by: string, preset: string}[]}}
  *   `defaults` are `$meta.defaults` from fragments (lowest precedence process
  *   env), `env` are preset `env` blocks (values the server reads *before* any
  *   config, so they cannot live in the ENV file itself). `unresolvableVars`
@@ -222,13 +231,15 @@ export function expandSelectors(selectors, opts = {}) {
         if (existing) {
             // A shared base pulled in by two selectors is not two layers.
             if (existing.role !== "base" && layer.role === "base") existing.role = "base";
+            // Named directly as well as by a preset: it is the direct answer.
+            if (!layer.via) existing.via = null;
             return;
         }
         byId.set(layer.id, layer);
         layers.push(layer);
     };
 
-    const addFile = (absFile, { id, kind, role, allowMissing = false }) => {
+    const addFile = (absFile, { id, kind, role, via = null, allowMissing = false }) => {
         if (seen.has(absFile)) {
             throw new Error(`[env-compose] circular layer chain at ${id}`);
         }
@@ -239,13 +250,13 @@ export function expandSelectors(selectors, opts = {}) {
         const { meta, bases, data } = splitBody(readJsonc(absFile));
         // A layer reached as somebody's base exists to be overridden, whatever
         // role it declares for itself.
-        for (const base of bases) resolve(base, "base");
+        for (const base of bases) resolve(base, "base", via);
         seen.delete(absFile);
         scanProcessEnvValues(meta.defaults, `${id} $meta.defaults`, unresolvableVars);
-        Object.assign(defaults, meta.defaults ?? {});
         push({
             id,
             kind,
+            via,
             file: path.relative(repoRoot, absFile).split(path.sep).join("/"),
             role: role ?? (meta.role || "layer"),
             dimension: typeof meta.dimension === "string" ? meta.dimension : null,
@@ -262,7 +273,7 @@ export function expandSelectors(selectors, opts = {}) {
             if (!presets[parent]) throw new Error(`[env-compose] preset "${name}" extends unknown preset "${parent}"`);
             addPreset(parent, role);
         }
-        for (const sel of asList(preset.layers)) resolve(sel, role);
+        for (const sel of asList(preset.layers)) resolve(sel, role, name);
         scanProcessEnvValues(preset.env, `preset:${name} env`, unresolvableVars);
         Object.assign(env, preset.env ?? {});
         if (isPlainObject(preset.override) && Object.keys(preset.override).length) {
@@ -271,6 +282,7 @@ export function expandSelectors(selectors, opts = {}) {
                 kind: "override",
                 file: PRESETS_FILE,
                 role: "override",
+                via: name,
                 dimension: null,
                 meta: {},
                 data: preset.override,
@@ -279,18 +291,18 @@ export function expandSelectors(selectors, opts = {}) {
         seen.delete(`preset:${name}`);
     };
 
-    const resolve = (selector, role) => {
+    const resolve = (selector, role, via = null) => {
         if (typeof selector !== "string" || !selector.trim()) {
             throw new Error(`[env-compose] invalid selector: ${JSON.stringify(selector)}`);
         }
         const sel = selector.trim();
         if (presets[sel]) return addPreset(sel, role);
         const frag = fragmentFile(sel);
-        if (frag) return addFile(frag, { id: sel, kind: "fragment", role });
+        if (frag) return addFile(frag, { id: sel, kind: "fragment", role, via });
         const file = fileFor(sel);
         if (file) {
             const id = path.isAbsolute(sel) ? sel : path.relative(repoRoot, file).split(path.sep).join("/");
-            return addFile(file, { id, kind: "file", role });
+            return addFile(file, { id, kind: "file", role, via });
         }
         const near = suggestions(sel, presets);
         throw new Error(
@@ -309,7 +321,20 @@ export function expandSelectors(selectors, opts = {}) {
         }
         resolve(selector, undefined);
     }
-    return { layers, defaults, env, unresolvableVars };
+
+    // A direct selector replaces a preset's answer in the same dimension.
+    const replaced = [];
+    const peer = (l) => l.dimension && l.role !== "base" && l.role !== "override";
+    for (const direct of layers.filter((l) => peer(l) && !l.via)) {
+        for (const other of layers.filter((l) => peer(l) && l.via && l.dimension === direct.dimension)) {
+            layers.splice(layers.indexOf(other), 1);
+            replaced.push({ replaced: other.id, by: direct.id, preset: other.via });
+        }
+    }
+    // Collected from the layers that survived, so a replaced fragment does not
+    // leave its process-env defaults behind.
+    for (const layer of layers) Object.assign(defaults, layer.meta?.defaults ?? {});
+    return { layers, defaults, env, unresolvableVars, replaced };
 }
 
 /* -------------------------------------------------------------- composition */
@@ -478,7 +503,7 @@ export function composeLayers(layers) {
  * `up:check`), because the server would silently ignore those keys.
  */
 export function composeDeployments(env, opts = {}) {
-    const conflicts = [], warnings = [], defaults = {}, presetEnv = {}, unresolvableVars = [];
+    const conflicts = [], warnings = [], defaults = {}, presetEnv = {}, unresolvableVars = [], layers = [];
     const defs = env?.deployments;
     if (isPlainObject(defs)) {
         for (const [id, def] of Object.entries(defs)) {
@@ -486,6 +511,7 @@ export function composeDeployments(env, opts = {}) {
             const { [LAYERS_KEY]: selectors, ...inline } = def;
             const expanded = expandSelectors(asList(selectors), opts);
             const result = composeLayers(expanded.layers);
+            for (const layer of expanded.layers) layers.push({ ...layer, deployment: id });
             const prefix = (c) => (c.path ? { ...c, path: `deployments.${id}.${c.path}` } : c);
             conflicts.push(...result.conflicts.map(prefix));
             warnings.push(...result.warnings.map((w) => ({ ...w, message: `deployments.${id}: ${w.message}` })));
@@ -506,7 +532,7 @@ export function composeDeployments(env, opts = {}) {
         }
     }
     for (const message of listDeploymentProblems(env)) conflicts.push({ kind: "deployment", message });
-    return { conflicts, warnings, defaults, presetEnv, unresolvableVars };
+    return { conflicts, warnings, defaults, presetEnv, unresolvableVars, layers };
 }
 
 /** Boot-only `core.server` keys that change what the process exposes. */
@@ -563,7 +589,19 @@ function hoistBootServerConfig(env, id, composed, conflicts, warnings = []) {
 
 /** Selector list → composed ENV, in one call. */
 export function composeEnv(selectors, opts = {}) {
-    const { layers, defaults, env: presetEnv, unresolvableVars } = expandSelectors(selectors, opts);
+    const { layers, defaults, env: presetEnv, unresolvableVars, replaced } = expandSelectors(selectors, opts);
+    // Named deployments stated on the command line / by the picker: the same
+    // `deployments.<id>.$layers` shape a fragment would write, so there is one
+    // expansion path (`composeDeployments`) and nothing new to merge.
+    const named = Object.entries(opts.deployments ?? {});
+    if (named.length || opts.defaultDeployment) {
+        const data = {};
+        if (named.length) {
+            data.deployments = Object.fromEntries(named.map(([id, sels]) => [id, { [LAYERS_KEY]: asList(sels) }]));
+        }
+        if (opts.defaultDeployment) data.defaultDeployment = opts.defaultDeployment;
+        layers.push({ id: "--deployment", kind: "override", file: null, role: "override", dimension: null, meta: {}, data });
+    }
     const extra = [];
     for (const [p, value] of Object.entries(opts.set ?? {})) extra.push({ path: p, value });
     if (extra.length) {
@@ -586,6 +624,9 @@ export function composeEnv(selectors, opts = {}) {
         defaults: { ...deployments.defaults, ...defaults },
         presetEnv: { ...deployments.presetEnv, ...presetEnv },
         unresolvableVars: [...unresolvableVars, ...deployments.unresolvableVars],
+        replaced,
+        // Layers pulled in by `deployments.<id>.$layers`, tagged with the id.
+        deploymentLayers: deployments.layers,
     };
 }
 
@@ -632,12 +673,114 @@ export function collectPlaceholders(env) {
         for (const m of str.matchAll(PLACEHOLDER_RE)) {
             const name = m[1];
             const entry = found.get(name) ?? { name, hasDefault: false, paths: [] };
-            if (m[2]) entry.hasDefault = true;
+            if (m[2]) {
+                entry.hasDefault = true;
+                entry.inlineDefault ??= m[3] ?? "";
+            }
             entry.paths.push(p);
             found.set(name, entry);
         }
     });
     return found;
+}
+
+const present = (v) => v !== undefined && v !== "";
+
+/**
+ * Which process-environment variables a composition reads, and where each one
+ * gets its value — the answer to "what do I have to set?" for someone who
+ * picked fragments without reading them.
+ *
+ * `status` is about who decided the value:
+ *  - `set`     — the user did (shell or a secrets file). The value is never
+ *                returned: it may be a credential.
+ *  - `default` — nobody did; a tracked default applies (`source` says which:
+ *                a preset `env` block, a fragment `$meta.defaults`, or the
+ *                inline `<% X:-… %>`). Worth showing, because a default the
+ *                user never saw is how a deployment points at the wrong port.
+ *  - `unset`   — nothing supplies it; the server substitutes an empty string.
+ *
+ * Variables a layer `requires` are included even when no placeholder names
+ * them (the server reads some straight from its environment).
+ *
+ * @param {object} result  what `composeEnv` returned
+ * @param {{user?: object, presetEnv?: object, defaults?: object}} sources
+ * @returns {{name: string, status: "set"|"default"|"unset", source?: string, value?: string,
+ *            required: boolean, layers: string[], paths: string[], description: string}[]}
+ */
+export function describeVariables(result, sources = {}) {
+    const user = sources.user ?? {};
+    const presetEnv = sources.presetEnv ?? result.presetEnv ?? {};
+    const defaults = sources.defaults ?? result.defaults ?? {};
+    const all = [...(result.layers ?? []), ...(result.deploymentLayers ?? [])];
+
+    const vars = new Map();
+    const entry = (name) => {
+        if (!vars.has(name)) vars.set(name, { name, required: false, layers: new Set(), paths: [], description: "" });
+        return vars.get(name);
+    };
+    for (const p of collectPlaceholders(result.env).values()) {
+        const v = entry(p.name);
+        v.paths = p.paths;
+        if (p.hasDefault) v.inlineDefault = p.inlineDefault;
+    }
+    for (const layer of all) {
+        const label = layer.deployment ? `${layer.id}@${layer.deployment}` : layer.id;
+        for (const name of collectPlaceholders(layer.data).keys()) {
+            if (vars.has(name)) vars.get(name).layers.add(label);
+        }
+        for (const name of asList(layer.meta?.requires)) {
+            const v = entry(name);
+            v.required = true;
+            v.layers.add(label);
+        }
+    }
+    for (const layer of all) {
+        for (const [name, text] of Object.entries(isPlainObject(layer.meta?.env) ? layer.meta.env : {})) {
+            if (vars.has(name) && !vars.get(name).description && typeof text === "string") {
+                vars.get(name).description = text;
+            }
+        }
+    }
+
+    return [...vars.values()].sort((a, b) => a.name.localeCompare(b.name)).map(({ inlineDefault, ...v }) => {
+        const out = { ...v, layers: [...v.layers] };
+        if (present(user[v.name])) return { ...out, status: "set" };
+        if (present(presetEnv[v.name])) {
+            return { ...out, status: "default", source: "preset env", value: String(presetEnv[v.name]) };
+        }
+        if (present(defaults[v.name])) {
+            return { ...out, status: "default", source: "$meta.defaults", value: String(defaults[v.name]) };
+        }
+        if (inlineDefault !== undefined) return { ...out, status: "default", source: "inline", value: inlineDefault };
+        return { ...out, status: "unset" };
+    });
+}
+
+/** Setup notes (`$meta.hint`) of every layer in a composition, in layer order. */
+export function collectHints(result) {
+    const seen = new Set();
+    const out = [];
+    for (const layer of [...(result.layers ?? []), ...(result.deploymentLayers ?? [])]) {
+        const hint = layer.meta?.hint;
+        if (typeof hint !== "string" || !hint.trim() || seen.has(layer.id)) continue;
+        seen.add(layer.id);
+        out.push({ layer: layer.id, hint: hint.trim() });
+    }
+    return out;
+}
+
+/** One aligned text row per variable; callers add colour by `status`. */
+export function formatVariables(variables) {
+    if (!variables.length) return [];
+    const w = Math.max(...variables.map((v) => v.name.length));
+    return variables.map((v) => {
+        const state = v.status === "set" ? "set"
+            : v.status === "default" ? `not set — default ${JSON.stringify(v.value)} (${v.source})`
+            : `UNSET, no default${v.required ? " — required" : ""}`;
+        const where = v.layers.length ? `  [${v.layers.join(", ")}]` : "";
+        return { status: v.status, text: `${v.name.padEnd(w)}  ${state}${where}${v.description ? `  ${v.description}` : ""}` };
+    });
 }
 
 /**

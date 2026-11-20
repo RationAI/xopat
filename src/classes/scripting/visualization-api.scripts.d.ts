@@ -306,8 +306,18 @@ export interface VisualizationDataSourceInfo {
     dataId: string | null;
     /** Stable per-source identity. Prefer this over any URL: DICOMweb shares one baseUrl. */
     tileSourceId: string | null;
+    /** Name of the protocol that fetches this entry (e.g. `"dicom"`), when it declares one. */
+    protocol: string | null;
+    /**
+     * Whether the active viewer shows this source: one of its backgrounds, or drawn by the
+     * visualization it has selected. The list itself covers the WHOLE session — every viewer.
+     */
+    inActiveViewer: boolean;
     role: "background" | "overlay" | "unbound";
-    /** Whether the source is currently present in the viewer's world (probeable). */
+    /**
+     * Whether the source is currently present in the viewer's world. Only a loaded source can
+     * be measured: `probeData` on an unloaded one throws.
+     */
     loaded: boolean;
     worldIndex: number | null;
     width: number | null;
@@ -370,12 +380,16 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Describes every data source in the session — what it IS, before deciding how to render it.
      *
-     * One entry per `config.data` index: `dataReference`, `dataId`, `tileSourceId`, the source's
-     * own `metadata` (channels, µm/px, whatever the tile source publishes), pixel `width`/`height`,
-     * whether it is currently `loaded` into the viewer world, its `role`
+     * One entry per `config.data` index: `dataReference`, `dataId`, `tileSourceId`, `protocol`,
+     * the source's own `metadata` (channels, µm/px, whatever the tile source publishes), pixel
+     * `width`/`height`, whether it is currently `loaded` into the viewer world, its `role`
      * (`"background"` = the scan itself | `"overlay"` = rendered by a shader layer |
      * `"unbound"` = present but not rendered), and `referencedBy` — the visualization layers
      * that draw it.
+     *
+     * The list spans the WHOLE session, not one viewer. To answer for the active viewer, keep
+     * the rows with `inActiveViewer: true`. Rows with `loaded: false` carry no metadata and
+     * cannot be probed; do not ask the user to identify them by `dataReference`.
      *
      * Call this before proposing a visualization for data you have not inspected. It costs no
      * rendering and answers "what am I even mapping to colour".
@@ -479,6 +493,11 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Changes the active visualization selection for the current viewer session.
      * The user is asked for confirmation unless the scripting context bypasses consent dialogs.
+     *
+     * A single `index` switches the ACTIVE viewer only (see `application.setActiveViewer`);
+     * other viewers keep what they show. Pass an array to set several viewers at once — one
+     * entry per viewer, in viewer order. The same holds for `makeActive` on
+     * `addVisualization` / `updateVisualizationAt`.
      */
     setActiveVisualization(index: number | number[]): Promise<boolean>;
 
@@ -516,6 +535,31 @@ export interface VisualizationScriptApi extends ScriptApiObject {
             makeActive?: boolean;
             newData?: DataID[];
         }
+    ): Promise<boolean>;
+
+    /**
+     * Returns the shader layers of the ACTIVE viewer's background — how the slide itself is
+     * rendered. A multi-channel slide (fluorescence) is typically drawn entirely by these
+     * layers, one per channel, with no visualization at all. Layers are addressed by their
+     * position in the returned array.
+     *
+     * When the user asks to restyle what the slide already shows (channel colours, gamma,
+     * a different shader type for a channel), read these FIRST. Adding a visualization
+     * instead draws new layers on top of the existing ones — it does not change them.
+     */
+    getBackgroundShaders(): VisualizationShaderGroupOrLayer[];
+
+    /**
+     * Applies a partial patch to background shader layer `index` (a position in
+     * `getBackgroundShaders()`) of the active viewer. Same merge rules as
+     * `updateVisualizationAt`: changing `type` replaces the layer, anything else merges, and
+     * the result is validated against `getSchema()` before it is applied. Undoable.
+     *
+     * One call changes one layer; restyle several channels with several calls in one script.
+     */
+    updateBackgroundShaderAt(
+        index: number,
+        patch: Partial<VisualizationShaderGroupOrLayer>
     ): Promise<boolean>;
 
     /**

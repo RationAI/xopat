@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "name": "Vektorové vrstvy (demo)",
+    "description": "Otevírá Mapbox Vector Tiles jako vrstvu sklíčka zarovnanou na vlastní pixelovou mřížku sklíčka, pro ukázku flexibility vizualizace.",
+    "longDescription": "Registruje protokol sklíčka `demo-mvt`. Deskriptor uvádí skutečnou šířku a výšku sklíčka, takže se vektorová vrstva se sklíčkem zarovná jedna ku jedné, a deklaruje, které dlaždice v řídké pyramidě existují, takže chybějící dlaždice se nikdy nežádají. GeoJSON takovou pomoc nepotřebuje a otevírá jej běžná autodetekce OpenSeadragonu."
+  }
+}

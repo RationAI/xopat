@@ -193,6 +193,49 @@ test("a rotated rect's outline is genuinely rotated @unit", () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(100, 6);
 });
 
+// ─── a line's x1..y2 are a direction, never a position ───────────────────────
+
+// (100,200)→(160,280): fabric frames it as left/top 100/200, 60×80.
+const LINE_FRAME = { left: 100, top: 200, width: 60, height: 80, strokeWidth: 0 };
+const LINE_ENDS = [{ x: 100, y: 200 }, { x: 160, y: 280 }];
+
+const expectEnds = (actual, expected) => {
+    expect(actual).toHaveLength(2);
+    actual.forEach((p, i) => {
+        expect(p.x).toBeCloseTo(expected[i].x, 6);
+        expect(p.y).toBeCloseTo(expected[i].y, 6);
+    });
+};
+
+test("a serialized line reports its frame, not its centre-relative endpoints @unit", () => {
+    // `fabric.Line.toObject()` writes x1..y2 through `calcLinePoints()`. Emitting
+    // them as-is put every line saved through an IO sink at the image origin.
+    const withObjectPoint = A.AnnotationObjectFactory.withObjectPoint;
+    const serialized = { ...LINE_FRAME, x1: -30, y1: -40, x2: 30, y2: 40 };
+    expectEnds(lineFactory().toPointArray(serialized, withObjectPoint), LINE_ENDS);
+
+    // Direction survives: drawn right-to-left, the first point is the right one.
+    const reversed = { ...LINE_FRAME, x1: 30, y1: -40, x2: -30, y2: 40 };
+    expectEnds(lineFactory().toPointArray(reversed, withObjectPoint),
+        [{ x: 160, y: 200 }, { x: 100, y: 280 }]);
+});
+
+test("a live line reports the same endpoints fresh or re-imported @unit", () => {
+    // Freshly drawn, fabric keeps x1..y2 absolute; re-imported, centre-relative.
+    // The matrix (translate to the centre) is the same either way.
+    const withObjectPoint = A.AnnotationObjectFactory.withObjectPoint;
+    const m = translate(130, 240);
+    const fresh = withMatrix({ ...LINE_FRAME, x1: 100, y1: 200, x2: 160, y2: 280 }, m);
+    const imported = withMatrix({ ...LINE_FRAME, x1: -30, y1: -40, x2: 30, y2: 40 }, m);
+    expectEnds(lineFactory().toPointArray(fresh, withObjectPoint), LINE_ENDS);
+    expectEnds(lineFactory().toPointArray(imported, withObjectPoint), LINE_ENDS);
+});
+
+test("a bare endpoint literal is taken as absolute @unit", () => {
+    const withObjectPoint = A.AnnotationObjectFactory.withObjectPoint;
+    expectEnds(lineFactory().toPointArray(LINE, withObjectPoint), [{ x: 0, y: 0 }, { x: 3, y: 4 }]);
+});
+
 test("toPointArray hands back a copy, never the live points array @unit", () => {
     // It used to return `obj.points` by identity, so any consumer that tidied its
     // result was editing the annotation.

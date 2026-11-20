@@ -8,15 +8,26 @@
 //                || /^5\d\d$/.test(String(r.code ?? "")),
 //   }));
 //
-// The wrapper preserves the inner sink's id, accepts() filter, and
-// supported capability kinds. Each retry attempt receives the same `ctx`
+// `create` is NOT retried by default: a create whose answer was lost (a 502
+// after the upstream already stored the item) would be stored twice. A sink
+// that dedups server-side opts in with `methods: [..., "create"]`.
+//
+// The wrapper preserves everything the inner sink declares (id, route,
+// accepts() filter, supported kinds). Each retry attempt receives the same `ctx`
 // (so sinks that read `ctx.meta.clientOpId` can dedup server-side
 // across retries).
+
+type RetryableMethod = "writeBundle" | "readBundle" | "create" | "read" | "update" | "delete";
+
+const DEFAULT_METHODS: RetryableMethod[] = ["writeBundle", "readBundle", "read", "update", "delete"];
 
 export interface WithRetryOptions {
     attempts?: number;                                          // default 3
     backoff?: (attemptIndex: number) => number;                  // default exponential
-    retryOn?: (result: IOResult) => boolean;                     // default: refusals with W_IO_*_THREW or 5xx codes
+    retryOn?: (result: IOResult) => boolean;                     // default: refusals with W_IO_*_THREW, network, 429 or 5xx codes
+    /** Methods that are retried; the rest pass through with one attempt.
+     *  Default: every method except the non-idempotent `create`. */
+    methods?: RetryableMethod[];
     /** Override the wrapped id; useful when you register the same inner
      *  sink multiple times under different ids/configs. */
     id?: string;
@@ -25,7 +36,7 @@ export interface WithRetryOptions {
 const DEFAULT_RETRY_ON: (r: IOResult) => boolean = (r) => {
     if (r.ok) return false;
     const code = String((r as any).code ?? "");
-    return code.endsWith("_THREW") || /^5\d\d$/.test(code);
+    return code.endsWith("_THREW") || code === "W_IO_HTTP_NETWORK" || code === "429" || /^5\d\d$/.test(code);
 };
 
 const DEFAULT_BACKOFF = (n: number) => 200 * Math.pow(2, n);
@@ -36,11 +47,14 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
     const attempts = Math.max(1, options.attempts ?? 3);
     const backoff = options.backoff ?? DEFAULT_BACKOFF;
     const retryOn = options.retryOn ?? DEFAULT_RETRY_ON;
+    const methods = new Set<RetryableMethod>(options.methods ?? DEFAULT_METHODS);
 
     const wrapMethod = <Args extends any[]>(
+        name: RetryableMethod,
         method: ((...args: Args) => Promise<IOResult> | IOResult) | undefined,
     ) => {
         if (!method) return undefined;
+        if (!methods.has(name)) return method;
         return async (...args: Args): Promise<IOResult> => {
             let last: IOResult = { ok: false, refused: true, reason: "no attempts", code: "W_IO_RETRY_NO_ATTEMPTS" };
             for (let i = 0; i < attempts; i++) {
@@ -63,6 +77,11 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
     };
 
     return {
+        // Everything the inner sink declares about itself (`route`, format
+        // requirements, future fields) must survive wrapping — a wrapped
+        // `route: "local"` sink that lost the field would be judged as an
+        // ordinary destination. The explicit entries below override methods.
+        ...inner,
         id: options.id ?? inner.id,
         label: inner.label,
         // `supports` is either the legacy kind array or the full
@@ -71,12 +90,12 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
         supports: Array.isArray(inner.supports) ? inner.supports.slice() : { ...inner.supports },
         accepts: inner.accepts ? inner.accepts.bind(inner) : undefined,
 
-        writeBundle: wrapMethod(inner.writeBundle?.bind(inner)),
-        readBundle:  wrapMethod(inner.readBundle?.bind(inner)),
-        create:      wrapMethod(inner.create?.bind(inner)),
-        read:        wrapMethod(inner.read?.bind(inner)),
-        update:      wrapMethod(inner.update?.bind(inner)),
-        delete:      wrapMethod(inner.delete?.bind(inner)),
+        writeBundle: wrapMethod("writeBundle", inner.writeBundle?.bind(inner)),
+        readBundle:  wrapMethod("readBundle", inner.readBundle?.bind(inner)),
+        create:      wrapMethod("create", inner.create?.bind(inner)),
+        read:        wrapMethod("read", inner.read?.bind(inner)),
+        update:      wrapMethod("update", inner.update?.bind(inner)),
+        delete:      wrapMethod("delete", inner.delete?.bind(inner)),
         // query is a streaming API; retry semantics are different (would
         // re-yield items). Pass through as-is.
         query: inner.query ? inner.query.bind(inner) : undefined,

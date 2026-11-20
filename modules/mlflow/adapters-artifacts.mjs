@@ -15,6 +15,8 @@ export class NoopArtifactsAdapter {
     async uploadBytes() { throw new Error("Artifacts not configured. Provide an artifacts adapter."); }
     async list() { throw new Error("Artifacts not configured. Provide an artifacts adapter."); }
     async download() { throw new Error("Artifacts not configured. Provide an artifacts adapter."); }
+    async downloadText() { throw new Error("Artifacts not configured. Provide an artifacts adapter."); }
+    async downloadBytes() { throw new Error("Artifacts not configured. Provide an artifacts adapter."); }
 }
 
 /**
@@ -113,6 +115,15 @@ export class MlflowArtifactsAdapter {
             expect: "text",
         });
     }
+
+    /** Download file as raw bytes (ArrayBuffer) — for anything binary. */
+    async downloadBytes(run_id, path) {
+        const root = await this._rootOf(run_id);
+        return this.http.request(`/artifacts/${root}/${encodePath(path)}`, {
+            method: "GET",
+            expect: "bytes",
+        });
+    }
 }
 
 /** Databricks-specific artifacts adapter (shape may differ across deployments). */
@@ -133,5 +144,8 @@ export class DatabricksArtifactsAdapter {
     }
     async downloadText(run_id, path) {
         return this.http.request("/artifacts/get", { method: "GET", query: { run_id, path }, expect: "text" });
+    }
+    async downloadBytes(run_id, path) {
+        return this.http.request("/artifacts/get", { method: "GET", query: { run_id, path }, expect: "bytes" });
     }
 }

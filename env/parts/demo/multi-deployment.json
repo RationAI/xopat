@@ -1,6 +1,7 @@
 {
   "$meta": {
     "description": "Named deployments: one server, the session picks synthetic / webtiff / geotiff via \"deployment\" or ?deployment=",
+    "hint": "The webtiff / geotiff deployments need npm run fixtures:fetch once",
     "clientKey": "localhost"
     /* Dimensionless: it adds `deployments` beside whatever `data/*` the base
        composes, it does not replace it. See env/README.md → "Multiple

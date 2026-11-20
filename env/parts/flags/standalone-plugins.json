@@ -1,6 +1,9 @@
 {
   "$meta": {
-    "description": "Standalone plugin set — whitelist mode, dev/experimental plugins off"
+    "description": "Standalone plugin set — whitelist mode, dev/experimental plugins off",
+    "env": {
+      "XOPAT_PLUGIN_SELECTION_MODE": "Which plugins may load: all, or whitelist (only those enabled in the ENV)"
+    }
   },
   /* Part of env/env.default.json (asserted in test/suites/unit/env-compose.test.mjs).
      Keys are plugin ids from include.json, not directory names. */

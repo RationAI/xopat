@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "name": "Protokol DICOMweb",
+    "description": "Vykresluje snímky celých sklíček DICOMweb, série CT/MR/PET a odvozené objekty Segmentation / Parametric Map. Otevírá jen to, co relace požaduje; pro procházení úložiště nainstalujte plugin DICOM Browser."
+  },
+  "series": {
+    "fallbackTail": "Série …{{tail}}",
+    "fallbackNumbered": "Série č. {{number}} …{{tail}}",
+    "fallbackGeneric": "Sklíčko DICOM"
+  },
+  "overlay": {
+    "segmentation": "Segmentace",
+    "parametricMap": "Parametrická mapa",
+    "visualizationName": "Překryvy DICOM {{slide}}",
+    "segmentFallback": "Segment {{number}}",
+    "threshold": "Práh: ",
+    "segmentColor": "{{label}}: ",
+    "segmentVisible": "Zobrazit {{label}}: ",
+    "colormap": "Barevná mapa: ",
+    "transparentBelow": "Průhledné pod: ",
+    "windowCenter": "Střed okna: ",
+    "windowWidth": "Šířka okna: "
+  },
+  "radiology": {
+    "series": "Série",
+    "unavailable": "Série není k dispozici",
+    "metadataMissing": "Chybí metadata",
+    "unknown": "neznámé",
+    "modality": "Modalita",
+    "dimensions": "Rozměry",
+    "slices": "Řezy",
+    "sliceSpacing": "Rozestup řezů",
+    "spacingIrregular": "{{mm}} mm (nepravidelný, medián)",
+    "pixelSize": "Velikost pixelu",
+    "valueRange": "Rozsah hodnot",
+    "window": "Okno",
+    "planeOrdering": "Řazení rovin",
+    "excluded": "Vyloučeno",
+    "interleaved": "Prokládané objemy",
+    "interleavedHint": "Tato série obsahuje {{count}} objemů; zobrazen je „{{key}}“. Jiný zvolte pomocí dataID.subVolume."
+  },
+  "window": {
+    "presetTitle": "Předvolba okna: ",
+    "presetFallback": "C {{center}} / W {{width}}",
+    "invert": "Invertovat (MONOCHROME1): ",
+    "useColormap": "Barevná mapa místo stupňů šedi: ",
+    "colormap": "Barevná mapa: ",
+    "preset": {
+      "custom": "Vlastní",
+      "softTissue": "Měkké tkáně",
+      "lung": "Plíce",
+      "bone": "Kosti",
+      "brain": "Mozek",
+      "liver": "Játra",
+      "mediastinum": "Mediastinum",
+      "angio": "Angio"
+    }
+  }
+}

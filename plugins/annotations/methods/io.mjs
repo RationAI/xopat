@@ -90,9 +90,14 @@ export const ioMethods = {
 
         const requestedFormat = this.exportOptions.format;
         const replace = this.getOption('importReplace', true);
-        if (requestedFormat && requestedFormat !== 'auto') {
-            this.context.setIOOption('format', requestedFormat);
-        }
+
+        // A binary format (DICOM) must be read as bytes — as text it is
+        // corrupted before any decoder sees it. In auto mode the file name is
+        // the only evidence available before reading.
+        const likelyFormat = requestedFormat && requestedFormat !== 'auto'
+            ? requestedFormat
+            : OSDAnnotations.Convertor.detectFromFilename(file.name);
+        const binary = !!IO_PIPELINE.formats.get('annotations', likelyFormat)?.binary;
 
         // Read from the captured File reference, not from the event: the input's
         // onchange handler typically clears e.target.value synchronously right after
@@ -102,7 +107,8 @@ export const ioMethods = {
             const reader = new FileReader();
             reader.onload = ev => resolve(ev.target?.result);
             reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
-            reader.readAsText(file);
+            if (binary) reader.readAsArrayBuffer(file);
+            else reader.readAsText(file);
         });
         const fabric = this.context.getFabric(target.viewer);
         // fabric.import mutates options.format to the resolved format (relevant
@@ -203,12 +209,20 @@ export const ioMethods = {
             + (withPresets && withObjects ? 'all' : (withObjects ? 'annotations' : 'presets'))
             + scopeSuffix;
 
-        const ioArgs = {};
-        if (toFormat) ioArgs.format = toFormat;
-        if (withObjects && scope === 'selected') ioArgs.filter = { ids: selectedItems };
+        // The scope itself travels as `scopeSelected` (set by getExportData).
+        const ioArgs = { format: toFormat };
 
         return this.getExportData(ioArgs, withObjects, withPresets, fabric).then((result) => {
-            UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
+            // A format may have nothing to say for this viewer (a DICOM SR
+            // describes a DICOM series; other slides have none).
+            if (result === undefined || result === null) {
+                throw new Error(`Format "${toFormat}" produced no output for this slide.`);
+            }
+            // Typed, so a binary format downloads as its bytes and a text one
+            // with its own MIME type rather than text/plain.
+            const format = IO_PIPELINE.formats.descriptor('annotations', toFormat);
+            UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat),
+                new Blob([result], { type: format.contentType }));
 
             // Lossy-format heads-up: the file just downloaded does not round-trip
             // cleanly. Surfaced after the download so it doesn't block the action.

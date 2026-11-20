@@ -4,8 +4,10 @@ import {Button} from "../elements/buttons.mjs";
 import {Checkbox} from "../elements/checkbox.mjs";
 import {PhIcon} from "../elements/ph-icon.mjs";
 import {Div} from "../elements/div.mjs";
+import {AdjustmentControls} from "./adjustmentControls.mjs";
+import {Popover} from "./popover.mjs";
 
-const { div, input, span } = van.tags;
+const { div } = van.tags;
 
 /**
  * ShaderMenu (DaisyUI)
@@ -29,6 +31,8 @@ export class NavigatorSideMenu extends BaseComponent {
     /** Lower bound: below this the overview is unreadable, phone included. */
     static MIN_WIDTH = 175;
     static MIN_HEIGHT = 146;
+    /** The sliders need this much even under the smallest navigator. */
+    static QUICK_ADJUST_MIN_WIDTH = 240;
     /**
      * Share of the viewer cell the navigator may occupy. Deliberately below a
      * quarter: at a laptop's ~1200px the overview is a reference, not a second
@@ -66,7 +70,12 @@ export class NavigatorSideMenu extends BaseComponent {
             class: "truncate text-sm cursor-pointer",
             extraProperties: {
                 title: $.t("main.bar.copy"), // tooltip
-                style: "flex-grow:1; box-sizing:border-box; vertical-align:middle;"
+                // One line, ellipsised, and allowed to shrink (`min-width:0`):
+                // a long slide path used to wrap and push the header buttons
+                // out of the panel. Inline because the `class` option above
+                // is not what `Div` renders its classes from.
+                style: "flex:1 1 0; min-width:0; overflow:hidden; text-overflow:ellipsis;"
+                    + " white-space:nowrap; box-sizing:border-box; vertical-align:middle;"
             },
             onClick: function () {
                 // inside this handler, `this` is the DOM node for the title
@@ -74,12 +83,14 @@ export class NavigatorSideMenu extends BaseComponent {
             }
         });
 
+        const self = this;
         this.visibility = new Checkbox({
             id: this.id + "-visibility",
             label: "",
             checked: true,
             onchange: function () {
-                VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);
+                // The viewer this navigator belongs to — never the focused one.
+                self._viewer?.world?.getItemAt(0)?.setOpacity(this.checked ? 1 : 0);
             },
         });
 
@@ -92,9 +103,24 @@ export class NavigatorSideMenu extends BaseComponent {
             },
             extraProperties: {
                 title: $.t("main.bar.copy"),
-                style: "width:30px;"
+                style: "width:30px; flex:none;"
             },
         }, new PhIcon({ name: "ph-copy" }));
+
+        // Quick background adjustment: revealed on navigator hover (see
+        // `.navigator-hover-action` in src/assets/style.css), toggles the
+        // slider pop-over hanging under the navigator.
+        this.quickAdjust = new Button({
+            id: this.id + "-quick-adjust",
+            size: Button.SIZE.SMALL,
+            onClick: () => this.toggleQuickAdjust(),
+            extraClasses: { hover: "navigator-hover-action" },
+            extraProperties: {
+                title: $.t("adjustments.quickTitle"),
+                "aria-label": $.t("adjustments.quickTitle"),
+                style: "width:30px; flex:none;"
+            },
+        }, new PhIcon({ name: "ph-sliders-horizontal" }));
 
 
         // A plain flex row, not a `Join`: this is three controls in a line, not a
@@ -112,6 +138,7 @@ export class NavigatorSideMenu extends BaseComponent {
             },
             this.toNode(this.visibility),
             this.toNode(this.title),
+            this.toNode(this.quickAdjust),
             this.toNode(this.copy)
         );
 
@@ -119,13 +146,15 @@ export class NavigatorSideMenu extends BaseComponent {
         // owning viewer cell, so a small screen / dense grid gets a small
         // navigator instead of a 360px square covering the tissue.
         this._navHost = div({ id: this.navigatorId });
+        // Only the overview lives here. The quick adjustments are a pop-over
+        // (see toggleQuickAdjust): inline they grew the panel and shoved every
+        // side-menu panel below it down each time they were opened.
         this._body = div(
             { class: "flex flex-col" },
-            this._navHost,
-            this._createDepthRow()
+            this._navHost
         );
         this._root = div(
-            { class: "flex flex-col" },
+            { class: "navigator-panel flex flex-col" },
             header,
             this._body
         );
@@ -171,99 +200,95 @@ export class NavigatorSideMenu extends BaseComponent {
             this._body.style.width = `${w}px`;
             this._root.style.width = `${w}px`;
         }
+        // The pop-over is as wide as the navigator it hangs under.
+        this._quickPopover?.reposition();
         return true;
     }
 
     /**
-     * Focal-plane (z-stack) navigator row, mounted at the bottom of the
-     * navigator window. Hidden by default — {@link init} reveals it only when
-     * the bound viewer shows a multi-plane slide. Drives / reflects the core
-     * per-viewer `viewer.__depthController`; the actual tile swap + zombie cache
-     * handling lives there, this is pure UI.
+     * Show/hide the quick background adjustment pop-over. Its sliders write the
+     * same value to every background layer of this navigator's viewer.
+     * @param {boolean} [open] force a state; toggles when omitted
      */
-    _createDepthRow() {
-        const commit = (value) => {
-            const v = parseInt(value, 10);
-            if (Number.isNaN(v)) return;
-            this._viewer?.__depthController?.setDepth?.(v);
-        };
+    toggleQuickAdjust(open) {
+        if (!this._root) return;
+        const show = open ?? !this._quickPopover?.isOpen();
+        if (!show) {
+            this._quickPopover?.close();
+            return;
+        }
+        if (!this._quickPopover) {
+            // Built on first open: the adjustments broker and the viewer must exist.
+            this._quickPopover = new Popover({
+                id: this.id + "-quick-adjust-popover",
+                // Right under the button that opens it, so it reads as that
+                // button's panel; it overlays the overview instead of sitting
+                // detached below the whole navigator.
+                anchor: () => document.getElementById(this.id + "-quick-adjust"),
+                trigger: () => document.getElementById(this.id + "-quick-adjust"),
+                placement: "bottom",
+                width: () => Math.max(NavigatorSideMenu.QUICK_ADJUST_MIN_WIDTH, this._appliedWidth || 0),
+                // Tuning is a loop of "move a slider, pan and zoom to look,
+                // move it again" — navigating the slide must not dismiss it.
+                keepOpenOn: (target) => !!target?.closest?.(".openseadragon-container"),
+                onOpen: () => {
+                    // `btn-active` also keeps the hover-revealed button visible
+                    // while the pointer is in the pop-over, outside the panel.
+                    this.quickAdjust?.setClass?.("active", "btn-active");
+                    this._quickControls?.refresh();
+                },
+                onClose: () => this.quickAdjust?.setClass?.("active", ""),
+            }, this._buildQuickAdjust());
+        }
+        this._quickPopover.open();
+    }
 
-        const readout = input({
-            type: "number", min: "0", step: "1",
-            class: "input input-xs input-bordered text-center px-1 flex-none",
-            style: "width:3.5rem; height:1.5rem;",
-            title: $.t("main.navigator.focalPlane"),
-        });
-        readout.addEventListener("change", (e) => commit(e.target.value));
-
-        const slider = input({
-            type: "range", min: "0", max: "0", step: "1", value: "0",
-            class: "range range-xs range-primary w-full",
-        });
-        // "input" tracks the drag live; the depth controller de-dupes unchanged
-        // indices and only fetches when the plane actually changes.
-        slider.addEventListener("input", (e) => commit(e.target.value));
-
-        const count = span({ class: "text-[10px] opacity-60 whitespace-nowrap" });
-
-        const row = div(
-            {
-                // px-0: same reason as the header — line up with the canvas edge.
-                class: "display-none flex flex-col gap-1 px-0 py-1 border-t border-base-300 bg-base-200/60",
-                title: $.t("main.navigator.focalPlaneHint"),
+    /** @returns {Node} the controls, built once and re-attached on every open */
+    _buildQuickAdjust() {
+        const adjustments = APPLICATION_CONTEXT.adjustments;
+        const background = () => this._viewer ? adjustments.backgroundLayerIds(this._viewer) : [];
+        this._quickControls = new AdjustmentControls({
+            keys: adjustments.getQuickKeys(),
+            // All background layers move together; the first one is the readout.
+            getValues: () => {
+                const first = background()[0];
+                return first ? adjustments.get(this._viewer, first) : {};
             },
-            // Row 1: label + count + numeric input, all on one compact line.
-            div(
-                { class: "flex items-center gap-2 text-xs" },
-                span({ class: "font-semibold opacity-80 whitespace-nowrap" }, $.t("main.navigator.focalPlane")),
-                count,
-                span({ class: "flex-1" }),
-                readout,
-            ),
-            // Row 2: slider spanning the width.
-            slider,
-        );
+            onInput: (patch) => this._viewer && adjustments.setBackground(this._viewer, patch),
+            onAuto: async () => {
+                const first = background()[0];
+                if (!first) return;
+                const range = await adjustments.autoLevels(this._viewer, first);
+                if (range) adjustments.setBackground(this._viewer, range);
+            },
+            onReset: () => {
+                for (const id of background()) adjustments.reset(this._viewer, id);
+            },
+        });
+        this._unsubscribeAdjustments = adjustments.onChange((change) => {
+            if (change.viewer === this._viewer && this._quickPopover?.isOpen()) {
+                this._quickControls?.refresh();
+            }
+        });
+        return this._quickControls.create();
+    }
 
-        this._depth = { row, slider, readout, count };
-        return row;
+    destroy() {
+        this._quickPopover?.destroy();
+        this._quickPopover = null;
+        this._unsubscribeAdjustments?.();
+        this._unsubscribeAdjustments = null;
+        this._quickControls?.destroy();
+        this._quickControls = null;
     }
 
     /**
      * Two-level init (matches ShaderSideMenu): the constructor builds DOM before
-     * the viewer opens; this wires per-viewer events once it exists.
+     * the viewer opens; this binds the viewer once it exists. The focal-plane
+     * control that used to live here is the per-viewer `DepthRuler`.
      * @param {OpenSeadragon.Viewer} viewer
      */
     init(viewer) {
         this._viewer = viewer;
-        if (this._depthWired) return;
-        this._depthWired = true;
-        // Slide (re)opens can add/remove/replace the z-stack; reflect availability.
-        viewer.addHandler("open", () => this.refreshDepth());
-        // Keyboard / Alt-scroll / scripting changes flow back here.
-        viewer.addHandler("z-depth-changed", (e) => this._reflectDepth(e.index, e.count));
-        this.refreshDepth();
-    }
-
-    /** Recompute range + visibility from the bound viewer's depth controller. */
-    refreshDepth() {
-        const d = this._depth;
-        if (!d || !this._viewer) return;
-        const range = this._viewer.__depthController?.getRange?.();
-        if (!range) {
-            d.row.classList.add("display-none");
-            return;
-        }
-        d.row.classList.remove("display-none");
-        d.slider.max = String(range.count - 1);
-        d.readout.max = String(range.count - 1);
-        this._reflectDepth(range.index, range.count);
-    }
-
-    _reflectDepth(index, count) {
-        const d = this._depth;
-        if (!d) return;
-        d.slider.value = String(index);
-        d.readout.value = String(index);
-        d.count.textContent = $.t("main.navigator.focalPlaneCount", { count });
     }
 }

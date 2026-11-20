@@ -36,6 +36,15 @@ const { OpenSeadragon, error: loadError } = loadOpenSeadragon();
 const fixLanded = typeof OpenSeadragon?.BatchImageJob?.prototype?.abort === "function";
 
 /**
+ * The `fail` half of the same entry is probed separately: the 6.1.1 re-vendor
+ * (2026-09-12) shipped the prototype `abort` but not `fail`'s early return, so
+ * `fixLanded` alone armed a vector the bundle cannot pass. The fix is merged
+ * upstream; this flips to armed on the next re-vendor.
+ */
+const failFixLanded = fixLanded
+    && /if\s*\(\s*!this\.jobId\s*\)\s*\{?\s*return/.test(String(OpenSeadragon.BatchImageJob.prototype.fail));
+
+/**
  * A source that batches and never settles anything, so a job's fate is decided
  * entirely by the loader.
  *
@@ -129,7 +138,7 @@ test("@upstream a batch still staged in its bucket releases its tiles too", () =
 
 test("@upstream a failed batch calls back exactly once", () => {
     test.skip(Boolean(loadError), loadError ?? "");
-    test.skip(!fixLanded, "awaiting the OpenSeadragon re-vendor — see UPSTREAM.md");
+    test.skip(!failFixLanded, "awaiting the OpenSeadragon re-vendor — see UPSTREAM.md");
 
     // The last child's wrapped `fail` already reaches the completion branch and
     // fires the callback; `fail()` must not fire it a second time. The callback

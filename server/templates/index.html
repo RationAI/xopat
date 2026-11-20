@@ -152,20 +152,74 @@
 <!--</div>-->
 <!-- Appended controls for other plugins -->
     <script>
-//preventive error message, that will be discarded after the full initialization, no translation
-window.onerror = function (message, file, line, col, error) {
-    if (window.isResizeObserverLoopMessage && window.isResizeObserverLoopMessage(error || message)) {
-        console.debug('ResizeObserver loop suppressed:', message);
+// Boot-failure screen. Live only until the app is up: `wireGlobalRuntimeErrorHandler`
+// (src/classes/app/global-error-handler.ts) retires it once the viewer manager exists,
+// after which uncaught errors become toasts.
+//
+// An uncaught error in this window means the application did not start, and by far the
+// most common reason is bundles that do not belong together — a core build (src/dist)
+// older than the UI bundle and module files served with it — which surfaces as
+// `APPLICATION_CONTEXT.<something> is undefined`. So this says that, instead of
+// "Unknown error" behind a spinner that never stops: #fullscreen-loader shares this
+// card's z-index and comes later in the document, so it has to be hidden explicitly.
+//
+// Deliberately self-contained (the template's own elements, `textContent` only): it
+// must work when the failure is early enough that USER_INTERFACE does not exist.
+(function () {
+    let shown = false;
+    // i18next is initialized inside initXOpat. A failure before that point can only be
+    // reported in English — there is no translator yet, and the placeholder `$.t`
+    // would print the key's last segment.
+    const text = function (key, english) {
+        try {
+            if (window.i18next && window.i18next.isInitialized && window.$ && typeof window.$.t === "function") {
+                return window.$.t(key);
+            }
+        } catch (e) { /* fall through to English */ }
+        return english;
+    };
+    const setText = function (id, value) {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+    };
+
+    window.onerror = function (message, file, line, col, error) {
+        if (window.isResizeObserverLoopMessage && window.isResizeObserverLoopMessage(error || message)) {
+            console.debug('ResizeObserver loop suppressed:', message);
+            return false;
+        }
+        // First error wins: what follows is the cascade of the first one (globals that
+        // were never assigned), and it would replace the only informative message.
+        if (shown) return false;
+        shown = true;
+
+        const loader = document.getElementById("fullscreen-loader");
+        if (loader) loader.style.display = "none";
+
+        const details = [String((error && error.message) || message || "")];
+        if (file) details.push("in " + file + (line ? ", line " + line : ""));
+        // Dev mode only: the server compared the core bundle with its sources.
+        const stale = Array.isArray(window.XOPAT_STALE_BUNDLES) ? window.XOPAT_STALE_BUNDLES : [];
+        if (stale.length) {
+            details.push("", "Out-of-date build detected:");
+            for (const entry of stale) details.push("  " + String(entry));
+            details.push("Start the dev watcher (npm run dev) and check its output for a failed build.");
+        }
+
+        setText("system-message-title", text("error.bootFailedTitle", "The viewer could not start."));
+        setText("system-message-subtitle", text("error.bootFailedDescription",
+            "The application files look incomplete or out of date. Reload the page; if it keeps happening, the application needs to be rebuilt."));
+        setText("system-message-details", details.join("\n"));
+        const card = document.getElementById("system-message");
+        if (card) card.classList.remove("hidden");
+
+        // Keep the app's own bookkeeping consistent when it got far enough to exist.
+        try {
+            if (window.USER_INTERFACE && window.USER_INTERFACE.Errors) window.USER_INTERFACE.Errors.active = true;
+        } catch (e) { /* not there yet */ }
         return false;
-    }
-    let ErrUI = USER_INTERFACE.Errors;
-    if (!ErrUI) console.error("Error UI not initialized! Attempt to show error message: ", message, " ", file, " ", line, " ", col, " ", error);
-    if (ErrUI.active) return false;
-    error = error || {};
-    ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
-<b>in</b> ${file}, <b>line</b> ${line}</code>`, true);
-    return false;
-};
+    };
+})();
     </script>
 
     <!-- Template app -->

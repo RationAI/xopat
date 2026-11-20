@@ -140,6 +140,12 @@ registrant owns its own pointer loop and queries:
 - `shortcuts.pointerModifiersMatch(id, mouseEvent)` — true when the event's
   `ctrlKey/altKey/shiftKey/metaKey` state matches the effective modifier combo.
 
+Conflicts between modifier-only bindings are enforced per `gesture`
+(`"drag"`, `"wheel"`, …; default `"pointer"`): a pointer event is never both a
+drag and a wheel, so Primary may arm drag-rotation (`core.viewport.rotateDrag`,
+gesture `drag`) and focal-plane scrolling (`core.viewport.zDepthWheel`, gesture
+`wheel`) at once. Use the same modifier for the same idea across gestures.
+
 The Keymap panel captures these by holding the modifier(s) and releasing
 (`modifierComboFromEvent`), so the arming modifier is user-remappable like any
 other shortcut. The gesture only fires while OSD mouse-nav is enabled (it rides

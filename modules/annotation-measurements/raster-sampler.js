@@ -228,7 +228,11 @@
             // first-pass forces a re-steal of the live viewer's textures.
             renderer.__firstPassResult = null;
             gl.clear(gl.COLOR_BUFFER_BIT);
-            await drawer.drawWithConfiguration(viewer.world._items, config, view, { x: w, y: h }, { status });
+            // `waitFullLoad`: an off-screen region has no next frame to refine in,
+            // so the pass itself must wait for the tiles it schedules. Without it
+            // the retry loop below only ever saw what happened to be resident.
+            await drawer.drawWithConfiguration(viewer.world._items, config, view, { x: w, y: h },
+                { status, waitFullLoad: true, loadTimeoutMs: 5000 });
             const buf = new Uint8Array(w * h * 4);
             gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
             gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);

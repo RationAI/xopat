@@ -356,7 +356,7 @@ test("the boot barrier stops WAITING without stopping the login", async () => {
         init() {},
         loginSilent: () => false,
         canLoginWithoutGesture: () => true,
-        navigatesOnLogin: () => true,
+        navigatesOnLogin: () => false,
         // A human at an identity provider: answers only when they are done.
         login: () => new Promise((r) => { resolveLogin = r; }),
     });
@@ -384,7 +384,7 @@ test("a credential landing after the barrier gave up still reaches subscribers",
         init() {},
         loginSilent: () => false,
         canLoginWithoutGesture: () => true,
-        navigatesOnLogin: () => true,
+        navigatesOnLogin: () => false,
         login: () => new Promise((r) => { resolveLogin = r; }),
     });
     await auth.configureContext({ contextId: "core", method: "oidc", autoLogin: true, secretTypes: ["jwt"] });

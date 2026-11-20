@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Měření doby načítání dlaždic a profiler",
+    "description": "Měří dobu načítání jednotlivých dlaždic a zaznamenává výkonnostní profily prohlížeče."
+  }
+}

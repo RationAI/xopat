@@ -247,7 +247,15 @@ export class ViewerStateBindingController {
                 // would file every later slide's viewport under the first one.
                 const save = UTILITIES.makeThrottled(() => {
                     try {
-                        this.writeViewportCache(viewportCacheKey(viewerRef), snapshotViewport(viewerRef));
+                        const viewport = snapshotViewport(viewerRef);
+                        // Cross-viewport sync turns a follower by its registration
+                        // angle, and that session is memory-only: stored as is, the
+                        // angle would reopen the slide tilted with nothing to explain it.
+                        const syncRotation = (viewerRef as any).scalebar?.ViewportSyncAPI?.getRotationOffset?.() || 0;
+                        if (viewport && syncRotation) {
+                            viewport.rotation = (viewport.rotation || 0) - syncRotation;
+                        }
+                        this.writeViewportCache(viewportCacheKey(viewerRef), viewport);
                     } catch (e) {
                         console.warn("Failed to cache viewport", e);
                     }

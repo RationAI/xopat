@@ -154,7 +154,8 @@ class AnnotationsGUI extends XOpatPlugin {
             }
         }
 
-        const formats = OSDAnnotations.Convertor.formats;
+        const listFormats = () => IO_PIPELINE.formats.list('annotations').map(f => f.id);
+        const formats = listFormats();
         // Precedence: plugin cache (an explicit user pick) -> session config ->
         // ENV.plugins.gui_annotations.ioFormat -> the module's deployment default
         // (ENV.modules.annotations.convertors.format) -> 'native'.
@@ -166,9 +167,22 @@ class AnnotationsGUI extends XOpatPlugin {
         // is what makes a changed deployment config take effect.
         this._defaultFormat = this.context.defaultFormat;
         const configuredFormat = this.getOption('ioFormat', undefined) ?? this._defaultFormat;
+        // Configuration (session / ENV, cache excluded) still sets the format
+        // the MODULE uses for IO — a deployment that asks for GeoJSON gets its
+        // session bundles in GeoJSON. A pick the user made in the file dialog
+        // does not: see setFormat().
+        const deploymentFormat = this.getOption('ioFormat', undefined, false);
+        if (deploymentFormat && deploymentFormat !== 'auto') {
+            this.context.setIOOption('format', deploymentFormat);
+        }
 
         this.exportOptions = {
-            availableFormats: formats,
+            // Live: formats register whenever their owner loads, which may be
+            // after this plugin has set itself up.
+            get availableFormats() { return listFormats(); },
+            // The format of the user's own file import/export. It does not
+            // drive what a bound IO sink receives — that is the module's
+            // format (config) or the sink's own requirement.
             format: configuredFormat,
             scope: 'all'
         };

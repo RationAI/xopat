@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "name": "Formulář zpětné vazby YouTrack",
+    "description": "Poskytněte zpětnou vazbu k xOpat přímo do nástěnky YouTrack."
+  },
+  "menu": {
+    "title": "Formulář zpětné vazby",
+    "unavailable": "Formulář zpětné vazby nefunguje pro domény, které nejsou nakonfigurovány v YouTracku. Oprávněná osoba musí formulář pro tuto doménu povolit."
+  },
+  "form": {
+    "attachLogs": "Přiložit k formuláři zpětné vazby logy aplikace"
+  }
+}

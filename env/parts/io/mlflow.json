@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "slide-scoring records land in MLflow experiments/runs",
+    "hint": "Needs an MLflow tracking server reachable at MLFLOW_URL",
+    "env": {
+      "MLFLOW_URL": "Base URL of the MLflow tracking server"
+    },
     "dimension": "io",
     "defaults": { "MLFLOW_URL": "http://localhost:5000/" }
   },

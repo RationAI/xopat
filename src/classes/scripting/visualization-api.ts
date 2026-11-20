@@ -27,6 +27,37 @@ import {
     validateVisualizations,
     type VisualizationIssue,
 } from "../app/visualization-validation";
+import { ViewerSelectionState } from "../app/viewer-selection-state";
+import { deserializeScene, serializeSceneFromViewer } from "../app/canonical-scene";
+
+/**
+ * Merge a layer patch onto an existing layer: a `type` change REPLACES the layer (the old
+ * type's controls do not transfer), anything else deep-merges.
+ *
+ * A control's current value lives in `cache[type][control]` and is re-applied on load, so
+ * it outranks `params[control]`. A patch that sets `params.opacity` on a layer whose cache
+ * already holds an `opacity` would otherwise validate, apply, and change nothing — so the
+ * cached value of every param the patch names is dropped first.
+ */
+function mergeLayerPatch(existingLayer: any, patchLayer: any): any {
+    const patchType = isPlainObject(patchLayer) ? patchLayer.type : undefined;
+    const existingType = isPlainObject(existingLayer) ? existingLayer.type : undefined;
+    if (patchType && existingType && patchType !== existingType) {
+        return cloneJson(patchLayer);
+    }
+
+    const base: any = OpenSeadragon.extend(true, {}, existingLayer || {});
+    const patchedParams = isPlainObject(patchLayer?.params) ? Object.keys(patchLayer.params) : [];
+    if (patchedParams.length && isPlainObject(base.cache)) {
+        for (const key of patchedParams) {
+            delete base.cache[key];                             // flat 3.x cache
+            for (const bucket of Object.values<any>(base.cache)) {
+                if (isPlainObject(bucket)) delete bucket[key];  // { [type]: { [control]: value } }
+            }
+        }
+    }
+    return OpenSeadragon.extend(true, base, cloneJson(patchLayer));
+}
 
 /**
  * Thrown by `requireVisualizationReview` when the user clicks "Send to LLM with
@@ -291,6 +322,23 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         });
     }
 
+    /**
+     * The per-slot selection with ONE slot changed: the script's active viewer.
+     *
+     * The open pipeline broadcasts a scalar, or the first element of a short array, to every
+     * viewer that has no entry of its own. "Make this visualization active" passed as `index`
+     * or `[index]` therefore switched every open viewer — overlays for one slide landed on all
+     * of them. Handing back the full slot-aligned selection leaves the others as they are.
+     */
+    protected selectionForActiveViewer(index: number): Array<number | undefined> {
+        const next = (this.getActiveVisualizationSelection() || []).slice();
+        let slot: any = (VIEWER_MANAGER as any)?.getViewerSlotIndex?.(this.activeViewer);
+        if (!Number.isInteger(slot) || slot < 0) slot = 0;
+        while (next.length <= slot) next.push(undefined);
+        next[slot] = index;
+        return next;
+    }
+
     protected buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
         const visualizations = cloneJson(Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : []);
         // Persisted visualizations may carry top-level shader entries whose ids
@@ -390,6 +438,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             cancelLabel?: string;
             rejectedMessage?: string;
             cacheKey?: string;
+            /** Index of the visualization this change is about; see `VisualizationReviewOptions`. */
+            targetIndex?: number;
         } = {}
     ): Promise<VisualizationStateSnapshot> {
         const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
@@ -443,6 +493,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 title: options.title,
                 rationale: options.rationale,
                 historyLabel: options.historyLabel,
+                targetIndex: options.targetIndex,
             },
         );
 
@@ -618,16 +669,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (patchShaders) {
             if (!isPlainObject(merged.shaders)) merged.shaders = {};
             for (const [layerKey, patchLayer] of Object.entries(patchShaders)) {
-                const existingLayer = merged.shaders[layerKey];
-                const patchType = isPlainObject(patchLayer) ? (patchLayer as any).type : undefined;
-                const existingType = isPlainObject(existingLayer) ? (existingLayer as any).type : undefined;
-
-                if (patchType && existingType && patchType !== existingType) {
-                    // Type change → fresh layer. Don't drag old controls along.
-                    merged.shaders[layerKey] = cloneJson(patchLayer);
-                } else {
-                    merged.shaders[layerKey] = OpenSeadragon.extend(true, {}, existingLayer || {}, cloneJson(patchLayer));
-                }
+                merged.shaders[layerKey] = mergeLayerPatch(merged.shaders[layerKey], patchLayer);
             }
         }
 
@@ -1066,7 +1108,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         });
 
         const visualizations = this.getVisualizations();
-        return await APPLICATION_CONTEXT.updateVisualization(visualizations, [], index);
+        // A single index targets the script's active viewer; an array is the caller's own
+        // explicit per-viewer selection and is passed through.
+        const selection = Number.isInteger(index) ? this.selectionForActiveViewer(index as number) : index;
+        return await APPLICATION_CONTEXT.updateVisualization(visualizations, [], selection as any);
     }
 
     /**
@@ -1121,7 +1166,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive !== false) {
-            nextActiveIndex = [next.length - 1];
+            nextActiveIndex = this.selectionForActiveViewer(next.length - 1);
         }
 
         const proposedSnapshot: VisualizationStateSnapshot = {
@@ -1142,6 +1187,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ],
             rejectedMessage: "Adding the visualization was canceled by the user.",
             cacheKey: "visualization:add",
+            targetIndex: next.length - 1,
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1169,12 +1215,20 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         }
 
         const merged = this.mergeVisualizationPatch(next[index], patch || {});
+        // Visualizations saved by an earlier review carry the live payload's `state` envelope
+        // on each layer — a field the schema rejects, so every later update of them failed
+        // validation whatever the patch said. Fold it into the layer and drop it.
+        this.forEachShaderLayer(merged?.shaders, (layer: any) => {
+            if (layer.state === undefined) return;
+            (UTILITIES as any).applySnapshotState?.(layer, layer.state);
+            delete layer.state;
+        });
         next[index] = this.normalizeVisualizationInput(merged);
         this.runFullValidation([next[index]]);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive === true) {
-            nextActiveIndex = [index];
+            nextActiveIndex = this.selectionForActiveViewer(index);
         }
 
         const proposedSnapshot: VisualizationStateSnapshot = {
@@ -1194,10 +1248,121 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ],
             rejectedMessage: "Updating the visualization was canceled by the user.",
             cacheKey: "visualization:update",
+            targetIndex: index,
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
         return await APPLICATION_CONTEXT.updateVisualization(acceptedVisualizations, options.newData || [], nextActiveIndex as any);
+    }
+
+    /** The background entry the script's active viewer shows, and its index in `config.background`. */
+    protected activeBackgroundEntry(): { index: number; entry: any } {
+        const index = ViewerSelectionState.getViewerSelectionIndex(
+            this.activeViewer, "activeBackgroundIndex", APPLICATION_CONTEXT as any, VIEWER_MANAGER
+        );
+        const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background)
+            ? APPLICATION_CONTEXT.config.background
+            : [];
+        const entry = Number.isInteger(index) ? backgrounds[index as number] : undefined;
+        if (!entry) throw new Error("The active viewer shows no background.");
+        return { index: index as number, entry };
+    }
+
+    /**
+     * The active viewer's background with its live control values merged in, as plain JSON.
+     * An entry that declares no shaders renders through one implicit `identity` layer; it is
+     * materialized here so there is always a layer 0 to read and to patch.
+     */
+    protected activeBackgroundSnapshot(): { index: number; background: any } {
+        const { index, entry } = this.activeBackgroundEntry();
+        const background: any = serializeSceneFromViewer(this.activeViewer, { background: [entry] }).background[0];
+        if (!Array.isArray(background.shaders) || !background.shaders.length) {
+            background.shaders = [{ type: "identity" }];
+        }
+        return { index, background };
+    }
+
+    /**
+     * Returns the shader layers of the active viewer's BACKGROUND — the slide's own rendering,
+     * as opposed to a visualization drawn over it.
+     */
+    getBackgroundShaders(): VisualizationShaderGroupOrLayer[] {
+        const mask = !this.mayExposeSensitive;
+        return this.activeBackgroundSnapshot().background.shaders.map((layer: any) => {
+            const out: any = cloneJson(layer);
+            // Derived from the background id, which comes from the slide's path; addressed
+            // by position instead.
+            delete out.id;
+            // Seeded from the slide's display name.
+            if (mask) delete out.name;
+            for (const key of Object.keys(out)) {
+                if (key.startsWith("_")) delete out[key];
+            }
+            return out;
+        });
+    }
+
+    /**
+     * Applies a partial patch to one shader layer of the active viewer's background.
+     */
+    async updateBackgroundShaderAt(
+        index: number,
+        patch: Partial<VisualizationShaderGroupOrLayer>
+    ): Promise<boolean> {
+        const { index: backgroundIndex, background } = this.activeBackgroundSnapshot();
+        if (!Number.isInteger(index) || index < 0 || index >= background.shaders.length) {
+            throw new Error(
+                `Background shader index must be an integer in 0..${background.shaders.length - 1}; ` +
+                "read visualization.getBackgroundShaders() for the current layers."
+            );
+        }
+        if (!isPlainObject(patch)) {
+            throw new Error("Background shader patch must be an object.");
+        }
+
+        // The layer's renderer id is derived from the background id and its position — not
+        // the caller's to set.
+        const cleanPatch: any = cloneJson(patch);
+        delete cleanPatch.id;
+        const merged = mergeLayerPatch(background.shaders[index], cleanPatch);
+
+        // Validate the one layer that changed. Host-private markers (`_`-prefixed, e.g. an
+        // owner's "these params were auto-filled" stamp) are not part of the renderer schema.
+        const forValidation: any = cloneJson(merged);
+        for (const key of Object.keys(forValidation)) {
+            if (key.startsWith("_") || key === "id") delete forValidation[key];
+        }
+        this.runFullValidation([{ name: "background", shaders: { background: forValidation } }]);
+
+        await this.requireActionConsent({
+            title: $.t("scripting.visualization.backgroundUpdateTitle"),
+            description: $.t("scripting.visualization.backgroundUpdateDescription"),
+            details: [$.t("scripting.visualization.backgroundUpdateUndo")],
+            mode: "warning",
+            rejectedMessage: "Changing the background rendering was canceled by the user.",
+            cacheKey: "visualization:update-background",
+        });
+
+        background.shaders[index] = merged;
+
+        // Only this viewer's background entry changes; every other entry, the visualizations
+        // and the slot mapping are handed back exactly as they are.
+        const config: any = APPLICATION_CONTEXT.config;
+        const backgrounds = [...(Array.isArray(config.background) ? config.background : [])];
+        backgrounds[backgroundIndex] = background;
+        await deserializeScene({
+            version: 1,
+            data: Array.isArray(config.data) ? config.data : [],
+            background: backgrounds,
+            visualizations: Array.isArray(config.visualizations) ? config.visualizations : [],
+            activeBackgroundIndex: ViewerSelectionState.normalizeSelectionValue(
+                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
+            ),
+        } as any, {
+            historyMode: "visualization-step",
+            historyLabel: this.getHistoryLabel("update-background"),
+        });
+        return true;
     }
 
     /**
@@ -1912,6 +2077,22 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             if (Number.isInteger(background?.dataReference)) backgroundRefs.add(background.dataReference);
         }
 
+        // `config.data` is one list for the whole session, shared by every viewer. What THIS
+        // viewer shows is its world's backgrounds plus whatever their visualization renders.
+        const viewerRefs = new Set<number>();
+        const itemCount = viewer?.world?.getItemCount ? viewer.world.getItemCount() : 0;
+        for (let i = 0; i < itemCount; i++) {
+            const background: any = viewer.world.getItemAt(i)?.getConfig?.("background");
+            if (!background) continue;
+            if (Number.isInteger(background.dataReference)) viewerRefs.add(background.dataReference);
+            const shown: any = Number.isInteger(background.visualizationIndex)
+                ? visualizations[background.visualizationIndex]
+                : null;
+            this.forEachShaderLayer(shown?.shaders || {}, (layer: any) => {
+                for (const ref of sanitizeArrayOfIntegers(layer?.dataReferences)) viewerRefs.add(ref);
+            });
+        }
+
         return data.map((entry: any, index: number): VisualizationDataSourceInfo => {
             const worldIndex = worldIndexOf.has(index) ? worldIndexOf.get(index)! : null;
             const item: any = worldIndex != null && viewer?.world?.getItemAt
@@ -1932,6 +2113,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             const rawDataId = typeof entry === "string" ? entry : (entry?.id ?? null);
             const rawTileSourceId = source?.tileSourceId ?? null;
             const mask = !this.mayExposeSensitive;
+            // A protocol NAME ("dicom") says how the entry is fetched, not whose it is. Anything
+            // that is not a bare name could be a URL template, so it is withheld.
+            const protocol = typeof entry?.protocol === "string" && /^[A-Za-z][\w-]{0,31}$/.test(entry.protocol)
+                ? entry.protocol
+                : null;
 
             return {
                 dataReference: index,
@@ -1939,10 +2125,16 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 // xOpat, not to a reader: they routinely embed the case. Same for `tileSourceId`,
                 // which for DICOMweb is the store URL with the study/series UIDs in it. Masked
                 // positionally so `dataReference` still joins the rows together.
-                dataId: mask && rawDataId != null ? this.maskedHandle("data", index) : rawDataId,
+                //
+                // Every masked entry gets a handle, including object entries that carry no `id`
+                // (`{dataID, protocol}`): a `null` there read as "nothing is here" and left a
+                // session full of rows with no way to refer to one.
+                dataId: mask && entry != null ? this.maskedHandle("data", index) : rawDataId,
                 tileSourceId: mask && rawTileSourceId != null
                     ? this.maskedHandle("source", index)
                     : rawTileSourceId,
+                protocol,
+                inActiveViewer: worldIndex != null || viewerRefs.has(index),
                 role: backgroundRefs.has(index)
                     ? "background"
                     : (layers.length ? "overlay" : "unbound"),

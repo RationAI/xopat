@@ -773,6 +773,73 @@ OSDAnnotations.AnnotationObjectFactory = class {
             return slots;
         };
 
+        // Measuring needs a 2D context; fabric hands one only to render(), but
+        // the pill must be sized earlier — in positionHandler, which fabric's
+        // setCoords() runs right before caching the control hit boxes
+        // (_setCornerCoords reads sizeX/sizeY). A shared scratch context
+        // lets both places measure identically.
+        let measureCtx = null;
+        const getMeasureCtx = () => {
+            if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+            return measureCtx;
+        };
+
+        // Single source of truth for the pill geometry: slot widths, total
+        // width and the pill-local click zones. Empty (width 0) when there is
+        // nothing to show or the annotation is fully transparent.
+        const layoutPill = (target, ctx = getMeasureCtx()) => {
+            const slots = slotsFor(target);
+            if (!slots.length || (target?.opacity ?? 1) <= 0) {
+                return { slots: [], bubbleWidth: 0, zones: [] };
+            }
+            let totalContentW = 0;
+            for (const s of slots) {
+                let w;
+                if (s.textOnly) {
+                    ctx.font = `600 ${METRIC_FONT}px Arial`;
+                    w = ctx.measureText(s.text).width;
+                } else {
+                    w = ICON_SIZE;
+                    if (s.countText) {
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
+                        w += TEXT_GAP + ctx.measureText(s.countText).width;
+                    }
+                }
+                s._width = w;
+                totalContentW += w;
+            }
+            const bubbleWidth = totalContentW + PAD_X * 2 + SLOT_GAP * (slots.length - 1);
+
+            // Hit-zone covers slot content + half the gap on each side
+            // (or the pill's padding on the outer edges).
+            const zones = [];
+            let cursor = -bubbleWidth / 2 + PAD_X;
+            for (let i = 0; i < slots.length; i++) {
+                const s = slots[i];
+                s._start = cursor;
+                const zoneLeftPad  = i === 0 ? PAD_X : SLOT_GAP / 2;
+                const zoneRightPad = i === slots.length - 1 ? PAD_X : SLOT_GAP / 2;
+                cursor += s._width;
+                zones.push({ id: s.id, x0: s._start - zoneLeftPad, x1: cursor + zoneRightPad, onClick: s.onClick });
+                cursor += SLOT_GAP;
+            }
+            return { slots, bubbleWidth, zones };
+        };
+
+        // Apply a pill width to the control's hit size. Returns true if it changed.
+        // An empty pill gets a 1px box, not 0: fabric's calcCornerCoords treats
+        // a falsy size as "use cornerSize" and would hand it a 13px hit box.
+        const applySize = (bubbleWidth) => {
+            const w = bubbleWidth || 1;
+            const h = bubbleWidth ? HEIGHT : 1;
+            const changed = control.sizeX !== w || control.sizeY !== h;
+            control.sizeX = w;
+            control.sizeY = h;
+            control.touchSizeX = bubbleWidth ? w + 12 : 1;
+            control.touchSizeY = bubbleWidth ? h + 8 : 1;
+            return changed;
+        };
+
         const control = new fabric.Control({
             // Anchor via custom positionHandler using calcLineCoords() —
             // rotation-correct under OSD-driven vpt rotation (fabric's
@@ -784,12 +851,25 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetX: 0,
             offsetY: -ANCHOR_OFFSET,
             cursorStyle: 'pointer',
-            sizeX: 120,
-            sizeY: HEIGHT,
-            touchSizeX: 140,
-            touchSizeY: HEIGHT + 8,
+            // Real sizes are set by positionHandler (below) before fabric
+            // caches the hit box; these only cover a control never positioned.
+            sizeX: 1,
+            sizeY: 1,
+            touchSizeX: 1,
+            touchSizeY: 1,
             enabled: true,
             positionHandler: function (dim, finalMatrix, fabricObject) {
+                // Size the hit box to the pill as it will be drawn. fabric's
+                // setCoords() runs this, then _setCornerCoords() reads sizeX/
+                // sizeY — so a fresh selection never caches a box wider than
+                // the pill (that phantom margin swallowed clicks meant for
+                // creating the next annotation). Only the active object has
+                // its controls drawn or hit-tested, and setCoords() runs for
+                // every visible annotation on zoom — skip the layout (metric
+                // computation included) for the rest.
+                if (fabricObject?.canvas?._activeObject === fabricObject) {
+                    applySize(layoutPill(fabricObject).bubbleWidth);
+                }
                 if (!fabricObject?.canvas?.__spatialIndex) {
                     return fabric.util.transformPoint({
                         x: this.x * dim.x + this.offsetX,
@@ -807,41 +887,30 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 return new fabric.Point(midTopX + (dx / len) * ANCHOR_OFFSET, midTopY + (dy / len) * ANCHOR_OFFSET);
             },
             render: (ctx, left, top, _styleOverride, fabricObject) => {
-                const slots = slotsFor(fabricObject);
-                if (!slots.length) {
-                    control._zones = [];
-                    return;
-                }
+                const { slots, bubbleWidth, zones } = layoutPill(fabricObject, ctx);
+                control._zones = zones;
 
-                // Tie label visibility to annotation opacity. At 0 the pill
-                // disappears and is non-clickable (empty zones). Otherwise
-                // the pill renders at min(1, opacity * factor) so dimmed
-                // annotations still get readable labels.
-                const annOpacity = fabricObject.opacity ?? 1;
-                if (annOpacity <= 0) {
-                    control._zones = [];
-                    return;
-                }
-                const pillAlpha = Math.min(1, annOpacity * LABEL_OPACITY_FACTOR);
-
-                // Measure each slot's intrinsic width.
-                let totalContentW = 0;
-                for (const s of slots) {
-                    let w;
-                    if (s.textOnly) {
-                        ctx.font = `600 ${METRIC_FONT}px Arial`;
-                        w = ctx.measureText(s.text).width;
-                    } else {
-                        w = ICON_SIZE;
-                        if (s.countText) {
-                            ctx.font = `600 ${METRIC_FONT}px Arial`;
-                            w += TEXT_GAP + ctx.measureText(s.countText).width;
-                        }
+                // Content can change while the object stays selected (comment
+                // count, lock icon, metric text) without fabric re-running
+                // setCoords(). Keep the cached hit box in step with what is
+                // drawn: recompute only this control's corner, with the same
+                // public call fabric's _setCornerCoords makes.
+                if (applySize(bubbleWidth)) {
+                    const oc = fabricObject.oCoords?.toolbar;
+                    if (oc) {
+                        oc.corner = control.calcCornerCoords(
+                            fabricObject.angle, fabricObject.cornerSize, oc.x, oc.y, false);
+                        oc.touchCorner = control.calcCornerCoords(
+                            fabricObject.angle, fabricObject.touchCornerSize, oc.x, oc.y, true);
                     }
-                    s._width = w;
-                    totalContentW += w;
                 }
-                const bubbleWidth = totalContentW + PAD_X * 2 + SLOT_GAP * (slots.length - 1);
+
+                // Empty pill: nothing to show, or the annotation is fully
+                // transparent (pill hidden and non-clickable). Otherwise the
+                // pill renders at min(1, opacity * factor) so dimmed
+                // annotations still get readable labels.
+                if (!slots.length) return;
+                const pillAlpha = Math.min(1, (fabricObject.opacity ?? 1) * LABEL_OPACITY_FACTOR);
 
                 // Pill icons/text must stay screen-axis-aligned for
                 // readability, even though the anchor follows the rotated
@@ -877,67 +946,32 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                // Walk slots, draw glyph + optional count, record local zones.
-                const zones = [];
-                let cursor = x + PAD_X;
-                for (let i = 0; i < slots.length; i++) {
-                    const s = slots[i];
-                    const slotStart = cursor;
-
-                    // Hit-zone covers slot content + half the gap on each side
-                    // (or the pill's padding on the outer edges).
-                    const zoneLeftPad  = i === 0 ? PAD_X : SLOT_GAP / 2;
-                    const zoneRightPad = i === slots.length - 1 ? PAD_X : SLOT_GAP / 2;
-
+                // Draw each slot at the position layoutPill assigned it.
+                for (const s of slots) {
                     if (s.textOnly) {
                         // Read-only metric label — no glyph, muted colour.
                         ctx.font = `600 ${METRIC_FONT}px Arial`;
                         ctx.textAlign = 'left';
                         ctx.textBaseline = 'middle';
                         ctx.fillStyle = '#444';
-                        ctx.fillText(s.text, slotStart, 1);
-                        cursor += s._width;
-                    } else {
-                        // Draw icon
-                        const iconCenterX = slotStart + ICON_SIZE / 2;
-                        ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillStyle = 'black';
-                        ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
-                        cursor += ICON_SIZE;
-
-                        if (s.countText) {
-                            ctx.font = `600 ${METRIC_FONT}px Arial`;
-                            ctx.textAlign = 'left';
-                            ctx.textBaseline = 'middle';
-                            ctx.fillStyle = 'black';
-                            ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
-                            cursor += TEXT_GAP + (s._width - ICON_SIZE);
-                        }
+                        ctx.fillText(s.text, s._start, 1);
+                        continue;
                     }
-
-                    zones.push({
-                        id: s.id,
-                        x0: slotStart - zoneLeftPad,
-                        x1: cursor + zoneRightPad,
-                        onClick: s.onClick,
-                    });
-
-                    cursor += SLOT_GAP;
+                    ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(self._resolveControlGlyph(s.icon), s._start + ICON_SIZE / 2, 1);
+                    if (s.countText) {
+                        ctx.font = `600 ${METRIC_FONT}px Arial`;
+                        ctx.textAlign = 'left';
+                        ctx.fillText(s.countText, s._start + ICON_SIZE + TEXT_GAP, 1);
+                    }
                 }
 
-                control._zones = zones;
                 control._lastLeft = left;
                 control._lastTop = top;
                 control._lastAngle = 0;
-                // Match the hit region to the actual pill so clicks land on
-                // any icon, not just a 34px square in the middle. Fabric uses
-                // sizeX/sizeY for control hit-testing in _findTargetCorner.
-                control.sizeX = bubbleWidth;
-                control.sizeY = HEIGHT;
-                control.touchSizeX = bubbleWidth + 12;
-                control.touchSizeY = HEIGHT + 8;
                 ctx.restore();
             },
         });

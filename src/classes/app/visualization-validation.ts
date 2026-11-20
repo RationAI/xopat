@@ -88,10 +88,15 @@ function tryGetShaderConfigurator(): any | undefined {
 let _ajvValidator: (((value: any) => boolean) & { errors?: any[] }) | undefined;
 let _ajvDisabled = false;
 let _publishedSchemaCache: Record<string, any> | undefined;
+/** The AJV instance behind `_ajvValidator` and the `$id` it compiled — see {@link ownBranchErrors}. */
+let _ajvInstance: any;
+let _ajvSchemaId: string | undefined;
 
 /** Drop the memoized schema + validator. Call after registering shaders at runtime. */
 export function invalidateVisualizationSchemaCache(): void {
     _ajvValidator = undefined;
+    _ajvInstance = undefined;
+    _ajvSchemaId = undefined;
     _ajvDisabled = false;
     _publishedSchemaCache = undefined;
 }
@@ -152,6 +157,8 @@ export function getVisualizationSchemaValidator(): (((value: any) => boolean) & 
         const fullSchema = compileVisualizationConfigSchema();
         const ajv = new AjvCtor({ strict: false, allErrors: true, inlineRefs: false, validateSchema: false });
         _ajvValidator = ajv.compile(fullSchema) as any;
+        _ajvInstance = ajv;
+        _ajvSchemaId = typeof fullSchema?.$id === "string" ? fullSchema.$id : undefined;
         return _ajvValidator!;
     } catch (err) {
         _ajvDisabled = true;
@@ -204,6 +211,7 @@ export function validateVisualizations(visualizations: any[]): VisualizationVali
                 // for the session; findings already collected stay valid.
                 _ajvDisabled = true;
                 _ajvValidator = undefined;
+                _ajvInstance = undefined;
                 skipped = true;
                 warnOnce(
                     "AJV threw during validate (" + String((err as any)?.message || err) +
@@ -215,7 +223,7 @@ export function validateVisualizations(visualizations: any[]): VisualizationVali
             if (!ok) {
                 const raw = (validate as any).errors as any[] | undefined;
                 if (raw) ajvErrors[i] = raw;
-                for (const e of filterOneOfErrorsByDiscriminator(raw, viz)) {
+                for (const e of filterOneOfErrorsByDiscriminator(narrowToOwnBranch(raw, viz), viz)) {
                     const instancePath: string = typeof e?.instancePath === "string" ? e.instancePath : "";
                     issues.push({
                         kind: "schema",
@@ -313,6 +321,66 @@ function collectCouplingIssues(
 /* ------------------------------------------------------------------ *
  * Formatting helpers (shared with the scripting API)
  * ------------------------------------------------------------------ */
+
+/**
+ * What the layer's OWN shader-type branch says about it, or `undefined` when that cannot be
+ * asked (no AJV, no `$id`, unregistered type).
+ *
+ * Asked directly because the answer cannot be recovered from the root validator's errors:
+ * with `inlineRefs: false` every `$ref` is compiled as its own function and reports a
+ * `schemaPath` relative to itself (`#/additionalProperties`), so nothing in an error says
+ * which `oneOf` branch produced it.
+ */
+function ownBranchErrors(layer: any, shaderId: string): any[] | undefined {
+    const layerType = isPlainObject(layer) && typeof layer.type === "string" ? layer.type : undefined;
+    if (!layerType || !_ajvInstance || !_ajvSchemaId || typeof _ajvInstance.getSchema !== "function") {
+        return undefined;
+    }
+    let branch: any;
+    try {
+        // JSON Pointer escaping; shader type names are otherwise URI-safe.
+        const pointer = layerType.replace(/~/g, "~0").replace(/\//g, "~1");
+        branch = _ajvInstance.getSchema(`${_ajvSchemaId}#/$defs/shaderLayers/${pointer}`);
+    } catch (e) {
+        return undefined;
+    }
+    if (typeof branch !== "function") return undefined;
+    if (branch(layer)) return [];
+    return (Array.isArray(branch.errors) ? branch.errors : []).map((e: any) => ({
+        ...e,
+        instancePath: `/shaders/${shaderId}${typeof e?.instancePath === "string" ? e.instancePath : ""}`,
+    }));
+}
+
+/**
+ * Replace each top-level layer's `oneOf` fan-out with the findings of the one branch its
+ * `type` selects. One misplaced key otherwise comes back once per registered shader type —
+ * thirty lines for one layer, the real cause somewhere among them — and a reader (or a model
+ * correcting its own proposal) cannot tell which line applies.
+ *
+ * Errors outside `/shaders/<id>`, and layers whose branch cannot be asked, pass through.
+ */
+function narrowToOwnBranch(errors: any[] | undefined, viz: any): any[] {
+    if (!Array.isArray(errors) || !errors.length) return [];
+    if (!isPlainObject(viz) || !isPlainObject(viz.shaders)) return errors;
+
+    const out: any[] = [];
+    const resolved = new Map<string, any[] | undefined>();
+    for (const e of errors) {
+        const shaderId = shaderIdFromInstancePath(typeof e?.instancePath === "string" ? e.instancePath : "");
+        if (!shaderId || !Object.prototype.hasOwnProperty.call(viz.shaders, shaderId)) {
+            out.push(e);
+            continue;
+        }
+        if (!resolved.has(shaderId)) {
+            const own = ownBranchErrors(viz.shaders[shaderId], shaderId);
+            resolved.set(shaderId, own);
+            if (own) out.push(...own);
+        }
+        if (resolved.get(shaderId) === undefined) out.push(e);
+    }
+    return out;
+}
 
 /**
  * AJV reports `oneOf` failures branch-by-branch: a single typo in a colormap layer

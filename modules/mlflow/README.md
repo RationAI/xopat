@@ -103,6 +103,7 @@ const data = new TextEncoder().encode("hello world");
 await ml.artifacts.uploadBytes(runId, "notes/hello.txt", data, { contentType: "text/plain" });
 const list = await ml.artifacts.list(runId, "notes");
 const text = await ml.artifacts.downloadText(runId, "notes/hello.txt");
+const bytes = await ml.artifacts.downloadBytes(runId, "scans/slice.dcm"); // ArrayBuffer — never read binary as text
 ```
 
 Artifacts inherit the parent's `proxy`/`auth` unless the deployment routes them
@@ -137,6 +138,7 @@ class MyAdapter {
     uploadBytes(run_id, path, bytes) { /* ... */ }
     list(run_id, path) { /* ... */ }
     downloadText(run_id, path) { /* ... */ }
+    downloadBytes(run_id, path) { /* ... ArrayBuffer */ } // optional; required for binary bundle formats
 }
 
 new MlFlowClient({ proxy: "mlflow", baseURL: "/api/2.0/mlflow",
@@ -191,6 +193,12 @@ class RunsAPI {
 - All methods return raw MLflow responses, so you can drill into `info`, `data`, etc.
 - Metric keys are sanitized to the MLflow-safe character set (`sanitizeMetricKey`,
   `utils.mjs`). Reuse it rather than re-implementing it.
+- Run lookups by tag build their search filter with `Utils.buildTagFilter(key, value)`:
+  MLflow strips the surrounding quotes and decodes **no** escapes, so the text is kept
+  verbatim inside a delimiter it does not contain (backtick for the key, `"` or else `'`
+  for the value) and throws when none fits. Use it for any filter built from record or
+  session data — escaping instead makes the lookup miss the tag written on create
+  (duplicate runs), and a hand-rolled quote escape lets the value close the string.
 - `HttpClient` retries 429/5xx with exponential backoff and throws `HTTPError`
   carrying `statusCode`.
 - Targets the MLflow **2.x** REST API (`/experiments/search`, not the 1.x

@@ -87,6 +87,12 @@ export interface CanonicalSyncSession {
     leaderId: string;
     transforms: Record<string, { A: number[]; b: { x: number; y: number }; scale?: number; rotDeg?: number }>;
     flipParity?: Record<string, boolean>;
+    /**
+     * The reference viewer's three hand-picked calibration points (image
+     * pixels), present only when the session was calibrated manually. They are
+     * what a viewer joining later is shown, so it can pick the same three.
+     */
+    leaderPts?: Array<{ x: number; y: number }>;
     /** Viewers that were actively following the session (not just calibrated). */
     enabled?: string[];
 }
@@ -203,6 +209,13 @@ function applyState(target: any, state: any): void {
     if (state.visible !== undefined) target.visible = state.visible ? 1 : 0;
     if (state.use_mode !== undefined) target.params.use_mode = state.use_mode;
     if (state.use_blend !== undefined) target.params.use_blend = state.use_blend;
+    const structural = state.structural === true;
+    for (const key of ["use_gamma", "use_exposure", "use_logscale"]) {
+        if (state[key] !== undefined) target.params[key] = state[key];
+        else if (structural) delete target.params[key];
+    }
+    if (isObject(state.pipeline)) target.params.pipeline = deepClone(state.pipeline);
+    else if (structural) delete target.params.pipeline;
 }
 
 function mergeRuntimeIntoStructuralShader(
@@ -525,12 +538,26 @@ function snapshotSyncSession(viewers: any[]): CanonicalSyncSession | undefined {
     }
     if (!Object.keys(transforms).length) return undefined;
 
+    const leaderPts = sanitizeLeaderPoints(session.leaderPts);
     return {
         leaderId: session.leaderId,
         transforms,
         flipParity: { ...(session.flipParity || {}) },
+        ...(leaderPts ? { leaderPts } : {}),
         enabled: viewers.filter(v => v?.scalebar?.ViewportSyncAPI?.isEnabled?.()).map(v => v.uniqueId),
     };
+}
+
+/** Exactly three finite points, or nothing — a scene is untrusted input. */
+function sanitizeLeaderPoints(pts: unknown): Array<{ x: number; y: number }> | null {
+    if (!Array.isArray(pts) || pts.length !== 3) return null;
+    const out: Array<{ x: number; y: number }> = [];
+    for (const p of pts) {
+        if (!p || typeof p.x !== "number" || typeof p.y !== "number") return null;
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+        out.push({ x: p.x, y: p.y });
+    }
+    return out;
 }
 
 function restoreSyncSession(sync: CanonicalSyncSession, viewers: any[]): void {
@@ -542,7 +569,7 @@ function restoreSyncSession(sync: CanonicalSyncSession, viewers: any[]): void {
     api.constructor._session = {
         context: 0,
         leaderId: sync.leaderId,
-        leaderPts: null,
+        leaderPts: sanitizeLeaderPoints(sync.leaderPts),
         transforms: {},
         flipParity: { ...(sync.flipParity || {}) },
     };

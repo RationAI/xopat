@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "OpenAI + Anthropic chat loaded at startup, voice dictation via the chat provider — the standalone default",
+    "env": {
+      "ANTHROPIC_API_KEY": "Anthropic API key held by the server",
+      "OPENAI_API_KEY": "OpenAI API key held by the server"
+    },
     "dimension": "chat",
     "requires": []
   },

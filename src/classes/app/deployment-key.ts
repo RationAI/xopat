@@ -139,7 +139,7 @@ export function initDeploymentKey(
  * an unscoped (and therefore refused) entry rather than a match.
  */
 export function deploymentKey(): string {
-    return _cached ?? (window as any).XOPAT_DEPLOYMENT_KEY ?? "";
+    return _cached ?? (typeof window !== "undefined" ? (window as any).XOPAT_DEPLOYMENT_KEY : undefined) ?? "";
 }
 
 /**
@@ -156,9 +156,13 @@ export function pluginsCookieKey(): string {
 /** The pre-scoping cookie name, deleted once on first boot after the upgrade. */
 export const LEGACY_PLUGINS_COOKIE = "_plugins";
 
-(window as any).XOpatDeploymentKey = {
-    resolve: resolveDeploymentKey,
-    init: initDeploymentKey,
-    get: deploymentKey,
-    pluginsCookieKey,
-};
+// Guarded: the IO pipeline imports this module, and it is also loaded outside a
+// browser (Node tests, workers) where there is no `window` to publish onto.
+if (typeof window !== "undefined") {
+    (window as any).XOpatDeploymentKey = {
+        resolve: resolveDeploymentKey,
+        init: initDeploymentKey,
+        get: deploymentKey,
+        pluginsCookieKey,
+    };
+}

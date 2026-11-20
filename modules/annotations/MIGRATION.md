@@ -51,6 +51,12 @@ For 99% of UI code, the sync `result.ok` check is enough. The toast + `io:refuse
 
 `OSDAnnotations.Preset.fromJSONFriendlyObject(parsedObject, context)` keeps a preset whose `factoryID` is unknown (after `resolveFactoryID` migration): it renders with the **polygon factory as a stand-in**, records the original id in `preset._factoryIDOverride`, and `toJSONFriendlyObject()` round-trips the original `factoryID` unchanged on re-export. A warning toast (`annotations.presets.unknownFactory`) surfaces the substitution. Annotations referencing the preset keep their class/color binding instead of dangling. (This replaces both the legacy *silent* polygon fallback and the interim strict-throw behavior.)
 
+### 3a. The drawing tool is no longer the preset's factory
+
+A click used to draw with `presets.left/right.objectFactory`, so selecting another class changed the shape. The shape is now the module's **active factory** — `getActiveFactory()` / `setActiveFactory(factoryOrId)`, event `active-factory-change` — shared by both mouse buttons, remembered across sessions, and untouched by `selectPreset`.
+
+`Preset.objectFactory` (wire `factoryID`) is **deprecated**: still imported, exported and round-tripped, but it only seeds the tool when none was chosen yet (and remains the fallback type of the scripting `createAnnotation`). Code that assigned `preset.objectFactory` to make the canvas draw a shape must call `setActiveFactory` instead; code that read it to learn what a click draws must call `getActiveFactory()`.
+
 ### 3b. `PresetManager.import` merge mode
 
 `PresetManager.import(presets, options)` now takes `{ mode: 'merge' | 'replace' }` (boolean still accepted: `true` → replace, `false`/undefined → merge). **Merge** upserts by `presetID` and never deletes — it is the slide-hydration semantics (per-slide snapshots may only add to the session-global palette). **Replace** is the exact-restore semantics for user file imports and history undo. Note the old `clear=false` behavior additionally deleted *unused* presets — that deletion is gone; merge never removes anything.
