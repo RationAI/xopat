@@ -616,10 +616,6 @@ OSD.Scalebar.prototype = {
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
-                    rotReadout.type = "number";
-                    rotReadout.min = "-180";
-                    rotReadout.max = "180";
-                    rotReadout.step = "1";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -628,8 +624,8 @@ OSD.Scalebar.prototype = {
 
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(readoutField(rotReadout, "°", 28), rotSliderContainer);
-                    this.magnificationContainer.appendChild(rotCol);
+                    rotCol.append(readoutField(rotReadout, "°", 26), rotSliderContainer);
+                    this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += ' noUi-reverse';
                     noUiSlider.create(rotSliderContainer, {
@@ -795,11 +791,6 @@ OSD.Scalebar.prototype = {
                     this._ui.collapsibles.push(magCol);
 
                     const magInput = document.createElement("input");
-                    magInput.type = "number";
-                    magInput.inputMode = "decimal";
-                    magInput.step = "0.1";
-                    magInput.min = String(minMag);
-                    magInput.max = String(maxMag);
                     magInput.title = window.$.t('main.scalebar.magnificationHint');
 
                     const magField = readoutField(magInput, "×", 28);
@@ -810,7 +801,7 @@ OSD.Scalebar.prototype = {
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
 
-                    this.magnificationContainer.appendChild(magCol);
+                    this._ui.slidersBox.appendChild(magCol);
                     // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
                     this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 
@@ -1018,10 +1009,6 @@ OSD.Scalebar.prototype = {
                     this._ui.collapsibles.push(rotCol);
 
                     const rotReadout = document.createElement("input");
-                    rotReadout.type = "number";
-                    rotReadout.min = "-180";
-                    rotReadout.max = "180";
-                    rotReadout.step = "1";
                     rotReadout.title = window.$.t('main.scalebar.rotationHint');
                     rotReadout.value = `${Math.round(toSignedRotation(viewport.getRotation()))}`;
 
@@ -1029,8 +1016,8 @@ OSD.Scalebar.prototype = {
                     rotSliderContainer.className = "relative flex-1 w-1.5 my-2 self-end";
                     this._ui.rotSliderEl = rotSliderContainer;
 
-                    rotCol.append(readoutField(rotReadout, "°", 28), rotSliderContainer);
-                    this.magnificationContainer.appendChild(rotCol);
+                    rotCol.append(readoutField(rotReadout, "°", 26), rotSliderContainer);
+                    this._ui.slidersBox.insertBefore(rotCol, this._ui.resetCol);
 
                     noUiSlider.cssClasses.target += " noUi-reverse";
                     noUiSlider.create(rotSliderContainer, {
@@ -1149,7 +1136,7 @@ OSD.Scalebar.prototype = {
                     magCol.appendChild(sliderWrap);
                     sliderWrap.appendChild(sliderContainer);
 
-                    this.magnificationContainer.appendChild(magCol);
+                    this._ui.slidersBox.appendChild(magCol);
                     // Panel before the bar: row order [controls][bar], column order [panel]/[bar].
                     this.dock.insertBefore(this.magnificationContainer, this.scalebarContainer);
 

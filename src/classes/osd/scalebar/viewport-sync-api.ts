@@ -200,7 +200,7 @@ class ViewportSyncAPI {
             } else {
                 // First calibrated viewer defines the reference image space only.
                 this.__ui?.setProgress?.("0/3");
-                const refPts = await this.calibrateViewer(this.master);
+                const refPts = await this.calibrateViewer(this.master, { messageKey: opts.messageKey });
 
                 S.leaderId = selfId;
                 S.leaderPts = refPts;
@@ -348,9 +348,14 @@ class ViewportSyncAPI {
      * own three, so those are shown (numbered, zoomed to) while this viewer
      * picks. A session without them — built by automatic registration, or
      * restored from a scene that predates stored points — has nothing to
-     * show: it is discarded and the reference is calibrated afresh, since
-     * hand-picked reference points and automatic transforms of the other
-     * viewers would no longer describe the same alignment.
+     * show, so the order flips: this viewer, the one the user acted on,
+     * picks first, and the reference then marks the same three with this
+     * viewer's markers as the guide. Those become the session's reference
+     * points for later joiners.
+     *
+     * Either way only this viewer's transform changes. Every transform maps
+     * the reference image space to one viewer, so the alignment of the other
+     * viewers — automatic or manual — is untouched by how this one was made.
      */
     async _manualCalibrate() {
         let S = this._getSession();
@@ -360,32 +365,35 @@ class ViewportSyncAPI {
         const refApi = refViewer?.scalebar?.ViewportSyncAPI;
         if (!refViewer || !refApi) throw new Error("Sync reference viewer unavailable");
 
-        if (!S.leaderPts) {
-            // Pick first, discard second: cancelling the picker must not
-            // cost the user the alignment they already have.
-            refApi.__ui?.setProgress?.("0/3");
-            const refPts = await refApi.calibrateViewer(refViewer);
-            const refWasEnabled = refApi.isEnabled();
+        this.__ui?.setProgress?.("0/3");
+        let tgtPts;
+        if (S.leaderPts) {
+            const hideReferencePoints = this._showReferencePoints(refViewer, S.leaderPts);
+            try {
+                tgtPts = await this.calibrateViewer(this.master, { messageKey: 'sync.pickMatchingPoints' });
+            } finally {
+                hideReferencePoints();
+            }
+        } else {
+            tgtPts = await this.calibrateViewer(this.master, { messageKey: 'sync.pickPointsThenReference' });
 
-            this.resetSession();
+            const hideOwnPoints = this._showReferencePoints(this.master, tgtPts);
+            // The pick now runs on the reference viewer, but this is still
+            // this viewer's calibration: its own cancel must reach it.
+            this._activeCalibrationCancel = () => refApi.cancelCalibration();
+            let refPts;
+            try {
+                refPts = await refApi.calibrateViewer(refViewer, { messageKey: 'sync.pickMatchingOnReference' });
+            } finally {
+                this._activeCalibrationCancel = null;
+                hideOwnPoints();
+            }
+
+            // Two awaits later the session may be a different one.
             S = this._getSession();
-            S.leaderId = refId;
+            if (S.leaderId !== refId) throw new Error("Calibration cancelled");
             S.leaderPts = refPts;
             refApi.points.set(refId, refPts);
-            this._storeViewerTransform(refId, this._identityTransform());
-            this._setFlipParity(refId, false);
-            delete this._pendingManual()[refId];
-            // The reference was just calibrated, so this only re-links it.
-            if (refWasEnabled) await refApi.enable({ mode: "auto", allowManual: false });
-        }
-
-        this.__ui?.setProgress?.("0/3");
-        const hideReferencePoints = this._showReferencePoints(refViewer, S.leaderPts);
-        let tgtPts;
-        try {
-            tgtPts = await this.calibrateViewer(this.master, { messageKey: 'sync.pickMatchingPoints' });
-        } finally {
-            hideReferencePoints();
         }
         this.points.set(selfId, tgtPts);
 
@@ -492,6 +500,12 @@ class ViewportSyncAPI {
     /**
      * Align every open viewer automatically against one reference (the
      * active viewer by default). Used by the Tools menu.
+     *
+     * Starts from a clean session: "align everything" is a request to
+     * recompute, so an existing alignment — hand-picked points included —
+     * is replaced rather than kept wherever one happens to exist. Joining
+     * on top of it would also mix automatic transforms with a reference
+     * space defined by somebody's three clicks.
      * @return {Promise<{aligned:number, failed:number, approximate:number}>}
      */
     static async autoSyncAll(referenceViewer = null) {
@@ -502,6 +516,12 @@ class ViewportSyncAPI {
         const reference = referenceViewer && viewers.includes(referenceViewer)
             ? referenceViewer
             : (window.VIEWER_MANAGER?.get?.() || viewers[0]);
+
+        // Also unlinks everyone and hands each viewer its own rotation back,
+        // so registration below starts from unposed viewers. It arms a manual
+        // re-align on every viewer; `allowManual: false` below overrides that
+        // for the batch, and it stays armed only where automation failed.
+        reference.scalebar.ViewportSyncAPI.resetSession();
 
         // Reference first so the session's reference space is its image space.
         const ordered = [reference, ...viewers.filter(v => v !== reference)];
@@ -538,6 +558,42 @@ class ViewportSyncAPI {
                 result.aligned++;
                 if (r.approximate) result.approximate++;
             }
+        }
+        return result;
+    }
+
+    /**
+     * Calibrate every open viewer by hand, in viewport order: the first one
+     * defines the reference points, each further one marks the same three.
+     * Used by the Tools menu; the per-viewer control calibrates one viewer.
+     *
+     * Replaces the session, like `autoSyncAll`. A cancelled pick rejects with
+     * the picker's "cancelled" error; viewers calibrated before it stay linked.
+     * @return {Promise<{aligned:number, total:number}>}
+     */
+    static async manualSyncAll() {
+        const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(v => v?.scalebar?.ViewportSyncAPI);
+        const result = { aligned: 0, total: viewers.length };
+        if (viewers.length < 2) return result;
+
+        viewers[0].scalebar.ViewportSyncAPI.resetSession();
+
+        for (const [index, viewer] of viewers.entries()) {
+            const api = viewer.scalebar.ViewportSyncAPI;
+            // Point the user at the viewport that is waiting for clicks.
+            window.VIEWER_MANAGER?.setActive?.(viewer, 'manual');
+            // Busy, so the viewer's own button cancels rather than toggles.
+            api.__ui?.setBusy?.(true);
+            try {
+                await api.enable({
+                    mode: "manual",
+                    messageKey: index === 0 ? 'sync.pickPointsFirst' : undefined,
+                });
+            } finally {
+                api.__ui?.setBusy?.(false);
+                api.__ui?.setProgress?.("");
+            }
+            result.aligned++;
         }
         return result;
     }

@@ -253,8 +253,12 @@ function readoutField(input, unit, inputWidth) {
     input.style.color = "inherit";
     input.style.fontSize = "inherit";
     input.style.textAlign = unit ? "right" : "center";
-    // The unit takes the place of the spinner; arrow keys still step.
-    input.style.appearance = "textfield";
+    // A text field, not `type=number`: the browser's spin buttons appear on
+    // hover, cover the value in a box this narrow, and cannot be switched off
+    // without a stylesheet. Callers parse and clamp the value themselves.
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.autocomplete = "off";
     box.appendChild(input);
 
     if (unit) {
@@ -459,14 +463,49 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
     scalebar._ui.collapsedOnly = scalebar._ui.collapsedOnly || [];
 
-    // Single inline strip along the bottom of the magnification panel, under
-    // the sliders: [▾] [SYNC|menu] [viewer controls] [LABEL]. It is a flow
-    // child in both panel states (see `_applyCollapsed`), so the panel is
-    // always at least as wide as the strip — hung off the panel's top edge as
-    // an absolute box it used to stick out past the right side — and the
-    // controls stay in the same place when the panel collapses onto them.
+    // The container itself is only a transparent stack of two independently
+    // sized boxes: the slider panel (slim, as wide as its two sliders) and,
+    // under it, the control strip (as wide as its buttons). Sharing one
+    // background forced the panel to the strip's width. Pointer events are
+    // taken by the boxes, not the stack, so the gap beside the narrower one
+    // still reaches the canvas.
+    magnificationContainer.classList.remove("bg-base-200", "rounded-lg", "pt-2", "items-stretch", "pointer-events-auto");
+    magnificationContainer.style.height = "auto";
+    magnificationContainer.style.pointerEvents = "none";
+    magnificationContainer.style.gap = "0.25rem";
+
+    // Slider panel: [rotation] [reset] [zoom]. The scalebar inserts its two
+    // slider columns around `resetCol`.
+    const slidersBox = document.createElement("div");
+    slidersBox.className = "relative flex flex-row items-stretch bg-base-200 rounded-lg pt-2 pointer-events-auto";
+    slidersBox.style.height = `${scalebar.magnificationContainerHeight}px`;
+    magnificationContainer.appendChild(slidersBox);
+    scalebar._ui.slidersBox = slidersBox;
+    scalebar._ui.collapsibles.push(slidersBox);
+
+    const resetCol = document.createElement("div");
+    resetCol.className = "flex flex-col items-center";
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "btn btn-xs btn-ghost border-none px-1";
+    reset.style.height = "24px";
+    reset.style.minHeight = "24px";
+    reset.title = window.$.t('main.scalebar.resetView');
+    reset.setAttribute("aria-label", reset.title);
+    reset.innerHTML = '<i class="ph-light ph-arrow-counter-clockwise" style="font-size:12px;line-height:1"></i>';
+    reset.addEventListener("click", () => {
+        viewer.viewport.setRotation(0);
+        viewer.viewport.goHome();
+    });
+    resetCol.appendChild(reset);
+    slidersBox.appendChild(resetCol);
+    scalebar._ui.resetCol = resetCol;
+
+    // Single inline strip under the slider panel:
+    // [▾] [SYNC|menu] [viewer controls] [LABEL]. A flow child in both panel
+    // states, so the controls stay put when the panel collapses onto them.
     const header = document.createElement("div");
-    header.className = "relative flex flex-row items-center justify-between gap-2";
+    header.className = "relative flex flex-row items-center gap-2 pointer-events-auto";
     header.style.zIndex = "3";
     magnificationContainer.appendChild(header);
     scalebar._ui.header = header;
@@ -740,12 +779,6 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
             if (el) el.style.display = c ? "" : "none";
         }
         scalebar._applyDockLayout?.();
-        // The bar's length is the measurement and cannot follow the panel,
-        // so the panel follows the bar: never narrower than its shortest
-        // state, which is what it sits on most of the time.
-        const barMin = scalebar.minWidth;
-        magnificationContainer.style.minWidth = c ? ""
-            : (typeof barMin === "number" ? `${barMin}px` : (barMin || ""));
         // Cancel any in-flight hover-scale on the label.
         closeLabelPopover();
         labelEl.style.transform = "";
@@ -753,45 +786,13 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         labelEl.style.zIndex = "";
         // Collapsed mode hides everything except the chevron + SYNC + label.
         placeLabel();
-        if (c) {
-            // Only the strip is left: the container is a plain flex row
-            // that collapses to the strip's natural height. The scalebar's
-            // refreshHandler then drops it just above the bar.
-            header.style.gridColumn = "";
-            header.style.gridRow = "";
-            header.style.padding = "";
-            magnificationContainer.classList.remove("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
-            magnificationContainer.classList.add("items-center");
-            magnificationContainer.style.display = "";
-            magnificationContainer.style.gridTemplateRows = "";
-            magnificationContainer.style.gridTemplateColumns = "";
-            magnificationContainer.style.justifyContent = "";
-            magnificationContainer.style.height = "auto";
-            magnificationContainer.style.background = "transparent";
-            toggle.title = window.$.t('main.scalebar.expand');
-            toggle.firstChild.textContent = "▴";
-        } else {
-            // Expanded: a grid — slider columns in the first row (their own
-            // fixed height), the strip spanning the second. Grid rather than
-            // the container's flex row because an auto-width grid sizes to its
-            // widest row, which is what keeps the strip inside the panel.
-            header.style.gridColumn = "1 / -1";
-            header.style.gridRow = "2";
-            header.style.padding = "0 0.25rem 0.25rem";
-            magnificationContainer.classList.add("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
-            magnificationContainer.classList.remove("items-center");
-            magnificationContainer.style.display = "grid";
-            magnificationContainer.style.gridTemplateRows = `${scalebar.magnificationContainerHeight}px auto`;
-            // Explicit: `1 / -1` on the strip spans the explicit grid only.
-            magnificationContainer.style.gridTemplateColumns = "auto auto";
-            // Extra width the strip claims goes between the two columns, not
-            // into them: the sliders keep their own width.
-            magnificationContainer.style.justifyContent = "space-between";
-            magnificationContainer.style.height = "auto";
-            magnificationContainer.style.background = "";
-            toggle.title = window.$.t('main.scalebar.minimize');
-            toggle.firstChild.textContent = "▾";
-        }
+        // Collapsed only the strip is left (the slider panel is a
+        // collapsible); expanded the panel stacks above it, each at its own
+        // width, left edges aligned.
+        magnificationContainer.style.flexDirection = c ? "row" : "column";
+        magnificationContainer.style.alignItems = c ? "center" : "flex-start";
+        toggle.title = window.$.t(c ? 'main.scalebar.expand' : 'main.scalebar.minimize');
+        toggle.firstChild.textContent = c ? "▴" : "▾";
         // The quick-zoom pass skips itself while expanded and only reruns on a
         // rendered frame; an idle viewer would otherwise show a stale row until
         // the user moves.
