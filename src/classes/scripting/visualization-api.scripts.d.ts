@@ -419,6 +419,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * provider is configured, so treat a null as "ask the user" rather than as an error.
      *
      * Sends the rendered view to the configured model provider.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     critiqueCurrentRendering(
         question?: string,
@@ -571,6 +575,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * Renders the current viewport with a temporary standalone visualization configuration and returns a PNG data URL.
      * For transient rendering, tiledImages should already resolve against the active viewer, or dataReferences must map to
      * data already present in the current session.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentViewportPng(
         visualization: VisualizationLayerSource,
@@ -579,6 +587,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
 
     /**
      * Renders the current viewport with a temporary standalone visualization configuration and returns raw RGBA pixels.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentViewportPixels(
         visualization: VisualizationLayerSource,
@@ -588,6 +600,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Renders the current viewport's BACKGROUND image only (no data/visualization overlay) at the live
      * zoom/pan and returns a PNG data URL. Use this to read the raw slide when the overlay must be excluded.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentBackgroundPng(options?: VisualizationViewportRenderOptions): Promise<string>;
 
@@ -598,6 +614,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * This reads the LIVE viewport, so it never waits for tiles: `isComplete` is false whenever the
      * view was still streaming. Check it before measuring or caching anything derived from these
      * pixels — a mask computed over a half-loaded viewport describes the cache, not the slide.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentBackgroundPixels(options?: VisualizationViewportRenderOptions): Promise<VisualizationViewportPixelsResult>;
 
@@ -613,6 +633,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * cannot carry that and a partial render is indistinguishable from a real one. Pass
      * `onIncomplete: "allow"` to accept partial pixels, or call {@link renderRegionPngDetailed} to
      * receive the flag and decide yourself.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string>;
 
@@ -623,6 +647,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * `stalled` means the tile wait gave up because nothing further could arrive (e.g. the missing
      * tiles 404) rather than because it ran out of time; it is always false on a flex-renderer that
      * does not wait. Only `isComplete && !stalled` is a faithful read of the region.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
@@ -632,6 +660,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * Renders an arbitrary image region off-screen and returns raw RGBA pixels plus `isComplete`
      * (false when the render did not have every tile of the region). Never moves the user's
      * viewport. Always check `isComplete` before treating the pixels as the region.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult>;
 

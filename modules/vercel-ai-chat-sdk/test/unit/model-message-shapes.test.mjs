@@ -41,7 +41,7 @@ async function loadServerModule(name) {
     return import(pathToFileURL(outfile).href);
 }
 
-const { toModelMessage } = await loadServerModule("model-messages");
+const { toModelMessage, conversationMediaKinds, mediaUnsupportedKind } = await loadServerModule("model-messages");
 const { createGuardedDownload } = await loadServerModule("asset-download");
 const { generateText, streamText } = await import("ai");
 
@@ -139,6 +139,40 @@ test("media is replaced by text when the model cannot take it @unit", async () =
 
     expect(parts.some((p) => p.type === "file")).toBe(false);
     expect(parts.map((p) => p.text).join(" ")).toContain("Image omitted");
+});
+
+test("media is sent when support is unknown — the model's rejection decides @unit", async () => {
+    // Most OpenAI-compatible providers never state input modalities. Treating that silence
+    // as "unsupported" disabled screenshots for multimodal models.
+    const parts = await promptPartsFor(
+        userMessage([{ type: "image", mimeType: "image/png", dataUrl: PNG_DATA_URL, name: "shot.png" }]),
+        { text: "supported", images: "unknown", files: "unknown", source: "default" },
+    );
+
+    expect(parts.some((p) => p.type === "file" && String(p.mediaType).startsWith("image/"))).toBe(true);
+});
+
+test("conversationMediaKinds tells images from other files @unit", () => {
+    const kinds = conversationMediaKinds([
+        { role: "user", content: [{ type: "file", mediaType: "image/png", data: new Uint8Array(1) }] },
+        { role: "user", content: "plain text" },
+    ]);
+    expect([...kinds]).toEqual(["images"]);
+    expect([...conversationMediaKinds([
+        { role: "user", content: [{ type: "file", mediaType: "application/pdf", data: new Uint8Array(1) }] },
+    ])]).toEqual(["files"]);
+});
+
+test("mediaUnsupportedKind recognizes a media refusal, and only for media that was sent @unit", () => {
+    const both = new Set(["images", "files"]);
+    const images = new Set(["images"]);
+    expect(mediaUnsupportedKind(new Error("Invalid request: image input is not supported by this model"), images)).toBe("images");
+    expect(mediaUnsupportedKind({ message: "Bad Request", responseBody: '{"error":"image_url is not supported for this model"}' }, images)).toBe("images");
+    expect(mediaUnsupportedKind(new Error("'file part media type text/plain' functionality not supported."), both)).toBe("files");
+    // Refusal phrase without a media word, or media the turn never carried: not ours to judge.
+    expect(mediaUnsupportedKind(new Error("tool_choice is unsupported"), both)).toBe(null);
+    expect(mediaUnsupportedKind(new Error("image input is not supported"), new Set())).toBe(null);
+    expect(mediaUnsupportedKind(new Error("400 Bad Request"), both)).toBe(null);
 });
 
 test("the system prompt travels as instructions, not as a message @unit", async () => {

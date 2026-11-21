@@ -685,6 +685,17 @@ export interface FmDriver {
     id: string;
     label?: string;
     local?: boolean;
+    /**
+     * A last-resort driver: chosen for a feature only when no other registered driver
+     * implements it (an explicit `driver` id still picks it). The built-in `assistant`
+     * analyze driver is one — a dedicated vision provider, when present, wins.
+     */
+    fallback?: boolean;
+    /**
+     * Whether the driver can serve right now (e.g. a model is selected). Drivers without it
+     * are always available. An unavailable fallback is skipped by automatic resolution.
+     */
+    isAvailable?: () => boolean;
     config?: Record<string, unknown>;
     features: {
         "tissue-mask"?: (input: TissueMaskInput) => Promise<MaskResult>;
@@ -713,6 +724,10 @@ export interface PathologyDriverInfo {
     id: string;
     label: string;
     local: boolean;
+    /** Last-resort driver (see {@link FmDriver.fallback}). */
+    fallback: boolean;
+    /** Can serve right now. */
+    available: boolean;
     features: PathologyFeature[];
 }
 
@@ -720,6 +735,8 @@ export interface ResolvedDriverInfo {
     id: string;
     label: string;
     local: boolean;
+    /** The built-in fallback that runs on the chat assistant's own model. */
+    fallback: boolean;
 }
 
 export interface TissueMaskSummary {
@@ -1678,25 +1695,88 @@ class VercelAnalyzeDriver implements FmDriver {
         if (!scope?.runVisionInference) {
             throw new Error(`The "${this._scopeId}" module is not available; cannot use vercel driver "${this.id}".`);
         }
-        const base64 = await blobToBase64(input.imageBlob);
-        const res = await scope.runVisionInference({
-            providerId: this._providerId,
-            model: this._model,
-            system: this._system,
-            prompt: input.prompt,
-            imageBase64: base64,
-            mediaType: "image/png",
-            // Diagnostics only — the server logs it beside the image and never
-            // puts it in the model's message. This is what turns a logged vision
-            // call from an anonymous PNG into "region 2.1 of this slide, read at
-            // 1.6 µm/px".
-            context: input.context,
-        }, {
-            // Yield connection slots to interactive tile loading — bounded per
-            // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
-            priority: "background",
-        });
-        return { text: typeof res?.text === "string" ? res.text : "" };
+        return callVisionInference(scope, this._providerId, this._model, this._system, input);
+    }
+}
+
+/**
+ * One stateless vision call through the vercel-ai-chat-sdk `runVisionInference` RPC — shared
+ * by the configured `vercel` drivers and the built-in `assistant` fallback.
+ */
+async function callVisionInference(
+    scope: any, providerId: string, model: string | null | undefined, system: string | undefined, input: AnalyzeInput
+): Promise<AnalyzeResult> {
+    const base64 = await blobToBase64(input.imageBlob);
+    const res = await scope.runVisionInference({
+        providerId,
+        model,
+        system,
+        prompt: input.prompt,
+        imageBase64: base64,
+        mediaType: "image/png",
+        // Diagnostics only — the server logs it beside the image and never
+        // puts it in the model's message. This is what turns a logged vision
+        // call from an anonymous PNG into "region 2.1 of this slide, read at
+        // 1.6 µm/px".
+        context: input.context,
+    }, {
+        // Yield connection slots to interactive tile loading — bounded per
+        // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
+        priority: "background",
+    });
+    return { text: typeof res?.text === "string" ? res.text : "" };
+}
+
+/**
+ * The `analyze` driver of last resort: the chat assistant's OWN model, called session-less.
+ *
+ * A deployment without a dedicated pathology vision provider (no MedGemma, no configured
+ * `vercel` driver) used to have no analyze driver at all, so every look at the slide failed.
+ * The assistant may well be multimodal, and a one-shot call — the region image, the
+ * pathology prompt, no chat history — costs far less than putting images into the
+ * conversation. It is `fallback: true`, so a dedicated provider always wins automatic
+ * resolution, and `local: false`, so it is consented like any other remote driver.
+ *
+ * Resolved per call: the assistant can switch models mid-session.
+ */
+class AssistantAnalyzeDriver implements FmDriver {
+    id = "assistant";
+    /** Translated at read time: the dialog and the model both see it, after i18n is up. */
+    get label(): string {
+        return $.t("pathology.assistantDriverLabel");
+    }
+    local = false;
+    fallback = true;
+    features: FmDriver["features"];
+
+    constructor() {
+        this.features = { "analyze": (input) => this._analyze(input) };
+    }
+
+    private _target(): { scope: any; providerId: string; modelId: string | null; images: string } | null {
+        const chat = (globalThis as any).singletonModule?.("vercel-ai-chat-sdk");
+        const ref = chat?.getAssistantTextModel?.();
+        const scope = (window as any).xserver?.module?.["vercel-ai-chat-sdk"];
+        if (!ref?.providerId || !scope?.runVisionInference) return null;
+        return { scope, providerId: ref.providerId, modelId: ref.modelId ?? null, images: ref.images || "unknown" };
+    }
+
+    isAvailable(): boolean {
+        const target = this._target();
+        return !!target && target.images !== "unsupported";
+    }
+
+    private async _analyze(input: AnalyzeInput): Promise<AnalyzeResult> {
+        const target = this._target();
+        if (!target) {
+            throw new Error("The \"assistant\" driver needs a chat model selected in the chat panel.");
+        }
+        if (target.images === "unsupported") {
+            throw new Error("The \"assistant\" driver cannot read images: the selected chat model does not accept image input.");
+        }
+        return callVisionInference(
+            target.scope, target.providerId, target.modelId, $.t("pathology.assistantDriverSystem"), input
+        );
     }
 }
 
@@ -1809,6 +1889,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             },
         });
 
+        // Last-resort analyze driver: the chat assistant's own model (see AssistantAnalyzeDriver).
+        this.registerDriver(new AssistantAnalyzeDriver());
+
         // Configured transports: { "<id>": { type:"http"|"vercel", ... } }.
         const drivers = this.getStaticMeta("drivers", {}) as Record<string, any>;
         for (const [id, cfg] of Object.entries(drivers || {})) {
@@ -1852,6 +1935,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             id: d.id,
             label: d.label || d.id,
             local: !!d.local,
+            fallback: !!d.fallback,
+            available: d.isAvailable ? d.isAvailable() : true,
             features: Object.keys(d.features).filter(
                 k => typeof (d.features as any)[k] === "function"
             ) as PathologyFeature[],
@@ -1875,9 +1960,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             const d = this._drivers.get(preferred);
             if (d && typeof d.features[feature] === "function") return d;
         }
-        for (const d of this._drivers.values()) {
-            if (typeof d.features[feature] === "function") return d;
-        }
+        // Dedicated drivers first; a fallback (the assistant's own model) only when none
+        // implements the feature, and only when it can serve right now.
+        const candidates = Array.from(this._drivers.values())
+            .filter(d => typeof d.features[feature] === "function");
+        const dedicated = candidates.find(d => !d.fallback);
+        if (dedicated) return dedicated;
+        const fallback = candidates.find(d => d.fallback && (d.isAvailable ? d.isAvailable() : true));
+        if (fallback) return fallback;
         // Name what IS here. A bare "feature X is missing" tells a caller nothing about what to
         // do next, so an agent's only move is to guess at another call and spend a turn finding
         // out that one is missing too — the inventory is what turns one dead end into a choice.
@@ -1888,9 +1978,36 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         );
     }
 
+    /**
+     * Run a driver's `analyze`, naming the way out when a DEDICATED driver fails.
+     *
+     * There is no silent switch to another driver: the user consented to sending pixels to a
+     * specific model, and a different one is a different decision. But a bare upstream error
+     * leaves the assistant guessing, so the error says what it can do instead — use the
+     * built-in `assistant` driver (itself, session-less), or render the region and look.
+     */
+    private async _invokeAnalyze(driver: FmDriver, input: AnalyzeInput): Promise<AnalyzeResult> {
+        try {
+            return await driver.features["analyze"]!(input);
+        } catch (error: any) {
+            const fallback = this._drivers.get("assistant");
+            const aborted = error?.name === "AbortError";
+            if (aborted || driver.fallback || !fallback?.isAvailable?.()) throw error;
+            const message = String(error?.message || error);
+            const wrapped: any = new Error(
+                `${message} — the "${driver.id}" analyze driver failed. You can retry with ` +
+                `{ driver: "assistant" } (that is YOU: your own model, called once with the region ` +
+                `image and no conversation history), or render the region with ` +
+                `visualization.renderRegionPng and look at it yourself.`
+            );
+            wrapped.cause = error;
+            throw wrapped;
+        }
+    }
+
     describeDriverForFeature(feature: PathologyFeature, driverId?: string | null): ResolvedDriverInfo {
         const d = this.getDriverForFeature(feature, driverId);
-        return { id: d.id, label: d.label || d.id, local: !!d.local };
+        return { id: d.id, label: d.label || d.id, local: !!d.local, fallback: !!d.fallback };
     }
 
     // ---- tissue jobs (built on the `tissue-mask` feature) ----
@@ -2312,7 +2429,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: null });
         let text: string | null = null;
         try {
-            const res = await driver.features["analyze"]!({
+            const res = await this._invokeAnalyze(driver, {
                 imageBlob: composite.blob,
                 prompt: [...this._contextPreamble(context, this._montageFacts(cellSizeUm, composite), 0, null), prompt].join(" "),
                 // A montage is many non-adjacent fields in one image, so there is no
@@ -5399,7 +5516,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         });
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: context.region });
         try {
-            const res = await driver.features["analyze"]!({ imageBlob, prompt, context });
+            const res = await this._invokeAnalyze(driver, { imageBlob, prompt, context });
             return {
                 driver: driver.id,
                 findings: res?.text ?? null,
@@ -6245,6 +6362,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 getActiveViewerContextId: () => uid,
                 activeViewerContextId: uid,
                 isConsentDialogBypassed: () => false,
+                // These renders feed this module's own drivers. Pixels only leave the
+                // browser through a remote driver, and the scripting adapter asks for that
+                // (`_consentIfRemote`) — a second core pixel-read prompt per render would
+                // ask the same question again, once per field of a walk.
+                pixelReadPreapproved: true,
             },
         });
     }

@@ -2,7 +2,8 @@ import { generateText, streamText, tool, jsonSchema } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts, assertLanguageModelCompatible } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError, errorText } from './abort-utils';
 import { getChatTuning, chatLog } from './tuning';
-import { toModelMessage, coerceMessageText, isContentlessAssistantMessage } from './model-messages';
+import { toModelMessage, coerceMessageText, isContentlessAssistantMessage, conversationMediaKinds, mediaUnsupportedKind } from './model-messages';
+import type { MediaKind } from './model-messages';
 import { createGuardedDownload } from './asset-download';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 import { findScriptFence } from '../shared/script-text';
@@ -1773,130 +1774,23 @@ function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
     };
 }
 
-function tinyProbePng(): Uint8Array {
-    return new Uint8Array([
-        137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,
-        0,0,0,1,0,0,0,1,8,2,0,0,0,144,119,83,222,
-        0,0,0,12,73,68,65,84,8,153,99,248,15,4,0,9,251,3,253,
-        160,90,167,130,0,0,0,0,73,69,78,68,174,66,96,130
-    ]);
-}
-
-function tinyProbeTextFile(): Uint8Array {
-    return new TextEncoder().encode('probe file');
-}
-
-async function probeModelCapabilities(ctx: any, providerId: string, modelId: string): Promise<ModelCapabilities> {
-    const registry = getRegistry();
-    const runtime = await registry.getProviderRuntime(providerId, { ctx, userScope: safeUserScope(ctx) });
-    const adapter = registry.getAdapter(runtime.type.adapter);
-    if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
-
-    const model = await adapter.resolveModel({
-        ctx,
-        providerId: runtime.instance.id,
-        providerTypeId: runtime.type.id,
-        modelId,
-        contextId: runtime.instance.contextId || null,
-        type: runtime.type,
-        instance: runtime.instance,
-        config: runtime.config,
-        secrets: runtime.secrets,
-    });
-    assertLanguageModelCompatible(model, runtime.type.adapter, providerId);
-
-    const result: ModelCapabilities = {
-        text: 'unknown',
-        images: 'unknown',
-        files: 'unknown',
-        source: 'probe',
-        checkedAt: new Date().toISOString(),
-    };
-
-    // One deadline shared by all three probes, inside this RPC's own policy
-    // timeout. Probing is a convenience check — an unreachable upstream must cost
-    // seconds and answer "unsupported", not hold the connection for minutes.
-    const probeBudget = createTimeoutLinkedSignal(ctx?.signal, getChatTuning(ctx).probeBudgetMs);
-
-    // The three probes are independent one-shot calls sharing one deadline — run
-    // them concurrently so a cold session pays one probe round-trip, not three.
-    const probeText = async (): Promise<CapabilityState> => {
-        const textProbe = await generateText({
-            model,
-            messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-            maxOutputTokens: 8,
-            abortSignal: probeBudget,
-            maxRetries: 0,
-        });
-        const out = String(textProbe?.text || '').trim().toUpperCase();
-        return out.includes('OK') ? 'supported' : 'unsupported';
-    };
-
-    const probeImage = async (): Promise<CapabilityState> => {
-        const imageProbe = await generateText({
-            model,
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'file', data: tinyProbePng(), mediaType: 'image/png', filename: 'probe.png' },
-                    { type: 'text', text: 'If you can process image input, reply with exactly: IMAGE_OK. Otherwise reply with exactly: IMAGE_UNSUPPORTED.' },
-                ],
-            }],
-            maxOutputTokens: 12,
-            abortSignal: probeBudget,
-            maxRetries: 0,
-        });
-        const out = String(imageProbe?.text || '').trim().toUpperCase();
-        return out.includes('IMAGE_OK') && !out.includes('IMAGE_UNSUPPORTED')
-            ? 'supported'
-            : 'unsupported';
-    };
-
-    const probeFile = async (): Promise<CapabilityState> => {
-        const fileProbe = await generateText({
-            model,
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'file', data: tinyProbeTextFile(), mediaType: 'text/plain', filename: 'probe.txt' },
-                    { type: 'text', text: 'If you can process file input, reply with exactly: FILE_OK. Otherwise reply with exactly: FILE_UNSUPPORTED.' },
-                ],
-            }],
-            maxOutputTokens: 12,
-            abortSignal: probeBudget,
-            maxRetries: 0,
-        });
-        const out = String(fileProbe?.text || '').trim().toUpperCase();
-        return out.includes('FILE_OK') && !out.includes('FILE_UNSUPPORTED')
-            ? 'supported'
-            : 'unsupported';
-    };
-
-    const [textOutcome, imageOutcome, fileOutcome] = await Promise.allSettled([
-        probeText(), probeImage(), probeFile(),
-    ]);
-    result.text = textOutcome.status === 'fulfilled' ? textOutcome.value : 'unsupported';
-    result.images = imageOutcome.status === 'fulfilled' ? imageOutcome.value : 'unsupported';
-    result.files = fileOutcome.status === 'fulfilled' ? fileOutcome.value : 'unsupported';
-
-    // Probed with this caller's key — cache the verdict under their scope.
-    return registry.setModelCapabilities(providerId, modelId, result, safeUserScope(ctx));
-}
-
 function modelCapabilitySystemContent(capabilities?: ModelCapabilities | null): string {
     const lines = [
         `Model image support: ${capabilities?.images || 'unknown'}.`,
         `Model file support: ${capabilities?.files || 'unknown'}.`,
     ];
 
-    if (capabilities?.images !== 'supported') {
+    // Only a demonstrated refusal discourages looking. 'unknown' is the common case (most
+    // providers never say) and media is sent optimistically; a model that rejects it is
+    // found out on the turn and recorded 'unsupported' (see `mediaUnsupportedKind`).
+    if (capabilities?.images === 'unsupported') {
         lines.push(
             'Do not rely on screenshots or image-returning API methods for reasoning.',
             'Prefer metadata, coordinates, measurements, labels, and plain-text summaries.'
         );
     }
 
-    if (capabilities?.files !== 'supported') {
+    if (capabilities?.files === 'unsupported') {
         lines.push(
             'Do not rely on file-returning API methods for reasoning.',
             'Prefer plain-text outputs when possible.'
@@ -1927,28 +1821,32 @@ export async function ensureModelCapabilities(
 
     const scope = safeUserScope(ctx);
     const cached = registry.getModelCapabilities(input.providerId, input.modelId, scope);
-    if (
-        cached &&
-        (cached.images !== 'unknown' || cached.files !== 'unknown') &&
-        cached.source !== 'probe'
-    ) {
+    // Learned from a real turn or set by hand: nothing the listing says can improve on it.
+    if (cached && (cached.source === 'observed' || cached.source === 'manual')) {
         return { providerId: input.providerId, modelId: input.modelId, capabilities: cached };
     }
 
-    if (cached?.source === 'probe') {
-        registry.clearModelCapabilities(input.providerId, input.modelId, scope);
+    // No up-front probe. A one-shot "reply IMAGE_OK" call misread every timeout, rate
+    // limit and reasoning model that spent its tiny budget thinking as "unsupported" —
+    // and that verdict disabled screenshots for models that take images fine. Silence
+    // from the provider stays 'unknown', which is treated as allowed; the turn loop
+    // learns 'unsupported' from a real rejection (`mediaUnsupportedKind`).
+    let discovered: ModelCapabilities | null = null;
+    try {
+        const listing = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: scope });
+        discovered = listing.models.find((m) => m.id === input.modelId)?.capabilities || null;
+    } catch (error) {
+        // Discovery is a hint, never a gate on the turn itself.
+        if (cached) return { providerId: input.providerId, modelId: input.modelId, capabilities: cached };
     }
 
-    const listing = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null, userScope: scope });
-    const discovered = listing.models.find((m) => m.id === input.modelId)?.capabilities || null;
-
-    if (discovered && (discovered.images !== 'unknown' || discovered.files !== 'unknown')) {
-        const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered, scope);
-        return { providerId: input.providerId, modelId: input.modelId, capabilities: stored };
-    }
-
-    const probed = await probeModelCapabilities(ctx, input.providerId, input.modelId);
-    return { providerId: input.providerId, modelId: input.modelId, capabilities: probed };
+    const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered || cached || {
+        text: 'unknown',
+        images: 'unknown',
+        files: 'unknown',
+        source: 'default',
+    }, scope);
+    return { providerId: input.providerId, modelId: input.modelId, capabilities: stored };
 }
 
 export function registerPersonality(personality: ChatPersonality): void {
@@ -2636,6 +2534,20 @@ async function runTurn(
             (modelCaps.capabilities as any).tools = verdict;
         } catch (_) { /* verdict cache is best-effort */ }
     };
+    // Media support is optimistic ('unknown' = send it) and learned here, from the model's
+    // own answer: a rejection records 'unsupported' and the turn is retried without the
+    // media; a reply that carried media records 'supported'. Local state is updated first so
+    // the rebuilt conversation drops the media even if the cache write fails.
+    const mediaRejected: MediaKind[] = [];
+    const cacheMediaVerdict = async (kind: MediaKind, verdict: 'supported' | 'unsupported') => {
+        const caps: any = modelCaps.capabilities;
+        if (!caps || caps[kind] === verdict) return;
+        caps[kind] = verdict;
+        caps.source = 'observed';
+        try {
+            await registry.setModelCapabilities(session.providerId, session.modelId, { ...caps }, safeUserScope(ctx));
+        } catch (_) { /* verdict cache is best-effort */ }
+    };
 
     // Two ways in: the model id looks like a known Harmony deployment (free head start on turn
     // one), or this session has already been caught emitting envelopes (covers every other
@@ -3172,10 +3084,22 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             try {
                 result = await attemptOnce();
             } catch (attemptError) {
+                const rejectedMedia = !(attemptError instanceof PartialEmissionError) && !isAbortError(attemptError)
+                    ? mediaUnsupportedKind(attemptError, conversationMediaKinds(conversation))
+                    : null;
+                if (rejectedMedia) {
+                    // The model refused the image/file itself. Remember it, and answer this
+                    // SAME rung with the media replaced by the "[Image omitted …]" placeholder,
+                    // so the user gets a reply (and the model knows something was dropped).
+                    llm.warn({ modelId: session.modelId, kind: rejectedMedia }, 'model rejected media input; retrying without it');
+                    await cacheMediaVerdict(rejectedMedia, 'unsupported');
+                    mediaRejected.push(rejectedMedia);
+                    conversation = buildConversation(count);
+                    result = await attemptOnce();
                 // A provider that rejects the `tools` param outright: drop tools and
                 // retry the SAME rung fence-only (the fenced-block contract stays in
                 // the prompt). Streamed partials are terminal and never re-run.
-                if (chatTools
+                } else if (chatTools
                     && !(attemptError instanceof PartialEmissionError)
                     && !isAbortError(attemptError)
                     && isToolsUnsupportedError(attemptError)) {
@@ -3188,6 +3112,9 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 }
             }
             if (toolsActive) await cacheToolsVerdict('supported');
+            for (const kind of conversationMediaKinds(conversation)) {
+                if ((modelCaps.capabilities as any)?.[kind] === 'unknown') await cacheMediaVerdict(kind, 'supported');
+            }
             {
                 const u: any = (result as any)?.usage || null;
                 // Cache accounting is the ONLY way to tell a working prompt-cache setup
@@ -3398,6 +3325,8 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         : undefined;
     const metadata: Record<string, unknown> = {};
     if (historyTruncatedTo !== undefined) metadata.historyTruncatedTo = historyTruncatedTo;
+    // The client turns this into a notice and disables the matching attachment buttons.
+    if (mediaRejected.length) metadata.mediaRejected = [...new Set(mediaRejected)];
     if (outputTruncated) {
         metadata.outputTruncated = true;
         // Which witness fired matters when diagnosing a gateway: `reported: false` means the

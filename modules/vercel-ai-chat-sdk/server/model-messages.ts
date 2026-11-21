@@ -9,6 +9,7 @@
  * read as base64, for instance). See test/unit/model-message-shapes.test.mjs.
  */
 import { getChatTuning } from './tuning';
+import { errorText } from './abort-utils';
 export function resolvePartPayload(
     part: any,
     attachmentIndex?: Map<string, ChatAttachmentRecord>
@@ -254,7 +255,46 @@ export function mediaAllowedForModel(
     partType: 'image' | 'file',
     capabilities?: ModelCapabilities | null
 ): boolean {
+    // Optimistic on 'unknown': most providers never say, and a model that rejects the media
+    // teaches the turn loop 'unsupported' (see `mediaUnsupportedKind` in chat.server.ts).
     if (!capabilities) return true;
-    if (partType === 'image') return capabilities.images === 'supported';
-    return capabilities.files === 'supported';
+    if (partType === 'image') return capabilities.images !== 'unsupported';
+    return capabilities.files !== 'unsupported';
+}
+
+export type MediaKind = 'images' | 'files';
+
+/** Which media kinds a converted conversation actually sends to the model. */
+export function conversationMediaKinds(conversation: any[]): Set<MediaKind> {
+    const kinds = new Set<MediaKind>();
+    for (const message of conversation || []) {
+        if (!Array.isArray(message?.content)) continue;
+        for (const part of message.content) {
+            if (part?.type === 'image') kinds.add('images');
+            else if (part?.type === 'file') {
+                kinds.add(String(part.mediaType || '').toLowerCase().startsWith('image/') ? 'images' : 'files');
+            }
+        }
+    }
+    return kinds;
+}
+
+/**
+ * The media kind a provider just refused, if its error says so.
+ *
+ * Capabilities are optimistic ('unknown' = send it), so this is how a model that cannot take
+ * images is found out: from the rejection of a real turn, not a guess. Deliberately
+ * conservative, like `isToolsUnsupportedError`: it needs a refusal phrase AND a media word,
+ * and only answers for a kind the conversation actually carried — an unrelated 400 that
+ * happens to say "unsupported" must not disable screenshots for the model.
+ */
+export function mediaUnsupportedKind(error: any, sent: Set<MediaKind>): MediaKind | null {
+    const msg = errorText(error).toLowerCase();
+    if (!msg) return null;
+    if (!/not support|unsupported|does not support|doesn't support|invalid content|cannot process|can't process|not a multimodal|text-only|only supports text/.test(msg)) {
+        return null;
+    }
+    if (sent.has('images') && /image|vision|multimodal|multi-modal/.test(msg)) return 'images';
+    if (sent.has('files') && /\bfile\b|file part|document|media type|input_file|attachment/.test(msg)) return 'files';
+    return null;
 }

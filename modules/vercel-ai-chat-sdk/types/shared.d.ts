@@ -21,7 +21,8 @@ type ModelCapabilities = {
      * Blocked on matching the backend's 400 text ("System message must be at the beginning."
      * on vLLM/litellm) across providers, which wants real failures to calibrate against.
      */
-    source: 'probe' | 'provider-metadata' | 'manual' | 'default';
+    /** 'observed' = learned from a real turn (a model that accepted or rejected the media). 'probe' is legacy. */
+    source: 'probe' | 'provider-metadata' | 'manual' | 'default' | 'observed';
     checkedAt?: string;
 };
 

@@ -149,6 +149,20 @@ agent — no session, history, or personality. It must be bound to a **dedicated
 (`providerId`) so the model + secrets are separate from whatever drives the agent above. The pathology module
 never hard-depends on the chat module; the driver throws a clear error if it is absent.
 
+### `assistant` (built-in fallback)
+
+Implements `analyze` on the **chat assistant's own model** (`chat.getAssistantTextModel()`), through the same
+stateless `runVisionInference` call: the region image and a pathology system prompt
+(`pathology.assistantDriverSystem`), no session or history. It is `fallback: true`, so it is chosen only when
+no other driver implements `analyze` (no MedGemma, no configured `vercel` driver), and only while a chat model
+is selected whose image support is not `unsupported`. A dedicated provider always wins automatic resolution;
+the assistant can still ask for it explicitly with `{ driver: "assistant" }`. It is `local: false`, so the
+remote-consent dialog asks first and names it as the chat's own model.
+
+A dedicated driver that **fails** never silently switches to it — the user consented to a specific model. The
+error instead tells the assistant it can retry with `{ driver: "assistant" }` or render the region and look
+itself (`_invokeAnalyze`).
+
 ### Custom drivers (runtime registration)
 
 Any module/plugin can add a driver — this is how the SAM plugin contributes its in-browser engine:

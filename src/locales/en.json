@@ -3,10 +3,26 @@
     "scripting": {
       "consent": {
         "permissionTitle": "This script is asking for permission.",
-        "dontAskAgain": "Don't ask again",
-        "remember1Day": "1 day",
-        "remember7Days": "7 days",
-        "remember30Days": "30 days"
+        "rememberLabel": "Remember:",
+        "rememberOnce": "Only this time",
+        "rememberSession": "Until reload (all slides)",
+        "rememberSlideSession": "This slide, until reload",
+        "rememberSlide7Days": "This slide, for 7 days",
+        "rememberAll1Day": "All slides, for 1 day",
+        "rememberAll7Days": "All slides, for 7 days",
+        "rememberAll30Days": "All slides, for 30 days",
+        "rememberAlways": "Always",
+        "cancel": "Cancel",
+        "pixelReadTitle": "Allow the assistant to look at the slide?",
+        "pixelReadDescription": "A script wants to read image pixels from the slide. The image is handed to the script, and from there to the AI model that requested it.",
+        "pixelReadWhat": "Requested: {{what}}",
+        "pixelReadConfirm": "Allow",
+        "pixelReadRejected": "The user declined access to the slide image. Do not retry the same read; ask the user, or continue from metadata, measurements and annotations.",
+        "pixelReadViewportScreenshot": "a screenshot of the current view",
+        "pixelReadViewportRender": "a render of the current view",
+        "pixelReadBackgroundRender": "a render of the slide background in the current view",
+        "pixelReadRegionRender": "a render of a slide region",
+        "pixelReadCritique": "a render of the current view, sent to a vision model for critique"
       },
       "ui": {
         "invokeTitle": "Allow the script to use the interface?",

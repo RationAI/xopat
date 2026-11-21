@@ -394,19 +394,22 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         };
     }
 
-    getViewportScreenshot(options?: {
+    async getViewportScreenshot(options?: {
         width?: number;
         height?: number;
         x?: number;
         y?: number;
         regionWidth?: number;
         regionHeight?: number;
-    }): string {
+    }): Promise<string> {
         const viewer: any = this.activeViewer;
 
         if (!viewer?.drawer?.canvas) {
             throw new Error("No viewport canvas is available.");
         }
+
+        // Pixels leave the viewer for the caller (and so for the model that asked).
+        await this.requirePixelReadConsent(viewer, $.t("scripting.consent.pixelReadViewportScreenshot"));
 
         const focus = (options?.regionWidth && options?.regionHeight)
             ? new OpenSeadragon.Rect(

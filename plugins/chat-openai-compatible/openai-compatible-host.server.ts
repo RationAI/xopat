@@ -149,18 +149,47 @@ function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: 
     return headers;
 }
 
+/**
+ * Tri-state on purpose: most OpenAI-compatible `/models` endpoints (vLLM, LiteLLM, CERIT, …)
+ * say nothing about input modalities, and silence is not a verdict. Reporting it as
+ * "unsupported" disabled screenshots and uploads for multimodal models; "unknown" lets the
+ * chat core try, and learn "unsupported" from a real rejection instead.
+ */
 function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
-    const modalities = Array.isArray(item?.modalities)
-        ? item.modalities.map((value: any) => String(value || "").toLowerCase())
-        : [];
-    const supportsVision = modalities.includes("image") || modalities.includes("vision");
-    const supportsFiles = modalities.includes("file");
+    const lower = (list: any): string[] | null =>
+        Array.isArray(list) ? list.map((value: any) => String(value || "").toLowerCase()) : null;
+    const flag = (...values: any[]): boolean | undefined => {
+        for (const value of values) if (typeof value === "boolean") return value;
+        return undefined;
+    };
 
+    // OpenRouter: `architecture.modality` = "text+image->text" (inputs before the arrow).
+    const modalityString = typeof item?.architecture?.modality === "string"
+        ? item.architecture.modality.toLowerCase().split("->")[0].split("+").map((s: string) => s.trim())
+        : null;
+    const modalities = lower(item?.modalities)
+        ?? lower(item?.input_modalities)
+        ?? lower(item?.architecture?.input_modalities)
+        ?? modalityString;
+    const caps = item?.capabilities && typeof item.capabilities === "object" ? item.capabilities : {};
+
+    const imageFlag = flag(item?.supports_vision, item?.supportsVision, item?.vision,
+        item?.supportsImages, caps.vision, caps.images);
+    const fileFlag = flag(item?.supports_files, item?.supportsFiles, caps.files, caps.documents);
+
+    const resolve = (explicit: boolean | undefined, names: string[]): ModelCapabilities["images"] => {
+        if (explicit !== undefined) return explicit ? "supported" : "unsupported";
+        if (modalities) return names.some((n) => modalities.includes(n)) ? "supported" : "unsupported";
+        return "unknown";
+    };
+
+    const images = resolve(imageFlag, ["image", "vision"]);
+    const files = resolve(fileFlag, ["file", "document"]);
     return {
         text: "supported",
-        images: supportsVision ? "supported" : "unsupported",
-        files: supportsFiles ? "supported" : "unsupported",
-        source: "provider-metadata",
+        images,
+        files,
+        source: images === "unknown" && files === "unknown" ? "default" : "provider-metadata",
     };
 }
 

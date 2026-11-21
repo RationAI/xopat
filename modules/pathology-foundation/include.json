@@ -154,8 +154,9 @@
     //
     // Vision -> text analysis through the Vercel AI SDK (reaches any provider
     // the SDK adapts). Runs in a context ISOLATED from the chat agent;
-    // `providerId` MUST name a DEDICATED pathology provider from the chat
-    // registry, never the agent's provider. It is a provider REFERENCE — an
+    // `providerId` should name a DEDICATED pathology provider from the chat
+    // registry (without any analyze driver, the built-in `assistant` fallback
+    // uses the chat model itself, session-less). It is a provider REFERENCE — an
     // instance id, a managed key ("<plugin>:<type>:default"), a plugin id or a
     // provider type id. Prefer the plugin id: managed instance ids are re-minted
     // on every server start and cannot be written into config at all:

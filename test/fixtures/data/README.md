@@ -21,9 +21,41 @@ npm run fixtures:derive           # build the vector/mvt/grid/pyramid overlays
 npm run fixtures:serve            # serve this directory on :9100 with byte ranges
 ```
 
-`fixtures:serve` exists because the core static handler answers no `Range`
-requests, and a TIFF reader that cannot range-request a 683 MB file downloads
-all of it per tile. `XOPAT_SLIDE_ROOT` overrides the served root.
+`fixtures:serve` is only needed for data living outside the repository
+(`XOPAT_SLIDE_ROOT=/data/scans`, then `TIFF_FILESERVER=http://127.0.0.1:9100/files`
+in `env/.env`). The `webtiff` / `geotiff` deployments serve this directory
+themselves, with `Range`, through `core.server.media`.
+
+## Referencing a fixture in a session
+
+A data id is the path **relative to this directory** — `slides/<file>` for a
+fetched slide, `generated/<…>` for a derived overlay:
+
+```json
+{
+  "data": ["slides/slide.tif", "slides/cancer-inference.tif"],
+  "background": [{ "dataReference": 0, "visualizationIndex": 0 }],
+  "visualizations": [{
+    "shaders": {
+      "prediction": { "type": "heatmap", "dataReferences": [1], "params": {} }
+    }
+  }]
+}
+```
+
+Run `npm run up:dev -- webtiff`, then open
+`http://localhost:9000/?slides=slides/slide.tif` or paste the session into
+`http://localhost:9000/dev_setup`. The id resolves against the `webtiff`
+module's `protocolBaseUrl` (`TIFF_FILESERVER`, default `/test/fixtures/data`),
+so no protocol or absolute URL belongs in the session. Ready-made sessions and
+their conventions: [`../sessions/README.md`](../sessions/README.md).
+
+**These ids only resolve in a TIFF deployment.** What a data id means is
+decided by the deployment's data layer, not by the session. Most presets
+(`default`, `synthetic`, `roles-dev`, …) use `data/synthetic-dzi`, whose only
+id is `synthetic.dzi` and which does not serve this directory at all — there
+`slides/slide.tif` is a 404. Swap the data layer on any preset by naming it
+after the preset: `npm run up:dev -- roles-dev data/tiff-webtiff`.
 
 Set `XOPAT_FIXTURE_BASE` to fetch the release assets from a mirror (or a local
 HTTP copy) without editing the tracked manifest.

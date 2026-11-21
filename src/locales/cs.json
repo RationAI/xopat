@@ -3,10 +3,26 @@
     "scripting": {
       "consent": {
         "permissionTitle": "Tento skript žádá o oprávnění.",
-        "dontAskAgain": "Znovu se neptat",
-        "remember1Day": "1 den",
-        "remember7Days": "7 dní",
-        "remember30Days": "30 dní"
+        "rememberLabel": "Zapamatovat:",
+        "rememberOnce": "Jen tentokrát",
+        "rememberSession": "Do obnovení stránky (všechny snímky)",
+        "rememberSlideSession": "Tento snímek, do obnovení stránky",
+        "rememberSlide7Days": "Tento snímek, na 7 dní",
+        "rememberAll1Day": "Všechny snímky, na 1 den",
+        "rememberAll7Days": "Všechny snímky, na 7 dní",
+        "rememberAll30Days": "Všechny snímky, na 30 dní",
+        "rememberAlways": "Vždy",
+        "cancel": "Zrušit",
+        "pixelReadTitle": "Povolit asistentovi prohlédnout si snímek?",
+        "pixelReadDescription": "Skript chce číst obrazové pixely ze snímku. Obraz dostane skript a od něj AI model, který o něj požádal.",
+        "pixelReadWhat": "Požadováno: {{what}}",
+        "pixelReadConfirm": "Povolit",
+        "pixelReadRejected": "The user declined access to the slide image. Do not retry the same read; ask the user, or continue from metadata, measurements and annotations.",
+        "pixelReadViewportScreenshot": "snímek obrazovky aktuálního zobrazení",
+        "pixelReadViewportRender": "vykreslení aktuálního zobrazení",
+        "pixelReadBackgroundRender": "vykreslení podkladu snímku v aktuálním zobrazení",
+        "pixelReadRegionRender": "vykreslení oblasti snímku",
+        "pixelReadCritique": "vykreslení aktuálního zobrazení odeslané vizuálnímu modelu k posouzení"
       },
       "ui": {
         "invokeTitle": "Povolit skriptu používat rozhraní?",

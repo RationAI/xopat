@@ -1,4 +1,12 @@
 import type {ScriptApiInvocationContext, ScriptApiObject, ScriptApiMetadata, HostScriptContext} from "./abstract-types";
+import {
+    consentGrantKeys,
+    consentGrantWrite,
+    consentRememberChoices,
+    findConsentRememberChoice,
+    slideConsentKeyOf,
+    DEFAULT_CONSENT_REMEMBER,
+} from "./consent-scope";
 
 export type ScriptActionConsentOptions = {
     /**
@@ -46,6 +54,12 @@ export type ScriptActionConsentOptions = {
      * even though it de-duplicates within one session via `cacheKey`.
      */
     allowRemember?: boolean;
+    /**
+     * Opaque per-slide key (see {@link XOpatScriptingApi.slideConsentKey}). When present the
+     * dialog also offers "this slide" grants, and a grant stored for this slide satisfies the
+     * request alongside an all-slides grant for `cacheKey`.
+     */
+    slideKey?: string;
 };
 
 export abstract class XOpatScriptingApi implements ScriptApiObject {
@@ -283,17 +297,18 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
 
         // Already consented this session (per-context runtime cache), or the local user chose
         // "don't ask again" for this action class (persistent, unexpired, non-secureMode).
-        if (options.cacheKey && (
-            this.scriptingContext.isActionConsented?.(options.cacheKey)
-            || this._isActionConsentRemembered(options.cacheKey)
+        if (options.cacheKey && consentGrantKeys(options.cacheKey, options.slideKey).some(key =>
+            this.scriptingContext.isActionConsented?.(key) || this._isActionConsentRemembered(key)
         )) {
             return true;
         }
 
-        const remember = (granted: boolean, rememberMs = 0): boolean => {
-            if (granted && options.cacheKey) {
-                this.scriptingContext.rememberActionConsent?.(options.cacheKey);
-                if (rememberMs > 0) this._rememberActionConsentPersistent(options.cacheKey, rememberMs);
+        const remember = (granted: boolean, rememberId: string = DEFAULT_CONSENT_REMEMBER): boolean => {
+            const choice = findConsentRememberChoice(rememberId) || findConsentRememberChoice(DEFAULT_CONSENT_REMEMBER)!;
+            const write = granted ? consentGrantWrite(options.cacheKey, options.slideKey, choice) : null;
+            if (write) {
+                this.scriptingContext.rememberActionConsent?.(write.key);
+                if (write.ttlMs > 0) this._rememberActionConsentPersistent(write.key, write.ttlMs);
             }
             return granted;
         };
@@ -311,7 +326,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
 
         if (ui?.Modal && ui?.Button) {
             const result = await this.renderConsentDialogWithUi(ui, options);
-            return remember(result.granted, result.rememberMs);
+            return remember(result.granted, result.remember);
         }
 
         if (typeof win?.confirm === "function") {
@@ -352,6 +367,52 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         } catch (_) {
             // best-effort
         }
+    }
+
+    /**
+     * Opaque per-slide key for consent grants: a hash of the slide shown in `viewer`
+     * (`tileSourceId`, else the background id). Undefined when nothing is open. The raw
+     * identity never leaves this method — background ids can be data paths.
+     */
+    protected slideConsentKey(viewer?: OpenSeadragon.Viewer | null): string | undefined {
+        try {
+            const target: any = viewer ?? this.activeViewer;
+            const tiledImage = target?.scalebar?.getReferencedTiledImage?.() || target?.world?.getItemAt?.(0);
+            const identity = tiledImage?.source?.tileSourceId
+                || (globalThis as any)?.UTILITIES?.currentBackgroundIdFor?.(target);
+            return slideConsentKeyOf(identity != null ? String(identity) : undefined);
+        } catch (_) {
+            return undefined;
+        }
+    }
+
+    /**
+     * Ask before slide pixels leave the viewer for the caller — a screenshot, a rendered region
+     * or raw pixel values handed to a script, and so to the chat model or a vision model.
+     *
+     * One action class for every pixel read (`core:pixel-read`), so the user decides once per
+     * their remember choice: this time, this session, this slide, all slides for a period, or
+     * always. A refusal throws; the message tells the model to ask or work from metadata
+     * instead of retrying.
+     *
+     * @param viewer the viewer whose pixels are read (keys "this slide" grants)
+     * @param what short, user-facing description of the read (already translated)
+     */
+    protected async requirePixelReadConsent(viewer: OpenSeadragon.Viewer | null | undefined, what: string): Promise<void> {
+        // A trusted in-process caller that already holds the user's consent for these pixels.
+        if (this._invocationContext?.scriptingContext?.pixelReadPreapproved === true) return;
+        const t =(key: string, opts?: any): string => (globalThis as any)?.$?.t?.(key, opts) ?? key;
+        await this.requireActionConsent({
+            title: t("scripting.consent.pixelReadTitle"),
+            description: t("scripting.consent.pixelReadDescription"),
+            details: [t("scripting.consent.pixelReadWhat", { what })],
+            mode: "warning",
+            confirmLabel: t("scripting.consent.pixelReadConfirm"),
+            cancelLabel: t("scripting.consent.cancel"),
+            rejectedMessage: t("scripting.consent.pixelReadRejected"),
+            cacheKey: "core:pixel-read",
+            slideKey: this.slideConsentKey(viewer),
+        });
     }
 
     /**
@@ -397,7 +458,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
     protected renderConsentDialogWithUi(
         ui: any,
         options: ScriptActionConsentOptions
-    ): Promise<{ granted: boolean; rememberMs?: number }> {
+    ): Promise<{ granted: boolean; remember?: string }> {
         const vanInstance = (globalThis as any)?.van;
         const tags = vanInstance?.tags || {};
         const t = (key: string): string => (globalThis as any)?.$?.t?.(key) ?? key;
@@ -430,7 +491,6 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         const ul = tags.ul || createTag("ul");
         const li = tags.li || createTag("li");
         // Always use the raw builders for form controls so we can hold references + wire events.
-        const inputTag = createTag("input");
         const selectTag = createTag("select");
         const optionTag = createTag("option");
         const labelTag = createTag("label");
@@ -452,32 +512,27 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             }).create()
             : null;
 
-        // "Don't ask again" affordance — only when the action opts in and persistence is allowed.
-        const DAY = 24 * 60 * 60 * 1000;
-        let rememberCheckbox: HTMLInputElement | null = null;
+        // "Remember" choice — scopes offered depend on the action (cache key, slide) and on whether
+        // persistence is allowed (opt-in, not secureMode). The logic lives in ./consent-scope.
+        const choices = consentRememberChoices({
+            hasCacheKey: !!options.cacheKey,
+            hasSlide: !!options.slideKey,
+            persistAllowed: this._consentRememberOffered(options),
+        });
         let rememberSelect: HTMLSelectElement | null = null;
         let rememberRow: HTMLElement | null = null;
 
-        if (this._consentRememberOffered(options)) {
-            rememberCheckbox = inputTag({ type: "checkbox", class: "checkbox checkbox-sm" }) as HTMLInputElement;
+        if (choices.length > 1) {
             rememberSelect = selectTag(
-                { class: "select select-sm select-bordered", disabled: "disabled" },
-                optionTag({ value: String(1 * DAY) }, t("scripting.consent.remember1Day")),
-                optionTag({ value: String(7 * DAY) }, t("scripting.consent.remember7Days")),
-                optionTag({ value: String(30 * DAY) }, t("scripting.consent.remember30Days")),
+                { class: "select select-sm select-bordered" },
+                ...choices.map(choice => optionTag({ value: choice.id }, t(choice.labelKey)))
             ) as HTMLSelectElement;
-            rememberSelect.value = String(7 * DAY); // default 7 days
-            rememberCheckbox.addEventListener("change", () => {
-                if (rememberSelect) rememberSelect.disabled = !rememberCheckbox!.checked;
-            });
-            // The select is a sibling of the label (not nested) so clicking it does not toggle the box.
+            rememberSelect.value = choices.some(c => c.id === DEFAULT_CONSENT_REMEMBER)
+                ? DEFAULT_CONSENT_REMEMBER
+                : choices[0]!.id;
             rememberRow = div(
                 { class: "flex items-center gap-2 text-sm mt-1" },
-                labelTag(
-                    { class: "flex items-center gap-2 cursor-pointer" },
-                    rememberCheckbox,
-                    spanTag({}, t("scripting.consent.dontAskAgain"))
-                ),
+                labelTag({ class: "flex items-center gap-2" }, spanTag({}, t("scripting.consent.rememberLabel"))),
                 rememberSelect
             );
         }
@@ -492,7 +547,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             rememberRow
         );
 
-        return new Promise<{ granted: boolean; rememberMs?: number }>((resolve) => {
+        return new Promise<{ granted: boolean; remember?: string }>((resolve) => {
             let settled = false;
             const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
 
@@ -508,13 +563,11 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
             const finish = (granted: boolean): void => {
                 if (settled) return;
                 settled = true;
-                const rememberMs = (granted && rememberCheckbox?.checked)
-                    ? Number(rememberSelect?.value) || 0
-                    : 0;
+                const remember = rememberSelect?.value || (choices[0]?.id ?? "once");
                 modal.close();
                 const root = (modal as any).root as HTMLElement | undefined;
                 root?.remove();
-                resolve({ granted, rememberMs });
+                resolve({ granted, remember });
             };
 
             const cancelButton = new ui.Button(

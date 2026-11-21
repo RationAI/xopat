@@ -546,6 +546,26 @@ Properties:
 static `ScriptingManager.extractApiReferences(script, knownNamespaces)` text scan to
 attach exact signatures of the methods a failing script referenced.
 
+### Asking consent — remember scopes and pixel reads
+
+`requireActionConsent({ ..., cacheKey, slideKey? })` shows one **Remember** select whose options depend on
+the action (logic in `consent-scope.ts`):
+- only this time
+- until reload, all slides (the default, and what the `window.confirm` fallback grants)
+- this slide until reload, and this slide for 7 days — only when you pass `slideKey`
+- all slides for 1, 7 or 30 days, and always
+
+Persistent options are hidden under `secureMode` or when the action passes `allowRemember: false`. Pass
+`slideKey: this.slideConsentKey(viewer)` when the decision is naturally per slide. It is a hash, so the slide
+path never reaches storage. A slide grant never satisfies another slide.
+
+**Any method that hands slide pixels to the caller** (a PNG, a data URL, RGBA values) calls
+`await this.requirePixelReadConsent(viewer, $.t("…what…"))` first. That is one shared action class
+(`core:pixel-read`), so the user decides once for every kind of read. Methods that only return
+*statistics* computed from pixels (`probeData`) do not ask. A trusted in-process caller that already holds
+consent for the same pixels sets `pixelReadPreapproved: true` on its synthetic context. Pathology-foundation
+does this because its own remote-driver consent covers it. Never set it to silence the prompt.
+
 ---
 
 ## What not to do

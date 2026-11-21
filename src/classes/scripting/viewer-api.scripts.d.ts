@@ -238,7 +238,10 @@ export interface ViewerScriptApi extends ScriptApiObject {
     getViewportBoundsInImage(tiledImageIndex?: number): ViewerRect;
 
     /**
-     * Takes a screenshot of the current viewport.
+     * Takes a screenshot of the current viewport (PNG data URL).
+     * Asks the user first (slide pixels leave the viewer); the user may remember the answer for
+     * this slide, all slides for a period, or always. Throws when the user declines — do not
+     * retry the same read, ask the user or work from metadata instead.
      */
-    getViewportScreenshot(options?: ViewerScreenshotOptions): string;
+    getViewportScreenshot(options?: ViewerScreenshotOptions): Promise<string>;
 }

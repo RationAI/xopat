@@ -1413,6 +1413,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         visualization: VisualizationLayerSource,
         options: VisualizationViewportRenderOptions = {}
     ): Promise<string> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const canvas = await this.extractCanvasForVisualization(visualization, options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted viewport canvas does not support toDataURL().");
@@ -1462,6 +1463,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         visualization: VisualizationLayerSource,
         options: VisualizationViewportRenderOptions = {}
     ): Promise<VisualizationViewportPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const canvas = await this.extractCanvasForVisualization(visualization, options);
         return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for pixel extraction.");
     }
@@ -1575,6 +1577,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * finished streaming — a data URL cannot carry that, and a partial one looks identical.
      */
     async renderCurrentBackgroundPng(options: VisualizationViewportRenderOptions = {}): Promise<string> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadBackgroundRender"));
         const { canvas } = await this.extractBackgroundCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted background canvas does not support toDataURL().");
@@ -1587,6 +1590,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * plus `isComplete` — false when the live viewport was still streaming tiles as it was read.
      */
     async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadBackgroundRender"));
         const { canvas, isComplete } = await this.extractBackgroundCanvas(options);
         const pixels = this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
         return { ...pixels, isComplete };
@@ -1983,7 +1987,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * {@link renderRegionPngDetailed}, which hands you the flag instead of deciding for you.
      */
     async renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string> {
-        const { dataUrl, isComplete } = await this.renderRegionPngDetailed(options);
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
+        const { dataUrl, isComplete } = await this.regionPngDetailed(options);
         if (!isComplete && (options?.onIncomplete ?? "throw") === "throw") {
             throw new Error(
                 "The region render is incomplete — some tiles had not loaded. Retry with a larger " +
@@ -2005,6 +2010,14 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     async renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
     ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
+        return this.regionPngDetailed(options);
+    }
+
+    /** Unchecked body of {@link renderRegionPngDetailed}: callers have already asked for pixel consent. */
+    protected async regionPngDetailed(
+        options: VisualizationRegionRenderOptions
+    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
         const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted region canvas does not support toDataURL().");
@@ -2018,6 +2031,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * with partially loaded data). Never moves the user's viewport.
      */
     async renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
         const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
         // Guard readback with the SAME default as the region render, so a region the render
         // allowed never throws on readback (readCanvasPixels otherwise defaults to 1024*1024).
@@ -2189,14 +2203,18 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const outWidth = Math.max(1, Math.floor(sourceWidth * scale));
         const outHeight = Math.max(1, Math.floor(sourceHeight * scale));
 
-        const probe = await this.renderCurrentViewportPixels(
+        // Unchecked extract, not renderCurrentViewportPixels: only per-channel statistics leave
+        // this method, never pixels, so there is nothing to ask pixel-read consent for.
+        const probeOptions: VisualizationViewportRenderOptions = { width: outWidth, height: outHeight, maxPixels, pixelFormat: "typed" };
+        const probeCanvas = await this.extractCanvasForVisualization(
             {
                 shaders: {
                     __probe: { id: "__probe", type: "identity", dataReferences: [dataReference], params: {} },
                 },
             } as unknown as VisualizationLayerSource,
-            { width: outWidth, height: outHeight, maxPixels, pixelFormat: "typed" }
+            probeOptions
         );
+        const probe = this.readCanvasPixels(probeCanvas, probeOptions, "Failed to create a 2D context for pixel extraction.");
 
         const pixels: any = probe.data;
         const total = probe.width * probe.height;
@@ -2278,11 +2296,12 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const model = chat?.getAssistantTextModel?.();
         const rpc = (globalThis as any).xserver?.module?.["vercel-ai-chat-sdk"];
         if (!model?.providerId || !rpc?.runVisionInference) return null;
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadCritique"));
 
         // Detailed, not renderRegionPng: a critique of a half-loaded view is worth having (the
         // shader settings it judges are visible in whatever DID render), but the model must be told
         // the blanks are missing tiles, not a rendering fault it should explain.
-        const { dataUrl, isComplete } = await this.renderRegionPngDetailed({
+        const { dataUrl, isComplete } = await this.regionPngDetailed({
             ...(options as any),
             region: this.currentViewportImageRegion(),
             layers: "active",

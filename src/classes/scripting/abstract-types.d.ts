@@ -59,6 +59,13 @@ export type HostScriptContext = Pick<
     rememberActionConsent?(cacheKey: string): unknown;
     isActionConsented?(cacheKey: string): boolean;
     /**
+     * Set ONLY by trusted in-process callers that obtained the user's consent for the pixels
+     * themselves (pathology-foundation asks before pixels leave for a remote driver, and its
+     * local drivers never send them anywhere). Skips `requirePixelReadConsent`. Worker contexts
+     * never carry it — a script cannot set it.
+     */
+    pixelReadPreapproved?: boolean;
+    /**
      * Context-scoped stored-result store (optional — synthetic in-process contexts
      * omit it). Lets a consumer park a large script result under an opaque handle
      * and read it back in bounded slices later. Runtime memory only, never serialized.

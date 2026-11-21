@@ -42,6 +42,13 @@ export type PathologyDriverInfo = {
     label: string;
     /** True when it runs in-browser (no snapshot leaves the viewer). */
     local: boolean;
+    /**
+     * True for the built-in last-resort \`assistant\` analyze driver — YOUR OWN model, called once
+     * per image without this conversation. Used only when no dedicated driver implements a feature.
+     */
+    fallback: boolean;
+    /** Whether it can serve right now (the \`assistant\` driver needs an image-capable chat model). */
+    available: boolean;
     features: PathologyFeature[];
 };
 
@@ -1078,8 +1085,10 @@ export interface PathologyScriptApi extends ScriptApiObject {
 
     /**
      * Send a slide snapshot plus \`prompt\` to a vision/analysis model and return its
-     * findings as text. Requires an "analyze" driver. Asks the user for permission
-     * (the snapshot leaves the viewer).
+     * findings as text. Runs on the "analyze" driver: a dedicated pathology vision model when
+     * one is registered, otherwise the built-in \`assistant\` driver (you, session-less); pass
+     * \`driver: "assistant"\` to choose yourself. Asks the user for permission (the snapshot
+     * leaves the viewer).
      *
      * WITHOUT \`options.region\` it snapshots what the user CURRENTLY SEES (their live
      * viewport, overlays included) — the right and cheap answer to "what am I looking
@@ -1289,7 +1298,11 @@ export function registerPathologyScriptingApi(): void {
                 "Slide-wide jobs (exploreSlide, reviewRegions, buildOverview, region-scoped analyzeRegion) " +
                 "render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the " +
                 "user's viewport, so the user keeps navigating freely while they run. Never move the viewer " +
-                "to 'show' the model something: it renders its own pixels. Pointing the USER at a region is " +
+                "to 'show' the model something: it renders its own pixels. That rule is about the user's " +
+                "viewport, not about looking — you may always render a region and look at it yourself. " +
+                "Who reads the pixels is the analyze driver: a dedicated pathology vision model when one " +
+                "is registered, otherwise the built-in 'assistant' driver, which is YOU, called " +
+                "session-less (see listDrivers). Pointing the USER at a region is " +
                 "the opposite — always do it, inline in your prose (see NAMING AND LINKING REGIONS).\n\n" +
                 "SCANNING IS EXPENSIVE — RUN IT ONLY WHEN THE USER ASKS FOR IT. buildOverview and " +
                 "reviewRegions fire many slow vision calls; a single overview can take MINUTES. They are " +
@@ -1411,12 +1424,17 @@ export function registerPathologyScriptingApi(): void {
                 details: [
                     t("pathology.consentDriver", { driver: info?.label || info?.id || "(default)" }),
                     t("pathology.consentTask", { task }),
+                    // The fallback driver is the chat model itself — say so, since the
+                    // "model" the user is asked about is then the one they are talking to.
+                    ...(info?.fallback ? [t("pathology.consentAssistantDriver")] : []),
                     ...extraDetails,
                 ],
                 mode: "warning",
                 confirmLabel: t("pathology.consentConfirm"),
                 rejectedMessage: t("pathology.consentRejected"),
                 cacheKey: alwaysAsk ? undefined : key,
+                // Lets the user grant this for one slide only.
+                slideKey: this.slideConsentKey(),
             });
         }
 
