@@ -17,7 +17,7 @@ import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-
 import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
-import { slideHashOf } from "./classes/io/slide-hash";
+import { slideCanonicalOf, slideHashOf, slideLegacyCanonicalOf } from "./classes/io/slide-hash";
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
@@ -2874,14 +2874,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
     let _sessionUrlSyncable: boolean | null = null;
 
-    /** JSON with object keys sorted, so equal data entries hash equally regardless of key order. */
-    const stableStringify = (value: any): string => {
-        if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-        if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-        return `{${Object.keys(value).sort()
-            .filter(k => value[k] !== undefined)
-            .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-    };
     const _slideHashCache = new Map<string, string>();
 
     /**
@@ -2964,7 +2956,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * data (`{slideHash}` / `{slideName}` in IO path templates).
          *
          * - `hash` — 16 hex chars of HMAC-SHA256(`hashKey`, data entry) (a path
-         *   string, or the object with its keys sorted). Independent of an
+         *   string, or the object with its keys sorted and its display-only
+         *   fields left out — see `slideCanonicalOf`). Independent of an
          *   explicit background `id` and of the session, unique in practice.
          *   Keyed because slide paths are guessable: an unkeyed hash lets anyone
          *   holding the stored data match candidate paths offline. `undefined`
@@ -2979,13 +2972,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * the same data locator (see `BackgroundConfig.processId`), so the first
          * match is the slide. `undefined` when the id names no background.
          */
-        slideIdentityFor: function (backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined {
+        slideIdentityFor: function (backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string; legacyHash?: string } | undefined {
             if (!backgroundId) return undefined;
             const bg = (APPLICATION_CONTEXT.config.background || []).find((b: any) => b?.id === backgroundId);
             if (!bg) return undefined;
             const item = BackgroundConfig.dataFromDataId(bg.dataReference);
             if (item === undefined || item === null) return undefined;
-            const canonical = typeof item === "string" ? item : stableStringify(item);
+            const canonical = slideCanonicalOf(item);
             let hash: string | undefined;
             if (typeof hashKey === "string" && hashKey) {
                 // Keyed by key AND entry: the key is static per page, but a
@@ -3002,7 +2995,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 ? UTILITIES.fileNameFromPath(item, false)
                 : UTILITIES.nameFromBGOrIndex({ dataReference: item } as any, false);
             if (name === "unknown" || name === "undefined" || name === "error") name = "";
-            return { hash, name };
+            // Where this slide's data was addressed before display-only fields
+            // were left out of the hash; set only when that differs.
+            const legacy = slideLegacyCanonicalOf(item);
+            const legacyHash = legacy !== undefined && typeof hashKey === "string" && hashKey
+                ? slideHashOf(hashKey, legacy) : undefined;
+            return legacyHash ? { hash, name, legacyHash } : { hash, name };
         },
 
         /**

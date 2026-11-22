@@ -1,3 +1,5 @@
+import { slideCanonicalOf } from "./io/slide-hash";
+
 const _CONF_GUARD = Symbol('guard');
 const _CONF_REGISTRY = new Map();
 
@@ -81,6 +83,16 @@ export class BackgroundConfig implements BackgroundItem {
         if (index === -1 && typeof raw === "object") {
             const key = JSON.stringify(raw);
             index = data.findIndex(entry => entry && typeof entry === "object" && JSON.stringify(entry) === key);
+            if (index !== -1) this._rawValue = data[index];
+        }
+        if (index === -1) {
+            // Same slide, other shape. Setting a per-data display field (sampling)
+            // turns the path `"a.tif"` into `{dataID: "a.tif", …}`, and clearing it
+            // turns it back; a snapshot of the old shape still names that entry.
+            // Compared on what identifies the slide, so `{dataID, protocol}` never
+            // binds to a bare path that names a different reading of the file.
+            const key = slideCanonicalOf(raw);
+            index = data.findIndex(entry => entry !== undefined && entry !== null && slideCanonicalOf(entry) === key);
             if (index !== -1) this._rawValue = data[index];
         }
         return index;
