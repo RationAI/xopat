@@ -24,6 +24,9 @@
  *   6. `empaia-ready` raised — the plugin renders from there.
  */
 
+// First on purpose: installs the sender check before the library below adds
+// its own `message` listener at import.
+import "./vaci-sender-guard";
 import {
     addScopeListener, addTokenListener, addWbsUrlListener,
     type Scope, type Token, type WbsUrl,
@@ -349,10 +352,10 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * there is no handshake race to guard against here.
      *
      * Note the library does not validate the sender (see the README and
-     * UPSTREAM.md), so any frame holding a handle to this window can push a
-     * `wbsUrl`. The client built from it carries the workbench token, so the
-     * URL is held to an operator allowlist (`wbsOrigins`) — otherwise a
-     * sibling frame winning the handshake race receives the real token.
+     * UPSTREAM.md). `vaci-sender-guard.ts` drops handshake messages that do
+     * not come from `window.top` before the library sees them; the operator
+     * allowlist (`wbsOrigins`) is the second wall for `wbsUrl`, because the
+     * client built from it carries the workbench token.
      */
     private _listenToWorkbench(): void {
         addScopeListener((scope: Scope) => {
@@ -1195,12 +1198,15 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             return;
         }
         const loan = this._roiToolLoan = { previous, factory };
-        const giveBack = () => {
-            if (!annotations.isModeAuto()) return;
+        // Checked a microtask later, not in the event: switching between two
+        // non-AUTO modes can pass THROUGH AUTO (leaving selection-edit does),
+        // and handing the tool back there draws the region with the user's shape.
+        const giveBack = () => queueMicrotask(() => {
+            if (this._roiToolLoan !== loan || !annotations.isModeAuto()) return;
             annotations.removeHandler("mode-changed", giveBack);
             this._roiToolLoan = undefined;
             if (annotations.getActiveFactory() === loan.factory) annotations.setActiveFactory(loan.previous);
-        };
+        });
         annotations.addHandler("mode-changed", giveBack);
     }
 
