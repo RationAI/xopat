@@ -26,6 +26,7 @@ export class DataAdjustmentsPanel extends BaseComponent {
         this._controls = [];
         this._unsubscribe = null;
         this._viewerHandlers = [];
+        this._historyHandlers = [];
         this.classMap["base"] = "flex flex-col gap-2 p-2 text-xs";
     }
 
@@ -79,12 +80,23 @@ export class DataAdjustmentsPanel extends BaseComponent {
         this._viewer = viewer;
 
         // Structure changes (slide/visualization switch) rebuild the list;
-        // value changes (undo, session peer, linked viewer) only refresh it.
+        // value changes (linked viewer, a local edit elsewhere) only refresh it.
         const rebuild = () => this.render();
         const refresh = () => this.refresh();
         for (const [name, fn] of [["open", rebuild], ["visualization-ready", rebuild], ["shader-config-update", refresh]]) {
             viewer.addHandler(name, fn);
             this._viewerHandlers.push([name, fn]);
+        }
+        // Undo/redo re-applies a snapshot through `importLiveVisualization`,
+        // which raises none of the events above. Rebuilt rather than refreshed:
+        // a step can add or remove a pipeline node, not only move a value.
+        const history = APPLICATION_CONTEXT.history;
+        if (history) {
+            const afterStep = () => queueMicrotask(() => { if (this._viewer === viewer) this.render(); });
+            for (const name of ["undo", "redo"]) {
+                history.addHandler(name, afterStep);
+                this._historyHandlers.push([name, afterStep]);
+            }
         }
         this._unsubscribe = APPLICATION_CONTEXT.adjustments.onChange((change) => {
             if (change.reason === "link") {
@@ -113,6 +125,8 @@ export class DataAdjustmentsPanel extends BaseComponent {
         this._unsubscribe = null;
         for (const [name, fn] of this._viewerHandlers) this._viewer?.removeHandler?.(name, fn);
         this._viewerHandlers = [];
+        for (const [name, fn] of this._historyHandlers) APPLICATION_CONTEXT.history?.removeHandler?.(name, fn);
+        this._historyHandlers = [];
     }
 
     _reflectBypass() {

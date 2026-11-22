@@ -379,4 +379,9 @@ export class FullscreenMenuPanel extends MainPanel {
         this.modal.close();
         return this;
     }
+
+    /** @returns {boolean} whether the panel is on screen right now (live, not persisted state). */
+    isOpen() {
+        return !!this.modal?.isOpen;
+    }
 }
