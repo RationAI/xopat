@@ -869,9 +869,10 @@ interface IOOwnerBundleHooks {
      * The format id (registered under this owner's domain) that a sink taking
      * any format stores when neither the binding nor the sink's own config
      * pins one. Deployment-derived only — a user preference here would make
-     * what is stored change with a UI choice.
+     * what is stored change with a UI choice. The exception is `ctx.route ===
+     * "local"`: a file the user downloads may follow the user's own choice.
      */
-    defaultFormat?(): string | undefined;
+    defaultFormat?(ctx?: IOContext): string | undefined;
 }
 
 /**
@@ -1338,7 +1339,18 @@ interface IOPipelineLike {
      */
     matchesPattern(value: string, patterns: string[] | null | undefined): boolean;
 
-    // ── events: 'io:refused', 'io:reverted', 'io:fully-refused', … ──────
+    /**
+     * Slide slots whose stored state could not be read; exports to bound sinks
+     * are refused for them (`W_IO_NOT_HYDRATED`) until a restore succeeds.
+     */
+    unreadableSlots(): Array<{ ownerUid: string; viewerId: string; backgroundId?: string }>;
+    /**
+     * Read an unreadable slot again. Success imports the stored state (which
+     * replaces what is on screen) and reopens the slot; failure changes nothing.
+     */
+    retryRestore(scope: { ownerUid?: string; viewerId: string; backgroundId: string }): Promise<IOResult[]>;
+
+    // ── events: 'io:refused', 'io:reverted', 'io:fully-refused', 'io:restore-unreadable', … ──
     addHandler(eventName: string, handler: (e: any) => void): void;
     removeHandler(eventName: string, handler: (e: any) => void): void;
 

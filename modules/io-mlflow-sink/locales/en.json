@@ -20,7 +20,10 @@
     "noArtifacts": "This MLflow template writes artifacts, but no artifacts adapter is configured for the sink.",
     "notConfigured": "MLflow storage is not configured (no proxy alias or base URL).",
     "targetMissing": "MLflow storage is on for this session, but no usable MLflow experiment was selected. Set params.ioSinks.mlflow.target in the session.",
-    "targetUnbounded": "This deployment lets sessions choose the MLflow experiment but does not limit which ones, so the choice is ignored. Ask the administrator to set experimentAllow."
+    "targetUnbounded": "This deployment lets sessions choose the MLflow experiment but does not limit which ones, so the choice is ignored. Ask the administrator to set experimentAllow.",
+    "targetRunUnbounded": "This deployment does not let a session choose the MLflow run unless the permitted runs are listed. Ask the administrator to set runAllow.",
+    "targetArtifactUnbounded": "This deployment does not let a session choose the MLflow file path unless the permitted location is set. Ask the administrator to set artifactPathPrefix.",
+    "targetNoSlide": "The selected MLflow destination is named after the slide, but this data does not belong to a slide, so it was not stored."
   },
   "consent": {
     "description": "A script wants to change how scored data is written to MLflow.",

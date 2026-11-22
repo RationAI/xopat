@@ -16,7 +16,7 @@ globalThis.OpenSeadragon.EventSource = globalThis.OpenSeadragon.EventSource ?? c
 globalThis.$ = globalThis.$ ?? { t: (key) => String(key).split(".").pop() };
 
 const { formatContextTemplate, IOPipeline } = await import("../../../src/classes/io/io-pipeline.ts");
-const { hmacSha256Hex, slideHashOf, sha256 } = await import("../../../src/classes/io/slide-hash.ts");
+const { hmacSha256Hex, slideHashOf, sha256, slideCanonicalOf, slideLegacyCanonicalOf } = await import("../../../src/classes/io/slide-hash.ts");
 
 const ctx = {
     direction: "export", capabilityId: "bundle-export", ownerId: "annotations",
@@ -81,6 +81,63 @@ test("slideHashOf is 16 hex, deterministic, and depends on the key @unit", () =>
     expect(slideHashOf("k1", "/data/FNB-766-24.czi")).toBe(a);
     expect(slideHashOf("k2", "/data/FNB-766-24.czi")).not.toBe(a);
     expect(slideHashOf("k1", "/data/FNB-766-25.czi")).not.toBe(a);
+});
+
+test("how a slide is drawn does not change which slide it is @unit", () => {
+    // Setting sampling in the Data panel turns the entry "a.tif" into
+    // {dataID: "a.tif", minificationFilter: …}; stored data must stay addressed.
+    const path = "/data/FNB-766-24.czi";
+    expect(slideCanonicalOf(path)).toBe(path);
+    expect(slideCanonicalOf({ dataID: path })).toBe(path);
+    expect(slideCanonicalOf({ dataID: path, minificationFilter: "nearest", imageSmoothingEnabled: false })).toBe(path);
+
+    // Anything that says WHICH data (protocol, options, microns) is identity,
+    // hashed exactly as before — only the display fields are left out.
+    const full = { protocol: "dicom", dataID: path, options: { format: "jpg" } };
+    const before = '{"dataID":"/data/FNB-766-24.czi","options":{"format":"jpg"},"protocol":"dicom"}';
+    expect(slideCanonicalOf(full)).toBe(before);
+    expect(slideCanonicalOf({ ...full, minificationFilter: "linear" })).toBe(before);
+    expect(slideCanonicalOf({ dataID: path, protocol: "dicom" })).not.toBe(path);
+    // The former address exists exactly where the answer changed.
+    expect(slideLegacyCanonicalOf(path)).toBeUndefined();
+    expect(slideLegacyCanonicalOf(full)).toBeUndefined();
+    expect(slideLegacyCanonicalOf({ dataID: path })).toBe('{"dataID":"/data/FNB-766-24.czi"}');
+    expect(slideLegacyCanonicalOf({ ...full, minificationFilter: "linear" }))
+        .toBe('{"dataID":"/data/FNB-766-24.czi","minificationFilter":"linear","options":{"format":"jpg"},"protocol":"dicom"}');
+    // An object locator is never collapsed.
+    expect(slideCanonicalOf({ dataID: { study: "1", series: "2" } })).toBe('{"dataID":{"series":"2","study":"1"}}');
+});
+
+test("a background keeps its data entry when the entry changes shape @unit", async () => {
+    const prevContext = globalThis.APPLICATION_CONTEXT;
+    const data = ["/data/a.tif", { dataID: "/data/b.tif", protocol: "p" }];
+    globalThis.APPLICATION_CONTEXT = { config: { data, background: [] } };
+    try {
+        const { BackgroundConfig } = await import("../../../src/classes/background-config.ts");
+        const a = Object.create(BackgroundConfig.prototype);
+        a._rawValue = data[0];
+        const b = Object.create(BackgroundConfig.prototype);
+        b._rawValue = data[1];
+        expect([a._indexIn(data), b._indexIn(data)]).toEqual([0, 1]);
+
+        // string → object (sampling set), then object → string (sampling cleared).
+        data[0] = { dataID: "/data/a.tif", minificationFilter: "nearest" };
+        expect(a._indexIn(data)).toBe(0);
+        expect(a._rawValue).toBe(data[0]);
+        data[0] = "/data/a.tif";
+        expect(a._indexIn(data)).toBe(0);
+
+        // In-place display edit on an object entry that was deep-cloned meanwhile.
+        data[1] = { dataID: "/data/b.tif", protocol: "p", imageSmoothingEnabled: false };
+        expect(b._indexIn(data)).toBe(1);
+
+        // A different reading of the same file is a different entry.
+        const c = Object.create(BackgroundConfig.prototype);
+        c._rawValue = { dataID: "/data/a.tif", protocol: "other" };
+        expect(c._indexIn(data)).toBe(-1);
+    } finally {
+        globalThis.APPLICATION_CONTEXT = prevContext;
+    }
 });
 
 test("formatPath passes the operator key and refuses {slideHash} without one @unit", () => {

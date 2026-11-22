@@ -242,6 +242,11 @@ function detachedJson(value: unknown): Record<string, unknown> | undefined {
 /** Tokens resolved from the slide behind `ctx.backgroundId`, not from the ctx itself. */
 const SLIDE_TOKENS = /\{slide(?:Hash|Name)\}/;
 const SLIDE_HASH_TOKEN = /\{slideHash\}/;
+/** An action offered next to a pipeline notification (rendered as a toast button). */
+export interface IONotifyButton { label: string; onClick: () => void; }
+
+/** `ctx.meta` flag: resolve `{slideHash}` to the slide's pre-change address. */
+const LEGACY_SLIDE_HASH = "legacySlideHash";
 
 /**
  * See `IOPipelineLike.formatPath`. Pure; exported for tests. `slide` is the
@@ -429,7 +434,7 @@ interface OwnerRecord {
      *  `all`                     — global + per-viewer + per-viewer-background. */
     bundleScope: BundleScope;
     /** See `IOOwnerBundleHooks.defaultFormat`. */
-    defaultFormat?: () => string | undefined;
+    defaultFormat?: (ctx?: IOContext) => string | undefined;
     capabilities: Map<string, IOCapability>;
     defaultBindings: Record<string, IOBindingTarget[]>;
     /** include.json hard-disable. */
@@ -446,7 +451,7 @@ export interface IOPipelineOptions {
      *  per-viewer bundle exports. Returns [] when none active. */
     getViewers?: () => Array<{ uniqueId: string; viewer?: any }>;
     /** Lazy getter for the user-facing notifier; defaults to console. */
-    notify?: (message: string, level: "info" | "warn" | "error") => void;
+    notify?: (message: string, level: "info" | "warn" | "error", buttons?: IONotifyButton[]) => void;
     /** Deployment cookie policy (`ENV.client.js_cookie_*`) applied by the
      *  `cookies` KV driver to every write. Operator-controlled, never
      *  session-derived (§7). */
@@ -504,7 +509,7 @@ export class IOPipeline implements IOPipelineLike {
     public readonly POST_DATA: Record<string, any>;
     private readonly getConfig: () => IOConfigBlock | undefined;
     private readonly getViewers: () => Array<{ uniqueId: string; viewer?: any }>;
-    private readonly notifier: (m: string, l: "info" | "warn" | "error") => void;
+    private readonly notifier: (m: string, l: "info" | "warn" | "error", buttons?: IONotifyButton[]) => void;
     /**
      * True until the loader's boot-time `forceDataImportInitialization`
      * fires and the host calls `markBootRestoreComplete()`. While pending,
@@ -524,6 +529,15 @@ export class IOPipeline implements IOPipelineLike {
      * genuine re-opens re-hydrate.
      */
     private hydratedKeys = new Set<string>();
+    /**
+     * Same keys, for slots whose restore was ATTEMPTED and came back with
+     * nothing but failures. What is stored there is unknown, so nothing is
+     * written to a bound sink for such a slot until a restore succeeds:
+     * exporting would replace data that was never read (or, before the wipe
+     * below existed, store the previous slide's state under this slide's key).
+     * A slot nobody tried to read is not in here — a write-only binding saves.
+     */
+    private restoreFailedKeys = new Set<string>();
     /** Background-scoped restores currently reading, by the same key. */
     private readonly hydrating = new Map<string, Promise<void>>();
     /**
@@ -901,11 +915,16 @@ export class IOPipeline implements IOPipelineLike {
     /** See `IOPipelineLike.formatPath`. */
     formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string {
         // Resolve the slide only when asked for: it is a config lookup + hash.
-        let slide: { hash?: string; name?: string } | undefined;
+        let slide: { hash?: string; name?: string; legacyHash?: string } | undefined;
         if (SLIDE_TOKENS.test(String(template))) {
             const key = this.getConfig()?.slideHashKey;
             slide = (window as any).UTILITIES?.slideIdentityFor?.(
                 ctx.backgroundId, typeof key === "string" && key ? key : undefined);
+            // The restore's second look (see `runOneRestoreUnguarded`): the
+            // address this slide's data had before the hash stopped covering
+            // display-only fields. Read-only by construction — only that pass
+            // sets the flag.
+            if (slide?.legacyHash && ctx.meta?.[LEGACY_SLIDE_HASH]) slide = { ...slide, hash: slide.legacyHash };
             // A slide is there but cannot be hashed without the operator key.
             // Degrade closed: `_any` would merge every slide into one address,
             // and an unkeyed hash is reversible offline (guessable paths).
@@ -1125,16 +1144,18 @@ export class IOPipeline implements IOPipelineLike {
             return { format: this.formats.descriptor(domain, id, binding?.formatOptions), source: "declared" };
         }
         // Takes any format and nobody pinned one: the owner's DEPLOYMENT default,
-        // so what lands in the store never follows a user's UI choice.
+        // so what lands in the store never follows a user's UI choice. The owner
+        // sees the route, and may answer a local-file sink with that choice.
         let fallback: string | undefined;
         try {
-            fallback = owner.defaultFormat?.();
+            fallback = owner.defaultFormat?.(sink.route === "local" ? { ...ctx, route: "local" } : ctx);
         } catch (e) {
             console.error(`[IO] owner "${ownerUid}" defaultFormat threw:`, e);
         }
         if (!fallback || !this.formats.has(domain, fallback)) return {};
         const warnKey = `${sink.id}::${ownerUid}`;
-        if (!this.ownerDefaultFormatWarned.has(warnKey)) {
+        // A local file is the owner's (and so the user's) choice by design.
+        if (sink.route !== "local" && !this.ownerDefaultFormatWarned.has(warnKey)) {
             this.ownerDefaultFormatWarned.add(warnKey);
             console.warn(`[IO] sink "${sink.id}" stores "${domain}" in the owner's default format "${fallback}". `
                 + `Pin one in the sink's config (formats: { "${domain}": "<id>" }) or the binding ({ sink, format }).`);
@@ -1669,6 +1690,12 @@ export class IOPipeline implements IOPipelineLike {
                 this.hydratedKeys.delete(k);
             }
         }
+        for (const k of Array.from(this.restoreFailedKeys)) {
+            const bundleKey = k.substring(k.indexOf("|") + 1);
+            if (bundleKey === viewerId || bundleKey.startsWith(`${viewerId}::`)) {
+                this.restoreFailedKeys.delete(k);
+            }
+        }
     }
 
     // ── orchestration: bundle export ───────────────────────────────────
@@ -1742,7 +1769,10 @@ export class IOPipeline implements IOPipelineLike {
                     await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger);
                     // Slide-leave: re-arm hydration for this (viewer, background)
                     // so returning to the slide restores from sinks again.
-                    this.hydratedKeys.delete(`${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`);
+                    const left = `${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`;
+                    this.hydratedKeys.delete(left);
+                    // ...and forget a failed read: the next visit reads again.
+                    this.restoreFailedKeys.delete(left);
                     continue;
                 }
 
@@ -1880,8 +1910,26 @@ export class IOPipeline implements IOPipelineLike {
         // here by other routes, and for guards registered after that check —
         // but `surface: false`, because the refusal it would report is the one
         // the caller is already aggregating.
-        const sinkVerdict = this.runGuards(
+        let sinkVerdict = this.runGuards(
             { ...ctx, direction: "pre-export", route: "sink" }, undefined, { surface: false });
+        // A slot whose stored state could not be read is closed to bound sinks
+        // exactly like a denied one — see `restoreFailedKeys`. The local route
+        // stays open for a user-driven export: a copy of what is on screen.
+        if (sinkVerdict.ok && backgroundId !== undefined && this.restoreFailedKeys.has(`${uid}|${ctx.key}`)) {
+            const refusal = {
+                ok: false as const, refused: true as const, code: "W_IO_NOT_HYDRATED",
+                reason: "stored data for this slide could not be read; not overwriting it",
+                userMessage: $.t("error.ioNotHydrated", { owner: ctx.ownerId }),
+            };
+            // An automatic flush (slide-leave) asked for no file either: it must
+            // not turn every slide change during an outage into a download.
+            if (trigger === "system") {
+                this.logRefusal(ctx, refusal, refusal.reason);
+                results.push({ ...refusal, ...ownerOf(ctx) });
+                return;
+            }
+            sinkVerdict = refusal;
+        }
         // The local-file escape hatch is a separate question with a separate
         // answer: denying an owner's upload must not confiscate the user's own
         // copy, and denying `core.io.local-file` must stop that copy even when
@@ -2123,6 +2171,46 @@ export class IOPipeline implements IOPipelineLike {
         return results;
     }
 
+    /**
+     * Slots whose stored state could not be read, and which are therefore
+     * closed to bound sinks (`W_IO_NOT_HYDRATED`). Empty in normal operation.
+     */
+    unreadableSlots(): Array<{ ownerUid: string; viewerId: string; backgroundId?: string }> {
+        return Array.from(this.restoreFailedKeys, (k) => {
+            const at = k.indexOf("|");
+            const [viewerId = "", backgroundId] = k.substring(at + 1).split("::");
+            return { ownerUid: k.substring(0, at), viewerId, backgroundId };
+        });
+    }
+
+    /**
+     * Read an unreadable slot again, at the user's request.
+     *
+     * On success the stored state is imported — which, for a slide-aware owner,
+     * REPLACES what is on screen (its `importBundle` wipes first) — and the slot
+     * reopens for saving. On failure nothing changes: the slot stays closed and
+     * what the user drew stays put. A slot that is not unreadable is left alone,
+     * so this can never re-import over a healthy one.
+     */
+    async retryRestore(scope: { ownerUid?: string; viewerId: string; backgroundId: string }): Promise<IOResult[]> {
+        const bundleKey = this.composeBundleKey(scope.viewerId, scope.backgroundId);
+        const pending = Array.from(this.restoreFailedKeys).filter(k =>
+            k.substring(k.indexOf("|") + 1) === bundleKey
+            && (!scope.ownerUid || k.startsWith(`${scope.ownerUid}|`)));
+        const results: IOResult[] = [];
+        for (const k of pending) {
+            const ownerUid = k.substring(0, k.indexOf("|"));
+            results.push(...await this.tryRestoreImport({
+                ownerUid, viewerId: scope.viewerId, backgroundId: scope.backgroundId, trigger: "user",
+            }));
+            if (!this.restoreFailedKeys.has(k)) {
+                const owner = this.owners.get(ownerUid);
+                this.notifier($.t("messages.ioRestoreRecovered", { owner: owner?.ownerId ?? ownerUid }), "info");
+            }
+        }
+        return results;
+    }
+
     private async runOneRestore(
         uid: string,
         owner: OwnerRecord,
@@ -2232,8 +2320,15 @@ export class IOPipeline implements IOPipelineLike {
                 const readCtx: IOContext = { ...ctxBase, capabilityId: sinks.get(tid)!, meta: { sinkId: tid } };
                 const resolved = sink ? this.formatFor(uid, owner, sinks.get(tid)!, sink, readCtx) : undefined;
                 if (resolved?.format) {
-                    readCtx.format = resolved.format;
-                    if (resolved.source === "owner-default") guessedFormat.add(tid);
+                    const guessed = resolved.source === "owner-default";
+                    if (guessed) guessedFormat.add(tid);
+                    // A guess must not decide HOW bytes are read. A local file
+                    // is whatever the user picks, so its sink gets no format at
+                    // all and goes by the file; a store is told it is a guess.
+                    if (!(guessed && sink?.route === "local")) {
+                        readCtx.format = resolved.format;
+                        if (guessed) readCtx.meta.formatGuessed = true;
+                    }
                 }
                 return readCtx;
             },
@@ -2241,7 +2336,7 @@ export class IOPipeline implements IOPipelineLike {
             (route) => route === "local" ? localAllowed : verdict.ok,
         );
         const attempted = picked.length;
-        for (const { sink: t, ctx } of picked) {
+        const readAll = async (entries: Array<{ sink: IOSink; ctx: IOContext }>) => { for (const { sink: t, ctx } of entries) {
             try {
                 const r = await t.readBundle!(ctx);
                 if (!r.ok) {
@@ -2280,6 +2375,28 @@ export class IOPipeline implements IOPipelineLike {
                 const r = this.failure(ctx, e?.message ?? String(e), "W_IO_RESTORE_THREW", e?.userMessage);
                 results.push(r);
                 dispatchResults.push(r);
+            }
+        } };
+        await readAll(picked);
+        // Nothing stored for this slide — under today's address. Data written
+        // before `{slideHash}` stopped covering display-only fields sits under
+        // the old one; look there once. Only when the slide HAS such an address
+        // (see `slideLegacyCanonicalOf`), so an ordinary empty slot costs no
+        // second read. The next save writes to the current address.
+        if (slideAware && !reads.length && emptyCtx && picked.length) {
+            const key = this.getConfig()?.slideHashKey;
+            const legacy = typeof key === "string" && key
+                ? (window as any).UTILITIES?.slideIdentityFor?.(backgroundId, key)?.legacyHash
+                : undefined;
+            if (legacy) {
+                await readAll(picked.map(({ sink, ctx }) => ({
+                    sink, ctx: { ...ctx, meta: { ...ctx.meta, [LEGACY_SLIDE_HASH]: true } },
+                })));
+                // The flag addressed the read; the owner imports into today's slot.
+                for (const read of reads) {
+                    const { [LEGACY_SLIDE_HASH]: _legacy, ...meta } = read.ctx.meta as Record<string, unknown>;
+                    read.ctx = { ...read.ctx, meta };
+                }
             }
         }
         // Slide-aware owners DO need the call even when every sink was empty:
@@ -2322,6 +2439,39 @@ export class IOPipeline implements IOPipelineLike {
         // sinks at all, nothing is attempted, and the slot stays free.
         if (backgroundId !== undefined && succeeded > 0) {
             this.hydratedKeys.add(guardKey);
+            this.restoreFailedKeys.delete(guardKey);
+        }
+        // Read attempted, nothing but failures (a cancelled file pick is not
+        // one). Two things follow for a slide-aware owner:
+        //  - its overlay still shows the slide that was open before, because
+        //    the wipe lives in `importBundle` and nothing called it. That state
+        //    was flushed when its slide was left, so clearing it loses nothing.
+        //    Once per visit only: a later retry must not erase what the user
+        //    has drawn on THIS slide in the meantime.
+        //  - what the sinks hold for this slot is unknown, so exports to them
+        //    are refused until a restore succeeds (`runOneBundleExport`).
+        if (slideAware && attempted > 0 && succeeded === 0
+            && dispatchResults.some(r => !r.ok && r.code !== "W_IO_CANCELLED")) {
+            if (!targets.length && !this.restoreFailedKeys.has(guardKey)) {
+                try {
+                    await owner.importBundle!(
+                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined);
+                } catch (e) {
+                    console.warn(`[IO] owner "${uid}" failed to clear state after an unreadable restore:`, e);
+                }
+            }
+            // Said once per visit, whoever triggered the restore: the refusals
+            // above are silent for an automatic one, but "your work here is not
+            // being saved" is not something to leave in a log. A retry that fails
+            // again has already reported its own refusals.
+            if (!this.restoreFailedKeys.has(guardKey) && viewerId !== undefined && backgroundId !== undefined) {
+                this.notifier($.t("error.ioRestoreUnreadable", { owner: owner.ownerId }), "warn", [{
+                    label: $.t("common.retry"),
+                    onClick: () => { void this.retryRestore({ ownerUid: uid, viewerId, backgroundId }); },
+                }]);
+            }
+            this.restoreFailedKeys.add(guardKey);
+            this.bus.raiseEvent("io:restore-unreadable", { ownerUid: uid, ownerId: owner.ownerId, viewerId, backgroundId });
         }
         if (attempted > 0 && succeeded === 0) {
             // Restore-side full refusal stays gated on `attempted`: a sink that

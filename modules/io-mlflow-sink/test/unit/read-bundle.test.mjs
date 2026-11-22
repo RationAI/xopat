@@ -11,12 +11,15 @@ import { BUILT_IN_TEMPLATES } from "../../templates.ts";
 globalThis.$ = globalThis.$ ?? {};
 globalThis.$.t = (key) => key;
 
-function installFakeMlflow({ files = {}, runData = { tags: [{ key: "t", value: "v" }] } } = {}) {
+function installFakeMlflow({ files = {}, runData = { tags: [{ key: "t", value: "v" }] }, experimentError } = {}) {
     const calls = { downloads: [] };
     globalThis.MlFlow = {
         Utils: MlflowUtils,
         MlFlowClient: class {
-            experiments = { getByName: async (name) => ({ experiment: { experiment_id: `exp:${name}` } }) };
+            experiments = { getByName: async (name) => {
+                if (experimentError) throw Object.assign(new Error("lookup failed"), { statusCode: experimentError });
+                return { experiment: { experiment_id: `exp:${name}` } };
+            } };
             runs = { search: async () => ({ runs: [{ info: { run_id: "run1" }, data: runData }] }) };
             artifacts = {
                 downloadText: async (runId, path) => {
@@ -57,6 +60,19 @@ test("bundle-artifact returns the stored JSON file, parsed @unit", async () => {
 test("bundle-artifact with no file yet is empty, not an error @unit", async () => {
     installFakeMlflow();
     expect(await sinkWith("bundle-artifact").readBundle(ctx)).toEqual({ ok: true });
+});
+
+test("a missing experiment is empty; an unreachable one is a failure @unit", async () => {
+    installFakeMlflow({ experimentError: 404 });
+    expect(await sinkWith("bundle-artifact").readBundle(ctx)).toEqual({ ok: true });
+    // Reading an outage as "nothing stored" would let the next save overwrite
+    // data that was never loaded.
+    for (const status of [401, 500, 503]) {
+        installFakeMlflow({ experimentError: status });
+        const res = await sinkWith("bundle-artifact").readBundle(ctx);
+        expect(res.ok).toBe(false);
+        expect(res.refused).toBe(true);
+    }
 });
 
 test("templates without artifacts still return the run data @unit", async () => {

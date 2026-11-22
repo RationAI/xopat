@@ -214,6 +214,22 @@ Set `runAllow` too: a named run is matched by `mlflow.runName`, so without it a
 session may append to (and, on delete, untag) any existing run of an allowed
 experiment, including runs created outside xOpat.
 
+**`strictSessionTarget` (trusted config, default `false`) makes that mandatory.**
+By default only the experiment has to be bounded: inside an allowed experiment a
+session may name any run and any artifact path. That is deliberate — it suits a
+deployment where everyone sharing an experiment is trusted — but it also means an
+embedding app or an imported session can point a user's saves at another reader's
+run. With `strictSessionTarget: true` a session target is refused when it
+
+- names a `run` while `runAllow` is unset (`W_MLFLOW_TARGET_UNBOUNDED`),
+- names an `artifact` while `artifactPathPrefix` is unset (`W_MLFLOW_TARGET_UNBOUNDED`),
+- uses `{slideHash}` or `{backgroundId}` on a dispatch that belongs to no slide
+  (`W_MLFLOW_NO_TARGET`). Without strict mode those tokens fall back to the
+  constant `_any`, one address shared by every such record.
+
+Nothing else changes: templates, registered mappers, `experimentAllow` and
+`runAllow` behave the same with or without the key.
+
 The session names its destination in the sink's own entry of `params.ioSinks`
 (the IO pipeline's generic per-sink session settings, `src/IO_PIPELINE.md`):
 
@@ -362,6 +378,7 @@ user just picked.
 | `artifactPathPrefix` | no²      | admin override | unset (unrestricted)   |
 | `artifacts`          | no       | admin override | unset (no artifacts)   |
 | `sessionTarget`      | no       | admin override | unset (session target ignored) |
+| `strictSessionTarget`| no       | admin override | `false` (run / artifact free inside an allowed experiment) |
 
 ¹ At least one of `proxy` / `baseURL` must resolve, or the sink declines. If it
 is the only sink bound, that decline now surfaces as a "nothing stored" refusal
@@ -372,12 +389,11 @@ names and `artifactPathPrefix` bounds artifact paths (which land in an upload
 URL). Leaving `experimentAllow` unset logs a one-time warning — allow-all may be
 deliberate, but it should never be invisible.
 
-**Write `artifactPathPrefix` without a trailing slash.** The comparison is
-against `sanitizeArtifactPath(prefix)`, which rewrites the empty segment a
-trailing slash produces into `_`: `"xopat/"` becomes `"xopat/_"` and then denies
-`xopat/anything.json` — every path the `bundle-artifact` template emits. Use
-`"xopat"`. A denial is reported as `W_MLFLOW_ARTIFACT_DENIED`, so this fails
-loudly rather than silently, but it fails on a value that looks correct.
+`artifactPathPrefix` names a directory and is matched on whole path segments:
+`"xopat"` admits `xopat/file.json`, never `xopat-other/file.json`. A trailing
+slash is ignored. (It used to be a bare string prefix, which let any sibling
+sharing the leading characters through; a template that relied on that needs a
+prefix that is the common parent directory.) A denial is reported as `W_MLFLOW_ARTIFACT_DENIED`.
 
 **Choosing the format** of a bundle artifact: `formats: { "annotations": "geo-json" }`
 (or `{ "id", "options" }`; `"*"` for any owner) in the sink config
@@ -487,7 +503,7 @@ never built from strings — so no `eval`/`Function` is involved.
 | `W_MLFLOW_NOT_FOUND`        | 404 — experiment / run / endpoint missing. Check `baseURL` and the proxy's upstream `baseUrl`. |
 | `W_MLFLOW_EXPERIMENT_DENIED`| A mapper targeted an experiment outside `experimentAllow`. Nothing was written. |
 | `W_MLFLOW_NO_TARGET`        | `sessionTarget` is `"required"` and the session set no `params.ioSinks.mlflow.target` (or the sink is not `sessionControllable`) (or `clearTarget()` was called), or — under `"allowed"` or `"required"` — the target was invalid or a name resolved to nothing. Nothing was written. |
-| `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. |
+| `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. Also: `strictSessionTarget` is on and the session named a run without `runAllow`, or an artifact without `artifactPathPrefix`. |
 | `W_MLFLOW_MAPPER_INVALID`   | The template name does not exist, the mapper threw, or it returned a mapping without an experiment / run identifier tag. |
 | `W_MLFLOW_NO_ARTIFACTS`     | The mapper emitted artifacts but no `artifacts` block is configured. |
 | `W_MLFLOW_HTTP_<status>`    | Other non-2xx (including 502/504 from a misconfigured proxy alias). |

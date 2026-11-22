@@ -134,9 +134,20 @@ export function makeHttpRestSink(opts: HttpRestSinkOptions): IOSink {
         },
         async readBundle(ctx) {
             try {
-                const res = await client(ctx).request(buildPath(ctx, "bundle"), { method: "GET" });
+                // A binary format read as text is corrupted before any decoder
+                // sees it. Only for a format somebody actually named: under the
+                // owner's default (a guess) the stored document may predate it.
+                const binary = !!ctx.format?.binary && !ctx.meta?.formatGuessed;
+                const res = await client(ctx).request(buildPath(ctx, "bundle"),
+                    binary ? { method: "GET", expect: "bytes" } : { method: "GET" });
                 return okFromResponse(res);
-            } catch (e) { return fail(e, "W_IO_HTTP_READ"); }
+            } catch (e: any) {
+                // Nothing stored yet is an answer, not a failure — every other
+                // sink reports it this way, and the pipeline needs to tell
+                // "empty" (wipe, then save freely) from "unreadable".
+                if (Number(e?.response?.status) === 404) return { ok: true };
+                return fail(e, "W_IO_HTTP_READ");
+            }
         },
         async create(ctx, item) {
             try {

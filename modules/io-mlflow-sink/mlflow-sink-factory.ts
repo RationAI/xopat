@@ -89,6 +89,19 @@ export type MlflowSinkConfig = {
      * without it a hostile session could route data to any experiment.
      */
     sessionTarget?: "allowed" | "required" | null;
+    /**
+     * Tighten what a session target may name. Trusted config only; default `false`.
+     * By default only the experiment must be bounded (`experimentAllow`), so a
+     * session may name any run and any artifact path inside an allowed experiment --
+     * deliberate, for deployments where everyone sharing an experiment is trusted.
+     * With `true` a session target is additionally refused when it
+     *   - names a `run` while `runAllow` is unset,
+     *   - names an `artifact` while `artifactPathPrefix` is unset,
+     *   - uses `{slideHash}` / `{backgroundId}` on a dispatch that has no slide
+     *     (they would resolve to the constant `_any`, one address for everyone).
+     * Templates, mappers and the allowlists themselves are unaffected by this key.
+     */
+    strictSessionTarget?: boolean | null;
 };
 
 /**
@@ -144,6 +157,23 @@ const TARGET_PLACEHOLDERS = new Set([
     "slideHash", "backgroundId", "viewerId", "ownerId", "ownerUid",
     "capabilityGroup", "capabilityId", "xoType", "key",
 ]);
+
+/** Tokens that address data by slide; without a slide they resolve to the constant `_any`. */
+const SLIDE_TARGET_TOKENS = /\{(?:slideHash|backgroundId)\}/;
+
+/**
+ * Whether `safe` (already sanitized) lies under the operator's `artifactPathPrefix`.
+ *
+ * The prefix names a directory, so it is matched on whole path segments: `"xopat"`
+ * admits `xopat/a.json` and `xopat` itself, never `xopat-other/a.json`. A bare
+ * `startsWith` let anything sharing the leading characters through. A trailing slash
+ * on the prefix is dropped first -- sanitizing it would append a `_` segment and
+ * deny every path.
+ */
+function withinArtifactPrefix(safe: string, prefix: string): boolean {
+    const root = sanitizeArtifactPath(String(prefix).replace(/\/+$/, ""));
+    return safe === root || safe.startsWith(`${root}/`);
+}
 
 /** Every brace belongs to a whole `{token}` from TARGET_PLACEHOLDERS. */
 function placeholdersAllowed(name: string): boolean {
@@ -212,6 +242,16 @@ function fail(reason: string, code: string, userMessage?: string): IOResult {
     return userMessage
         ? { ok: false, refused: true, reason, code, userMessage }
         : { ok: false, refused: true, reason, code };
+}
+
+/**
+ * `.catch` handler for a lookup whose 404 means "does not exist yet". Anything
+ * else (auth, 5xx, no answer) is rethrown: reading an outage as "nothing
+ * stored" lets the next save replace data that was never loaded.
+ */
+function absentIfNotFound(e: any): undefined {
+    if (e?.statusCode === 404) return undefined;
+    throw e;
 }
 
 function classifyHttpError(e: any): IOResult {
@@ -391,7 +431,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         for (const artifact of mapping.artifacts) {
             const safe = sanitizeArtifactPath(String(artifact.path ?? ""));
             artifact.path = safe;
-            if (prefix && !safe.startsWith(sanitizeArtifactPath(prefix))) {
+            if (prefix && !withinArtifactPrefix(safe, prefix)) {
                 return fail(
                     `mapper emitted artifact path "${safe}" outside artifactPathPrefix "${prefix}"`,
                     "W_MLFLOW_ARTIFACT_DENIED",
@@ -409,6 +449,32 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         "sessionTarget is set but experimentAllow is not: a session target is ignored without an allowlist";
     const unboundedTarget = (): IOResult =>
         fail(UNBOUNDED_REASON, "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetUnbounded"));
+
+    /** `strictSessionTarget` refusals; `undefined` when the target passes (or strict is off). */
+    const strictTargetRefusal = (ctx: IOContext, o: MlflowSinkConfig, raw: MlflowSessionTarget)
+        : IOResult | undefined => {
+        if (o.strictSessionTarget !== true) return undefined;
+        if (raw.run !== undefined && !(Array.isArray(o.runAllow) && o.runAllow.length)) {
+            return fail("strictSessionTarget: a session-chosen run requires runAllow",
+                "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetRunUnbounded"));
+        }
+        if (raw.artifact !== undefined && !o.artifactPathPrefix) {
+            return fail("strictSessionTarget: a session-chosen artifact path requires artifactPathPrefix",
+                "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetArtifactUnbounded"));
+        }
+        const names = [raw.experiment, raw.run, raw.artifact].filter((n): n is string => !!n);
+        if (names.some((n) => SLIDE_TARGET_TOKENS.test(n))) {
+            const pipeline = (globalThis as any).IO_PIPELINE;
+            const noSlide = !ctx.backgroundId
+                || (names.some((n) => n.includes("{slideHash}")) && typeof pipeline?.formatPath === "function"
+                    && pipeline.formatPath("{slideHash}", ctx, { mode: "name" }) === "_any");
+            if (noSlide) {
+                return fail("strictSessionTarget: the target addresses data by slide, but this dispatch has no slide",
+                    "W_MLFLOW_NO_TARGET", t("error.targetNoSlide"));
+            }
+        }
+        return undefined;
+    };
 
     /**
      * The session target for this dispatch, resolved, or a refusal.
@@ -433,6 +499,9 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         if (!raw?.experiment) {
             return required || opts.isTargetRejected?.() ? { refusal: missingTarget() } : {};
         }
+
+        const strict = strictTargetRefusal(ctx, o, raw);
+        if (strict) return { refusal: strict };
 
         const experiment = resolveTargetName(raw.experiment, ctx);
         const run = raw.run !== undefined ? resolveTargetName(raw.run, ctx) : undefined;
@@ -683,7 +752,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 const client = buildClient(o);
                 // A missing experiment/run is "no data yet", not an error — never
                 // create one on the import path.
-                const found = await client.experiments.getByName(mapping.experiment).catch(() => undefined);
+                const found = await client.experiments.getByName(mapping.experiment).catch(absentIfNotFound);
                 const expId = found?.experiment?.experiment_id;
                 if (!expId) return { ok: true };
 
@@ -738,7 +807,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
             const { mapping } = step;
 
             const client = buildClient(o);
-            const found = await client.experiments.getByName(mapping.experiment).catch(() => undefined);
+            const found = await client.experiments.getByName(mapping.experiment).catch(absentIfNotFound);
             const expId = found?.experiment?.experiment_id;
             if (!expId) return;
 

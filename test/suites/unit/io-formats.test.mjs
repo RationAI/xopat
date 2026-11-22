@@ -418,14 +418,18 @@ function agnosticPipeline({ bindings = ["store"], pin, ownerDefault, sinkRoute, 
             return `payload:${ctx.format?.id ?? "default"}:${ctx.format?.options?.precision ?? ""}`;
         },
         importBundle: async (ctx, data) => { imported.push({ data, format: ctx.format?.id }); },
-        ...(ownerDefault !== undefined ? { defaultFormat: () => ownerDefault } : {}),
+        ...(ownerDefault !== undefined
+            ? { defaultFormat: typeof ownerDefault === "function" ? ownerDefault : () => ownerDefault } : {}),
     });
     pipeline.registerCapability(OWNER, { id: "bundle-import", kind: "bundle" });
     pipeline.registerSink({
         id: "store", supports: ["bundle"], ...(sinkRoute ? { route: sinkRoute } : {}),
         preferredFormat: (domain, ctx) => pinnedFormatFrom({ formats: pin }, domain),
         async writeBundle(ctx, payload) { written.store = { payload, format: ctx.format?.id }; return { ok: true }; },
-        async readBundle() { return readResult ?? { ok: true }; },
+        async readBundle(ctx) {
+            written.read = { format: ctx.format?.id, guessed: ctx.meta?.formatGuessed };
+            return readResult ?? { ok: true };
+        },
     });
     return { pipeline, exports, written, imported };
 }
@@ -481,6 +485,39 @@ test("a local-route sink is asked with route 'local', so the owner may use the u
     const { pipeline, exports } = agnosticPipeline({ sinkRoute: "local" });
     await pipeline.flushBundleExport({ skipFileFallback: true });
     expect(exports).toEqual([{ format: "(default)", route: "local" }]);
+});
+
+test("a bound local-file sink follows the owner's answer for the local route @unit", async () => {
+    // What annotations does: the deployment default for a store, the user's
+    // download-dialog choice for a file. The file must carry that format (its
+    // extension and MIME type come from `ctx.format`), not the store's.
+    const byRoute = (ctx) => ctx?.route === "local" ? "geo" : "native";
+    let run = agnosticPipeline({ sinkRoute: "local", ownerDefault: byRoute });
+    await run.pipeline.flushBundleExport();
+    expect(run.written.store.format).toBe("geo");
+    expect(run.exports).toEqual([{ format: "geo", route: "local" }]);
+
+    run = agnosticPipeline({ ownerDefault: byRoute });
+    await run.pipeline.flushBundleExport({ skipFileFallback: true });
+    expect(run.written.store.format).toBe("native");
+});
+
+test("a guessed format does not decide how a local file is read @unit", async () => {
+    // Under the owner default (binary here) a picked text file would be read as
+    // bytes, and a picked binary one as text under a text default. The local
+    // sink gets no format and goes by the file; a store is told it is a guess.
+    let run = agnosticPipeline({ sinkRoute: "local", ownerDefault: "bin" });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.written.read).toEqual({ format: undefined, guessed: undefined });
+
+    run = agnosticPipeline({ ownerDefault: "bin" });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.written.read).toEqual({ format: "bin", guessed: true });
+
+    // A pinned format is not a guess.
+    run = agnosticPipeline({ pin: { annotations: "bin" }, ownerDefault: "native" });
+    await run.pipeline.tryRestoreImport({ ownerUid: OWNER, trigger: "system" });
+    expect(run.written.read).toEqual({ format: "bin", guessed: undefined });
 });
 
 test("a restore under the owner default detects first, so older data still loads @unit", async () => {

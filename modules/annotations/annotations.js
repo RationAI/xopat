@@ -153,7 +153,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // Deployment `convertors.format` (validated), else native. What a
             // format-agnostic sink (GitHub, MLflow, http-rest) stores when
             // neither the binding nor the sink's own config pins a format.
-            defaultFormat: () => this.defaultFormat,
+            // A local file (bound `file-download`) is the user's own copy and
+            // follows the format picked in the export dialog, like `formatOf`.
+            defaultFormat: (ctx) => ctx?.route === "local"
+                ? (this.getExportOptions()?.format || this.defaultFormat)
+                : this.defaultFormat,
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
             // auto-fires flush-on-leave + restore-on-enter when the active

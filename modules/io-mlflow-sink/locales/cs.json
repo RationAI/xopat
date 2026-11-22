@@ -20,7 +20,10 @@
     "noArtifacts": "Tato šablona MLflow zapisuje artefakty, ale pro úložiště není nakonfigurován žádný adaptér artefaktů.",
     "notConfigured": "Úložiště MLflow není nakonfigurováno (chybí alias proxy nebo základní URL).",
     "targetMissing": "Úložiště MLflow je pro tuto relaci zapnuté, ale nebyl vybrán žádný použitelný experiment MLflow. Nastavte v relaci params.ioSinks.mlflow.target.",
-    "targetUnbounded": "Toto nasazení umožňuje relacím zvolit experiment MLflow, ale neomezuje, které, proto se volba ignoruje. Požádejte správce o nastavení experimentAllow."
+    "targetUnbounded": "Toto nasazení umožňuje relacím zvolit experiment MLflow, ale neomezuje, které, proto se volba ignoruje. Požádejte správce o nastavení experimentAllow.",
+    "targetRunUnbounded": "Toto nasazení nedovoluje relaci zvolit běh MLflow, dokud nejsou vyjmenovány povolené běhy. Požádejte správce o nastavení runAllow.",
+    "targetArtifactUnbounded": "Toto nasazení nedovoluje relaci zvolit cestu k souboru v MLflow, dokud není nastaveno povolené umístění. Požádejte správce o nastavení artifactPathPrefix.",
+    "targetNoSlide": "Zvolený cíl v MLflow je pojmenován podle snímku, ale tato data k žádnému snímku nepatří, proto nebyla uložena."
   },
   "consent": {
     "description": "Skript chce změnit způsob, jakým se hodnocená data zapisují do MLflow.",

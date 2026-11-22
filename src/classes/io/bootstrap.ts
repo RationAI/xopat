@@ -60,7 +60,7 @@ export function bootstrapIOPipeline(
                 ? vm.viewers.filter(Boolean).map((v: any) => ({ uniqueId: v.uniqueId, viewer: v }))
                 : [];
         },
-        notify: (m, l) => {
+        notify: (m, l, buttons) => {
             const D = (window as any).Dialogs;
             if (D?.show) {
                 const lvl = l === "error" ? D.MSG_ERR : l === "warn" ? D.MSG_WARN : D.MSG_INFO;
@@ -68,7 +68,9 @@ export function bootstrapIOPipeline(
                 // glancing away briefly still catches them; info stays
                 // short so successful-write confirmations don't pile up.
                 const duration = l === "info" ? 5000 : 12000;
-                D.show(m, duration, lvl);
+                // A message that offers a way out stays until it is dealt with.
+                if (buttons?.length) D.show(m, 60000, lvl, { buttons });
+                else D.show(m, duration, lvl);
             } else {
                 (l === "error" ? console.error : l === "warn" ? console.warn : console.info)(`[IO] ${m}`);
             }

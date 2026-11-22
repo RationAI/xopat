@@ -276,3 +276,85 @@ test("the sink's own `formats` config is reported as its format pin @unit", asyn
     // An older core without the helper: no pin, never a throw.
     expect(sinkWith({ formats: { annotations: "geo-json" } }).preferredFormat("annotations", ctxFor())).toBeUndefined();
 });
+
+// `strictSessionTarget` is opt-in: the default leaves run and artifact free inside
+// an allowed experiment (deliberate), strict closes the three remaining routes.
+test("strictSessionTarget refuses a run or artifact the operator never bounded @unit @security", async () => {
+    const calls = installFakeMlflow();
+    const base = { sessionTarget: "allowed", experimentAllow: ["xopat-*"] };
+    const target = { experiment: "xopat-cohort", run: "someone-elses-run" };
+
+    // Default: unchanged behaviour.
+    expect((await sinkWith(base, target).create(ctxFor(), score("s"))).ok).toBe(true);
+    expect(calls.runs[0].identifierTag.value).toBe("someone-elses-run");
+
+    const strict = { ...base, strictSessionTarget: true };
+    expect((await sinkWith(strict, target).create(ctxFor(), score("s"))).code).toBe("W_MLFLOW_TARGET_UNBOUNDED");
+    expect((await sinkWith({ ...strict, runAllow: ["review-*"] }, target).create(ctxFor(), score("s"))).code)
+        .toBe("W_MLFLOW_RUN_DENIED");
+    expect((await sinkWith({ ...strict, runAllow: ["someone-*"] }, target).create(ctxFor(), score("s"))).ok).toBe(true);
+
+    const artifact = { experiment: "xopat-cohort", artifact: "anywhere/file.json" };
+    expect((await sinkWith(strict, artifact).create(ctxFor(), score("s"))).code).toBe("W_MLFLOW_TARGET_UNBOUNDED");
+    // An experiment-only target needs no further allowlist.
+    expect((await sinkWith(strict, { experiment: "xopat-cohort" }).create(ctxFor(), score("s"))).ok).toBe(true);
+});
+
+test("strictSessionTarget refuses slide tokens on a dispatch without a slide @unit @security", async () => {
+    const calls = installFakeMlflow();
+    const base = { sessionTarget: "allowed", experimentAllow: ["xopat-*"], runAllow: ["review-*"] };
+    const target = { experiment: "xopat-cohort", run: "review-{backgroundId}" };
+    const noSlide = ctxFor({ backgroundId: undefined });
+
+    // Default: the token falls back to the shared constant.
+    expect((await sinkWith(base, target).create(noSlide, score("s"))).ok).toBe(true);
+    expect(calls.runs[0].identifierTag.value).toBe("review-_any");
+
+    const strict = sinkWith({ ...base, strictSessionTarget: true }, target);
+    expect((await strict.create(noSlide, score("s"))).code).toBe("W_MLFLOW_NO_TARGET");
+    expect((await strict.create(ctxFor(), score("s"))).ok).toBe(true);
+});
+
+test("artifactPathPrefix matches whole path segments @unit @security", async () => {
+    installFakeMlflow();
+    const config = { sessionTarget: "allowed", experimentAllow: ["xopat-*"], template: "bundle-artifact",
+        artifacts: { type: "mlflow-artifacts" } };
+    const bundleCtx = ctxFor({ capabilityId: "bundle-export" });
+    const write = (prefix, artifact) => sinkWith({ ...config, artifactPathPrefix: prefix },
+        { experiment: "xopat-cohort", artifact }).writeBundle(bundleCtx, { a: 1 });
+
+    expect((await write("xopat", "xopat-other/file.json")).code).toBe("W_MLFLOW_ARTIFACT_DENIED");
+    expect((await write("xopat", "xopatfile.json")).code).toBe("W_MLFLOW_ARTIFACT_DENIED");
+    expect((await write("xopat", "elsewhere/file.json")).code).toBe("W_MLFLOW_ARTIFACT_DENIED");
+    expect((await write("xopat", "xopat/file.json")).ok).toBe(true);
+    expect((await write("xopat", "xopat/deep/file.json")).ok).toBe(true);
+    expect((await write("xopat/", "xopat/file.json")).ok).toBe(true);
+    expect((await write("xopat/annotations", "xopat/annotations/file.json")).ok).toBe(true);
+    expect((await write("xopat/annotations", "xopat/annotations-b/file.json")).code).toBe("W_MLFLOW_ARTIFACT_DENIED");
+});
+
+// A deployment's own mapper is the common setup: it must behave identically whether or
+// not the new key exists, and strict mode must leave it alone when no session target is set.
+test("a custom mapper is untouched by strictSessionTarget @unit", async () => {
+    const custom = () => ({
+        experiment: "lab-results",
+        run: { name: "nightly", identifierTag: { key: "data_id", value: "nightly" } },
+        metrics: [{ key: "grade", value: 2 }],
+        artifacts: [{ path: "xopat/scores/out.json", bytes: "{}" }],
+    });
+    const sinkFor = (extra) => makeMlflowSink({
+        getOptions: () => ({ proxy: "mlflow", template: "custom", artifacts: { type: "mlflow-artifacts" },
+            artifactPathPrefix: "xopat", ...extra }),
+        getMapper: (name) => (name === "custom" ? custom : BUILT_IN_TEMPLATES[name]),
+        getTarget: () => undefined,
+        isTargetRejected: () => false,
+    });
+
+    for (const extra of [{}, { strictSessionTarget: false }, { sessionTarget: "allowed", experimentAllow: ["lab-*"] }]) {
+        const calls = installFakeMlflow();
+        expect((await sinkFor(extra).create(ctxFor({ backgroundId: undefined }), score("s"))).ok,
+            JSON.stringify(extra)).toBe(true);
+        expect(calls.runs[0].experiment_id).toBe("exp:lab-results");
+        expect(calls.runs[0].identifierTag).toEqual({ key: "data_id", value: "nightly" });
+    }
+});

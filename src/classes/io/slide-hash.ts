@@ -99,6 +99,53 @@ export function hmacSha256Hex(key: string, message: string): string {
     return toHex(sha256(outerInput));
 }
 
+/** JSON with object keys sorted, so equal data entries hash equally regardless of key order. */
+const stableStringify = (value: any): string => {
+    if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+    return `{${Object.keys(value).sort()
+        .filter(k => value[k] !== undefined)
+        .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+};
+
+/**
+ * Fields of a data entry that say how the slide is DRAWN, not which slide it is.
+ * Changing one (Data panel → sampling) must not move the slide's stored data.
+ */
+const DISPLAY_ONLY_FIELDS = new Set(["imageSmoothingEnabled", "minificationFilter"]);
+
+/**
+ * The string a data entry is hashed as: a path as is, an object with its keys
+ * sorted and its display-only fields left out. An object left with nothing but
+ * a string `dataID` IS that path — a string entry turns into `{dataID, …}` the
+ * moment a display field is set on it, and has to keep its address.
+ */
+export function slideCanonicalOf(entry: unknown): string {
+    if (typeof entry === "string") return entry;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return stableStringify(entry);
+    const identity: Record<string, unknown> = {};
+    for (const key of Object.keys(entry)) {
+        const value = (entry as Record<string, unknown>)[key];
+        if (value !== undefined && !DISPLAY_ONLY_FIELDS.has(key)) identity[key] = value;
+    }
+    const keys = Object.keys(identity);
+    if (keys.length === 1 && typeof identity.dataID === "string") return identity.dataID;
+    return stableStringify(identity);
+}
+
+/**
+ * What {@link slideCanonicalOf} answered before display-only fields were left
+ * out (the whole object, keys sorted), when that differs from today's answer —
+ * i.e. for `{dataID: "<path>"}` and for any object carrying a display field.
+ * Data stored under the old address is still there; a restore that finds
+ * nothing under the new one looks here once. `undefined` when nothing changed.
+ */
+export function slideLegacyCanonicalOf(entry: unknown): string | undefined {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const legacy = stableStringify(entry);
+    return legacy === slideCanonicalOf(entry) ? undefined : legacy;
+}
+
 /** `{slideHash}` value: the first 16 hex chars of HMAC-SHA256(key, canonical slide entry). */
 export function slideHashOf(key: string, canonical: string): string {
     return hmacSha256Hex(key, canonical).slice(0, 16);

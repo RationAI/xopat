@@ -90,6 +90,36 @@ test("the default retry policy retries http-rest on network and 5xx, never on 4x
     }
 });
 
+test("http-rest reads a missing bundle as empty, and only that @unit", async () => {
+    // Every other sink answers "nothing stored yet" with ok + no payload; a
+    // refusal here left the previous slide's state on screen.
+    failingHttpClient(() => httpError(404));
+    const sink = makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) });
+    const importCtx = ctxOf({ direction: "import", capabilityId: "bundle-import" });
+    expect(await sink.readBundle(importCtx)).toEqual({ ok: true });
+
+    for (const [makeError, code] of [[() => httpError(500), "500"], [() => httpError(401), "W_IO_HTTP_READ"],
+        [networkError, "W_IO_HTTP_NETWORK"]]) {
+        failingHttpClient(makeError);
+        const r = await sink.readBundle(importCtx);
+        expect(r.ok).toBe(false);
+        expect(r.code).toBe(code);
+    }
+});
+
+test("http-rest reads a named binary format as bytes, a guessed one as before @unit", async () => {
+    const requests = [];
+    globalThis.HttpClient = class {
+        async request(path, init) { requests.push(init); return "x"; }
+    };
+    const sink = makeHttpRestSink({ getOptions: () => ({ baseURL: "/api" }) });
+    const importCtx = ctxOf({ direction: "import", capabilityId: "bundle-import" });
+    await sink.readBundle({ ...importCtx, format: { id: "dicom-sr", binary: true } });
+    await sink.readBundle({ ...importCtx, format: { id: "dicom-sr", binary: true }, meta: { formatGuessed: true } });
+    await sink.readBundle({ ...importCtx, format: { id: "native" } });
+    expect(requests.map(r => r.expect)).toEqual(["bytes", undefined, undefined]);
+});
+
 // ── http-rest addressing ───────────────────────────────────────────────────
 
 test("http-rest's default bundle path is distinct per bundle key @unit", async () => {
@@ -320,6 +350,173 @@ test("two restores of one slot in the same tick hydrate once @unit", async () =>
     const { pipeline, imported } = restorePipeline({ only: "stored" }, { readDelayMs: 5 });
     await Promise.all([pipeline.tryRestoreImport(SLOT), pipeline.tryRestoreImport(SLOT)]);
     expect(imported).toEqual(["stored"]);
+});
+
+// ── a restore that could not read ─────────────────────────────────────────
+//
+// The slide-aware owner's overlay survives a slide change, and the wipe lives
+// in its `importBundle`. A read that fails called nothing: slide A's state
+// stayed on screen under slide B, and the next flush stored it under B's key.
+
+/** One remote sink whose read answers `state.read`, plus an explicitly bound local one. */
+function unreadablePipeline() {
+    const state = { read: { ok: false, refused: true, code: "503", reason: "down" } };
+    const imported = [];
+    const written = { remote: [], local: [] };
+    const pipeline = new IOPipeline({
+        POST_DATA: {},
+        getConfig: () => ({ bindings: { annotations: {
+            "bundle-export": ["remote", "local"], "bundle-import": ["remote"] } } }),
+        notify: () => {},
+    });
+    pipeline.registerOwner(OWNER, {
+        ownerId: "annotations", xoType: "module", bundleScope: "per-viewer-background",
+        exportBundle: async () => "on-canvas",
+        importBundle: async (_ctx, data) => { imported.push(data); },
+    });
+    pipeline.registerSink({
+        id: "remote", supports: ["bundle"],
+        async writeBundle(_ctx, payload) { written.remote.push(payload); return { ok: true }; },
+        async readBundle() { return state.read; },
+    });
+    pipeline.registerSink({
+        id: "local", supports: ["bundle"], route: "local",
+        async writeBundle(_ctx, payload) { written.local.push(payload); return { ok: true }; },
+    });
+    return { pipeline, state, imported, written };
+}
+
+test("an unreadable slot is wiped once and closed to bound sinks @unit", async () => {
+    const { pipeline, imported, written } = unreadablePipeline();
+    await pipeline.tryRestoreImport(SLOT);
+    // The previous slide's state is cleared...
+    expect(imported).toEqual([undefined]);
+    // ...and a retry does not clear what the user has drawn here since.
+    await pipeline.tryRestoreImport(SLOT);
+    expect(imported).toEqual([undefined]);
+
+    // Slide-leave: nothing is written anywhere, and no file is produced.
+    const left = await pipeline.flushBundleExport({ ...SLOT });
+    expect(written).toEqual({ remote: [], local: [] });
+    expect(left.some(r => !r.ok && r.code === "W_IO_NOT_HYDRATED")).toBe(true);
+});
+
+test("a user export of an unreadable slot keeps the local copy, not the store @unit", async () => {
+    const { pipeline, written } = unreadablePipeline();
+    await pipeline.tryRestoreImport(SLOT);
+    const results = await pipeline.flushBundleExport({ ownerUid: OWNER, viewerId: "v1", backgroundId: "bg1" });
+    expect(written.remote).toEqual([]);
+    expect(written.local).toEqual(["on-canvas"]);
+    expect(results.some(r => !r.ok && r.code === "W_IO_NOT_HYDRATED")).toBe(true);
+});
+
+test("a later successful restore reopens the slot @unit", async () => {
+    const { pipeline, state, imported, written } = unreadablePipeline();
+    await pipeline.tryRestoreImport(SLOT);
+    state.read = { ok: true, payload: "stored" };
+    await pipeline.tryRestoreImport(SLOT);
+    expect(imported).toEqual([undefined, "stored"]);
+    await pipeline.flushBundleExport({ ...SLOT });
+    expect(written.remote).toEqual(["on-canvas"]);
+});
+
+test("the user is told once, with a retry that reopens the slot @unit", async () => {
+    const { pipeline, state, imported, written } = unreadablePipeline();
+    const notices = [];
+    pipeline.notifier = (message, level, buttons) => { notices.push({ message, level, buttons }); };
+
+    // An automatic restore is silent about its refusals, but not about this.
+    await pipeline.tryRestoreImport(SLOT);
+    await pipeline.tryRestoreImport(SLOT);
+    const offers = notices.filter(n => n.buttons?.length);
+    expect(offers).toHaveLength(1);
+    expect(pipeline.unreadableSlots()).toEqual([{ ownerUid: OWNER, viewerId: "v1", backgroundId: "bg1" }]);
+
+    // Still down: nothing changes, and what is on screen is not wiped again.
+    await pipeline.retryRestore({ viewerId: "v1", backgroundId: "bg1" });
+    expect(imported).toEqual([undefined]);
+    expect(pipeline.unreadableSlots()).toHaveLength(1);
+
+    // Back up: the button loads the stored state and saving reopens.
+    state.read = { ok: true, payload: "stored" };
+    offers[0].buttons[0].onClick();
+    await new Promise(r => setTimeout(r, 5));
+    expect(imported).toEqual([undefined, "stored"]);
+    expect(pipeline.unreadableSlots()).toEqual([]);
+    await pipeline.flushBundleExport({ ...SLOT });
+    expect(written.remote).toEqual(["on-canvas"]);
+
+    // A healthy slot is never re-imported by a retry.
+    await pipeline.retryRestore({ viewerId: "v1", backgroundId: "bg1" });
+    expect(imported).toEqual([undefined, "stored"]);
+});
+
+test("an empty slot is looked up once more under the slide's former address @unit", async () => {
+    // `{slideHash}` no longer covers display-only fields, so data stored for an
+    // entry like {dataID, minificationFilter} sits under the old hash.
+    const store = { "x/old": "stored-before" };
+    const paths = [];
+    const pipeline = new IOPipeline({
+        POST_DATA: {},
+        getConfig: () => ({ slideHashKey: "k",
+            bindings: { annotations: { "bundle-export": ["store"], "bundle-import": ["store"] } } }),
+        notify: () => {},
+    });
+    const imported = [];
+    pipeline.registerOwner(OWNER, {
+        ownerId: "annotations", xoType: "module", bundleScope: "per-viewer-background",
+        exportBundle: async () => "on-canvas",
+        importBundle: async (ctx, data) => { imported.push([data, ctx.meta.legacySlideHash]); },
+    });
+    pipeline.registerSink({
+        id: "store", supports: ["bundle"],
+        async readBundle(ctx) {
+            const path = pipeline.formatPath("x/{slideHash}", ctx);
+            paths.push(path);
+            return { ok: true, payload: store[path] };
+        },
+        async writeBundle(ctx, payload) { store[pipeline.formatPath("x/{slideHash}", ctx)] = payload; return { ok: true }; },
+    });
+    const identity = { hash: "new", name: "a.tif", legacyHash: "old" };
+    globalThis.UTILITIES = { slideIdentityFor: () => identity };
+    try {
+        await pipeline.tryRestoreImport(SLOT);
+        expect(paths).toEqual(["x/new", "x/old"]);
+        // Imported into today's slot; the flag does not travel to the owner.
+        expect(imported).toEqual([["stored-before", undefined]]);
+        // ...and the next save lands on the current address.
+        await pipeline.flushBundleExport({ ...SLOT });
+        expect(store["x/new"]).toBe("on-canvas");
+
+        // A slide whose address never changed costs no second read.
+        delete identity.legacyHash;
+        paths.length = 0;
+        await pipeline.tryRestoreImport({ ...SLOT, backgroundId: "bg2" });
+        expect(paths).toEqual(["x/new"]);
+    } finally {
+        delete globalThis.UTILITIES;
+    }
+});
+
+test("a slot nobody could read from still saves @unit", async () => {
+    // A write-only binding attempts no read, so there is nothing unknown to protect.
+    const written = [];
+    const pipeline = new IOPipeline({
+        POST_DATA: {},
+        getConfig: () => ({ bindings: { annotations: { "bundle-export": ["out"], "bundle-import": ["out"] } } }),
+        notify: () => {},
+    });
+    pipeline.registerOwner(OWNER, {
+        ownerId: "annotations", xoType: "module", bundleScope: "per-viewer-background",
+        exportBundle: async () => "on-canvas", importBundle: async () => {},
+    });
+    pipeline.registerSink({
+        id: "out", supports: ["bundle"],
+        async writeBundle(_ctx, payload) { written.push(payload); return { ok: true }; },
+    });
+    await pipeline.tryRestoreImport(SLOT);
+    await pipeline.flushBundleExport({ ...SLOT });
+    expect(written).toEqual(["on-canvas"]);
 });
 
 test("a user-picked file import can name the viewer it is for @unit", async () => {

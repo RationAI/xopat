@@ -157,8 +157,33 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
         return !!mapping.roiPresetId && String(presetID ?? "") === mapping.roiPresetId;
     };
 
-    /** Server ids this sink has already deleted on the way to a re-post. */
+    /** Server ids this sink has already deleted (on the way to a re-post, or for good). */
     const retired = new Set<string>();
+
+    /**
+     * Retired server id → the record posted in its place.
+     *
+     * An update is a delete + re-post, so the id a dispatch carries can be one
+     * this sink has already replaced: `ctx.meta.previous` is the object as it
+     * was before the commit, and an undo (or a retry) of an edit names the
+     * record the edit retired. Acting on that id literally skipped the delete
+     * (already retired) and posted a second copy next to the live one.
+     */
+    const replacedBy = new Map<string, string>();
+    const liveIdOf = (id: string | undefined): string | undefined => {
+        // Ids are minted by the server per post, so a chain cannot loop; the
+        // bound only guards against a server that reuses one.
+        for (let hops = 0; id && replacedBy.has(id) && hops < 1000; hops++) id = replacedBy.get(id);
+        return id;
+    };
+
+    /**
+     * Class records owed to annotations a bundle upload already stored.
+     * Annotation and class are separate requests; when the class one fails the
+     * annotation is linked and a retry skips it, so the class has to be
+     * remembered here or it is never sent.
+     */
+    const classOwed = new Map<string, Partial<EmpaiaClass>>();
 
     /**
      * Post the class record for a just-stored annotation; if that fails, take
@@ -216,12 +241,21 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             }
             const [created] = await client.postAnnotations([mapped], { isRoi: asRoi });
             const empaiaId = typeof created?.id === "string" ? created.id : undefined;
+            if (existing && empaiaId) replacedBy.set(existing, empaiaId);
             // The dispatch is keyed by the object being replaced, but the one
             // left on the canvas is the replacement. `annotation-persisted`
             // moves the link to its id; here we only retire the old entry.
             deps.linkAnnotation(localId, empaiaId);
 
-            if (empaiaId) await postClassOrWithdraw(client, mapping, classSource, empaiaId, localId);
+            // NOT `postClassOrWithdraw`: the record this one replaces is already
+            // deleted, so withdrawing the replacement because its class was
+            // refused leaves the annotation nowhere on the server. Keep it and
+            // report the failure — a retry (or the next edit) finds it through
+            // `replacedBy` and replaces it, so there is never a second copy.
+            if (empaiaId) {
+                const cls = nativeToEmpaiaClass(classSource, empaiaId, mapping);
+                if (cls) await client.postClasses([cls]);
+            }
             return { ok: true, payload: { id: empaiaId } };
         } catch (e: any) {
             // An update is a delete + re-post, so it hits the same lock as a
@@ -317,7 +351,7 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             const { client, ctx: mapping } = pre;
 
             const localId = localIdOf(ctx);
-            const existing = serverIdOf(ctx, deps);
+            const existing = liveIdOf(serverIdOf(ctx, deps));
             const mapped = nativeToEmpaia(patch, mapping);
 
             if (!mapped) {
@@ -382,15 +416,29 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             const { client } = pre;
 
             const localId = localIdOf(ctx);
-            const empaiaId = serverIdOf(ctx, deps);
+            const empaiaId = liveIdOf(serverIdOf(ctx, deps));
             // Never stored server-side (helper shape, or created while offline).
             if (!empaiaId) return { ok: true, payload: { skipped: true } };
+            // Already deleted by this sink and never replaced: the goal is met.
+            if (retired.has(empaiaId)) {
+                deps.linkAnnotation(localId, undefined);
+                return { ok: true };
+            }
 
             try {
                 await client.deleteAnnotation(empaiaId);
+                retired.add(empaiaId);
                 deps.linkAnnotation(localId, undefined);
                 return { ok: true };
             } catch (e: any) {
+                // Gone already (deleted elsewhere, or by an attempt whose answer
+                // was lost): a delete that finds nothing has succeeded. Failing
+                // it restored the annotation locally and made it undeletable.
+                if (asRemoteRefusal(e).status === 404) {
+                    retired.add(empaiaId);
+                    deps.linkAnnotation(localId, undefined);
+                    return { ok: true };
+                }
                 // 423 (a job holds it, and there is no unlock route) and 412
                 // (another scope owns it) are final: the code says so, so the retry
                 // wrapper stops and the annotation is restored instead of the user
@@ -489,7 +537,23 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
 
             const items = Array.isArray(parsed?.items) ? parsed.items : [];
             const links = Array.isArray(parsed?.links) ? parsed.links : [];
-            if (!items.length) return { ok: true, payload: { created: 0 } };
+            // Classes a previous attempt still owes go out even when there is
+            // nothing new to post — that is exactly the retry case.
+            const settleOwedClasses = async () => {
+                for (const [annotationId, cls] of Array.from(classOwed)) {
+                    await client.postClasses([cls]);
+                    classOwed.delete(annotationId);
+                }
+            };
+            const bundleFailed = (e: any) => refuse(
+                `EMPAIA annotation upload failed: ${e?.message ?? e}`,
+                "W_EMPAIA_BUNDLE_FAILED",
+                $.t("io.bundleFailed", { ns: "empaia-workbench" })
+            );
+            if (!items.length) {
+                try { await settleOwedClasses(); } catch (e: any) { return bundleFailed(e); }
+                return { ok: true, payload: { created: 0 } };
+            }
 
             // Only the ones with no server id yet.
             const pending: Array<{ item: Partial<EmpaiaAnnotation>; link: AnnotationLink }> = [];
@@ -499,10 +563,8 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                     ?? (link.incrementId ? deps.resolveEmpaiaId(link.incrementId) : undefined);
                 if (!known) pending.push({ item, link });
             });
-            if (!pending.length) return { ok: true, payload: { created: 0 } };
-
             try {
-                const classes: Array<Partial<EmpaiaClass>> = [];
+                await settleOwedClasses();
                 let createdCount = 0;
                 // One request per annotation (the client does that anyway), linked
                 // as each one lands. Two reasons it is not one batch call:
@@ -518,7 +580,11 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                     if (!empaiaId) continue;
                     createdCount++;
                     if (link.classValue) {
-                        classes.push({
+                        // Right after its annotation, and owed until it lands:
+                        // collected for one call after the loop, the classes of
+                        // everything already stored were dropped whenever a
+                        // later annotation failed.
+                        classOwed.set(empaiaId, {
                             type: "class",
                             value: link.classValue,
                             creator_id: mapping.scopeId,
@@ -526,17 +592,13 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                             reference_id: empaiaId,
                             reference_type: "annotation",
                         });
+                        await settleOwedClasses();
                     }
                 }
 
-                if (classes.length) await client.postClasses(classes);
                 return { ok: true, payload: { created: createdCount } };
             } catch (e: any) {
-                return refuse(
-                    `EMPAIA annotation upload failed: ${e?.message ?? e}`,
-                    "W_EMPAIA_BUNDLE_FAILED",
-                    $.t("io.bundleFailed", { ns: "empaia-workbench" })
-                );
+                return bundleFailed(e);
             }
         },
 
