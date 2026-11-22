@@ -1,7 +1,7 @@
 # Changelog
 
 
-### 3.2.2
+### 3.3.0
 
 **Features**:
 
