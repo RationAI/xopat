@@ -3043,6 +3043,13 @@ export class ChatPanel extends BaseComponent {
     _noteMediaRejected(reply: ChatMessage | null | undefined): void {
         const rejected = (reply as any)?.metadata?.mediaRejected;
         if (!Array.isArray(rejected) || !rejected.length) return;
+        // `_models` is a snapshot from when the list was loaded; the service has
+        // since folded the verdict into NEW model objects. Without re-reading,
+        // the buttons below keep the capabilities the model no longer has.
+        if (this._providerId) {
+            const fresh = this.chatService.getCachedModels(this._providerId);
+            if (Array.isArray(fresh) && fresh.length) this._models = fresh;
+        }
         this._updateAttachmentCapabilityState();
         const images = rejected.includes('images');
         const files = rejected.includes('files');
