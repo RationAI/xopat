@@ -77,7 +77,19 @@ node_eol() {
     if (s) console.log(s.end);' "$1"
 }
 
-digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"' || true; }
+# Digest of a published ref, EMPTY when the ref does not exist. Every other failure
+# (auth, rate limit, network) returns non-zero instead of looking like "no such tag":
+# a lookup of <tag>-orig that merely failed would otherwise re-patch the already
+# patched image and then overwrite the real -orig with it.
+digest() {
+  local out err rc
+  err="$(mktemp)"
+  out="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}' 2>"$err")"; rc=$?
+  if [ $rc -eq 0 ] && [ -n "$out" ]; then rm -f "$err"; printf '%s' "$out" | tr -d '"'; return 0; fi
+  if grep -qiE ': not found$|manifest unknown' "$err"; then rm -f "$err"; return 0; fi
+  echo "registry lookup failed for $1: $(tail -n 1 "$err")" >&2
+  rm -f "$err"; return 1
+}
 in_image() { docker run --rm --user root --entrypoint sh "$1" -c "$2" 2>/dev/null; }
 
 RESULTS=()
@@ -85,15 +97,15 @@ result() { RESULTS+=("RESULT $1 $2 ${3:-}"); echo "RESULT $1 $2 ${3:-}"; }
 
 repatch_one() {
   local target="$1" name tag image cur orig base latest move_latest user old major eol node \
-        local_tag current_node pending got code running running_user t
+        local_tag probe current_node pending got code running running_user t
   name="${target%%:*}"; tag="${target#*:}"; image="$REGISTRY/$name"
   echo "=== $image:$tag (push=$PUSH)"
 
-  cur="$(digest "$image:$tag")"
+  cur="$(digest "$image:$tag")" || { result "$target" failed "registry lookup $image:$tag"; return 1; }
   [ -n "$cur" ] || { result "$target" missing "not published"; return 0; }
-  orig="$(digest "$image:$tag-orig")"
+  orig="$(digest "$image:$tag-orig")" || { result "$target" failed "registry lookup $image:$tag-orig"; return 1; }
   if [ -n "$orig" ]; then base="$image:$tag-orig"; else base="$image:$tag"; orig="$cur"; fi
-  latest="$(digest "$image:latest")"
+  latest="$(digest "$image:latest")" || { result "$target" failed "registry lookup $image:latest"; return 1; }
   move_latest=false
   { [ "$latest" = "$orig" ] || [ "$latest" = "$cur" ]; } && move_latest=true
 
@@ -125,9 +137,16 @@ repatch_one() {
 
   # --- skip when the published tag is already current ---
   if $IF_NEEDED; then
-    current_node="$(in_image "$image:$tag" 'command -v node >/dev/null && node -v' || true)"
-    pending="$(in_image "$image:$tag" 'command -v apt-get >/dev/null || exit 0; apt-get update -qq >/dev/null 2>&1; apt list --upgradable 2>/dev/null | grep -c "upgradable from"' || true)"
-    if [ "${current_node#v}" = "$node" ] && [ "${pending:-0}" = "0" ]; then
+    # One run, two labelled lines. "current" needs a POSITIVE answer: a probe that
+    # could not run, or an `apt-get update` that failed, prints no `APT:0` and so
+    # falls through to a rebuild instead of passing as up to date.
+    probe="$(in_image "$image:$tag" 'echo "NODE:$(command -v node >/dev/null 2>&1 && node -v)"
+      if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq >/dev/null 2>&1 && echo "APT:$(apt list --upgradable 2>/dev/null | grep -c "upgradable from")" || echo "APT:ERR"
+      else echo "APT:0"; fi' || true)"
+    current_node="$(printf '%s\n' "$probe" | sed -n 's/^NODE://p')"
+    pending="$(printf '%s\n' "$probe" | sed -n 's/^APT://p')"
+    if [ "${current_node#v}" = "$node" ] && [ "$pending" = "0" ]; then
       result "$target" current "${current_node:-no Node}, no OS updates pending"
       return 0
     fi

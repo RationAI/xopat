@@ -10,6 +10,15 @@ import { test, expect } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 globalThis.$ = globalThis.$ ?? { t: (key) => String(key) };
+// A worker runs several files and `globalThis` outlives each of them, so the `??` above
+// inherits whatever an earlier file left (a real en.json translator turned the asserted key
+// into its English sentence). Own the stub while this file runs.
+let inherited$;
+test.beforeAll(() => {
+    inherited$ = globalThis.$;
+    globalThis.$ = { t: (key) => String(key) };
+});
+test.afterAll(() => { globalThis.$ = inherited$; });
 
 const scope = await import("../../../src/classes/scripting/consent-scope.ts");
 const { XOpatScriptingApi } = await import("../../../src/classes/scripting/abstract-api.ts");

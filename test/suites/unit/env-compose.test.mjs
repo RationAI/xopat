@@ -496,6 +496,26 @@ test("a variable is reported by who decided its value @unit", () => {
     expect(configured.WSI_PORT.value).toBeUndefined();
 });
 
+test("an empty assignment is reported as blocking the tracked defaults @unit", () => {
+    // `VAR=` reaches the server as "": layerEnv only fills what is undefined,
+    // so the report must not claim a preset/$meta default applies.
+    const tracked = { layers: [], env: { p: "<% FROM_PRESET %>", d: "<% FROM_META %>" } };
+    const sources = { presetEnv: { FROM_PRESET: "one" }, defaults: { FROM_META: "two" } };
+    expect(describeVariables(tracked, { ...sources, user: {} }).map((v) => v.status)).toEqual(["default", "default"]);
+    for (const v of describeVariables(tracked, { ...sources, user: { FROM_PRESET: "", FROM_META: "" } })) {
+        expect(v, v.name).toMatchObject({ status: "unset", source: "empty assignment" });
+        expect(v.value).toBeUndefined();
+    }
+
+    // Inline defaults follow the shell rule: `:-` replaces empty, `-` does not.
+    const inline = { layers: [], env: { a: "<% COLON:-x %>", b: "<% DASH-y %>" } };
+    const byName = Object.fromEntries(
+        describeVariables(inline, { user: { COLON: "", DASH: "" } }).map((v) => [v.name, v]));
+    expect(byName.COLON).toMatchObject({ status: "default", source: "inline", value: "x" });
+    expect(byName.DASH).toMatchObject({ status: "unset", source: "empty assignment" });
+    expect(describeVariables(inline, { user: {} }).map((v) => v.status)).toEqual(["default", "default"]);
+});
+
 test("every variable a fragment reads is described in its $meta.env @unit", () => {
     for (const fragment of listFragments()) {
         const { $meta = {}, ...data } = readJsonc(fragment.file);

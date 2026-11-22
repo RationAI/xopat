@@ -62,7 +62,14 @@ const renderAndAttach = (pages) => {
 
     const result = {
         markup: host.innerHTML,
-        liveHandlers: host.querySelectorAll("[onerror],[onload],[onmouseover],[onclick]").length,
+        // Read from the parsed DOM, not the serialized markup: a payload that was
+        // correctly neutralised into an attribute VALUE (`class="&quot; onmouseover=…"`)
+        // still contains ` onmouseover=` as text, and no regex over `innerHTML`
+        // can tell that from a real attribute.
+        liveHandlers: [...host.querySelectorAll("*")]
+            .flatMap(el => [...el.attributes])
+            .filter(attr => /^on/i.test(attr.name))
+            .map(attr => attr.name),
         fired: window.__xopatXss ?? null,
     };
     host.remove();
@@ -76,10 +83,9 @@ test("no session page shape can execute script", { tag: ["@e2e"] }, async ({ xop
         const result = await xopat.page.evaluate(renderAndAttach, [page]);
 
         expect(result.fired, `payload "${name}" executed`).toBe(null);
-        expect(result.liveHandlers, `payload "${name}" left a live handler in the DOM`).toBe(0);
         // The default allowlist permits a plain <img>; what it must never keep is
-        // an event-handler attribute on any element.
-        expect(result.markup, `payload "${name}" kept an inline handler`).not.toMatch(/<[^>]+\son\w+\s*=/i);
+        // an event-handler attribute — any `on*`, on any element.
+        expect(result.liveHandlers, `payload "${name}" kept an inline handler`).toEqual([]);
     }
 });
 

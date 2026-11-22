@@ -17,7 +17,8 @@ globalThis.APPLICATION_CONTEXT = {
     _dangerouslyAccessConfig: () => globalThis.APPLICATION_CONTEXT.config,
 };
 globalThis.UTILITIES = {
-    sanitizeID: (id) => String(id).replace(/[^a-zA-Z0-9_:-]/g, "_"),
+    // As the real one (src/loader.ts): everything outside [A-Za-z0-9_-] becomes "-", ":" included.
+    sanitizeID: (id) => String(id).replace(/[^a-zA-Z0-9_-]/g, "-"),
     generateID: (seed) => `gen-${String(seed).length}`,
 };
 
@@ -30,6 +31,20 @@ test("a tagged visualization applies only to its slides @unit", () => {
     expect(BackgroundConfig.visualizationAppliesTo(viz, { id: "b", dataReference: 1 }, data)).toBe(false);
     expect(BackgroundConfig.visualizationAppliesTo({ backgrounds: ["b"] }, { id: "b", dataReference: 1 }, data)).toBe(true);
     expect(BackgroundConfig.visualizationAppliesTo({}, { id: "b", dataReference: 1 }, data)).toBe(true);
+});
+
+test("a tag written before sanitization still matches the sanitized background id @unit", () => {
+    // `processId` turns "case 1" into "case-1"; the tag keeps what the author wrote.
+    const viz = { backgrounds: ["case 1"] };
+    expect(BackgroundConfig.visualizationAppliesTo(viz, { id: "case-1", dataReference: 0 }, ["x"])).toBe(true);
+    expect(BackgroundConfig.visualizationAppliesTo(viz, { id: "case-2", dataReference: 0 }, ["x"])).toBe(false);
+});
+
+test("a virtual-region child answers to its parent's id @unit", () => {
+    const child = { id: "slide--r0", virtualOf: "slide", dataReference: { dataID: "data-1", region: {} } };
+    expect(BackgroundConfig.visualizationAppliesTo({ backgrounds: ["slide"] }, child, [])).toBe(true);
+    expect(BackgroundConfig.visualizationAppliesTo({ backgrounds: ["data-1"] }, child, [])).toBe(true);
+    expect(BackgroundConfig.visualizationAppliesTo({ backgrounds: ["other"] }, child, [])).toBe(false);
 });
 
 test("the default selection never binds another slide's overlay @unit", () => {
