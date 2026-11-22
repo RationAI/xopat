@@ -566,6 +566,22 @@ path never reaches storage. A slide grant never satisfies another slide.
 consent for the same pixels sets `pixelReadPreapproved: true` on its synthetic context. Pathology-foundation
 does this because its own remote-driver consent covers it. Never set it to silence the prompt.
 
+### Looking is not acting
+
+A script that only needs to SEE the slide must leave the user's session as it found it. The core verb is
+`viewer.captureRegion({ region, magnification | targetPixels | size, layers })`: an off-screen render of any
+region, the scan without overlays by default, with the effective `scale` / `magnification` reported back. It
+is a thin delegate to `visualization.renderRegionPngDetailed`, bound to the caller's own invocation context,
+so there is one render path and one pixel-read consent. Output sizing lives in `region-render-size.ts`, and
+callers state a request (`magnification` / `targetPixels`) rather than computing a size — pathology-foundation's
+region renders go through the same rule.
+
+Two consequences for namespace authors:
+- A method that inspects takes a `region` and renders off-screen. It never navigates the viewer, and it never
+  hides, removes or re-activates a visualization to get an unobstructed read (`layers: "background"` already is one).
+- Say so in the declaration. An assistant picks its tools from the `.scripts.d.ts` text, and a navigation or
+  mutation method that does not say "changes what the user sees" gets used as a way to look.
+
 ---
 
 ## What not to do

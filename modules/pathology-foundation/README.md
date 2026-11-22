@@ -244,6 +244,33 @@ Spending a load budget is not a failure: the render returns the tiles it got, ma
 the field is analyzed and reported as the partial read it is. Spending the queue budget *is* a failure — the
 pass never started — and is reported as such rather than as an unreadable region.
 
+### Vision calls: deadline and image encoding
+
+Two more deployment knobs govern the model call itself (static meta, same reasoning as above):
+
+| Key | What it bounds | Default |
+| --- | --- | --- |
+| `visionTimeoutMs` | client deadline for ONE `runVisionInference` call — the wait for a background request slot plus the model's answer. Clamped to 30000..1800000. Keep it ≥ the server's budget (`XOPAT_PATHOLOGY_VISION_TIMEOUT_MS`, 300000) | 315000 |
+| `visionImage` | encoding of every image sent to a vision model: `{ "format": "jpeg" \| "png", "quality": 0..1 }` | `{ "format": "jpeg", "quality": 0.9 }` |
+
+JPEG is the default because the image travels base64-in-JSON through every hop: a 2 MP field is several MB as
+PNG and a few hundred KB as JPEG, and a proxy in front of a model server commonly refuses bodies over 1 MB.
+Transparent pixels are flattened onto white (glass) first. PNG remains available — set
+`"visionImage": { "format": "png" }`, or `"imageFormat": "png"` on one driver (a runtime-registered driver sets
+`imageFormat` on the object it registers) — and a PNG the endpoint refuses as too large (HTTP 413) is re-encoded
+and retried **once** as JPEG, on the same driver. Drivers must send `imageBlob.type` as the media type.
+
+### When a read fails
+
+A failed read is reported by **stage**, because the remedies are opposite:
+
+- `interrogateRegion` fields carry `error` and `errorStage`. `"render"` → `warnFieldsUnread` (tiles/render;
+  re-running is reasonable). `"analyze"` → `warnFieldsAnalyzeFailed` (the image was rendered, the model call was
+  refused / timed out / errored; re-running unchanged repeats it).
+- `buildOverview` adds `warnReadsFailed` with the count and the first reason whenever nodes errored, and drops
+  the "never found a region it could read closely" note when *every* read failed — "go deeper" is wrong advice
+  for a refused payload.
+
 A field whose render fails is retried up to three times: twice at the planned resolution (the second attempt
 runs over the tile cache the first one warmed, which is usually enough), then once one pyramid level coarser,
 which reports its real `deliveredMpp` so features that need finer detail come back as
@@ -259,6 +286,10 @@ Injected into the agent's system prompt automatically (with its inline type decl
 agent toward concrete jobs instead of guessing. Select the viewer first (`application.setActiveViewer(...)`).
 Consent is requested **only when the resolved driver is remote** (a snapshot would leave the viewer); the
 built-in tissue jobs run silently.
+
+The namespace exists only when this module is part of the deployment (`npm run up -- <chat fragment>
+demo/annotations-pathology`). Without it an assistant still has the core off-screen look
+(`viewer.captureRegion`), but none of the survey, checklist or evidence machinery below.
 
 ```ts
 pathology.listDrivers(): PathologyDriverInfo[];                       // { id, label, local, features[] }
@@ -642,7 +673,7 @@ takes the viewer explicitly (multi-viewport-safe).
 | `analyzeRegion(viewer, { prompt, driver?, source?, region?, mpp?, magnification?, targetPixels? })` | Vision → `{ findings, isComplete?, coveredFraction? }`. `mpp` is DELIVERED (the region is sampled rather than squashed); `magnification`/`targetPixels` are requests the render may clamp. Without `region`: the current view (composite incl. overlays, or raw background). With `region` (parent-global px): rendered off-screen at the requested size — the user's viewport is untouched. |
 | `pickViewportPoint(viewer, { message?, timeoutMs? })` | Await a user click → `{x,y}` image coords (or null). |
 | `getSelectedAnnotationId(viewer)` / `awaitAnnotationSelection(viewer, ...)` | Current / awaited annotation selection. |
-| `captureViewportImage(viewer, label?)` | `{ blob, width, height, isComplete }` on-screen composite PNG (used by `analyze` / SAM). Settles the view, then waits (bounded) for the pyramid; `isComplete: false` means the blob holds partially streamed tiles. |
+| `captureViewportImage(viewer, label?, encoding?)` | `{ blob, width, height, isComplete }` on-screen composite, PNG unless `encoding` says JPEG (used by `analyze` / SAM). Settles the view, then waits (bounded) for the pyramid; `isComplete: false` means the blob holds partially streamed tiles. |
 | `maskToPolygon(mask, ref, w, h, ratio, viewer)` | Trace a mask's largest region to image-space points (shared infra). |
 
 Feature ids: `tissue-mask`, `segment`, `analyze`, `cellularity`.

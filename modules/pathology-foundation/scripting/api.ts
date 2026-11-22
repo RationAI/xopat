@@ -260,6 +260,12 @@ export type InterrogationResult = {
         answers: FeatureAnswer[];
         findings: string | null;
         error?: string;
+        /**
+         * Where the error happened: "render" = no image was produced (tiles/render — re-running
+         * is reasonable); "analyze" = the image was rendered and the MODEL CALL failed
+         * (payload refused, timeout, upstream error) — re-running unchanged repeats it.
+         */
+        errorStage?: "render" | "analyze";
     }>;
     /** One answer per feature across the whole region. */
     answers: FeatureAnswer[];
@@ -1807,7 +1813,10 @@ export function registerPathologyScriptingApi(): void {
                         finest: this._slideFinestMppNote(),
                     }),
                     maxOutputTokens: 512,
-                }, { priority: "background" });
+                    // The module's vision deadline, not the HttpClient default (30 s): a
+                    // reasoning model did not answer inside that, and the timeout surfaced as
+                    // a "fallback" checklist with no hint that a clock was the cause.
+                }, { priority: "background", timeoutMs: this._getModule().visionTimeoutMs });
 
                 const parsed = this._parseChecklistJson(res?.text);
                 if (!parsed) {

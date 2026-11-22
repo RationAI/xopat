@@ -207,6 +207,26 @@ test("a failing analysis is contained the same way", { tag: ["@unit"] }, async (
     expect(out.map(r => r.id)).toEqual(["b"]);
 });
 
+test("onError is told which half failed", { tag: ["@unit"] }, async () => {
+    // A render that produced nothing and a model call that was refused have opposite
+    // remedies; reporting both as "could not be rendered" sent readers to re-run a request
+    // whose failure (payload too large, timeout) re-running could never fix.
+    const t = tracker();
+    const seen = {};
+
+    await collectPipeline([{ id: "no-render" }, { id: "no-answer" }], {
+        render: async (f) => { if (f.id === "no-render") throw new Error("tiles missing"); return t.render(f); },
+        analyze: async (f, r) => { if (f.id === "no-answer") throw new Error("Request Entity Too Large"); return t.analyze(f, r); },
+        onError: (field, _error, at) => { seen[field.id] = at; return null; },
+    });
+
+    expect(seen["no-render"].stage).toBe("render");
+    expect(seen["no-render"].raster).toBeUndefined();
+    expect(seen["no-answer"].stage).toBe("analyze");
+    // The raster is handed over: it WAS rendered, and its resolution is still a fact.
+    expect(seen["no-answer"].raster).toBeTruthy();
+});
+
 test("without onError a failure is dropped rather than thrown", { tag: ["@unit"] }, async () => {
     const t = tracker();
 

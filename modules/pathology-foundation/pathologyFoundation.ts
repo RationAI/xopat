@@ -40,10 +40,11 @@ import {
 } from "./lib/geometry";
 import {
     blobToBase64, builtinTissueMask, composeMontage, decodeBase64Mask, densityGrid,
-    montageCellLabel, pixelsToPngBlob, planMontageLayout, saturationChannel,
+    encodeCanvas, flattenOnWhite, montageCellLabel, normalizeImageEncoding, pixelsToImageBlob,
+    pixelsToPngBlob, planMontageLayout, reencodeAsJpeg, saturationChannel,
     stainConcentration, DEFAULT_STAIN_VECTORS,
 } from "./lib/imaging";
-import type { MontageCell, StainVectors } from "./lib/imaging";
+import type { ImageEncoding, MontageCell, StainVectors } from "./lib/imaging";
 import { isTemplateEcho, keywordInterest, normalizeScore, parseOverviewVerdict } from "./lib/verdict";
 import {
     fallbackChecklist, sanitizeChecklist, splitByResolution, unassessable, exceedsSlide,
@@ -632,7 +633,10 @@ export interface SegmentInput extends PixelSource {
 }
 
 export interface AnalyzeInput {
-    /** PNG of the on-screen composite (may include the overlay). */
+    /**
+     * The image to read (may include the overlay). JPEG by default, PNG when the deployment
+     * or the driver asks for it — send `imageBlob.type` as the media type, never a literal.
+     */
     imageBlob: Blob;
     prompt: string;
     /**
@@ -696,6 +700,12 @@ export interface FmDriver {
      * are always available. An unavailable fallback is skipped by automatic resolution.
      */
     isAvailable?: () => boolean;
+    /**
+     * Encoding this driver wants its `analyze` image in, overriding the module's
+     * `visionImage` default (JPEG). Set `"png"` only for an endpoint that needs lossless
+     * input AND accepts multi-megabyte bodies; a PNG refused as too large is retried as JPEG.
+     */
+    imageFormat?: "jpeg" | "png";
     config?: Record<string, unknown>;
     features: {
         "tissue-mask"?: (input: TissueMaskInput) => Promise<MaskResult>;
@@ -828,6 +838,12 @@ export interface InterrogationField {
     answers: FeatureAnswer[];
     findings: string | null;
     error?: string;
+    /**
+     * Where `error` happened. `"render"`: no image was produced. `"analyze"`: the image was
+     * rendered and the MODEL CALL failed (payload refused, timeout, upstream error) — a
+     * different problem with a different remedy, so the two are never reported as one.
+     */
+    errorStage?: "render" | "analyze";
 }
 
 export interface InterrogationResult {
@@ -1672,9 +1688,13 @@ class VercelAnalyzeDriver implements FmDriver {
     private _model?: string;
     private _system?: string;
     private _scopeId: string;
+    private _timeoutMs: number;
+    imageFormat?: "jpeg" | "png";
 
-    constructor(id: string, cfg: Record<string, any>) {
+    constructor(id: string, cfg: Record<string, any>, timeoutMs: number) {
         this.id = id;
+        this._timeoutMs = timeoutMs;
+        if (cfg.imageFormat === "png" || cfg.imageFormat === "jpeg") this.imageFormat = cfg.imageFormat;
         this.label = cfg.label || id;
         this._providerId = cfg.providerId;
         this._model = cfg.model;
@@ -1695,8 +1715,22 @@ class VercelAnalyzeDriver implements FmDriver {
         if (!scope?.runVisionInference) {
             throw new Error(`The "${this._scopeId}" module is not available; cannot use vercel driver "${this.id}".`);
         }
-        return callVisionInference(scope, this._providerId, this._model, this._system, input);
+        return callVisionInference(scope, this._providerId, this._model, this._system, input, this._timeoutMs);
     }
+}
+
+/**
+ * Whether an analyze failure is the endpoint refusing the request BODY for its size.
+ *
+ * xOpat's own RPC cap answers 413 `RPC_BODY_TOO_LARGE`; an upstream model server or an
+ * ingress in front of it answers with the bare HTTP reason phrase, which reaches here only
+ * as message text relayed through the RPC error.
+ */
+function isPayloadTooLarge(error: any): boolean {
+    const status = error?.status ?? error?.statusCode;
+    return status === 413
+        || error?.code === "RPC_BODY_TOO_LARGE"
+        || /entity too large|payload too large|body exceeds/i.test(String(error?.message || ""));
 }
 
 /**
@@ -1704,7 +1738,8 @@ class VercelAnalyzeDriver implements FmDriver {
  * by the configured `vercel` drivers and the built-in `assistant` fallback.
  */
 async function callVisionInference(
-    scope: any, providerId: string, model: string | null | undefined, system: string | undefined, input: AnalyzeInput
+    scope: any, providerId: string, model: string | null | undefined, system: string | undefined,
+    input: AnalyzeInput, timeoutMs: number
 ): Promise<AnalyzeResult> {
     const base64 = await blobToBase64(input.imageBlob);
     const res = await scope.runVisionInference({
@@ -1713,16 +1748,20 @@ async function callVisionInference(
         system,
         prompt: input.prompt,
         imageBase64: base64,
-        mediaType: "image/png",
+        mediaType: input.imageBlob.type || "image/png",
         // Diagnostics only — the server logs it beside the image and never
         // puts it in the model's message. This is what turns a logged vision
-        // call from an anonymous PNG into "region 2.1 of this slide, read at
+        // call from an anonymous image into "region 2.1 of this slide, read at
         // 1.6 µm/px".
         context: input.context,
     }, {
         // Yield connection slots to interactive tile loading — bounded per
         // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
         priority: "background",
+        // Explicit, because the HttpClient default (30 s) is far below what the server
+        // grants this method (300 s) and its clock also covers the background-lane queue:
+        // a reasoning model never answered inside it, so every read failed as a timeout.
+        timeoutMs,
     });
     return { text: typeof res?.text === "string" ? res.text : "" };
 }
@@ -1748,8 +1787,10 @@ class AssistantAnalyzeDriver implements FmDriver {
     local = false;
     fallback = true;
     features: FmDriver["features"];
+    private _timeoutMs: number;
 
-    constructor() {
+    constructor(timeoutMs: number) {
+        this._timeoutMs = timeoutMs;
         this.features = { "analyze": (input) => this._analyze(input) };
     }
 
@@ -1775,7 +1816,8 @@ class AssistantAnalyzeDriver implements FmDriver {
             throw new Error("The \"assistant\" driver cannot read images: the selected chat model does not accept image input.");
         }
         return callVisionInference(
-            target.scope, target.providerId, target.modelId, $.t("pathology.assistantDriverSystem"), input
+            target.scope, target.providerId, target.modelId, $.t("pathology.assistantDriverSystem"), input,
+            this._timeoutMs
         );
     }
 }
@@ -1851,12 +1893,25 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * and caching it would make a transient network state permanent for the session.
      */
     private _surveys: Map<string, SlideSurvey> = new Map();
+    /**
+     * Client deadline for one `runVisionInference` call, in ms. A DEPLOYMENT knob
+     * (`visionTimeoutMs`): keep it at or above the server's own budget for the method
+     * (`XOPAT_PATHOLOGY_VISION_TIMEOUT_MS`, 300 s), or the browser gives up on a call the
+     * server is still running.
+     */
+    readonly visionTimeoutMs: number;
+    /** Default encoding of model-bound images (`visionImage`); a driver may override the format. */
+    private _visionImage: ImageEncoding;
 
     constructor() {
         super();
         this._drivers = new Map();
         this.MagicWand = null;
         this._defaultForFeature = (this.getStaticMeta("defaultDrivers", {}) as Record<string, string>) || {};
+        this.visionTimeoutMs = clampNumber(
+            this.getStaticMeta("visionTimeoutMs", undefined) as number | undefined, 315_000, 30_000, 1_800_000
+        );
+        this._visionImage = normalizeImageEncoding(this.getStaticMeta("visionImage", undefined));
 
         // Built-in, dependency-free tissue detector so the module works out of
         // the box. Registered first → default for `tissue-mask`. local => no
@@ -1890,7 +1945,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         });
 
         // Last-resort analyze driver: the chat assistant's own model (see AssistantAnalyzeDriver).
-        this.registerDriver(new AssistantAnalyzeDriver());
+        this.registerDriver(new AssistantAnalyzeDriver(this.visionTimeoutMs));
 
         // Configured transports: { "<id>": { type:"http"|"vercel", ... } }.
         const drivers = this.getStaticMeta("drivers", {}) as Record<string, any>;
@@ -1901,7 +1956,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (type === "http") {
                     this.registerDriver(new HttpMaskDriver(id, cfg));
                 } else if (type === "vercel") {
-                    this.registerDriver(new VercelAnalyzeDriver(id, cfg));
+                    this.registerDriver(new VercelAnalyzeDriver(id, cfg, this.visionTimeoutMs));
                 } else {
                     console.warn(`[pathology-foundation] driver "${id}" has unknown type "${type}"; skipped.`);
                 }
@@ -1988,7 +2043,20 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     private async _invokeAnalyze(driver: FmDriver, input: AnalyzeInput): Promise<AnalyzeResult> {
         try {
-            return await driver.features["analyze"]!(input);
+            try {
+                return await driver.features["analyze"]!(input);
+            } catch (error: any) {
+                // A lossless image the endpoint (or an ingress in front of it) refused for its
+                // size: the same pixels as JPEG are several times smaller, so try that once
+                // before reporting a failure. Same driver, same image — not a driver switch.
+                if (!isPayloadTooLarge(error) || input.imageBlob.type === "image/jpeg") throw error;
+                (globalThis as any).APPLICATION_CONTEXT?.log?.("module.pathology-foundation")?.warn?.(
+                    "analyze image refused as too large; retrying as JPEG",
+                    { driver: driver.id, bytes: input.imageBlob.size, type: input.imageBlob.type }
+                );
+                const imageBlob = await reencodeAsJpeg(input.imageBlob, this._visionImage.quality);
+                return await driver.features["analyze"]!({ ...input, imageBlob });
+            }
         } catch (error: any) {
             const fallback = this._drivers.get("assistant");
             const aborted = error?.name === "AbortError";
@@ -2003,6 +2071,21 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             wrapped.cause = error;
             throw wrapped;
         }
+    }
+
+    /** The encoding `driver` gets its analyze image in: its own format, else the module default. */
+    private _visionEncoding(driver: FmDriver): ImageEncoding {
+        return driver.imageFormat
+            ? { format: driver.imageFormat, quality: this._visionImage.quality }
+            : this._visionImage;
+    }
+
+    /** Encode a raster for `driver`. PNG reuses the raster's memoized blob. */
+    private _visionBlob(raster: PixelSource, driver: FmDriver): Promise<Blob> {
+        const encoding = this._visionEncoding(driver);
+        return encoding.format === "png"
+            ? raster.toBlob()
+            : pixelsToImageBlob(raster.pixels, raster.width, raster.height, encoding);
     }
 
     describeDriverForFeature(feature: PathologyFeature, driverId?: string | null): ResolvedDriverInfo {
@@ -2258,19 +2341,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     findings,
                 };
             },
-            onError: (field, error) => {
-                // Nothing was rendered, so nothing was read: the result cannot claim to be
-                // complete, and the features are `unread` — not `unparsed`, which would let
-                // the aggregate report "the model could not tell" about an image the model
-                // was never shown.
+            onError: (field, error, at) => {
+                // Nothing was READ, so the result cannot claim to be complete, and the features
+                // are `unread` — not `unparsed`, which would let the aggregate report "the model
+                // could not tell" about an image the model never answered on. WHICH half failed
+                // is kept: a render that produced nothing and a model call that was refused or
+                // timed out have opposite remedies.
                 isComplete = false;
+                const stage = at?.stage ?? "render";
                 return {
                     label: field.label,
                     bounds: field.bounds,
-                    deliveredMpp: null,
+                    deliveredMpp: stage === "analyze" ? (at?.raster?.deliveredMpp ?? null) : null,
                     answers: checklist.features.map(f => unassessable(f.id, "unread")),
                     findings: null,
                     error: (error as any)?.message || String(error),
+                    errorStage: stage,
                 };
             },
             visionConcurrency: Math.max(1, options.concurrency ?? 4),
@@ -2288,15 +2374,27 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const coveredArea = fields.reduce(
             (sum, f) => sum + (f.error ? 0 : f.bounds.width * f.bounds.height), 0
         );
-        const warnings = unread.length
-            // Named as a rendering failure, because the aggregate answers alone read as a
-            // resolution problem and send the reader to zoom in — which cannot help.
-            ? [t("pathology.warnFieldsUnread", {
-                count: unread.length,
+        // Named by cause, because the aggregate answers alone read as a resolution problem and
+        // send the reader to zoom in — which cannot help either kind. The two are kept apart
+        // because their remedies differ: a failed render is worth re-running as-is, a refused
+        // or timed-out model call is not.
+        const unrendered = unread.filter(f => f.errorStage !== "analyze");
+        const unanalyzed = unread.filter(f => f.errorStage === "analyze");
+        const warnings: string[] = [];
+        if (unrendered.length) {
+            warnings.push(t("pathology.warnFieldsUnread", {
+                count: unrendered.length,
                 total: fields.length,
-                reason: unread[0]?.error ?? "",
-            })]
-            : [];
+                reason: unrendered[0]?.error ?? "",
+            }));
+        }
+        if (unanalyzed.length) {
+            warnings.push(t("pathology.warnFieldsAnalyzeFailed", {
+                count: unanalyzed.length,
+                total: fields.length,
+                reason: unanalyzed[0]?.error ?? "",
+            }));
+        }
         return {
             region: options.region,
             checklist,
@@ -2394,7 +2492,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
         if (!cells.length) throw new Error("None of the requested regions could be rendered.");
 
-        const composite = await composeMontage(cells, layout);
+        const driver = this.getDriverForFeature("analyze", options.driver);
+        const composite = await composeMontage(cells, layout, undefined, this._visionEncoding(driver));
         const context = this._normalizeContext(options.context ?? this.getSlideContext(viewer) ?? undefined);
         const checklist = options.features
             ? sanitizeChecklist(options.features, { source: "explicit" })
@@ -2425,7 +2524,6 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             t("pathology.montageContract"),
         ].join(" ");
 
-        const driver = this.getDriverForFeature("analyze", options.driver);
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: null });
         let text: string | null = null;
         try {
@@ -3906,8 +4004,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // and questions still open did not examine the tissue, and every number below reads as
         // if it had. This is the shape the old fill veto produced — one call out of
         // twenty-eight, `truncated: false`, everything "not-assessable".
+        // Before the "no progress" note, and INSTEAD of it when every region failed: a walk
+        // whose reads all threw did not fail to find a readable region, it never got an answer,
+        // and "go deeper" is the wrong advice for a refused payload or a timed-out model.
+        let failedReads = 0;
+        let okReads = 0;
+        let firstReadError = "";
+        const countReads = (n: OverviewNode) => {
+            if (n.error) {
+                failedReads++;
+                firstReadError ||= n.error;
+            } else {
+                okReads++;
+            }
+            n.children.forEach(countReads);
+        };
+        roots.forEach(countReads);
+        if (failedReads) {
+            warnings.push(t("pathology.warnReadsFailed", {
+                count: failedReads, total: failedReads + okReads, reason: firstReadError,
+            }));
+        }
         const stalled = (evidence ?? []).some(r => r.underResolved);
-        if (budget.focusUnspent > 0 && stalled) {
+        if (budget.focusUnspent > 0 && stalled && !(failedReads && !okReads)) {
             warnings.push(t("pathology.warnNoProgress", { unspent: budget.focusUnspent }));
         }
         if (budget.plannedNotRead > 0) {
@@ -5478,7 +5597,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     label: t("pathology.captureAnalyze"),
                 });
             }
-            imageBlob = await raster.toBlob();
+            imageBlob = await this._visionBlob(raster, driver);
             isComplete = raster.isComplete;
             if (options?.context && !options?.raw) {
                 prompt = await this._groundPrompt(viewer, options.context, raster, options.driver, prompt);
@@ -5490,10 +5609,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // let a half-loaded frame be reported as a finished read.
             if (options?.source === "background") {
                 const bg = await this._readBackground(viewer, { label: t("pathology.captureAnalyze") });
-                imageBlob = await bg.toBlob();
+                imageBlob = await this._visionBlob(bg, driver);
                 isComplete = bg.isComplete;
             } else {
-                const shot = await this.captureViewportImage(viewer, t("pathology.captureAnalyze"));
+                const shot = await this.captureViewportImage(
+                    viewer, t("pathology.captureAnalyze"), this._visionEncoding(driver)
+                );
                 imageBlob = shot?.blob;
                 isComplete = shot?.isComplete;
             }
@@ -6100,25 +6221,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             label?: string;
         }
     ): Promise<RegionRaster> {
-        const { region, aspect, nativeMag } = this._regionRenderGeometry(viewer, bounds);
+        const { region, nativeMag } = this._regionRenderGeometry(viewer, bounds);
 
-        let outWidth: number;
-        if (typeof opts?.magnification === "number" && opts.magnification > 0 && nativeMag) {
-            outWidth = region.width * (opts.magnification / nativeMag);
-        } else {
-            const target = opts?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS;
-            outWidth = Math.sqrt(target * aspect);
-        }
-        // Never upsample past native resolution; keep the raster area bounded.
-        outWidth = Math.min(outWidth, region.width);
-        const maxArea = opts?.targetPixels ? Math.min(MASK_MAX_PIXELS, REGION_RENDER_MAX_PIXELS) : REGION_RENDER_MAX_PIXELS;
-        if ((outWidth * outWidth) / aspect > maxArea) {
-            outWidth = Math.sqrt(maxArea * aspect);
-        }
-        outWidth = Math.max(16, Math.round(outWidth));
-
+        // The output size is the core render's decision (`region-render-size.ts`: never
+        // upsampled past native, shrunk to `maxPixels`) — this only says what is wanted. An
+        // uncalibrated slide cannot honour a magnification, so it falls back to the area budget.
+        const byMagnification = typeof opts?.magnification === "number" && opts.magnification > 0 && !!nativeMag;
         return this._renderRegionAt(viewer, bounds, region, nativeMag, {
-            outWidth,
+            ...(byMagnification
+                ? { magnification: opts!.magnification }
+                : { targetPixels: opts?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS }),
+            maxPixels: opts?.targetPixels ? Math.min(MASK_MAX_PIXELS, REGION_RENDER_MAX_PIXELS) : REGION_RENDER_MAX_PIXELS,
             layers: opts?.layers,
             timeoutMs: opts?.timeoutMs,
             label: opts?.label,
@@ -6269,8 +6382,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         region: Bounds,
         nativeMag: number | null,
         opts: {
-            outWidth: number;
+            /** Exact output size (a planned field), OR one of the two requests below. */
+            outWidth?: number;
             outHeight?: number;
+            magnification?: number;
+            targetPixels?: number;
             maxPixels?: number;
             layers?: "background" | "active";
             timeoutMs?: number;
@@ -6295,10 +6411,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const res = await withTimeout<RawPixelsResult & { isComplete?: boolean; stalled?: boolean }>(
             viz.renderRegionPixels({
                 region,
-                size: {
-                    width: opts.outWidth,
-                    ...(opts.outHeight ? { height: opts.outHeight } : {}),
-                },
+                ...(opts.outWidth
+                    ? { size: { width: opts.outWidth, ...(opts.outHeight ? { height: opts.outHeight } : {}) } }
+                    : opts.magnification
+                        ? { magnification: opts.magnification }
+                        : { targetPixels: opts.targetPixels }),
                 layers: opts.layers ?? "background",
                 refIndex,
                 pixelFormat: "typed",
@@ -6441,7 +6558,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     // ---- capture (on-screen composite) + mask→polygon infra ----
 
     /**
-     * Capture the on-screen composite of a viewer as a PNG blob (device pixels).
+     * Capture the on-screen composite of a viewer as an image blob (device pixels) — PNG unless
+     * `encoding` says otherwise (the `analyze` path passes the model-bound encoding).
      * Includes the visualization overlay — used only where that is desirable
      * (the `analyze` feature). Tissue/segment read the raw background instead
      * (see {@link _readBackground}). The SAM plugin also delegates here.
@@ -6454,7 +6572,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async captureViewportImage(
         viewer: any,
-        label?: string
+        label?: string,
+        encoding: ImageEncoding = { format: "png" }
     ): Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null> {
         const sourceCanvas = viewer?.drawer?.canvas;
         if (!sourceCanvas || sourceCanvas.width < 1) {
@@ -6501,18 +6620,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             ctx.drawImage(sourceCanvas, 0, 0);
         }
 
-        return new Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null>(resolve => {
-            ctx!.canvas.toBlob(blob => {
-                if (!blob) {
-                    console.error("[pathology-foundation] failed to capture viewport image.");
-                    announce("end", false);
-                    resolve(null);
-                    return;
-                }
-                announce("end", true);
-                resolve({ blob, width, height, isComplete });
-            }, "image/png");
-        });
+        try {
+            // JPEG has no alpha: whatever the composite left transparent must become glass, not black.
+            const out = encoding.format === "jpeg" ? flattenOnWhite(ctx.canvas, width, height) : ctx.canvas;
+            const blob = await encodeCanvas(out, encoding, "Failed to capture the viewport image.");
+            announce("end", true);
+            return { blob, width, height, isComplete };
+        } catch (e) {
+            console.error("[pathology-foundation] failed to capture viewport image.");
+            announce("end", false);
+            return null;
+        }
     }
 
     /**

@@ -94,12 +94,15 @@ function createFileDriver(options = {}) {
      * session taking messages) fails intermittently on Windows only. POSIX never
      * takes this path.
      *
-     * The backoff is exponential but capped at ~400ms in total on purpose: this
-     * delay is also paid on the failing path of `set`/`append`/`put`, and a
-     * longer ceiling turns sustained contention into request queueing rather
-     * than a fast, honest error.
+     * The backoff is exponential, capped per step, ~2s in total. It used to be
+     * ~330ms, sized for the days when this process could also be racing ITSELF
+     * on the destination; `serialized` below removed that, so what is left is
+     * an external holder — and a sync client uploading the file routinely
+     * outlasts a third of a second. The delay is still paid on the failing path
+     * of `set`/`append`/`put`, which is why it stays bounded: past it the error
+     * is honest, and names the likely cause.
      */
-    async function renameAtomic(tmp, file, attempts = 8) {
+    async function renameAtomic(tmp, file, attempts = 18) {
         for (let i = 0; ; i += 1) {
             try {
                 await fsp.rename(tmp, file);
@@ -107,11 +110,42 @@ function createFileDriver(options = {}) {
             } catch (e) {
                 if (!e || !TRANSIENT_RENAME.has(e.code) || i >= attempts) {
                     await fsp.rm(tmp, { force: true }).catch(() => {});
+                    if (e && TRANSIENT_RENAME.has(e.code) && process.platform === "win32") {
+                        e.message += " — the destination stayed held by another process. A storage root " +
+                            "inside a synced folder (OneDrive, Dropbox) or under real-time antivirus " +
+                            "scanning does this; move it with core.server.secure.storage.root / XOPAT_STORAGE_ROOT.";
+                    }
                     throw e;
                 }
-                await sleep(Math.min(80, 3 * 2 ** i));
+                await sleep(Math.min(150, 3 * 2 ** i));
             }
         }
+    }
+
+    /**
+     * Runs `task` after every earlier task for the same `file` has settled.
+     *
+     * A log append and a blob put are read-modify-write over TWO files (the
+     * data and its `.meta.json`), and nothing made two of them on one key take
+     * turns: overlapping chat turns of one session both read `length: n`, both
+     * wrote `n + 1`, and on Windows the second rename onto the same destination
+     * failed with EPERM — a lost turn. Serializing per file fixes the count and
+     * stops the process contending with itself.
+     *
+     * In-process only. Sibling cluster workers still interleave; for them the
+     * rename retry above is the whole defence, and `length` in the meta is
+     * advisory (readers take the entries from the log file itself).
+     *
+     * The map holds in-flight keys only: an entry is removed when its tail
+     * settles, so it cannot grow with the number of keys ever written.
+     */
+    const chains = new Map();
+    function serialized(file, task) {
+        const run = (chains.get(file) || Promise.resolve()).then(task, task);
+        const tail = run.catch(() => {});
+        chains.set(file, tail);
+        tail.then(() => { if (chains.get(file) === tail) chains.delete(file); });
+        return run;
     }
 
     async function writeAtomic(file, data) {
@@ -375,7 +409,10 @@ function createFileDriver(options = {}) {
         },
 
         // ── log ──────────────────────────────────────────────────────────────
-        async append(ns, key, entries) {
+        append(ns, key, entries) {
+            return serialized(filesFor(ns, key).main, () => driver._append(ns, key, entries));
+        },
+        async _append(ns, key, entries) {
             const { main, meta, dir } = filesFor(ns, key);
             await fsp.mkdir(dir, { recursive: true });
             const payload = entries.map(e => JSON.stringify(e)).join("\n") + "\n";
@@ -412,7 +449,10 @@ function createFileDriver(options = {}) {
             const record = await readJson(filesFor(ns, key).meta);
             return record && !expired(record) ? (record.length || 0) : 0;
         },
-        async trim(ns, key, keepTail) {
+        trim(ns, key, keepTail) {
+            return serialized(filesFor(ns, key).main, () => driver._trim(ns, key, keepTail));
+        },
+        async _trim(ns, key, keepTail) {
             const { main, meta } = filesFor(ns, key);
             const record = await readJson(meta);
             if (!record || (record.length || 0) <= keepTail) return record?.length || 0;
@@ -429,7 +469,10 @@ function createFileDriver(options = {}) {
         // bytes land first and the meta sidecar LAST, so the meta doubles as the
         // commit record — see `read`/`open`, which refuse a blob whose meta is
         // missing rather than serving half-written bytes.
-        async put(ns, key, source, meta = {}) {
+        put(ns, key, source, meta = {}) {
+            return serialized(filesFor(ns, key).main, () => driver._put(ns, key, source, meta));
+        },
+        async _put(ns, key, source, meta = {}) {
             const { main, meta: metaFile } = filesFor(ns, key);
             const data = await bufferOf(source);
             // Remove any previous commit record first: between here and the new

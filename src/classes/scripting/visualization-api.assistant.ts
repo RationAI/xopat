@@ -28,7 +28,9 @@ export const VISUALIZATION_ASSISTANT_HINTS: ScriptApiAssistantHints = {
   3. Only if that is inconclusive — no channel information, no usable value range, or you need to judge how the current rendering LOOKS — call \`visualization.critiqueCurrentRendering()\`. It captures what the user sees and returns a short written critique. Treat its wording as evidence, not as your answer.
   4. Only if all of the above still leave a choice the data cannot settle, ask the user ONE bundled question.
 - If the request names no viewer, apply to every open viewer that has data to show rather than asking which one. Say afterwards what you changed and where.
-- Act, then report: apply the change and state in one line what was applied and how to adjust it. Do not describe a visualization you have not applied.`,
+- Act, then report: apply the change and state in one line what was applied and how to adjust it. Do not describe a visualization you have not applied.
+- **Changing the visualization is for requests to change it — never a way to look.** To see the slide under an overlay, render off-screen with \`layers: "background"\` (\`viewer.captureRegion\`, or \`renderRegion*\` here for pixel math): the scan comes back with no overlay and nothing on screen changes. Do not \`removeVisualization\`, \`replaceVisualizations\`, \`setActiveVisualization\` or lower an opacity to uncover tissue, and do not "restore" afterwards — a round trip through the user's session is two consent prompts and a chance to lose their configuration.
+- \`critiqueCurrentRendering\` answers one question: how well does the CURRENT VIEW read as a rendering. Its model is instructed to refuse tissue, morphology and diagnosis, so it is useless as a specimen reader, and it must never be the reason to move the user's view.`,
     /**
      * Workflow block: how to discover the shader-type vocabulary (so the model does not
      * invent names like `color-mapping`), one worked `colormap` example (the

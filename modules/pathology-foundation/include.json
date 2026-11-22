@@ -113,6 +113,21 @@
   // "surveyLoadTimeoutMs": 15000,
   // "renderQueueTimeoutMs": 20000,
 
+  // Client deadline for ONE vision model call (ms, clamped to 30000..1800000). Covers the
+  // wait for a background request slot AND the model's answer. Keep it at or above the
+  // server's own budget for the call (env XOPAT_PATHOLOGY_VISION_TIMEOUT_MS, 300000), or
+  // the browser gives up on a call the server is still running — the symptom is every
+  // field failing with "aborted after N ms", worst with reasoning models.
+  // "visionTimeoutMs": 315000,
+
+  // How images sent to a vision model are encoded. JPEG is the default: a 2 MP field is
+  // several MB as PNG and a few hundred KB as JPEG, and the image travels base64-in-JSON
+  // through every hop, including ingresses that refuse bodies over 1 MB. Set
+  // { "format": "png" } for lossless input when every hop accepts large bodies; a PNG
+  // refused as too large (HTTP 413) is retried once as JPEG. A single driver can override
+  // the format with its own "imageFormat".
+  // "visionImage": { "format": "jpeg", "quality": 0.9 },
+
   // Absorbance vectors of the stain basis used to unmix the NUCLEAR stain, which is
   // how the module derives its free "where are the nuclei" prior (feature
   // "cellularity"). A COLOUR BASIS, not a clinical vocabulary: `nuclear` is the
@@ -164,6 +179,7 @@
     //   "type": "vercel",
     //   "providerId": "pathology-medgemma",
     //   "model": "medgemma-4b-it", "label": "MedGemma (SDK)"
+    //   // optional: "imageFormat": "png"  (overrides visionImage.format for this driver)
     // }
   }
 }

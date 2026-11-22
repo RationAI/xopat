@@ -6,6 +6,7 @@ import type {
     VisualizationViewportPixelsResult,
     VisualizationRegionRenderOptions,
     VisualizationRegionPixelsResult,
+    VisualizationRegionPngResult,
     VisualizationFirstPassExtractOptions,
     VisualizationLayerSource,
     VisualizationShaderGroupOrLayer,
@@ -17,6 +18,7 @@ import type {
 import { XOpatScriptingApi } from "./abstract-api";
 import { fetchDtsCached } from "./dts-fetch";
 import { VISUALIZATION_ASSISTANT_HINTS } from "./visualization-api.assistant";
+import { resolveRegionRenderSize } from "./region-render-size";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
 import {
     compileVisualizationConfigSchema,
@@ -67,6 +69,12 @@ function mergeLayerPatch(existingLayer: any, patchLayer: any): any {
  * the feedback verbatim — the LLM treats it as a normal "user wants refinement"
  * signal and re-plans.
  */
+/**
+ * Client deadline for a `runVisionInference` RPC. At or above the server's own budget for the
+ * method (300 s), so the server's result or timeout ends the call rather than the browser.
+ */
+const VISION_RPC_TIMEOUT_MS = 315_000;
+
 class VisualizationReviewFeedbackError extends Error {
     feedback: string;
     editedSnapshot: VisualizationStateSnapshot;
@@ -1854,7 +1862,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     protected async extractRegionCanvas(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean }> {
+    ): Promise<{
+        canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean;
+        scale: number; magnification: number | null;
+    }> {
         const viewer: any = this.activeViewer;
         const region = options?.region;
         if (!region || !(Number(region.width) > 0) || !(Number(region.height) > 0)) {
@@ -1882,8 +1893,25 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             }
         }
 
+        // Resolved before the pass is queued, so a bad size request fails without taking a turn.
+        // The output keeps the region's aspect ratio — the standalone viewport letterboxes a
+        // mismatched one with out-of-region content.
+        const rendered = resolveRegionRenderSize({
+            regionWidth: Number(region.width),
+            regionHeight: Number(region.height),
+            size: options.size,
+            magnification: options.magnification,
+            targetPixels: options.targetPixels,
+            nativeMagnification: (viewer as any)?.scalebar?.magnification || null,
+            maxPixels: Number.isFinite(options.maxPixels as number)
+                ? Number(options.maxPixels)
+                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS,
+        });
+        const outWidth = rendered.width;
+        const outHeight = rendered.height;
+
         const announcedRefIndex = Number.isInteger(options.refIndex) ? Number(options.refIndex) : 0;
-        return this.runSerializedRegionTask(viewer, async () => {
+        const pass = await this.runSerializedRegionTask(viewer, async () => {
             const drawer = this.getCurrentStandaloneDrawer();
             const mirrors = await this.getRegionMirrorImages(viewer, drawer);
 
@@ -1900,28 +1928,6 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             const bounds = ref.imageToViewportRectangle(
                 new osd.Rect(Number(region.x) || 0, Number(region.y) || 0, Number(region.width), Number(region.height))
             );
-
-            // Fit the region's aspect ratio into the requested size box — the standalone
-            // viewport letterboxes mismatched aspect ratios with out-of-region content.
-            const aspect = Number(region.width) / Number(region.height);
-            let outWidth = Number(options.size?.width);
-            let outHeight = Number(options.size?.height);
-            if (!(outWidth > 0) && !(outHeight > 0)) {
-                throw new Error("renderRegion requires size.width and/or size.height.");
-            }
-            if (!(outHeight > 0)) outHeight = outWidth / aspect;
-            else if (!(outWidth > 0)) outWidth = outHeight * aspect;
-            else if (outWidth / outHeight > aspect) outWidth = outHeight * aspect;
-            else outHeight = outWidth / aspect;
-            outWidth = Math.max(1, Math.round(outWidth));
-            outHeight = Math.max(1, Math.round(outHeight));
-
-            const maxPixels = Number.isFinite(options.maxPixels as number)
-                ? Number(options.maxPixels)
-                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS;
-            if (outWidth * outHeight > maxPixels) {
-                throw new Error("Requested region render is too large. Reduce the output size or raise maxPixels.");
-            }
 
             // STOP-GAP (AGENTS.md §1: renderer internals belong in the library). The standalone
             // DRAWER does not clear its target between passes — the standalone RENDERER facade does
@@ -1974,6 +1980,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ...(Number.isFinite(options.queueTimeoutMs as number)
                 ? { queueTimeoutMs: Number(options.queueTimeoutMs) } : {}),
         });
+        return { ...pass, scale: rendered.scale, magnification: rendered.magnification };
     }
 
     /**
@@ -2009,7 +2016,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     async renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
+    ): Promise<VisualizationRegionPngResult> {
         await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
         return this.regionPngDetailed(options);
     }
@@ -2017,12 +2024,15 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     /** Unchecked body of {@link renderRegionPngDetailed}: callers have already asked for pixel consent. */
     protected async regionPngDetailed(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
-        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
+    ): Promise<VisualizationRegionPngResult> {
+        const { canvas, isComplete, stalled, scale, magnification } = await this.extractRegionCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted region canvas does not support toDataURL().");
         }
-        return { dataUrl: canvas.toDataURL("image/png"), isComplete, stalled };
+        return {
+            dataUrl: canvas.toDataURL("image/png"), isComplete, stalled,
+            width: canvas.width, height: canvas.height, scale, magnification,
+        };
     }
 
     /**
@@ -2032,7 +2042,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     async renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult> {
         await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
-        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
+        const { canvas, isComplete, stalled, scale, magnification } = await this.extractRegionCanvas(options);
         // Guard readback with the SAME default as the region render, so a region the render
         // allowed never throws on readback (readCanvasPixels otherwise defaults to 1024*1024).
         const readbackOptions: VisualizationViewportRenderOptions = {
@@ -2046,7 +2056,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             readbackOptions,
             "Failed to create a 2D context for region extraction."
         );
-        return { ...pixels, isComplete, stalled };
+        return { ...pixels, isComplete, stalled, scale, magnification };
     }
 
     /**
@@ -2325,8 +2335,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                     : `${$.t("scripting.visualization.critiqueIncomplete")}\n\n${basePrompt}`,
                 imageBase64: base64,
                 mediaType: "image/png",
-                maxOutputTokens: 512,
-            }, { priority: "background" });
+                // Room for a reasoning model: 512 was spent before the critique finished.
+                maxOutputTokens: 1024,
+                // Not the HttpClient default (30 s): the server grants this method 300 s and a
+                // reasoning model needs more than 30, so the default made every critique fail.
+            }, { priority: "background", timeoutMs: VISION_RPC_TIMEOUT_MS });
             const text = typeof result?.text === "string" ? result.text.trim() : "";
             return text || null;
         } catch (e) {

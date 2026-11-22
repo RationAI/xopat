@@ -201,11 +201,25 @@ export type VisualizationRegionRenderOptions = {
      */
     region: { x: number; y: number; width: number; height: number };
     /**
+     * HOW MUCH DETAIL — give exactly ONE of `size`, `magnification`, `targetPixels`.
+     *
      * Output bounding box in pixels. The region's aspect ratio is preserved: provide one
      * dimension to derive the other, or both to fit the region inside the box. Small sizes
      * (e.g. 512) are cheap — request only the resolution you need.
      */
-    size: { width?: number; height?: number };
+    size?: { width?: number; height?: number };
+    /**
+     * Render at this optical magnification (e.g. 5, 20) — the same number the scalebar shows.
+     * Needs a calibrated slide (throws otherwise; use `targetPixels`). A request, not a
+     * guarantee: the output is never upsampled past native resolution and never exceeds
+     * `maxPixels`, so read the result's `magnification` for what was actually rendered.
+     */
+    magnification?: number;
+    /**
+     * Render at whatever resolution fits this output AREA (e.g. 500000 ≈ 700×700). Works on
+     * uncalibrated slides. Capped the same way as `magnification`; read the result's `scale`.
+     */
+    targetPixels?: number;
     /**
      * Which shader layers to render. `"active"` (default) reproduces the user's full live
      * visualization (background + data layers, current control values). `"background"` renders
@@ -259,7 +273,23 @@ export type VisualizationRegionRenderOptions = {
     label?: string;
 };
 
-export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & {
+/** What a region render says about the resolution it actually produced. */
+export type VisualizationRegionResolution = {
+    /** Output pixels per level-0 image pixel (1 = native resolution, 0.25 = every 4th pixel). */
+    scale: number;
+    /** Effective optical magnification of the output; null on an uncalibrated slide. */
+    magnification: number | null;
+};
+
+export type VisualizationRegionPngResult = VisualizationRegionResolution & {
+    dataUrl: string;
+    width: number;
+    height: number;
+    isComplete: boolean;
+    stalled: boolean;
+};
+
+export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & VisualizationRegionResolution & {
     /**
      * False when the render did not have every tile of the region — the tile-load wait ran out of
      * `timeoutMs`, or gave up early because no further tile could arrive (see `stalled`).
@@ -413,6 +443,12 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Captures what the user currently sees and returns a vision model's written critique of it.
      *
+     * RENDERING QUALITY ONLY. `question` narrows the critique ("is the overlay distinguishable?");
+     * the model behind it is instructed to refuse tissue, morphology and diagnosis, so it is not a
+     * way to read a specimen. It reads the CURRENT VIEWPORT with overlays — never navigate the
+     * viewer or change the visualization to feed it. To look at tissue, render a region
+     * (`viewer.captureRegion`).
+     *
      * For questions the configuration cannot answer — "is this readable?", "why does the overlay
      * look washed out?" — where the subject is the composite on screen. Prefer `describeData` and
      * `probeData` first: they are cheaper and more precise. Returns `null` when no vision-capable
@@ -507,6 +543,8 @@ export interface VisualizationScriptApi extends ScriptApiObject {
 
     /**
      * Replaces the full visualization list for the current session.
+     * Not for temporarily hiding overlays to look at the slide — render off-screen with
+     * `layers: "background"` instead.
      * Optional newData entries are appended to the session data array before the viewer reloads.
      */
     replaceVisualizations(
@@ -567,7 +605,9 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     ): Promise<boolean>;
 
     /**
-     * Removes a visualization from the current session.
+     * Removes a visualization from the current session. A change to the user's session — only
+     * when the user asked for it. NOT a way to uncover the slide for a look: an off-screen render
+     * with `layers: "background"` shows the scan without any overlay and changes nothing.
      */
     removeVisualization(index: number, nextActiveIndex?: number | number[]): Promise<boolean>;
 
@@ -629,6 +669,9 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * location (active visualization, current control values); `layers: "background"` returns the
      * raw slide. Excludes annotation/DOM overlays (not part of the render pipeline).
      *
+     * Return the data URL from your script to view the image yourself on the next step.
+     * `viewer.captureRegion` is the same render with the resolution reported alongside.
+     *
      * THROWS when the render came back incomplete (some tiles had not loaded), because a data URL
      * cannot carry that and a partial render is indistinguishable from a real one. Pass
      * `onIncomplete: "allow"` to accept partial pixels, or call {@link renderRegionPngDetailed} to
@@ -654,7 +697,7 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      */
     renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }>;
+    ): Promise<VisualizationRegionPngResult>;
 
     /**
      * Renders an arbitrary image region off-screen and returns raw RGBA pixels plus `isComplete`
