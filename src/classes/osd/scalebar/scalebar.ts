@@ -83,6 +83,11 @@ OSD.Viewer.prototype.makeScalebar = function(options) {
     // reserved under it belongs to the viewer, not to one slide: carry it over,
     // or the first slide change drops the dock back onto whatever reserved it.
     const bottomInset = this.scalebar?._bottomInset || 0;
+    // Same for viewport sync: the link itself lives in a shared session and in
+    // the viewer's handlers, both of which survive the rebuild. A fresh API
+    // object would report "not enabled" for a viewer that is still linked and
+    // still posed — `disable()` and the pose release then silently do nothing.
+    options.syncApi = this.scalebar?.ViewportSyncAPI;
     if (this.scalebar) {
         this.scalebar.destroy();
     }
@@ -123,7 +128,8 @@ OSD.Scalebar = function(options) {
 
     //Defaults
     this.viewer = options.viewer;
-    this.ViewportSyncAPI = new ViewportSyncAPI(this.viewer);
+    this.ViewportSyncAPI = options.syncApi?.master === this.viewer
+        ? options.syncApi : new ViewportSyncAPI(this.viewer);
 
     this.setDrawScalebarFunction(options.type || OSD.ScalebarType.MICROSCOPY);
     this.color = options.color || "black";

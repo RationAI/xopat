@@ -1076,9 +1076,16 @@ interface XOpatUtilities {
 
     /**
      * Download content as a file via a temporary link element. Strings become
-     * `text/plain`; binary payloads keep their own type.
+     * `text/plain`; binary payloads keep their own type. Gated by
+     * `core.io.local-file`; returns false (after telling the user) when refused.
      */
-    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): void;
+    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): boolean;
+
+    /**
+     * Read a file the user picked or dropped. Gated by `core.io.local-file`;
+     * rejects with `code: "W_PERM_DENIED"` (after telling the user) when refused.
+     */
+    readLocalFile(file: File, mode?: "text" | "bytes"): Promise<string | ArrayBuffer>;
 
     /**
      * Download the original slide file behind a tile source that implements the

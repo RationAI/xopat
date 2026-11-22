@@ -21,7 +21,7 @@ import { slideCanonicalOf, slideHashOf, slideLegacyCanonicalOf } from "./classes
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
-    registerCoreCapabilities, allowCoreAction,
+    registerCoreCapabilities, allowCoreAction, CAP_IO_LOCAL_FILE,
     CAP_EXPORT_FILE, CAP_EXPORT_URL,
 } from "./classes/app/core-capabilities";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
@@ -506,6 +506,33 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     function escapeHtml(value: unknown) {
         return String(value).replace(/[&<>"']/g, char =>
             ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+    }
+
+    /**
+     * JSON for interpolation into a `<script>` body. `JSON.stringify` does not
+     * escape `<`, so a value holding `</script>` would close the tag. Mirrors
+     * `jsonForScript` in server/node/utils.js — keep the two in step.
+     */
+    function jsonForScript(value: unknown) {
+        return JSON.stringify(value === undefined ? null : value)
+            .replace(/[<\u2028\u2029]/g, char => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0"));
+    }
+
+    /** Hand content to the browser as a download. Ungated: callers answer for their own capability. */
+    function saveAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
+        let data: Blob;
+        if (content instanceof Blob) data = content;
+        else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
+        else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
+
+        const downloadURL = window.URL.createObjectURL(data);
+        const elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
+        elem.href = downloadURL;
+        elem.setAttribute('download', filename);
+        elem.click();
+        // Revoking synchronously races the browser's read of a large blob —
+        // Firefox in particular aborts the save. Let the click settle first.
+        setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
     }
 
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
@@ -3481,7 +3508,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 ${form}
 </body></html>`;
 
-                UTILITIES.downloadAsFile("export.html", doc);
+                // Already allowed by `core.export.file` above: its own knob,
+                // not the local-file one.
+                saveAsFile("export.html", doc);
                 APPLICATION_CONTEXT.__cache.dirty = false;
                 // The file is written either way — the export is not "failed"
                 // because one owner was refused. But an export silently missing
@@ -3656,21 +3685,16 @@ ${form}
          * Download content as a file via a temporary link element. Strings are
          * written as `text/plain`; binary payloads keep their own type (a Blob's
          * own, `application/octet-stream` otherwise).
+         *
+         * Gated by `core.io.local-file`: this is the one door every plugin's
+         * "Download" goes through, so the role that closes local files closes
+         * it here once, for all of them. A refusal tells the user.
+         * @returns false when the download was refused
          */
-        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
-            let data: Blob;
-            if (content instanceof Blob) data = content;
-            else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
-            else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
-
-            let downloadURL = window.URL.createObjectURL(data);
-            let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
-            elem.href = downloadURL;
-            elem.setAttribute('download', filename);
-            elem.click();
-            // Revoking synchronously races the browser's read of a large blob —
-            // Firefox in particular aborts the save. Let the click settle first.
-            setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
+        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): boolean {
+            if (!allowCoreAction(CAP_IO_LOCAL_FILE)) return false;
+            saveAsFile(filename, content);
+            return true;
         },
 
         /**
@@ -3689,6 +3713,8 @@ ${form}
          * @param mode - Read as text or as ArrayBuffer.
          */
         uploadFile: async function (onUploaded: (arg0: (string | ArrayBuffer)) => void, accept = ".json", mode = "text") {
+            // Asked before the picker opens, not after the user chose a file.
+            if (!allowCoreAction(CAP_IO_LOCAL_FILE)) return;
             const uploader = document.getElementById("file-upload-helper") as HTMLInputElement | null;
             if (!uploader) {
                 console.error("Upload helper input is missing from the document.");
@@ -3711,9 +3737,24 @@ ${form}
          * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
          */
         readFileUploadEvent: function (e: Event, mode = "text") {
+            const file = (e.currentTarget as HTMLInputElement | null)?.files?.[0];
+            if (!file) return Promise.reject("Invalid input file: no file.");
+            return UTILITIES.readLocalFile(file, mode);
+        },
+
+        /**
+         * Read a file the user picked or dropped. Gated by `core.io.local-file`
+         * like `downloadAsFile`; a refusal tells the user and rejects with an
+         * error whose `code` is `W_PERM_DENIED`.
+         * @param {File} file
+         * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
+         * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
+         */
+        readLocalFile: function (file: File, mode = "text") {
             return new Promise((resolve, reject) => {
-                let file = e.currentTarget.files?.[0];
-                if (!file) return reject("Invalid input file: no file.");
+                if (!allowCoreAction(CAP_IO_LOCAL_FILE)) {
+                    return reject(Object.assign(new Error("Local files are not available."), { code: "W_PERM_DENIED" }));
+                }
                 const fileReader = new FileReader();
                 fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
                 // Without this a failed read left the promise pending forever.
@@ -4045,7 +4086,8 @@ ${form}
          *   just silently missing from the exported document.
          */
         getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false, outcome?: IOResult[]) {
-            const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
+            // Lands in an HTML attribute below.
+            const url = escapeHtml((APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url);
 
             if (!APPLICATION_CONTEXT.env.server.supportsPost) {
                 return `
@@ -4073,8 +4115,8 @@ ${form}
             function addExport(key: string, data: any) {
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", "${key}");
-node.setAttribute("value", JSON.stringify(${JSON.stringify(data)}));
+node.setAttribute("name", ${jsonForScript(key)});
+node.setAttribute("value", JSON.stringify(${jsonForScript(data)}));
 form.appendChild(node);`;
             }
 

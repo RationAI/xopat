@@ -444,7 +444,7 @@ a role names them.
 
 | id | choke point |
 | --- | --- |
-| `core.io.local-file` | the `route: "local"` guard, mounted on `pre-export` / `pre-import` |
+| `core.io.local-file` | the `route: "local"` guard, mounted on `pre-export` / `pre-import`; and `UTILITIES.downloadAsFile` / `uploadFile` / `readLocalFile` / `downloadSlideFile`, which every plugin's own Download and Choose-file go through |
 | `core.export.file` | `UTILITIES.export()` — the `export.html` session document |
 | `core.export.url` | `copyUrlToClipboard()` and `syncSessionToUrl()` |
 | `core.scripting.run` | `ScriptingManager.executeScript` — any script text, whoever authored it |

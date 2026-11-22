@@ -560,6 +560,11 @@ export class BackgroundConfig implements BackgroundItem {
      * Whether a visualization may render over a background. A visualization
      * without `backgrounds` belongs to every background; otherwise one entry
      * must equal the background's `id` or the data id the background shows.
+     *
+     * A background id is sanitized on the way in (`processId`) while the tags
+     * are stored as written, so a tag is also compared in sanitized form. A
+     * virtual-region child answers to its parent's id (`virtualOf`) too: it
+     * shows the same slide and inherits the parent's visualization.
      */
     static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
         const targets = visualization?.backgrounds;
@@ -568,7 +573,11 @@ export class BackgroundConfig implements BackgroundItem {
         const ref = background.dataReference;
         const entry = typeof ref === "number" ? data[ref] : ref;
         const dataId = typeof entry === "string" ? entry : entry?.dataID;
-        return targets.some((t: any) => t === background.id || (dataId !== undefined && t === dataId));
+        const ids = [background.id, background.virtualOf].filter((id: any) => id !== undefined && id !== null);
+        const sanitize = (window as any).UTILITIES?.sanitizeID;
+        return targets.some((t: any) => ids.includes(t)
+            || (dataId !== undefined && t === dataId)
+            || (typeof t === "string" && typeof sanitize === "function" && ids.includes(sanitize(t))));
     }
 }
 (window as any).BackgroundConfig = BackgroundConfig;
