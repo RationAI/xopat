@@ -1,6 +1,6 @@
 {
   "name": "xopat",
-  "version": "3.2.2",
+  "version": "3.3.0",
   "description": "A flexible multipurpose high-resolution data viewing framework.",
   "main": "index.js",
   "bin": "index.js",
