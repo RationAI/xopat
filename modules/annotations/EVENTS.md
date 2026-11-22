@@ -52,6 +52,11 @@ to mark the request as handled.
 ##### `preset-update` | `{ preset: OSDAnnotations.Preset }`
 
 ##### `preset-select` | `{ preset: OSDAnnotations.Preset | undefined, isLeftClick: boolean }`
+Selecting a preset changes the class only, never the drawing tool.
+
+##### `active-factory-change` | `{ factory: OSDAnnotations.AnnotationObjectFactory }`
+The drawing tool changed (`setActiveFactory`). The tool is shared by both mouse buttons and
+is independent of the active presets; read it with `getActiveFactory()`.
 
 ##### `preset-meta-add` | `{ preset: OSDAnnotations.Preset, key: string }`
 Custom metadata is key-addressed, and keys round-trip through export/import verbatim.

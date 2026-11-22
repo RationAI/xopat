@@ -4,6 +4,7 @@
 // IOKVDriver, IOKVHandle, …).
 
 import { SyncKVHandle, AsyncKVHandle } from "./io-kv-handle";
+import { IOFormatRegistry } from "./io-formats";
 import type { CookieAttributes } from "./kv-drivers";
 
 /**
@@ -223,11 +224,43 @@ export function capabilityGroupOf(capabilityId: string): string {
     return capabilityId.replace(/-(export|import)$/, "");
 }
 
-/** See `IOPipelineLike.formatPath`. Pure; exported for tests. */
+/**
+ * A plain-data copy of untrusted session input: JSON round-trip, so functions,
+ * prototypes and shared references are gone and the caller cannot reach back
+ * into the session payload. `undefined` when the value is not a plain object or
+ * cannot be serialized (cycles, BigInt).
+ */
+function detachedJson(value: unknown): Record<string, unknown> | undefined {
+    try {
+        const copy = JSON.parse(JSON.stringify(value));
+        return copy && typeof copy === "object" && !Array.isArray(copy) ? copy : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** Tokens resolved from the slide behind `ctx.backgroundId`, not from the ctx itself. */
+const SLIDE_TOKENS = /\{slide(?:Hash|Name)\}/;
+const SLIDE_HASH_TOKEN = /\{slideHash\}/;
+/** An action offered next to a pipeline notification (rendered as a toast button). */
+export interface IONotifyButton { label: string; onClick: () => void; }
+
+/** `ctx.meta` flag: resolve `{slideHash}` to the slide's pre-change address. */
+const LEGACY_SLIDE_HASH = "legacySlideHash";
+
+/**
+ * See `IOPipelineLike.formatPath`. Pure; exported for tests. `slide` is the
+ * identity of the slide behind `ctx.backgroundId` (`UTILITIES.slideIdentityFor`),
+ * resolved by the caller; without it `{slideHash}` falls back like
+ * `{backgroundId}` does (`_any`) and `{slideName}` to `options.empty`.
+ * (`formatPath` refuses before reaching here when a slide exists but no
+ * `slideHashKey` is configured to hash it.)
+ */
 export function formatContextTemplate(
     template: string,
     ctx: IOContext,
     options?: IOFormatOptions,
+    slide?: { hash?: string; name?: string },
 ): string {
     const mode = options?.mode ?? "path";
     const empty = options?.empty ?? "_";
@@ -243,6 +276,11 @@ export function formatContextTemplate(
         key: ctx.key || "_default",
         resourceName: ctx.resourceName,
         itemId: ctx.itemId,
+        slideHash: slide?.hash || "_any",
+        slideName: slide?.name,
+        // File extension of the format this dispatch travels in, without the
+        // dot. `json` when none is known — what every bundle was before formats.
+        ext: ctx.format?.fileExt || "json",
         ...(options?.extra ?? {}),
     };
     return String(template).replace(/\{(\w+)\}/g, (_match, token: string) => {
@@ -259,14 +297,64 @@ export function formatContextTemplate(
             const stripped = raw.replace(CONTROL_CHARS, "");
             return stripped.length > FORMAT_MAX_RAW ? stripped.slice(0, FORMAT_MAX_RAW) : stripped;
         }
+        if (mode === "uri") {
+            const stripped = raw.replace(CONTROL_CHARS, "");
+            if (stripped === "") return empty;
+            // `encodeURIComponent` leaves `.` alone; a whole-segment `.`/`..`
+            // would be resolved away by URL normalization.
+            if (stripped === "." || stripped === "..") return stripped.replace(/\./g, "%2E");
+            return encodeURIComponent(stripped);
+        }
         return sanitizeSegment(raw, empty);
     });
+}
+
+/**
+ * See `IOPipelineLike.pinnedFormatFrom`. Pure; the config is a sink's composed
+ * operator options. A domain entry beats `"*"`; anything malformed is ignored
+ * (no pin) rather than guessed at.
+ */
+export function pinnedFormatFrom(config: unknown, domain: string): IOFormatPin | undefined {
+    const formats = (config as { formats?: unknown } | null | undefined)?.formats;
+    if (!formats || typeof formats !== "object" || Array.isArray(formats)) return undefined;
+    const map = formats as Record<string, unknown>;
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(map, k);
+    const entry = has(domain) ? map[domain] : (has("*") ? map["*"] : undefined);
+    if (typeof entry === "string") return entry || undefined;
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        const { id, options } = entry as { id?: unknown; options?: unknown };
+        if (typeof id !== "string" || !id) return undefined;
+        return options && typeof options === "object" && !Array.isArray(options)
+            ? { id, options: options as Record<string, unknown> }
+            : { id };
+    }
+    return undefined;
 }
 
 // ── binding targets ────────────────────────────────────────────────────
 
 /** Shared frozen `{}` so `bindingConfig` never allocates on the hot path. */
 const EMPTY_BINDING_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({});
+
+/** Cache/grouping key of a dispatch format; `""` is "none named — the owner's default". */
+function formatKey(format?: IOFormatDescriptor): string {
+    if (!format) return "";
+    const options = Object.keys(format.options).length ? JSON.stringify(format.options) : "";
+    return `${format.id}\u0000${options}`;
+}
+
+/**
+ * Sinks used to tag a read by wrapping it as `{ format, meta, buffer }` — an
+ * undocumented convention each owner had to know to unwrap. `IOResult.format`
+ * / `.meta` replace it; a sink still returning the wrapper is read the same way.
+ */
+function unwrapTaggedRead(r: Extract<IOResult, { ok: true }>): { payload: unknown; format?: string; meta?: Record<string, unknown> } {
+    const p: any = r.payload;
+    if (r.format === undefined && p && typeof p === "object" && typeof p.format === "string" && "buffer" in p) {
+        return { payload: p.buffer, format: p.format, meta: p.meta && typeof p.meta === "object" ? p.meta : undefined };
+    }
+    return { payload: p, format: r.format, meta: r.meta };
+}
 
 function bareBinding(sink: string): IOResolvedBinding {
     return { sink, config: EMPTY_BINDING_CONFIG };
@@ -282,6 +370,9 @@ function normalizeBindingTarget(raw: IOBindingTarget): IOResolvedBinding | undef
         // and a sink mutating it would silently reconfigure the deployment.
         config: raw.config ? Object.freeze({ ...raw.config }) : EMPTY_BINDING_CONFIG,
         ...(raw.label ? { label: raw.label } : {}),
+        ...(typeof raw.format === "string" && raw.format ? { format: raw.format } : {}),
+        ...(raw.formatOptions && typeof raw.formatOptions === "object"
+            ? { formatOptions: Object.freeze({ ...raw.formatOptions }) } : {}),
     };
 }
 
@@ -342,6 +433,8 @@ interface OwnerRecord {
      *  `both`                    — global + per-viewer (legacy).
      *  `all`                     — global + per-viewer + per-viewer-background. */
     bundleScope: BundleScope;
+    /** See `IOOwnerBundleHooks.defaultFormat`. */
+    defaultFormat?: (ctx?: IOContext) => string | undefined;
     capabilities: Map<string, IOCapability>;
     defaultBindings: Record<string, IOBindingTarget[]>;
     /** include.json hard-disable. */
@@ -358,18 +451,20 @@ export interface IOPipelineOptions {
      *  per-viewer bundle exports. Returns [] when none active. */
     getViewers?: () => Array<{ uniqueId: string; viewer?: any }>;
     /** Lazy getter for the user-facing notifier; defaults to console. */
-    notify?: (message: string, level: "info" | "warn" | "error") => void;
+    notify?: (message: string, level: "info" | "warn" | "error", buttons?: IONotifyButton[]) => void;
     /** Deployment cookie policy (`ENV.client.js_cookie_*`) applied by the
      *  `cookies` KV driver to every write. Operator-controlled, never
      *  session-derived (§7). */
     cookieAttributes?: CookieAttributes;
     /**
-     * Lazy getter for the session's per-sink on/off map (`params.ioSinks`).
+     * Lazy getter for the session's per-sink map (`params.ioSinks`): each entry
+     * is `true`/`false`, or an object `{enabled?, ...sinkSettings}`.
      *
      * Session-derived and therefore untrusted: it is honoured only for sinks the
-     * operator marked `sessionControllable` in `ENV.client.io.sinks`, and only
-     * real booleans are read out of it. Injected rather than read off a global so
-     * the seam is testable without an APPLICATION_CONTEXT.
+     * operator marked `sessionControllable` in `ENV.client.io.sinks`, only real
+     * booleans count as on/off, and the settings are handed to the sink opaque
+     * ({@link IOPipeline.sessionSinkConfig}). Injected rather than read off a
+     * global so the seam is testable without an APPLICATION_CONTEXT.
      */
     getSessionSinks?: () => unknown;
 }
@@ -380,6 +475,9 @@ export interface IOPipelineOptions {
  */
 export class IOPipeline implements IOPipelineLike {
     private readonly bus = new EventBus();
+    /** Format registry and conversion service. Usable on its own — see `io-formats.ts`. */
+    public readonly formats: IOFormatRegistry = new IOFormatRegistry(
+        (eventName, payload) => this.bus.raiseEvent(eventName, payload));
     private readonly sinks: Map<string, IOSink> = new Map();
     private readonly kvDrivers: Map<string, IOKVDriver> = new Map();
     private readonly owners: Map<string, OwnerRecord> = new Map();
@@ -411,7 +509,7 @@ export class IOPipeline implements IOPipelineLike {
     public readonly POST_DATA: Record<string, any>;
     private readonly getConfig: () => IOConfigBlock | undefined;
     private readonly getViewers: () => Array<{ uniqueId: string; viewer?: any }>;
-    private readonly notifier: (m: string, l: "info" | "warn" | "error") => void;
+    private readonly notifier: (m: string, l: "info" | "warn" | "error", buttons?: IONotifyButton[]) => void;
     /**
      * True until the loader's boot-time `forceDataImportInitialization`
      * fires and the host calls `markBootRestoreComplete()`. While pending,
@@ -431,6 +529,17 @@ export class IOPipeline implements IOPipelineLike {
      * genuine re-opens re-hydrate.
      */
     private hydratedKeys = new Set<string>();
+    /**
+     * Same keys, for slots whose restore was ATTEMPTED and came back with
+     * nothing but failures. What is stored there is unknown, so nothing is
+     * written to a bound sink for such a slot until a restore succeeds:
+     * exporting would replace data that was never read (or, before the wipe
+     * below existed, store the previous slide's state under this slide's key).
+     * A slot nobody tried to read is not in here — a write-only binding saves.
+     */
+    private restoreFailedKeys = new Set<string>();
+    /** Background-scoped restores currently reading, by the same key. */
+    private readonly hydrating = new Map<string, Promise<void>>();
     /**
      * Permission denials already shown to the user, keyed by roles + dispatch
      * identity. See {@link shouldToastRefusal} — a deterministic verdict is
@@ -453,6 +562,11 @@ export class IOPipeline implements IOPipelineLike {
      * where the operator's `sessionControllable` gate lives.
      */
     private readonly sessionSinkState = new Map<string, boolean>();
+    /**
+     * Per-sink session settings: the object form of `params.ioSinks.<id>` minus
+     * `enabled`. Opaque to core; returned only through {@link sessionSinkConfig}.
+     */
+    private readonly sessionSinkSettings = new Map<string, Record<string, unknown>>();
     private sessionSinksSeeded = false;
     private readonly getSessionSinks: () => unknown;
 
@@ -529,7 +643,7 @@ export class IOPipeline implements IOPipelineLike {
     // ── Guard registry (abortable CRUD pre-action hooks) ───────────────
 
     registerGuard(spec: IOGuardSpec): IODisposer {
-        if (!spec.handler) throw "[IO] registerGuard: missing handler";
+        if (!spec.handler) throw new Error("[IO] registerGuard: missing handler");
         const bucket = spec.resource;
         let list = this.guards.get(bucket);
         if (!list) { list = []; this.guards.set(bucket, list); }
@@ -800,7 +914,33 @@ export class IOPipeline implements IOPipelineLike {
 
     /** See `IOPipelineLike.formatPath`. */
     formatPath(template: string, ctx: IOContext, options?: IOFormatOptions): string {
-        return formatContextTemplate(template, ctx, options);
+        // Resolve the slide only when asked for: it is a config lookup + hash.
+        let slide: { hash?: string; name?: string; legacyHash?: string } | undefined;
+        if (SLIDE_TOKENS.test(String(template))) {
+            const key = this.getConfig()?.slideHashKey;
+            slide = (window as any).UTILITIES?.slideIdentityFor?.(
+                ctx.backgroundId, typeof key === "string" && key ? key : undefined);
+            // The restore's second look (see `runOneRestoreUnguarded`): the
+            // address this slide's data had before the hash stopped covering
+            // display-only fields. Read-only by construction — only that pass
+            // sets the flag.
+            if (slide?.legacyHash && ctx.meta?.[LEGACY_SLIDE_HASH]) slide = { ...slide, hash: slide.legacyHash };
+            // A slide is there but cannot be hashed without the operator key.
+            // Degrade closed: `_any` would merge every slide into one address,
+            // and an unkeyed hash is reversible offline (guessable paths).
+            // Thrown so the sink pass turns it into a refusal (W_IO_SINK_THREW).
+            if (slide && !slide.hash && SLIDE_HASH_TOKEN.test(String(template))) {
+                throw Object.assign(new Error(
+                    "{slideHash} requires ENV.client.io.slideHashKey (operator secret); refusing to address data by slide."),
+                { code: "W_IO_SLIDE_HASH_KEY", userMessage: $.t("error.ioSlideHashKey") });
+            }
+        }
+        return formatContextTemplate(template, ctx, options, slide);
+    }
+
+    /** See `IOPipelineLike.pinnedFormatFrom`. */
+    pinnedFormatFrom(config: unknown, domain: string): IOFormatPin | undefined {
+        return pinnedFormatFrom(config, domain);
     }
 
     /** See `IOPipelineLike.matchesPattern`. */
@@ -863,6 +1003,7 @@ export class IOPipeline implements IOPipelineLike {
         if (info.bundleScope) record.bundleScope = info.bundleScope;
         if (info.exportBundle) record.exportBundle = info.exportBundle;
         if (info.importBundle) record.importBundle = info.importBundle;
+        if (info.defaultFormat) record.defaultFormat = info.defaultFormat;
         // Auto-register bundle-* capabilities when the matching hook is
         // supplied (mirrors kv() and defineResource()). Idempotent: an
         // explicit declaration via include.json or options.capabilities
@@ -934,6 +1075,99 @@ export class IOPipeline implements IOPipelineLike {
         const hit = this.bindingTargetsFor(ownerUid, capabilityId).find(t => t.sink === sinkId);
         return hit?.config ?? EMPTY_BINDING_CONFIG;
     }
+
+    /**
+     * The format one sink receives (or returned) for one owner's bundle.
+     *
+     * In order: the binding's `format`; the sink's own config pin
+     * (`sink.preferredFormat`); the first registered format the sink says it
+     * takes; and — only for a sink that takes any format — the owner's
+     * deployment `defaultFormat`. `{}` means nobody named one — the owner
+     * decides. `missing` means a pin or the sink's requirement cannot be met:
+     * handing it the owner's default instead would store data it cannot read
+     * back (or not what the operator asked for), so the caller declines the sink.
+     *
+     * `source` tells the restore path how far to trust the format: an
+     * `owner-default` is a guess about data that may have been written before
+     * it was chosen, so content detection goes first there.
+     */
+    private formatFor(
+        ownerUid: string,
+        owner: OwnerRecord,
+        capabilityId: string,
+        sink: IOSink,
+        ctx: IOContext,
+    ): { format?: IOFormatDescriptor; missing?: string; source?: "binding" | "sink" | "declared" | "owner-default" } {
+        const domain = owner.ownerId;
+        const binding = this.bindingTargetsFor(ownerUid, capabilityId).find(t => t.sink === sink.id);
+        const taken = sink.formats?.[domain] ?? sink.formats?.["*"];
+        // A pin (binding or sink config) is checked per dispatch, not at boot:
+        // formats register whenever their element loads, so a later one simply
+        // starts working.
+        const pinned = (id: string, where: string, source: "binding" | "sink",
+            options?: Readonly<Record<string, unknown>>) => {
+            if (!this.formats.has(domain, id)) {
+                return { missing: `${where} names format "${id}" for "${domain}", which is not registered` };
+            }
+            if (taken?.length && !taken.includes(id)) {
+                return {
+                    missing: `${where} names format "${id}" for "${domain}", `
+                        + `but the sink takes only [${taken.join(", ")}]`,
+                };
+            }
+            return { format: this.formats.descriptor(domain, id, options), source };
+        };
+        if (binding?.format) {
+            return pinned(binding.format, `binding of sink "${sink.id}"`, "binding", binding.formatOptions);
+        }
+        let own: IOFormatPin | undefined;
+        try {
+            own = sink.preferredFormat?.(domain, ctx);
+        } catch (e) {
+            console.error(`[IO] sink "${sink.id}" preferredFormat threw:`, e);
+        }
+        if (own) {
+            const id = typeof own === "string" ? own : own.id;
+            const options = typeof own === "string" || !own.options
+                ? binding?.formatOptions
+                : { ...own.options, ...(binding?.formatOptions ?? {}) };
+            return pinned(id, `config of sink "${sink.id}"`, "sink", options);
+        }
+        if (taken?.length) {
+            const id = taken.find(f => this.formats.has(domain, f));
+            if (!id) {
+                return {
+                    missing: `sink "${sink.id}" takes only [${taken.join(", ")}] for "${domain}", `
+                        + `and none of those formats is registered`,
+                };
+            }
+            return { format: this.formats.descriptor(domain, id, binding?.formatOptions), source: "declared" };
+        }
+        // Takes any format and nobody pinned one: the owner's DEPLOYMENT default,
+        // so what lands in the store never follows a user's UI choice. The owner
+        // sees the route, and may answer a local-file sink with that choice.
+        let fallback: string | undefined;
+        try {
+            fallback = owner.defaultFormat?.(sink.route === "local" ? { ...ctx, route: "local" } : ctx);
+        } catch (e) {
+            console.error(`[IO] owner "${ownerUid}" defaultFormat threw:`, e);
+        }
+        if (!fallback || !this.formats.has(domain, fallback)) return {};
+        const warnKey = `${sink.id}::${ownerUid}`;
+        // A local file is the owner's (and so the user's) choice by design.
+        if (sink.route !== "local" && !this.ownerDefaultFormatWarned.has(warnKey)) {
+            this.ownerDefaultFormatWarned.add(warnKey);
+            console.warn(`[IO] sink "${sink.id}" stores "${domain}" in the owner's default format "${fallback}". `
+                + `Pin one in the sink's config (formats: { "${domain}": "<id>" }) or the binding ({ sink, format }).`);
+        }
+        return {
+            format: this.formats.descriptor(domain, fallback, binding?.formatOptions),
+            source: "owner-default",
+        };
+    }
+
+    /** (sink, owner) pairs already warned about falling back to the owner default format. */
+    private readonly ownerDefaultFormatWarned = new Set<string>();
 
     private resolveBindings(ownerUid: string, capabilityId: string): IOResolvedBinding[] {
         const owner = this.owners.get(ownerUid);
@@ -1210,16 +1444,24 @@ export class IOPipeline implements IOPipelineLike {
             if (owner.disabled) continue;
             for (const cap of owner.capabilities.values()) {
                 if (cap.kind === "kv") continue; // kv resolves against drivers, not sinks
-                for (const sinkId of this.bindingsFor(uid, cap.id)) {
+                for (const binding of this.bindingTargetsFor(uid, cap.id)) {
+                    const sinkId = binding.sink;
                     const sink = this.sinks.get(sinkId);
                     if (!sink) continue;
-                    const reason = supportMismatch(sink, {
+                    let reason = supportMismatch(sink, {
                         kind: cap.kind,
                         capabilityId: cap.id,
                         ownerId: owner.ownerId,
                         ownerUid: uid,
                         resourceName: cap.kind === "crud" ? cap.id.slice(cap.id.indexOf(":") + 1) : undefined,
                     });
+                    // A binding may pick AMONG the formats a sink takes, never
+                    // outside them: the sink would be handed bytes it has said
+                    // it cannot store.
+                    const taken = sink.formats?.[owner.ownerId] ?? sink.formats?.["*"];
+                    if (!reason && binding.format && taken?.length && !taken.includes(binding.format)) {
+                        reason = `binding asks for format "${binding.format}", but the sink takes only [${taken.join(", ")}]`;
+                    }
                     if (reason) this.emitInvalidBinding(uid, cap.id, sinkId, reason);
                 }
             }
@@ -1276,7 +1518,9 @@ export class IOPipeline implements IOPipelineLike {
      *
      * Untrusted input: anything that is not a real boolean is ignored rather than
      * coerced, so `{"mlflow": "false"}` from a hand-written URL cannot read as
-     * `true` (nor as `false` — it simply says nothing).
+     * `true` (nor as `false` — it simply says nothing). An object entry carries
+     * `enabled` (same rule) plus settings for the sink, kept as a detached JSON
+     * copy and never interpreted here.
      * @private
      */
     private seedSessionSinks(): void {
@@ -1294,8 +1538,34 @@ export class IOPipeline implements IOPipelineLike {
         }
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
         for (const [sinkId, value] of Object.entries(raw as Record<string, unknown>)) {
-            if (typeof value === "boolean" && sinkId) this.sessionSinkState.set(sinkId, value);
+            if (!sinkId) continue;
+            if (typeof value === "boolean") {
+                this.sessionSinkState.set(sinkId, value);
+                continue;
+            }
+            if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+            const { enabled, ...settings } = value as Record<string, unknown>;
+            if (typeof enabled === "boolean") this.sessionSinkState.set(sinkId, enabled);
+            const copy = detachedJson(settings);
+            if (copy) this.sessionSinkSettings.set(sinkId, copy);
         }
+    }
+
+    /**
+     * The session's settings for one sink — the object form of
+     * `params.ioSinks.<id>` without `enabled` — or `undefined`.
+     *
+     * Returned only where the operator marked the sink `sessionControllable`
+     * (`ENV.client.io.sinks.<id>`): the same rule that lets a session switch the
+     * sink on or off. Core never interprets the keys. The value is session input,
+     * so the sink validates every field it reads, and each call returns a fresh
+     * copy: a sink mutating it changes nothing for the next caller.
+     */
+    sessionSinkConfig(sinkId: string): Record<string, unknown> | undefined {
+        if (!sinkId || !this.sinkPolicy(sinkId).sessionControllable) return undefined;
+        this.seedSessionSinks();
+        const settings = this.sessionSinkSettings.get(sinkId);
+        return settings ? detachedJson(settings) : undefined;
     }
 
     /**
@@ -1420,6 +1690,12 @@ export class IOPipeline implements IOPipelineLike {
                 this.hydratedKeys.delete(k);
             }
         }
+        for (const k of Array.from(this.restoreFailedKeys)) {
+            const bundleKey = k.substring(k.indexOf("|") + 1);
+            if (bundleKey === viewerId || bundleKey.startsWith(`${viewerId}::`)) {
+                this.restoreFailedKeys.delete(k);
+            }
+        }
     }
 
     // ── orchestration: bundle export ───────────────────────────────────
@@ -1493,7 +1769,10 @@ export class IOPipeline implements IOPipelineLike {
                     await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger);
                     // Slide-leave: re-arm hydration for this (viewer, background)
                     // so returning to the slide restores from sinks again.
-                    this.hydratedKeys.delete(`${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`);
+                    const left = `${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`;
+                    this.hydratedKeys.delete(left);
+                    // ...and forget a failed read: the next visit reads again.
+                    this.restoreFailedKeys.delete(left);
                     continue;
                 }
 
@@ -1535,7 +1814,7 @@ export class IOPipeline implements IOPipelineLike {
                 const res = await r.flush();
                 if (Array.isArray(res)) out.push(...res);
             } catch (e: any) {
-                out.push({ ok: false, code: "W_IO_RESOURCE_FLUSH_THREW", reason: e?.message ?? String(e) });
+                out.push({ ok: false, refused: true, code: "W_IO_RESOURCE_FLUSH_THREW", reason: e?.message ?? String(e) });
             }
         }));
         return out;
@@ -1631,8 +1910,26 @@ export class IOPipeline implements IOPipelineLike {
         // here by other routes, and for guards registered after that check —
         // but `surface: false`, because the refusal it would report is the one
         // the caller is already aggregating.
-        const sinkVerdict = this.runGuards(
+        let sinkVerdict = this.runGuards(
             { ...ctx, direction: "pre-export", route: "sink" }, undefined, { surface: false });
+        // A slot whose stored state could not be read is closed to bound sinks
+        // exactly like a denied one — see `restoreFailedKeys`. The local route
+        // stays open for a user-driven export: a copy of what is on screen.
+        if (sinkVerdict.ok && backgroundId !== undefined && this.restoreFailedKeys.has(`${uid}|${ctx.key}`)) {
+            const refusal = {
+                ok: false as const, refused: true as const, code: "W_IO_NOT_HYDRATED",
+                reason: "stored data for this slide could not be read; not overwriting it",
+                userMessage: $.t("error.ioNotHydrated", { owner: ctx.ownerId }),
+            };
+            // An automatic flush (slide-leave) asked for no file either: it must
+            // not turn every slide change during an outage into a download.
+            if (trigger === "system") {
+                this.logRefusal(ctx, refusal, refusal.reason);
+                results.push({ ...refusal, ...ownerOf(ctx) });
+                return;
+            }
+            sinkVerdict = refusal;
+        }
         // The local-file escape hatch is a separate question with a separate
         // answer: denying an owner's upload must not confiscate the user's own
         // copy, and denying `core.io.local-file` must stop that copy even when
@@ -1642,14 +1939,35 @@ export class IOPipeline implements IOPipelineLike {
             { ...ctx, direction: "pre-export", route: "local" }, undefined, { surface: false }).ok;
         if (!sinkVerdict.ok && !localAllowed) { results.push({ ...sinkVerdict, ...ownerOf(ctx) }); return; }
 
-        let payload: unknown = undefined;
-        try {
-            payload = owner.exportBundle ? await owner.exportBundle(ctx) : undefined;
-        } catch (e: any) {
-            results.push(this.failure(ctx, e?.message ?? String(e), "W_IO_EXPORT_THREW", e?.userMessage));
-            return;
-        }
-        if (payload === undefined || payload === null) return;
+        // One export per distinct FORMAT, not one per flush: a sink that takes
+        // DICOM and a sink that takes the owner's native JSON are both served
+        // from the same flush, each with the payload it asked for. Keyed by
+        // route + format; "local|" is "no format named, local file" — the
+        // owner's own choice, and what the local fallback below downloads.
+        // Cached, so N sinks sharing a format cost
+        // one `exportBundle`, and a throwing owner is reported once.
+        const exported = new Map<string, { payload?: unknown; failed?: boolean }>();
+        // `route` reaches the owner too: with no format named, a local file
+        // may follow the user's own choice, a stored destination may not.
+        const exportAs = async (format?: IOFormatDescriptor, route: "sink" | "local" = "sink") => {
+            const key = `${route}|${formatKey(format)}`;
+            let hit = exported.get(key);
+            if (!hit) {
+                const exportCtx: IOContext = {
+                    ...ctx,
+                    ...(format ? { format } : {}),
+                    ...(route === "local" ? { route } : {}),
+                };
+                try {
+                    hit = { payload: owner.exportBundle ? await owner.exportBundle(exportCtx) : undefined };
+                } catch (e: any) {
+                    results.push(this.failure(exportCtx, e?.message ?? String(e), "W_IO_EXPORT_THREW", e?.userMessage));
+                    hit = { failed: true };
+                }
+                exported.set(key, hit);
+            }
+            return hit;
+        };
 
         // Export fans out: every gated sink gets the payload, and one refusing
         // does not stop the others (a local file copy is still worth having
@@ -1658,13 +1976,40 @@ export class IOPipeline implements IOPipelineLike {
         // is judged by the local verdict, not the owner's — which is why the
         // route answer is threaded in rather than the whole selection being
         // skipped when the sink route is denied.
-        const { picked, declines, policyDeclines } = this.selectGatedSinks(
+        const { picked: gated, declines, policyDeclines } = this.selectGatedSinks(
             sinks, () => ctx, undefined,
             (route) => route === "local" ? localAllowed : sinkVerdict.ok,
         );
+        const picked: Array<{ sink: IOSink; ctx: IOContext }> = [];
+        const payloadFor = new Map<IOSink, unknown>();
+        for (const entry of gated) {
+            const { format, missing } = this.formatFor(uid, owner, cap.id, entry.sink, entry.ctx);
+            if (missing) {
+                this.emitRejectedByAccepts(entry.ctx, entry.sink.id, missing);
+                declines.push(missing);
+                continue;
+            }
+            const out = await exportAs(format, entry.sink.route === "local" ? "local" : "sink");
+            // Nothing to store in this format (or the owner threw, already
+            // reported): the sink is simply not part of this flush.
+            if (out.failed || out.payload === undefined || out.payload === null) continue;
+            payloadFor.set(entry.sink, out.payload);
+            picked.push({ sink: entry.sink, ctx: format ? { ...entry.ctx, format } : entry.ctx });
+        }
+        if (!picked.length) {
+            // The owner was asked and had nothing (or threw — already
+            // reported): no state to store is not a refusal, and no reason to
+            // hand the user a file.
+            if (exported.size) return;
+            // Nobody eligible was even asked. Is there anything to rescue?
+            const own = await exportAs(undefined, "local");
+            if (own.failed || own.payload === undefined || own.payload === null) return;
+        }
+
         const pass = await this.runSinkPass(
             picked,
-            (sink) => sink.writeBundle?.(ctx, payload) ?? this.unsupported(sink.id, "writeBundle"),
+            (sink, sinkCtx) => sink.writeBundle?.(sinkCtx, payloadFor.get(sink))
+                ?? this.unsupported(sink.id, "writeBundle"),
             { policy: "all", throwCode: "W_IO_SINK_THREW" },
         );
         const dispatchResults: IOResult[] = [...pass.results];
@@ -1693,13 +2038,17 @@ export class IOPipeline implements IOPipelineLike {
             const fallback = isExport && !sinks.includes(FALLBACK_ID)
                 ? this.sinks.get(FALLBACK_ID)
                 : undefined;
-            if (fallback?.writeBundle) {
+            // The local copy is in the owner's own default format — the one the
+            // user would get from the owner's "download" action — whatever the
+            // bound sinks asked for.
+            const own = fallback?.writeBundle ? await exportAs(undefined, "local") : undefined;
+            if (fallback?.writeBundle && own && !own.failed && own.payload !== undefined && own.payload !== null) {
                 // The fallback runs on the LOCAL route — sinks and guards that
                 // key off `ctx.route` must see it as such, not as one more
                 // bound destination.
                 const localCtx: IOContext = { ...ctx, route: "local" };
                 try {
-                    const r = await fallback.writeBundle(localCtx, payload);
+                    const r = await fallback.writeBundle(localCtx, own.payload);
                     results.push(r);
                     dispatchResults.push(r);
                     if (r.ok) {
@@ -1822,6 +2171,46 @@ export class IOPipeline implements IOPipelineLike {
         return results;
     }
 
+    /**
+     * Slots whose stored state could not be read, and which are therefore
+     * closed to bound sinks (`W_IO_NOT_HYDRATED`). Empty in normal operation.
+     */
+    unreadableSlots(): Array<{ ownerUid: string; viewerId: string; backgroundId?: string }> {
+        return Array.from(this.restoreFailedKeys, (k) => {
+            const at = k.indexOf("|");
+            const [viewerId = "", backgroundId] = k.substring(at + 1).split("::");
+            return { ownerUid: k.substring(0, at), viewerId, backgroundId };
+        });
+    }
+
+    /**
+     * Read an unreadable slot again, at the user's request.
+     *
+     * On success the stored state is imported — which, for a slide-aware owner,
+     * REPLACES what is on screen (its `importBundle` wipes first) — and the slot
+     * reopens for saving. On failure nothing changes: the slot stays closed and
+     * what the user drew stays put. A slot that is not unreadable is left alone,
+     * so this can never re-import over a healthy one.
+     */
+    async retryRestore(scope: { ownerUid?: string; viewerId: string; backgroundId: string }): Promise<IOResult[]> {
+        const bundleKey = this.composeBundleKey(scope.viewerId, scope.backgroundId);
+        const pending = Array.from(this.restoreFailedKeys).filter(k =>
+            k.substring(k.indexOf("|") + 1) === bundleKey
+            && (!scope.ownerUid || k.startsWith(`${scope.ownerUid}|`)));
+        const results: IOResult[] = [];
+        for (const k of pending) {
+            const ownerUid = k.substring(0, k.indexOf("|"));
+            results.push(...await this.tryRestoreImport({
+                ownerUid, viewerId: scope.viewerId, backgroundId: scope.backgroundId, trigger: "user",
+            }));
+            if (!this.restoreFailedKeys.has(k)) {
+                const owner = this.owners.get(ownerUid);
+                this.notifier($.t("messages.ioRestoreRecovered", { owner: owner?.ownerId ?? ownerUid }), "info");
+            }
+        }
+        return results;
+    }
+
     private async runOneRestore(
         uid: string,
         owner: OwnerRecord,
@@ -1835,7 +2224,32 @@ export class IOPipeline implements IOPipelineLike {
         // (owner, viewer, background) — see `hydratedKeys`. Viewer-only and
         // global restores keep their existing semantics.
         const guardKey = `${uid}|${this.composeBundleKey(viewerId, backgroundId)}`;
-        if (backgroundId !== undefined && this.hydratedKeys.has(guardKey)) return;
+        if (backgroundId === undefined) {
+            return this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+        }
+        if (this.hydratedKeys.has(guardKey)) return;
+        // `hydratedKeys` is only written after the reads settle, so two callers
+        // arriving in the same tick (boot pass + viewer-open pass) both got past
+        // the check above and both ran `importBundle` — the double hydration the
+        // set exists to prevent. The second caller waits for the first instead.
+        const inFlight = this.hydrating.get(guardKey);
+        if (inFlight) { await inFlight; return; }
+        const run = this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+        const settled = run.then(() => {}, () => {});
+        this.hydrating.set(guardKey, settled);
+        try { await run; } finally { this.hydrating.delete(guardKey); }
+    }
+
+    private async runOneRestoreUnguarded(
+        uid: string,
+        owner: OwnerRecord,
+        sinks: Map<string, string>,
+        viewerId: string | undefined,
+        backgroundId: string | undefined,
+        results: IOResult[],
+        trigger: "user" | "system",
+        guardKey: string,
+    ): Promise<void> {
         const ctxBase: Omit<IOContext, "meta" | "capabilityId"> = {
             direction: "import",
             xoType: owner.xoType,
@@ -1876,19 +2290,53 @@ export class IOPipeline implements IOPipelineLike {
 
         const dispatchResults: IOResult[] = [];
         let succeeded = 0;
-        // Restore reads from every gated sink (last non-empty payload wins in
-        // the owner's state). Kept as its own loop rather than a `runSinkPass`
-        // because each read feeds `owner.importBundle` and an *empty* read is a
-        // success that still has work to do — see the wipe case below.
+        // Restore reads from every gated sink first, then imports.
+        //
+        // Slide-aware owners (bundleScope: per-viewer-background / all →
+        // backgroundId set) get exactly ONE payload: the last non-empty one.
+        // Their `importBundle` wipes first, so importing per sink let an empty
+        // answer from a later sink erase what an earlier one had just restored,
+        // and two populated sinks imported (and wiped) twice.
+        //
+        // Every other owner imports each non-empty payload in sink order, as it
+        // always has: a global or per-viewer owner may MERGE state from several
+        // sinks (post-data + a remote store), and last-wins would drop all but
+        // one of them.
         // Per-sink capability id — see the comment on the `sinks` map.
+        const slideAware = backgroundId !== undefined;
+        const reads: { ctx: IOContext; payload: unknown }[] = [];
+        let emptyCtx: IOContext | undefined;
+        // Sinks whose read context carries only the owner's default format: the
+        // data may predate that choice, so detection is asked before it.
+        const guessedFormat = new Set<string>();
         const { picked } = this.selectGatedSinks(
             sinks.keys(),
-            (tid) => ({ ...ctxBase, capabilityId: sinks.get(tid)!, meta: { sinkId: tid } }),
+            (tid) => {
+                // A format known BEFORE the read (pinned by the binding, or the
+                // only kind the sink stores) is on the context the sink reads
+                // with, exactly as it was on the one it wrote with — a sink that
+                // names its file after `ctx.format` must look for the same file.
+                const sink = this.sinks.get(tid);
+                const readCtx: IOContext = { ...ctxBase, capabilityId: sinks.get(tid)!, meta: { sinkId: tid } };
+                const resolved = sink ? this.formatFor(uid, owner, sinks.get(tid)!, sink, readCtx) : undefined;
+                if (resolved?.format) {
+                    const guessed = resolved.source === "owner-default";
+                    if (guessed) guessedFormat.add(tid);
+                    // A guess must not decide HOW bytes are read. A local file
+                    // is whatever the user picks, so its sink gets no format at
+                    // all and goes by the file; a store is told it is a guess.
+                    if (!(guessed && sink?.route === "local")) {
+                        readCtx.format = resolved.format;
+                        if (guessed) readCtx.meta.formatGuessed = true;
+                    }
+                }
+                return readCtx;
+            },
             (sink) => sink.readBundle ? undefined : `sink "${sink.id}" does not implement "readBundle"`,
             (route) => route === "local" ? localAllowed : verdict.ok,
         );
         const attempted = picked.length;
-        for (const { sink: t, ctx } of picked) {
+        const readAll = async (entries: Array<{ sink: IOSink; ctx: IOContext }>) => { for (const { sink: t, ctx } of entries) {
             try {
                 const r = await t.readBundle!(ctx);
                 if (!r.ok) {
@@ -1897,33 +2345,83 @@ export class IOPipeline implements IOPipelineLike {
                     if (r.refused) this.surfaceRefusal(ctx, r);
                     continue;
                 }
-                const payload = (r as any).payload;
-                if (payload === undefined || payload === null) {
-                    // Non-error empty read still counts as a successful
-                    // attempt — admin's binding worked, there just was
-                    // nothing stored yet.
-                    //
-                    // Slide-aware owners (bundleScope: per-viewer-background
-                    // / all → ctx.backgroundId set) DO need the call even on
-                    // empty — they have local UI state (e.g. fabric overlay
-                    // for annotations) that survives the OSD world reset and
-                    // must be wiped when the new slide carries no payload.
-                    // Other scopes have no equivalent state to clear, so the
-                    // legacy skip stays.
-                    if (ctx.backgroundId !== undefined) {
-                        await owner.importBundle!(ctx, payload);
-                    }
-                    succeeded++;
-                    continue;
-                }
-                await owner.importBundle!(ctx, payload);
-                results.push({ ok: true });
-                dispatchResults.push({ ok: true });
+                const read = unwrapTaggedRead(r);
+                const payload = read.payload;
+                // A non-error empty read still counts as a successful attempt
+                // — the binding worked, there just was nothing stored yet.
                 succeeded++;
+                if (payload === undefined || payload === null) { emptyCtx ??= ctx; continue; }
+                // What format is this? The sink's own word first, then what the
+                // binding / the sink's declaration says it stores, then a look
+                // at the data. Unknown stays unknown: the owner then applies
+                // its own default, exactly as before formats existed.
+                const domain = owner.ownerId;
+                const formatId = read.format
+                    ?? (guessedFormat.has(t.id) ? undefined : ctx.format?.id)
+                    ?? this.formats.detect(domain, payload, { fileName: read.meta?.fileName as string | undefined })
+                    ?? ctx.format?.id;
+                reads.push({
+                    payload,
+                    ctx: {
+                        ...ctx,
+                        // Keep the pinned descriptor (it carries the binding's
+                        // format options) unless the sink said otherwise.
+                        format: formatId && formatId !== ctx.format?.id
+                            ? this.formats.descriptor(domain, formatId) : ctx.format,
+                        meta: read.meta ? { ...ctx.meta, ...read.meta } : ctx.meta,
+                    },
+                });
             } catch (e: any) {
                 const r = this.failure(ctx, e?.message ?? String(e), "W_IO_RESTORE_THREW", e?.userMessage);
                 results.push(r);
                 dispatchResults.push(r);
+            }
+        } };
+        await readAll(picked);
+        // Nothing stored for this slide — under today's address. Data written
+        // before `{slideHash}` stopped covering display-only fields sits under
+        // the old one; look there once. Only when the slide HAS such an address
+        // (see `slideLegacyCanonicalOf`), so an ordinary empty slot costs no
+        // second read. The next save writes to the current address.
+        if (slideAware && !reads.length && emptyCtx && picked.length) {
+            const key = this.getConfig()?.slideHashKey;
+            const legacy = typeof key === "string" && key
+                ? (window as any).UTILITIES?.slideIdentityFor?.(backgroundId, key)?.legacyHash
+                : undefined;
+            if (legacy) {
+                await readAll(picked.map(({ sink, ctx }) => ({
+                    sink, ctx: { ...ctx, meta: { ...ctx.meta, [LEGACY_SLIDE_HASH]: true } },
+                })));
+                // The flag addressed the read; the owner imports into today's slot.
+                for (const read of reads) {
+                    const { [LEGACY_SLIDE_HASH]: _legacy, ...meta } = read.ctx.meta as Record<string, unknown>;
+                    read.ctx = { ...read.ctx, meta };
+                }
+            }
+        }
+        // Slide-aware owners DO need the call even when every sink was empty:
+        // they hold local UI state (e.g. the fabric overlay for annotations)
+        // that survives the OSD world reset and must be wiped when the new
+        // slide carries no payload. Other scopes have nothing to clear.
+        const chosen = reads[reads.length - 1];
+        const targets = !slideAware ? reads
+            : chosen ? [chosen]
+            : emptyCtx ? [{ ctx: emptyCtx, payload: undefined }]
+            : [];
+        for (const target of targets) {
+            try {
+                await owner.importBundle!(target.ctx, target.payload);
+                if (target.payload !== undefined) {
+                    results.push({ ok: true });
+                    dispatchResults.push({ ok: true });
+                }
+            } catch (e: any) {
+                const r = this.failure(target.ctx, e?.message ?? String(e), "W_IO_RESTORE_THREW", e?.userMessage);
+                results.push(r);
+                dispatchResults.push(r);
+                // The read worked but the state did not land — not a success
+                // (and for a slide-aware owner, not a hydration).
+                succeeded = slideAware ? 0 : succeeded - 1;
             }
         }
         // Mark hydrated only on success so a transient sink failure
@@ -1941,6 +2439,39 @@ export class IOPipeline implements IOPipelineLike {
         // sinks at all, nothing is attempted, and the slot stays free.
         if (backgroundId !== undefined && succeeded > 0) {
             this.hydratedKeys.add(guardKey);
+            this.restoreFailedKeys.delete(guardKey);
+        }
+        // Read attempted, nothing but failures (a cancelled file pick is not
+        // one). Two things follow for a slide-aware owner:
+        //  - its overlay still shows the slide that was open before, because
+        //    the wipe lives in `importBundle` and nothing called it. That state
+        //    was flushed when its slide was left, so clearing it loses nothing.
+        //    Once per visit only: a later retry must not erase what the user
+        //    has drawn on THIS slide in the meantime.
+        //  - what the sinks hold for this slot is unknown, so exports to them
+        //    are refused until a restore succeeds (`runOneBundleExport`).
+        if (slideAware && attempted > 0 && succeeded === 0
+            && dispatchResults.some(r => !r.ok && r.code !== "W_IO_CANCELLED")) {
+            if (!targets.length && !this.restoreFailedKeys.has(guardKey)) {
+                try {
+                    await owner.importBundle!(
+                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined);
+                } catch (e) {
+                    console.warn(`[IO] owner "${uid}" failed to clear state after an unreadable restore:`, e);
+                }
+            }
+            // Said once per visit, whoever triggered the restore: the refusals
+            // above are silent for an automatic one, but "your work here is not
+            // being saved" is not something to leave in a log. A retry that fails
+            // again has already reported its own refusals.
+            if (!this.restoreFailedKeys.has(guardKey) && viewerId !== undefined && backgroundId !== undefined) {
+                this.notifier($.t("error.ioRestoreUnreadable", { owner: owner.ownerId }), "warn", [{
+                    label: $.t("common.retry"),
+                    onClick: () => { void this.retryRestore({ ownerUid: uid, viewerId, backgroundId }); },
+                }]);
+            }
+            this.restoreFailedKeys.add(guardKey);
+            this.bus.raiseEvent("io:restore-unreadable", { ownerUid: uid, ownerId: owner.ownerId, viewerId, backgroundId });
         }
         if (attempted > 0 && succeeded === 0) {
             // Restore-side full refusal stays gated on `attempted`: a sink that
@@ -1952,7 +2483,16 @@ export class IOPipeline implements IOPipelineLike {
 
     // ── orchestration: bundle import (caller-supplied data) ─────────────
 
-    async importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]> {
+    /**
+     * Hand caller-supplied data (a file the user picked) to owners'
+     * `importBundle`. `scope.viewerId` / `backgroundId` address the import the
+     * same way a restore would — without a viewer, a per-viewer owner has
+     * nowhere to put the data and ignores it.
+     */
+    async importBundle(
+        rawData: unknown,
+        scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string; format?: string; fileName?: string },
+    ): Promise<IOResult[]> {
         const results: IOResult[] = [];
         for (const [uid, owner] of this.owners) {
             if (scope?.ownerUid && uid !== scope.ownerUid) continue;
@@ -1966,9 +2506,14 @@ export class IOPipeline implements IOPipelineLike {
                 xoType: owner.xoType,
                 ownerUid: uid,
                 ownerId: owner.ownerId,
-                key: "",
-                meta: {},
+                key: this.composeBundleKey(scope?.viewerId, scope?.backgroundId),
+                viewerId: scope?.viewerId,
+                backgroundId: scope?.backgroundId,
+                meta: scope?.fileName ? { fileName: scope.fileName } : {},
             };
+            const formatId = scope?.format
+                ?? this.formats.detect(owner.ownerId, rawData, { fileName: scope?.fileName });
+            if (formatId) ctx.format = this.formats.descriptor(owner.ownerId, formatId);
             // Same veto phase as the sink-driven restore, but on the LOCAL
             // route: the payload came from the user's own machine, so it is
             // `core.io.local-file` that decides whether hand-loading is
@@ -2150,7 +2695,10 @@ export class IOPipeline implements IOPipelineLike {
         // Unconditional: the event is how features react and how the roles UI
         // learns what is restricted. Only the DIALOG is a judgement call.
         this.bus.raiseEvent("io:refused", { ctx, result: r });
-        const msg = r.userMessage ?? r.reason;
+        // A guard/sink that refuses without saying why must not make the refusal
+        // invisible: the user's change is gone either way, so name what failed.
+        const msg = r.userMessage || r.reason
+            || $.t("error.ioRefusedNoReason", { what: ctx.resourceName || ctx.ownerId || ctx.capabilityId });
         if (msg) {
             if (ctx.trigger === "system") {
                 // Nobody asked for this. Boot hydration, the restore after a

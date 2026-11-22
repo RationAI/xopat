@@ -13,19 +13,19 @@
  */
 import { readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { repoRoot } from "./paths.mjs";
 
 /** Newer-by tolerance: a watcher writes the bundle a moment after the save. */
 const SLACK_MS = 2000;
 
+// The core rule is not restated here: the dev watcher and the dev server ask the
+// same question (`inspectCoreBundle`), and three copies of "what counts as a core
+// source" is how one of them ends up wrong.
+const require = createRequire(import.meta.url);
+const { inspectCoreBundle, describeStaleCoreBundle } = require("../../server/utils/mixins/build-logic.js");
+
 const BUNDLES = [
-    {
-        name: "core (src/dist)",
-        outputs: ["src/dist/app.js", "src/dist/loader.js"],
-        roots: ["src"],
-        skipDirs: new Set(["libs", "dist", "types", "locales", "assets"]),
-        accept: (file) => file.endsWith(".ts") && !file.endsWith(".d.ts"),
-    },
     {
         name: "UI (ui/index.js)",
         outputs: ["ui/index.js"],
@@ -63,6 +63,8 @@ function newestSource(dir, bundle, best = { file: null, mtimeMs: 0 }) {
  */
 export function findStaleBundles() {
     const problems = [];
+    const core = describeStaleCoreBundle(inspectCoreBundle(repoRoot));
+    if (core) problems.push(core);
     for (const bundle of BUNDLES) {
         const outputs = bundle.outputs.map(rel => path.join(repoRoot, rel));
         const missing = outputs.filter(file => !existsSync(file));

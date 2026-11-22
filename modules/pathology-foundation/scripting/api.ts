@@ -42,6 +42,13 @@ export type PathologyDriverInfo = {
     label: string;
     /** True when it runs in-browser (no snapshot leaves the viewer). */
     local: boolean;
+    /**
+     * True for the built-in last-resort \`assistant\` analyze driver — YOUR OWN model, called once
+     * per image without this conversation. Used only when no dedicated driver implements a feature.
+     */
+    fallback: boolean;
+    /** Whether it can serve right now (the \`assistant\` driver needs an image-capable chat model). */
+    available: boolean;
     features: PathologyFeature[];
 };
 
@@ -253,6 +260,12 @@ export type InterrogationResult = {
         answers: FeatureAnswer[];
         findings: string | null;
         error?: string;
+        /**
+         * Where the error happened: "render" = no image was produced (tiles/render — re-running
+         * is reasonable); "analyze" = the image was rendered and the MODEL CALL failed
+         * (payload refused, timeout, upstream error) — re-running unchanged repeats it.
+         */
+        errorStage?: "render" | "analyze";
     }>;
     /** One answer per feature across the whole region. */
     answers: FeatureAnswer[];
@@ -952,7 +965,8 @@ export interface PathologyScriptApi extends ScriptApiObject {
      *
      * Throws when no overview has been built on this slide — deliberately, because starting a
      * minutes-long walk is not a decision to make on the user's behalf. Call \`buildOverview\`
-     * for that. Needs an \`analyze\` driver; reuses the consent already granted for the walk.
+     * for that. Needs an \`analyze\` driver; reuses the consent already granted for the walk
+     * while the driver stays the one the walk used. Naming another \`driver\` asks again.
      * @param options.addCalls vision calls to spend, all on depth (default: the original budget).
      */
     refineOverview(options?: {
@@ -1078,8 +1092,10 @@ export interface PathologyScriptApi extends ScriptApiObject {
 
     /**
      * Send a slide snapshot plus \`prompt\` to a vision/analysis model and return its
-     * findings as text. Requires an "analyze" driver. Asks the user for permission
-     * (the snapshot leaves the viewer).
+     * findings as text. Runs on the "analyze" driver: a dedicated pathology vision model when
+     * one is registered, otherwise the built-in \`assistant\` driver (you, session-less); pass
+     * \`driver: "assistant"\` to choose yourself. Asks the user for permission (the snapshot
+     * leaves the viewer).
      *
      * WITHOUT \`options.region\` it snapshots what the user CURRENTLY SEES (their live
      * viewport, overlays included) — the right and cheap answer to "what am I looking
@@ -1289,7 +1305,11 @@ export function registerPathologyScriptingApi(): void {
                 "Slide-wide jobs (exploreSlide, reviewRegions, buildOverview, region-scoped analyzeRegion) " +
                 "render regions OFF-SCREEN through the same pipeline the user sees — they NEVER move the " +
                 "user's viewport, so the user keeps navigating freely while they run. Never move the viewer " +
-                "to 'show' the model something: it renders its own pixels. Pointing the USER at a region is " +
+                "to 'show' the model something: it renders its own pixels. That rule is about the user's " +
+                "viewport, not about looking — you may always render a region and look at it yourself. " +
+                "Who reads the pixels is the analyze driver: a dedicated pathology vision model when one " +
+                "is registered, otherwise the built-in 'assistant' driver, which is YOU, called " +
+                "session-less (see listDrivers). Pointing the USER at a region is " +
                 "the opposite — always do it, inline in your prose (see NAMING AND LINKING REGIONS).\n\n" +
                 "SCANNING IS EXPENSIVE — RUN IT ONLY WHEN THE USER ASKS FOR IT. buildOverview and " +
                 "reviewRegions fire many slow vision calls; a single overview can take MINUTES. They are " +
@@ -1399,10 +1419,13 @@ export function registerPathologyScriptingApi(): void {
              * user consented to a very different cost than the one they'd get.
              */
             scope?: string
-        ): Promise<void> {
+        ): Promise<string | undefined> {
             const module = this._getModule();
             const info = module.describeDriverForFeature(feature, driverId);
-            if (info?.local) return;
+            // Returned so the caller hands the engine THIS id. An absent `driverId` is
+            // resolved here, and resolving it again at the call would let a driver that
+            // registered while the dialog was open receive the pixels instead.
+            if (info?.local) return info.id;
             const alwaysAsk = module.getStaticMeta?.("alwaysAskRemoteConsent", false);
             const key = `pathology:${feature}:${info?.id || "default"}${scope ? `:${scope}` : ""}`;
             await this.requireActionConsent({
@@ -1411,13 +1434,19 @@ export function registerPathologyScriptingApi(): void {
                 details: [
                     t("pathology.consentDriver", { driver: info?.label || info?.id || "(default)" }),
                     t("pathology.consentTask", { task }),
+                    // The fallback driver is the chat model itself — say so, since the
+                    // "model" the user is asked about is then the one they are talking to.
+                    ...(info?.fallback ? [t("pathology.consentAssistantDriver")] : []),
                     ...extraDetails,
                 ],
                 mode: "warning",
                 confirmLabel: t("pathology.consentConfirm"),
                 rejectedMessage: t("pathology.consentRejected"),
                 cacheKey: alwaysAsk ? undefined : key,
+                // Lets the user grant this for one slide only.
+                slideKey: this.slideConsentKey(),
             });
+            return info?.id;
         }
 
         // ---- slide context resolution (adapter-owned; see the security note below) ----
@@ -1602,16 +1631,17 @@ export function registerPathologyScriptingApi(): void {
             surveyPixels?: number;
         }): Promise<any> {
             const module = this._getModule();
-            if (options?.hint) {
-                await this._consentIfRemote("analyze", options?.driver, "whole-slide overview hint");
-            }
+            // The engine's pin is never a script's to set; it is whatever was asked about.
+            const analyzeDriver = options?.hint
+                ? await this._consentIfRemote("analyze", options?.driver, "whole-slide overview hint")
+                : undefined;
             // Shaped for the model on the way out, exactly like buildOverview/getOverview.
             // Without this the region list ships raw engine doubles — bounds like
             // 12345.678901234567 where 12346 is the whole-pixel value a region link
             // actually uses — and the region count is unbounded, so a fragmented slide
             // spent thousands of tokens on float noise. The cached geometry keeps its
             // full precision; this is a view, not a mutation.
-            return forPresentation(await module.exploreSlide(this.activeViewer, options || {}));
+            return forPresentation(await module.exploreSlide(this.activeViewer, { ...(options || {}), analyzeDriver }));
         }
 
         async reviewRegions(options?: {
@@ -1626,10 +1656,13 @@ export function registerPathologyScriptingApi(): void {
             options = options || {};
             options.feature = options?.feature || "analyze";
             // Scoped: a multi-region walk is a different ask than one snapshot.
-            await this._consentIfRemote(
+            const pinned = await this._consentIfRemote(
                 options.feature, options.driver, "review tissue regions → findings", [], "review"
             );
-            return module.reviewRegions(this.activeViewer, options || {});
+            return module.reviewRegions(this.activeViewer, {
+                ...options,
+                analyzeDriver: options.feature === "analyze" ? pinned : undefined,
+            });
         }
 
         /**
@@ -1687,14 +1720,18 @@ export function registerPathologyScriptingApi(): void {
             // dialog shows the user exactly what slide context will be sent with it.
             // Scoped to "overview" so a grant for a single snapshot never stands in for
             // approval of a minutes-long, many-call sweep.
-            await this._consentIfRemote("analyze", options?.driver, "recursive expert overview", [
+            // Resolved to an id BEFORE asking, and that id is what the walk is pinned to:
+            // the dialog can stay open for a while, and a driver registering meanwhile must
+            // not change which model the answer applies to.
+            const analyzeDriver = module.describeDriverForFeature("analyze", options?.driver).id;
+            await this._consentIfRemote("analyze", analyzeDriver, "recursive expert overview", [
                 this._contextConsentDetail(prepared.context),
             ], "overview");
 
             // Shaped for the model on the way out: whole-pixel geometry (what a region
             // link needs), short numbers and capped prose. The cached tree keeps its full
             // precision — this is a view, not a mutation.
-            return forPresentation(await module.buildOverview(this.activeViewer, prepared.merged));
+            return forPresentation(await module.buildOverview(this.activeViewer, { ...prepared.merged, analyzeDriver }));
         }
 
         async planOverview(options?: any): Promise<any> {
@@ -1704,7 +1741,9 @@ export function registerPathologyScriptingApi(): void {
             const prepared = await this._overviewCallOptions(options);
             if (prepared.status === "context-required") return prepared;
 
-            return forPresentation(await module.planOverview(this.activeViewer, prepared.merged));
+            // `analyzeDriver` is the engine's pin, never a script's to set: the engine
+            // derives it from `driver`, and runPlan asks consent on what it derived.
+            return forPresentation(await module.planOverview(this.activeViewer, { ...prepared.merged, analyzeDriver: undefined }));
         }
 
         async runPlan(planId: string, edits?: any): Promise<any> {
@@ -1712,16 +1751,32 @@ export function registerPathologyScriptingApi(): void {
             // The consent the plan itself did not need. This IS the minutes-long, many-call
             // sweep, so it is gated exactly like buildOverview — and scoped to "overview", so a
             // grant for one snapshot never stands in for it.
-            await this._consentIfRemote("analyze", edits?.driver, "recursive expert overview", [
-                this._contextConsentDetail(module.getSlideContext(this.activeViewer)),
-            ], "overview");
+            // Asked on the driver the PLAN is pinned to — the one the walk uses — not on
+            // `edits.driver`, which the engine refuses when it differs. An expired plan
+            // sends nothing, so it asks nothing.
+            const pinned = module.planAnalyzeDriver(this.activeViewer, planId);
+            if (pinned) {
+                await this._consentIfRemote("analyze", pinned, "recursive expert overview", [
+                    this._contextConsentDetail(module.getSlideContext(this.activeViewer)),
+                ], "overview");
+            }
             return forPresentation(await module.runPlan(this.activeViewer, planId, edits || {}));
         }
 
         async refineOverview(options?: any): Promise<any> {
             const module = this._getModule();
-            // No consent prompt: this continues work the user already approved under the
-            // "overview" scope. Asking again for the same walk would train them to click through.
+            // No consent prompt when the driver stays the same: this continues work the user
+            // already approved under the "overview" scope, and asking again for the same walk
+            // would train them to click through. Another driver is another model receiving
+            // the slide — a different decision, asked like the first one.
+            const requested = options?.driver
+                ? module.describeDriverForFeature("analyze", options.driver).id
+                : undefined;
+            if (requested && requested !== module.overviewAnalyzeDriver(this.activeViewer)) {
+                await this._consentIfRemote("analyze", requested, "recursive expert overview", [
+                    this._contextConsentDetail(module.getSlideContext(this.activeViewer)),
+                ], "overview");
+            }
             const derived = options?.query && !options?.features && !options?.checklist
                 ? await this._deriveChecklist(options.query, module.getSlideContext(this.activeViewer))
                 : { checklist: null, reason: null };
@@ -1789,7 +1844,10 @@ export function registerPathologyScriptingApi(): void {
                         finest: this._slideFinestMppNote(),
                     }),
                     maxOutputTokens: 512,
-                }, { priority: "background" });
+                    // The module's vision deadline, not the HttpClient default (30 s): a
+                    // reasoning model did not answer inside that, and the timeout surfaced as
+                    // a "fallback" checklist with no hint that a clock was the cause.
+                }, { priority: "background", timeoutMs: this._getModule().visionTimeoutMs });
 
                 const parsed = this._parseChecklistJson(res?.text);
                 if (!parsed) {
@@ -1863,7 +1921,7 @@ export function registerPathologyScriptingApi(): void {
 
         async annotateTissue(driver?: string): Promise<any> {
             const module = this._getModule();
-            await this._consentIfRemote("tissue-mask", driver, "detect tissue → annotations");
+            driver = await this._consentIfRemote("tissue-mask", driver, "detect tissue → annotations");
             return module.annotateTissue(this.activeViewer, { driver });
         }
 
@@ -1877,7 +1935,7 @@ export function registerPathologyScriptingApi(): void {
                     throw new Error("No annotation was selected; tissue coverage canceled.");
                 }
             }
-            await this._consentIfRemote("tissue-mask", driver, "tissue coverage of an annotation");
+            driver = await this._consentIfRemote("tissue-mask", driver, "tissue coverage of an annotation");
             return module.tissueCoverage(viewer, id, { driver });
         }
 
@@ -1888,7 +1946,7 @@ export function registerPathologyScriptingApi(): void {
             const viewer = this.activeViewer;
             const point = await module.pickViewportPoint(viewer);
             if (!point) throw new Error("No point was selected; segmentation canceled.");
-            await this._consentIfRemote("segment", driver, "segmentation → annotation");
+            driver = await this._consentIfRemote("segment", driver, "segmentation → annotation");
             return module.segmentAtPoint(viewer, { prompt: prompt || "", driver, point });
         }
 
@@ -1905,7 +1963,7 @@ export function registerPathologyScriptingApi(): void {
         ): Promise<any> {
             const module = this._getModule();
             const opts = typeof options === "string" ? { driver: options } : (options || {});
-            await this._consentIfRemote("analyze", opts.driver, "image analysis → findings");
+            const pinned = await this._consentIfRemote("analyze", opts.driver, "image analysis → findings");
 
             // Ground the call in whatever is already established about the slide. This never
             // ASKS (that belongs to the walk, which is what the budget hangs on) — it only
@@ -1917,7 +1975,7 @@ export function registerPathologyScriptingApi(): void {
             // from scripts.
             return module.analyzeRegion(this.activeViewer, {
                 prompt: prompt || "",
-                driver: opts.driver,
+                driver: pinned,
                 source: opts.source,
                 region: opts.region,
                 magnification: opts.magnification,
@@ -1939,7 +1997,7 @@ export function registerPathologyScriptingApi(): void {
             const module = this._getModule();
             const opts = options || {};
             const context = module.getSlideContext(this.activeViewer);
-            await this._consentIfRemote("analyze", opts.driver, "targeted region interrogation", [
+            const pinned = await this._consentIfRemote("analyze", opts.driver, "targeted region interrogation", [
                 $.t("pathology.consentInterrogate", { fields: Math.max(1, opts.maxFields ?? 4) }),
                 ...(context ? [this._contextConsentDetail(context)] : []),
             ], "interrogate");
@@ -1952,6 +2010,7 @@ export function registerPathologyScriptingApi(): void {
                 ...(typeof opts.mpp === "number" ? { mpp: opts.mpp } : {}),
                 ...(typeof opts.maxFields === "number" ? { maxFields: opts.maxFields } : {}),
                 ...(opts.driver ? { driver: opts.driver } : {}),
+                analyzeDriver: pinned,
                 ...(context ? { context } : {}),
             });
         }
@@ -1968,7 +2027,7 @@ export function registerPathologyScriptingApi(): void {
             const opts = options || {};
             const count = Array.isArray(regions) ? regions.length : 0;
             const context = module.getSlideContext(this.activeViewer);
-            await this._consentIfRemote("analyze", opts.driver, "composite comparison of several regions", [
+            const pinned = await this._consentIfRemote("analyze", opts.driver, "composite comparison of several regions", [
                 $.t("pathology.consentMontage", { count }),
                 ...(context ? [this._contextConsentDetail(context)] : []),
             ], "montage");
@@ -1980,7 +2039,7 @@ export function registerPathologyScriptingApi(): void {
                 ...(typeof opts.cols === "number" ? { cols: opts.cols } : {}),
                 ...(typeof opts.cellPixels === "number" ? { cellPixels: opts.cellPixels } : {}),
                 ...(typeof opts.mpp === "number" ? { mpp: opts.mpp } : {}),
-                ...(opts.driver ? { driver: opts.driver } : {}),
+                driver: pinned,
                 ...(context ? { context } : {}),
             });
         }
@@ -1994,9 +2053,10 @@ export function registerPathologyScriptingApi(): void {
             const opts = options || {};
             // A no-op for the built-in (local) implementation; a deployment that binds a
             // remote nuclei detector to this feature gets the prompt it deserves.
-            await this._consentIfRemote("cellularity", opts.driver, "local cell-density map");
+            const pinned = await this._consentIfRemote("cellularity", opts.driver, "local cell-density map");
             const map = await module.buildDensityMap(this.activeViewer, {
                 ...(opts.driver ? { driver: opts.driver } : {}),
+                cellularityDriver: pinned,
                 ...(typeof opts.cell === "number" ? { cell: opts.cell } : {}),
                 ...(opts.refresh ? { refresh: true } : {}),
             });

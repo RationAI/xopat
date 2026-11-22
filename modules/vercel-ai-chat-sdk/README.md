@@ -540,6 +540,21 @@ improvement is the TODO on `SYSTEM_MERGING_ADAPTERS`: decide this per **model**,
 from a real failure like `ModelCapabilities.streaming` already is, so a newer model that does
 accept several system messages gets the optimal path without an allowlist edit.
 
+## Image and file support (`ModelCapabilities.images` / `.files`)
+
+Learned, not guessed. A provider adapter's `listModels` reports `"supported"`/`"unsupported"`
+only when its metadata actually says so; silence is `"unknown"`, and `"unknown"` is treated as
+**allowed** — the attachment buttons stay enabled and the media is sent. There is no up-front
+probe: a one-shot "reply IMAGE_OK" call misread timeouts, rate limits and reasoning models as
+"no image support" and disabled screenshots for models that take them.
+
+When the model refuses the media (`mediaUnsupportedKind` in `server/model-messages.ts` — a
+refusal phrase plus a media word, for a kind the turn actually sent), the turn loop records
+`"unsupported"` with `source: "observed"`, retries the same rung with the media replaced by an
+`[Image omitted …]` placeholder, and flags the reply `metadata.mediaRejected`; the panel then
+disables the matching button and says why. A turn that carried media successfully records
+`"supported"`. Observed verdicts are per (provider, model, user scope) and outrank listing metadata.
+
 ## Token usage readout
 
 The fullscreen Plugins menu carries a second chat submenu, **Token usage**, beside
@@ -924,7 +939,7 @@ overrides any subset (`modules/vercel-ai-chat-sdk/server.json` carries the same
     "turnBudgetMs": 540000,          // whole-turn deadline (inside the 600s RPC ceiling)
     "attemptTimeoutMs": 300000,      // per-attempt ceiling for one upstream call
     "maxRetries": 1,                 // transport-stall retries only
-    "probeBudgetMs": 25000,          // shared ceiling for the capability probes
+    "probeBudgetMs": 25000,          // deprecated no-op (capability probes removed)
     "maxInlineAttachmentBytes": 524288,
     "maxOutputTokens": 16384,        // shared with reasoning tokens on reasoning models
     "decodedMediaCacheBytes": 67108864,
@@ -974,17 +989,21 @@ deployment's call, not a session's.
 
 ### Remote attachments and the SSRF guard
 
-A message part may reference an asset by `url` instead of carrying it inline, and
-that URL comes from the client. When the target model does not accept URLs of that
-media type, **the SDK resolves the asset from the server process** — so the turn
-path always supplies `experimental_download` (`server/asset-download.ts`), which
-routes the fetch through `XOPAT_SERVER.safeRequest` (connect-time validation,
-no redirects, private/metadata IP rejection), caps it at
-`maxInlineAttachmentBytes`, and refuses outright when the guard is unavailable. A
-model that *does* accept URLs gets the URL untouched — the fetch then happens at
-the provider, on the provider's network. Do not remove the hook: without it the
-SDK falls back to plain `fetch`, which turns a client-supplied URL into a
-server-side request.
+**A message part carries its payload inline (`data:`) or by `attachmentId`; a
+remote `url` is not accepted.** It used to be, and the URL came from the client:
+the SSRF guard blocks private addresses but honours the operator's allowlist of
+internal hosts (`XOPAT_SSRF_ALLOWED_HOSTS` / `_CIDRS`), and the SDK trusts the
+client's `mimeType`, so a `text/*` part aimed at an allowlisted backend had its
+body inlined into the prompt and returned in the reply. Now `uploadAttachment`
+refuses anything but a base64 `data:` URL, incoming parts are stripped of `url`
+and of a non-`data:` `dataUrl`, and `resolvePartPayload`
+(`server/model-messages.ts`) resolves nothing else — which also covers history
+stored before the check existed.
+
+The turn path still supplies `experimental_download` (`server/asset-download.ts`,
+routed through `XOPAT_SERVER.safeRequest`, capped at `maxInlineAttachmentBytes`)
+as defence in depth. Do not remove the hook: without it the SDK falls back to
+plain `fetch` should a URL ever reach it again.
 
 `core.server.secure.storage.retention["vercel-ai-chat-sdk"]` still takes
 precedence over the retention values for the storage namespaces themselves — see

@@ -614,10 +614,12 @@ OpenSeadragon.Tools = class {
         const source = await this.resolveSource(viewer, bgConfig);
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail
-            let label = await source.getLabel();
+            const label = await source.getLabel();
             if (label) {
-                label = await UTILITIES.imageLikeToImage(label);
-                return label;
+                // Inline as a data URL: consumers cache this node and `cloneNode` it
+                // into each surface. Decoding a Blob directly yields an <img> whose
+                // `blob:` src OSD revokes on load, so every clone renders broken.
+                return await UTILITIES.imageLikeToImage(await UTILITIES.imageLikeToDataUrl(label));
             }
         }
         return undefined;

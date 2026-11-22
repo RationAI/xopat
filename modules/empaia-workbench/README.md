@@ -157,8 +157,8 @@ Pinned at `^0.1.34` — npm's latest. The upstream monorepo carries an unpublish
 **VACI does not validate the sender's origin.** It listens for any `message`
 event, dispatches on `data.type` alone, and adopts the sender's origin as its
 reply target. Its listener is installed at import and hands us only the
-payload, so the sender cannot be checked here without patching the library —
-the request is recorded in [`UPSTREAM.md`](../../UPSTREAM.md).
+payload, so the sender cannot be checked in a callback — the request to fix
+that is recorded in [`UPSTREAM.md`](../../UPSTREAM.md).
 
 The exposure is narrow but real: the viewer is a sandboxed frame behind a
 signed path (`/v3/frontends/<JWT>/`), yet any other frame on the Workbench page
@@ -166,6 +166,12 @@ can reach it through `window.top.frames[i]`. A frame that wins the handshake
 race with a forged `wbsUrl` would have the genuine token sent to its own host.
 So what is checked:
 
+- **The sender** (`vaci-sender-guard.ts`, imported first in `index.ts`). A
+  capture-phase `message` listener in front of the library's stops any `scope` /
+  `token` / `wbsUrl` message whose `e.source` is not `window.top` — the frame
+  the library posts to. Window references compare across origins and on the
+  sandbox's opaque one, so this needs no configuration. Other `postMessage`
+  traffic is left alone.
 - **`wbsUrl` origin allowlist** (`wbsOrigins` in `include.json`, static meta
   only). Unset, the URL must share the origin the app UI was served from; list
   origins explicitly when the Workbench Service lives elsewhere, or `["*"]` to

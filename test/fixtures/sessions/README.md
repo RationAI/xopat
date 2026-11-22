@@ -39,8 +39,9 @@ Groups today: `visualization`, `multichannel`, `viz-flex`, `errors`, `dicom`.
 
 - **Data ids are fileserver-relative**: `slides/<file>` for a fetched fixture,
   `generated/<…>` for a derived overlay. Both resolve against `TIFF_FILESERVER`
-  (`http://127.0.0.1:9100/files` by default), so one origin serves both and the
-  same session works against a mirror.
+  (the viewer's own `/test/fixtures/data` media route by default), so one origin
+  serves both and the same session works against a mirror. Minimal example:
+  [`../data/README.md`](../data/README.md#referencing-a-fixture-in-a-session).
 - **No session names a protocol it does not need.** `webtiff` owns `tiff` and
   reads everything here — the H&E slides and the mask pyramids alike. The
   deployment used to compose two decoders because the H&E slides are JPEG/YCbCr

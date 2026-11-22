@@ -228,14 +228,17 @@ class MultiPanelMenu extends Menu {
     }
 
     /**
+     * Collapse one side panel; the counterpart of `_openTab`, so the cached
+     * open state matches what the user sees after a reload.
      * @param {*} id of the item we want to close
+     * @returns {boolean} false for an unknown tab
      */
     closeTab(id) {
-        if (id in this.tabs && !(this.parentElement.classMap["mobile"] === "mobile")) {
-            this.tabs[id].close();
-            return true;
-        }
-        return false;
+        const tab = this.tabs?.[id];
+        if (!tab) return false;
+        APPLICATION_CONTEXT.AppCache.set(`${tab.id}-open`, false);
+        tab.close();
+        return true;
     }
 
     openTab(id) {

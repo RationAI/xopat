@@ -90,6 +90,15 @@ minutes). Two timeouts must both be long enough, or the call aborts mid-request:
   (default 315000 ms, ~5 min + margin). Keep it **≥** the server value so the server's
   result/timeout ends the call, not the browser giving up.
 
+## "Request Entity Too Large"
+
+That text is an HTTP 413 from the **model endpoint or a proxy in front of it** (nginx refuses
+bodies over 1 MB unless `client_max_body_size` says otherwise) — xOpat's own limit reads
+"Request body exceeds the N byte limit". The image travels base64-in-JSON, so it is ~1.33× its
+file size. `pathology-foundation` therefore sends JPEG by default (`visionImage`, a few hundred
+KB per field) and retries a refused PNG as JPEG once. If JPEG is refused too, raise the body
+limit on the endpoint.
+
 For faster responses, use a GPU backend (see the deployment repo) and/or frame a smaller region
 before calling `analyzeRegion`.
 

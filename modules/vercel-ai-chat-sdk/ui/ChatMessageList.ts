@@ -511,7 +511,7 @@ export class ChatMessageList {
                 }
                 case "image": {
                     const wrapper = div({ class: "flex flex-col gap-1" }) as HTMLElement;
-                    const src = part.dataUrl || part.url || "";
+                    const src = part.dataUrl || "";
                     if (src) {
                         wrapper.appendChild(img({
                             src,
@@ -526,7 +526,7 @@ export class ChatMessageList {
                     break;
                 }
                 case "file": {
-                    const href = part.dataUrl || part.url || "#";
+                    const href = part.dataUrl || "#";
                     const link = a({
                         href,
                         class: "link link-primary text-[11px] break-all",

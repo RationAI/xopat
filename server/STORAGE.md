@@ -318,6 +318,22 @@ overrides:
 | `XOPAT_STORAGE_SWEEP_INTERVAL_MS` | Shared sweeper period | `60000` |
 | `XOPAT_STORAGE_MEMORY_MAX_BYTES` | Default memory-driver byte budget | unset |
 
+### Windows, and storage roots inside a synced folder
+
+Every `file`-driver write is temp-file + `rename`. On Windows that rename fails with
+`EPERM`/`EBUSY` while anything else holds a handle on the destination, and a file-sync client
+(OneDrive, Dropbox) or real-time antivirus opens each file it sees change. The driver retries for
+about two seconds and then fails the write with an error that says so.
+
+**Keep the storage root out of synced trees.** The default is `<XOPAT_CACHE_DIR>/storage`, i.e.
+inside the repository — so a checkout under `OneDrive\…` puts chat transcripts and sessions there.
+Point `core.server.secure.storage.root` (or `XOPAT_STORAGE_ROOT`) at a plain local directory.
+
+Within one process, writes that span two files — a log `append`/`trim` and a blob `put` — are
+serialized per key, so overlapping requests on one key (two turns of the same chat session) take
+turns instead of racing the rename and losing a `length` increment. Across cluster workers there is
+no such ordering: the retry is the defence, and a log's `length` is advisory.
+
 ---
 
 ## Making state survive a restart

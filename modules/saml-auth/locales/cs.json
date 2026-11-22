@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "name": "Autentizace SAML",
+    "description": "Jednotné přihlášení SAML 2.0. Ověří tvrzení IdP na serveru a vloží do relace prohlížeče krátkodobý token.",
+    "longDescription": "Poskytovatel služby (Service Provider) SAML 2.0 na straně serveru. Na serveru xOpat obsluhuje tok AuthnRequest / assertion-consumer / odhlášení, ověřuje podepsané tvrzení vůči certifikátu poskytovatele identity a vydává krátkodobý podepsaný token, který prohlížeč používá pro ověřené požadavky. Podporuje přihlášení iniciované SP i (volitelně) IdP, jednotné odhlášení (Single Logout) a koncový bod s metadaty poskytovatele služby pro správce IdP."
+  },
+  "error": {
+    "loginFailed": "Přihlášení do {{service}} nebylo dokončeno. Zkuste to prosím znovu.",
+    "serverUnavailable": "Přihlášení přes SAML není k dispozici: server xOpat neodpověděl.",
+    "popupBlocked": "Přihlašovací okno bylo zablokováno, pokračuje se v této kartě."
+  }
+}

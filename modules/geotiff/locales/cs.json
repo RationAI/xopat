@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "name": "Podpora TIFF / GeoTIFF",
+    "description": "Otevírá sklíčka TIFF, OME-TIFF a QPTIFF včetně vzorků s vysokou bitovou hloubkou a s plovoucí desetinnou čárkou a volí shader odpovídající uspořádání kanálů sklíčka."
+  }
+}

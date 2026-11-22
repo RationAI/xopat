@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.2
-//! Built on 2026-11-09
-//! Git commit: --55621d8
+//! Built on 2026-11-12
+//! Git commit: --d8cbf42
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -4252,9 +4252,10 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             }
 
             for (const key of Object.keys(params)) {
-                // Keep any use_* key (filters, mode, blend, per-source channel, future additions).
+                // Keep any use_* key (filters, mode, blend, per-source channel, future additions)
+                // and the type-independent pre/post pipeline.
                 // Keep keys that match a control on the new shader.
-                if (!key.startsWith("use_") && !controlNames.has(key)) {
+                if (!key.startsWith("use_") && key !== "pipeline" && !controlNames.has(key)) {
                     delete params[key];
                     continue;
                 }
@@ -6215,6 +6216,10 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
      * @property {OpenSeadragon.TiledImage[] | number[]} tiledImages - Mapping from source indexes (the array index) to tiled images that provide the data for the shader layer.
      * @property {object} params - Settings for the ShaderLayer as well as parameters for its controls.
      * @property {object} cache - Cache object used by the ShaderLayer.
+     *
+     * Every ShaderLayer accepts `params.pipeline` ({@link ShaderLayerPipelineConfig}):
+     * `{enabled, pre: [{id, type, params}], post: [...]}`, chains of vec4 -> vec4
+     * ShaderModules run on each sampled value (`pre`) and on the layer's result (`post`).
      * @property {"float16"|"unorm8"} [precision] - Per-instance override of the first-pass color
      *      target precision, honored only while the renderer option `precision` is `"auto"`.
      *      `"float16"` demands a high-precision (RGBA16F) target even over 8-bit data — any
@@ -6238,6 +6243,8 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
      * @property {Function} refresh     // callback to recreate the ShaderLayer when control layout changes
      * @property {Function} refetch     // callback to request source/config refetch work from the owning drawer
      * @property {WebGLImplementation} backend
+     * @property {ShaderLayer} [pipelineHost] - wrapper layer (time-series, channel-series) whose
+     *      pipeline this delegate layer uses instead of building its own
      */
 
     /**
@@ -6324,6 +6331,19 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             // parameters used for applying filters
             this.__filterPrefix = null;
             this.__filterSuffix = null;
+            // legacy use_* filters migrated to pre-pipeline nodes (see ShaderLayer.filterModules)
+            this.__legacyFilterNodes = [];
+
+            // pre/post module pipeline (params.pipeline), see ShaderLayerPipeline
+            this._pipeline = null;
+            this.__pipelineControlNames = new Set();
+            this.__controlsBuilt = false;
+            // a delegate layer (time-series / channel-series child) defers to its wrapper
+            this._pipelineHost = options.pipelineHost || null;
+            // transient before/after bypass (setPipelineBypass): a raw uniform, never cached
+            this.__pipelineBypass = false;
+            this.__bypassLocation = null;
+            this.__bypassNeedsLoad = true;
         }
 
         /**
@@ -6338,6 +6358,8 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             this.resetMode(this._params, false, false);
             // set up the filters to be applied to sampled data from the texture
             this.resetFilters(this._params, false, false);
+            // set up the pre/post module pipeline (controls are built by _buildControls)
+            this.resetPipeline(this._params, false);
 
             // build the ShaderLayer's controls
             this._buildControls();
@@ -6740,6 +6762,10 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             const glsl = [];
 
             for (const controlName in this._controls) {
+                // pipeline uniforms are emitted by getPipelineDefinition(), ahead of this block
+                if (this.__pipelineControlNames.has(controlName)) {
+                    continue;
+                }
                 let code = this[controlName].define();
                 if (code) {
                     // trim removes whitespace from beggining and the end of the string
@@ -6747,6 +6773,44 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
                 }
             }
             return glsl.join("\n    ");
+        }
+
+        /**
+         * GLSL of this layer's pre/post pipeline: its control uniforms, per-node functions
+         * and the `<uid>_pipeline_pre` / `<uid>_pipeline_post` chain functions. The backend
+         * emits it before getFragmentShaderDefinition(), so helpers defined there may call
+         * sampleChannel(). Empty when the layer has no pipeline nodes.
+         *
+         * @return {string} glsl code
+         */
+        getPipelineDefinition() {
+            if (!this._pipeline || (!this._pipeline.hasPre() && !this._pipeline.hasPost())) {
+                return "";
+            }
+            const glsl = [];
+            for (const controlName of this.__pipelineControlNames) {
+                const control = this._controls[controlName];
+                const code = control && control.define();
+                if (code) {
+                    glsl.push(code.trim());
+                }
+            }
+            glsl.push(this._pipeline.getDefinition());
+            return glsl.join("\n");
+        }
+
+        /**
+         * @return {boolean} whether the layer's result passes through a post pipeline
+         */
+        hasPostPipeline() {
+            return !!(this._pipeline && this._pipeline.hasPost());
+        }
+
+        /**
+         * @return {string} GLSL name of the post chain function, vec4 -> vec4
+         */
+        getPostPipelineFunctionName() {
+            return this._pipeline ? this._pipeline.postFunctionName : "";
         }
 
         /**
@@ -6819,7 +6883,62 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
                 this[controlName] = control;
             }
 
+            this.__controlsBuilt = true;
+            this._buildPipelineControls();
+
             this._warnOnUndeclaredParams(expandedControls);
+        }
+
+        /**
+         * Build the flattened pipeline controls (`pre_<node>_<ctl>`, `post_<node>_<ctl>`,
+         * `pipeline_enabled`) next to the layer's own controls.
+         * @private
+         */
+        _buildPipelineControls() {
+            this.__pipelineControlNames = new Set();
+            if (!this._pipeline) {
+                return;
+            }
+            const defs = this._pipeline.getControlDefinitions();
+            for (const name of Object.keys(defs)) {
+                if (this._controls[name]) {
+                    this._report("warn", "pipeline-control-collision",
+                        `ShaderLayer '${this.id}': pipeline control '${name}' collides with a layer control ` +
+                        `and is omitted.`, { control: name });
+                    continue;
+                }
+                const control = $.FlexRenderer.UIControls.build(this, name, defs[name],
+                    this.id + '_' + name, this._pipeline.getControlParams(name));
+                if (!control) {
+                    this._report("error", "control-build-failed",
+                        `ShaderLayer '${this.id}': pipeline control '${name}' could not be built and is omitted.`,
+                        { control: name });
+                    continue;
+                }
+                this._controls[name] = control;
+                this[name] = control;
+                this.__pipelineControlNames.add(name);
+            }
+        }
+
+        /**
+         * Remove (and destroy) the pipeline controls built by _buildPipelineControls().
+         * @private
+         */
+        _removePipelineControls() {
+            for (const name of this.__pipelineControlNames) {
+                const control = this._controls[name];
+                if (control && typeof control.destroy === "function") {
+                    try {
+                        control.destroy();
+                    } catch (e) {
+                        $.console.warn(`[flex-renderer] pipeline control '${name}' of layer '${this.id}' ` +
+                            `failed to destroy.`, e);
+                    }
+                }
+                this.removeControl(name);
+            }
+            this.__pipelineControlNames = new Set();
         }
 
         /**
@@ -6850,7 +6969,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             const customParams = this.constructor.customParams || {};
             const declared = Object.keys(expandedControls).concat(Object.keys(customParams));
             const undeclared = Object.keys(this._params).filter(
-                key => !key.startsWith("use_") &&
+                key => !key.startsWith("use_") && key !== "pipeline" &&
                     expandedControls[key] === undefined &&
                     customParams[key] === undefined
             );
@@ -6862,7 +6981,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             $.console.warn(`ShaderLayer '${this.id}' (${this.constructor.type()}): params ` +
                 `${undeclared.map(k => `'${k}'`).join(", ")} declared by no control or custom ` +
                 `param, and therefore ignored. Accepted here: ${declared.join(", ")}, ` +
-                `plus any use_* built-in.`);
+                `plus 'pipeline' and any use_* built-in.`);
         }
 
         _expandControlDefinitions(controlDefinitions) {
@@ -6923,6 +7042,8 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          * @param {object} [options] render options passed to every control's toHtml()
          * @param {string|Object<string, string|null>} [options.inputClasses] per-role input classes,
          *   see OpenSeadragon.FlexRenderer.UIControls.resolveInputClasses
+         * @param {boolean} [options.includePipeline=true] false omits the pre/post pipeline controls
+         *   (hosts that render their own adjustment panels)
          * @returns {String} HTML code
          */
         htmlControls(wrapper = null, classes = "", css = "", options = {}) {
@@ -6935,10 +7056,17 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
                 if (opts.inputClasses !== undefined) {
                     options.inputClasses = opts.inputClasses;
                 }
+                if (opts.includePipeline !== undefined) {
+                    options.includePipeline = opts.includePipeline;
+                }
             }
             options = options && typeof options === "object" ? options : {};
+            const skipPipeline = options.includePipeline === false;
             let controlsHtmls = [];
             for (const controlName in this._controls) {
+                if (skipPipeline && this.__pipelineControlNames.has(controlName)) {
+                    continue;
+                }
                 const control = this[controlName];
                 controlsHtmls.push(control.toHtml(classes || "", css || "", options));
             }
@@ -6980,6 +7108,9 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             for (const controlName in this._controls) {
                 this[controlName].glLoaded(program, gl);
             }
+            this.__bypassLocation = this._pipeline ?
+                gl.getUniformLocation(program, this._pipeline.bypassUniformName) : null;
+            this.__bypassNeedsLoad = true;
         }
 
         /**
@@ -7001,6 +7132,10 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             }
             for (const controlName in this._controls) {
                 this[controlName].glDrawing(program, gl);
+            }
+            if (this.__bypassNeedsLoad && this.__bypassLocation) {
+                gl.uniform1i(this.__bypassLocation, this.__pipelineBypass ? 1 : 0);
+                this.__bypassNeedsLoad = false;
             }
         }
 
@@ -7104,6 +7239,9 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             }
             const bucket = {};
             for (const key of keys) {
+                if (key === "__pipeline") {
+                    continue;
+                }
                 bucket[key] = root[key];
                 delete root[key];
             }
@@ -7120,8 +7258,42 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          * @return {String}
          */
         loadProperty(name, defaultValue) {
-            const value = this.cache[name];
+            const value = this._cacheFor(name)[name];
             return value !== undefined ? value : defaultValue;
+        }
+
+        /**
+         * Type-independent cache bucket (`config.cache.__pipeline`) of the pre/post pipeline:
+         * adjustments survive changeShaderType and the per-type buckets.
+         * @return {Object}
+         * @private
+         */
+        get _pipelineCache() {
+            // normalizes a legacy flat root first, so the bucket is never swept into a type bucket
+            this.cache; // eslint-disable-line no-unused-expressions
+            const root = this.__shaderConfig.cache;
+            let bucket = root.__pipeline;
+            if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) {
+                bucket = root.__pipeline = {};
+            }
+            return bucket;
+        }
+
+        /**
+         * @param {String} name cache key
+         * @return {Object} the bucket the key lives in
+         * @private
+         */
+        _cacheFor(name) {
+            const pipeline = this._pipeline;
+            // the toggle lives in the pipeline bucket even before any node exists, so a value
+            // set early is honored once resetPipeline() builds a pipeline
+            const enabledName = ShaderLayer.PIPELINE_ENABLED_CONTROL;
+            if ((typeof name === "string" && name.startsWith(enabledName)) ||
+                    (pipeline && pipeline.ownsCacheKey(name))) {
+                return this._pipelineCache;
+            }
+            return this.cache;
         }
 
         /**
@@ -7130,7 +7302,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          * @return {boolean}
          */
         hasProperty(name) {
-            return this.cache[name] !== undefined;
+            return this._cacheFor(name)[name] !== undefined;
         }
 
         /**
@@ -7139,11 +7311,12 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          * @param {String} value
          */
         storeProperty(name, value) {
+            const bucket = this._cacheFor(name);
             if (value === undefined) {
-                delete this.cache[name];
+                delete bucket[name];
                 return;
             }
-            this.cache[name] = value;
+            bucket[name] = value;
         }
 
         /**
@@ -7185,8 +7358,8 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
         resetChannel(options = {}, force = true, evented = true) {
-            if (Object.keys(options) === 0) {
-                options = this._params;
+            if (!options || Object.keys(options).length === 0) {
+                options = this._params || {};
             }
 
             // regex to compare with value used with use_channel, to check its correctness
@@ -7334,7 +7507,7 @@ function(c){"request"==c&&this.fetch()};n.prototype.onExecute=function(){this.se
             const chanPattern = this.__channels[sourceIndex] || "r";
             const glslExpr = this._buildChannelSampleExpr(sourceIndex, textureCoords, baseChannel, chanPattern);
 
-            return raw ? glslExpr : this.filter(glslExpr);
+            return raw ? glslExpr : this._applyPrePipeline(glslExpr);
         }
 
         /**
@@ -7804,12 +7977,14 @@ ${code}
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
         resetFilters(options = {}, force = true, evented = true) {
-            if (Object.keys(options) === 0) {
-                options = this._params;
+            if (!options || Object.keys(options).length === 0) {
+                options = this._params || {};
             }
 
             this.__filterPrefix = [];
             this.__filterSuffix = [];
+            this.__legacyFilterNodes = [];
+            const filterModules = ShaderLayer.filterModules || {};
             for (let key in this.constructor.filters) {
                 const predefined = this.constructor.defaultControls[key];
                 let value = predefined ? predefined.required : undefined;
@@ -7821,16 +7996,48 @@ ${code}
                     }
                 }
 
-                if (value !== undefined) {
-                    let filter = this.constructor.filters[key](value);
-                    this.__filterPrefix.push(filter[0]);
-                    this.__filterSuffix.push(filter[1]);
+                if (value === undefined) {
+                    continue;
                 }
+
+                // Built-in filters run as pre-pipeline nodes (ShaderLayer.filterModules); filters a
+                // host registered on ShaderLayer.filters keep the prefix/suffix one-liner.
+                // A wrapper (time-series, channel-series) never samples itself; its delegate
+                // builds the nodes and the wrapper pulls them into its own pipeline
+                // (_collectLegacyPreNodes), so the toggle and the bypass reach them too.
+                if (this.constructor.delegatesSampling) {
+                    continue;
+                }
+                const migration = $.FlexRenderer.ShaderLayerPipeline ? filterModules[key] : null;
+                if (migration) {
+                    const number = Number.parseFloat(value);
+                    this.__legacyFilterNodes.push({
+                        id: migration.id,
+                        type: migration.type,
+                        params: { [migration.param]: Number.isFinite(number) ? number : migration.fallback }
+                    });
+                    continue;
+                }
+
+                let filter = this.constructor.filters[key](value);
+                this.__filterPrefix.push(filter[0]);
+                this.__filterSuffix.push(filter[1]);
             }
             this.__filterPrefix = this.__filterPrefix.join("");
             this.__filterSuffix = this.__filterSuffix.reverse().join("");
 
-            if (evented) {
+            // after construct(), the migrated nodes live in the pipeline: rebuild it (the
+            // wrapper's, for a delegate)
+            const host = this._pipelineHost;
+            if (host) {
+                if (host.__controlsBuilt && typeof host.resetPipeline === "function") {
+                    host.resetPipeline(host._params, false);
+                }
+            } else if (this.__controlsBuilt) {
+                this.resetPipeline(this._params, false);
+            }
+
+            if (evented && this.backend && this.backend.renderer) {
                 this.backend.renderer.notifyVisualizationChanged({
                     reason: "filter-change",
                     shaderId: this.id,
@@ -7840,12 +8047,230 @@ ${code}
         }
 
         /**
-         * Apply global filters on value
+         * Apply global filters on value: the legacy use_* filters (run as migrated pre nodes) and
+         * any host-registered ShaderLayer.filters one-liner. params.pipeline.pre is NOT applied
+         * here; it runs on non-raw sampleChannel() results only, so raw samplers that filter a
+         * derived value (stain-separation, bipolar-heatmap) keep their legacy behavior.
          * @param {String} value GLSL code string, value to filter
          * @return {String} filtered value (GLSL oneliner without ';')
          */
         filter(value) {
-            return `${this.__filterPrefix}${value}${this.__filterSuffix}`;
+            const legacy = `${this.__filterPrefix || ""}${value}${this.__filterSuffix || ""}`;
+            const host = this._pipelineHost || this;
+            const pipeline = host._pipeline;
+            return pipeline && pipeline.hasLegacyPre() ? `${pipeline.legacyFunctionName}(${legacy})` : legacy;
+        }
+
+        /**
+         * Apply the whole pre stage (legacy filter nodes + params.pipeline.pre) to a sampled value.
+         * Used by non-raw sampleChannel().
+         * @param {String} value GLSL float/vec2/vec3/vec4 expression
+         * @return {String}
+         * @private
+         */
+        _applyPrePipeline(value) {
+            const legacy = `${this.__filterPrefix || ""}${value}${this.__filterSuffix || ""}`;
+            const host = this._pipelineHost || this;
+            const pipeline = host._pipeline;
+            return pipeline && pipeline.hasPre() ? `${pipeline.preFunctionName}(${legacy})` : legacy;
+        }
+
+        // PIPELINE LOGIC
+        /**
+         * Nodes migrated from legacy use_* filters that run first in this layer's pre stage.
+         * Wrappers (time-series, channel-series) return their delegate's nodes, since the
+         * delegate samples but the wrapper owns the pipeline.
+         * @return {ShaderLayerPipelineNodeConfig[]}
+         * @protected
+         */
+        _collectLegacyPreNodes() {
+            return this.__legacyFilterNodes || [];
+        }
+
+        /**
+         * (Re)build the pre/post module pipeline from `params.pipeline` (plus the nodes migrated
+         * from legacy use_gamma / use_exposure / use_logscale filters, which run first in `pre`).
+         *
+         * Like resetFilters(), this changes the generated GLSL: the caller rebuilds the program
+         * afterwards. Adding or removing a node needs this; changing a node's value does not
+         * (use getPipelineControl(...).set(...)), neither does toggling (setPipelineEnabled).
+         *
+         * A delegate layer created with `pipelineHost` never builds its own pipeline.
+         *
+         * @param {Object} [params=this._params] object carrying `pipeline`
+         * @param {boolean} [evented=true] whether to raise a visualization-change event
+         */
+        resetPipeline(params = undefined, evented = true) {
+            const source = params && typeof params === "object" ? params : (this._params || {});
+            const config = source.pipeline !== undefined ? source.pipeline : (this._params || {}).pipeline;
+
+            this._removePipelineControls();
+            this._pipeline = null;
+
+            const Pipeline = $.FlexRenderer.ShaderLayerPipeline;
+            if (!Pipeline || !$.FlexRenderer.ShaderModuleRegistry) {
+                // a build without the module system: no pipeline, legacy filters as one-liners
+                this.__pipelineStructureKey = "";
+                return;
+            }
+            // structural signature, compared by the navigator sync to detect rebuild-worthy changes
+            const legacyNodes = this._pipelineHost ? [] : (this._collectLegacyPreNodes() || []);
+            this.__pipelineStructureKey = Pipeline.structureKey(config) +
+                "|" + legacyNodes.map(n => n.id).join(",");
+
+            if (!this._pipelineHost) {
+                const pipeline = new Pipeline(this, config, legacyNodes);
+                if (pipeline.hasPre() || pipeline.hasPost()) {
+                    this._pipeline = pipeline;
+
+                    // The config is authoritative for the toggle and for migrated legacy values:
+                    // controls load the cache first, so seed it from the config.
+                    const enabledName = ShaderLayer.PIPELINE_ENABLED_CONTROL;
+                    const configured = config && typeof config === "object" ? config.enabled : undefined;
+                    if (configured !== undefined || !this.hasProperty(enabledName)) {
+                        this.storeProperty(enabledName, configured !== false);
+                    }
+                    for (const node of pipeline.stages.pre) {
+                        if (!node.legacy) {
+                            continue;
+                        }
+                        for (const [flatName, ref] of Object.entries(pipeline.controlMap)) {
+                            if (ref.stage === "pre" && ref.nodeId === node.id) {
+                                const value = pipeline.getControlParams(flatName);
+                                if (value !== undefined) {
+                                    this.storeProperty(flatName, value);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (this.__controlsBuilt) {
+                this._buildPipelineControls();
+            }
+
+            // the bypass is transient layer state: it survives a node add/remove, and is dropped
+            // together with the pipeline. The uniform location is resolved again in glLoaded().
+            if (!this._pipeline) {
+                this.__pipelineBypass = false;
+                this.__bypassLocation = null;
+            }
+            this.__bypassNeedsLoad = true;
+
+            if (evented && this.backend && this.backend.renderer) {
+                this.backend.renderer.notifyVisualizationChanged({
+                    reason: "pipeline-change",
+                    shaderId: this.id,
+                    shaderType: this.constructor.type()
+                });
+            }
+        }
+
+        /**
+         * Control of one pipeline node, so callers never reconstruct the flattened name.
+         *
+         * @param {"pre"|"post"} stage
+         * @param {string} nodeId node id from params.pipeline
+         * @param {string} controlName module-local control name (e.g. "black" of `levels`)
+         * @return {OpenSeadragon.FlexRenderer.UIControls.IControl|undefined}
+         */
+        getPipelineControl(stage, nodeId, controlName) {
+            if (stage !== "pre" && stage !== "post") {
+                return undefined;
+            }
+            let name;
+            try {
+                name = $.FlexRenderer.sanitizeKey(`${stage}_${nodeId}_${controlName}`);
+            } catch (e) {
+                return undefined;
+            }
+            return this.__pipelineControlNames.has(name) ? this._controls[name] : undefined;
+        }
+
+        /**
+         * Switch the whole pipeline (pre and post, legacy filter nodes included) on or off.
+         * A uniform update, never a relink. This is a persisted setting: it writes
+         * `params.pipeline.enabled` and the `__pipeline` cache and raises `control-change`.
+         * For a transient before/after peek use setPipelineBypass().
+         *
+         * @param {boolean} enabled
+         */
+        setPipelineEnabled(enabled) {
+            enabled = !!enabled;
+            const params = this._params;
+            if (params && params.pipeline && typeof params.pipeline === "object") {
+                params.pipeline.enabled = enabled;
+            }
+            const name = ShaderLayer.PIPELINE_ENABLED_CONTROL;
+            const control = this.__pipelineControlNames.has(name) ? this._controls[name] : null;
+            if (control) {
+                control.set(enabled);
+            } else {
+                this.storeProperty(name, enabled);
+            }
+            if (typeof this.invalidate === "function") {
+                this.invalidate();
+            }
+        }
+
+        /**
+         * @return {boolean} whether the pipeline is currently applied (true when there is none)
+         */
+        isPipelineEnabled() {
+            const name = ShaderLayer.PIPELINE_ENABLED_CONTROL;
+            const control = this.__pipelineControlNames.has(name) ? this._controls[name] : null;
+            if (control && control.encoded !== undefined) {
+                return !!$.FlexRenderer.UIControls.getUiElement("bool").decode(control.encoded);
+            }
+            const params = this._params || {};
+            return !(params.pipeline && params.pipeline.enabled === false);
+        }
+
+        /**
+         * Transient before/after bypass of the whole pipeline (pre and post, legacy filter nodes
+         * included). Uploads a uniform only: no params write, no cache write, no
+         * visualization-change event, so a peek never becomes an undo step or session state.
+         * The navigator mirrors it. A layer without a pipeline ignores the call. The flag lives
+         * on the layer instance: it survives resetPipeline() while a pipeline remains, and is
+         * reset by changeShaderType() (a new instance).
+         *
+         * @param {boolean} bypassed
+         */
+        setPipelineBypass(bypassed) {
+            if (this._applyPipelineBypass(bypassed)) {
+                const host = this._pipelineHost || this;
+                if (typeof host.invalidate === "function") {
+                    host.invalidate();
+                }
+            }
+        }
+
+        /**
+         * @return {boolean} whether the pipeline is currently bypassed (false when there is none)
+         */
+        isPipelineBypassed() {
+            const host = this._pipelineHost || this;
+            return !!host._pipeline && !!host.__pipelineBypass;
+        }
+
+        /**
+         * setPipelineBypass() without the redraw request; used by the navigator sync.
+         * @param {boolean} bypassed
+         * @return {boolean} whether the layer has a pipeline (and so took the value)
+         * @private
+         */
+        _applyPipelineBypass(bypassed) {
+            const host = this._pipelineHost || this;
+            if (!host._pipeline) {
+                return false;
+            }
+            bypassed = !!bypassed;
+            if (host.__pipelineBypass !== bypassed) {
+                host.__pipelineBypass = bypassed;
+                host.__bypassNeedsLoad = true;
+            }
+            return true;
         }
 
         /**
@@ -7926,6 +8351,22 @@ ${code}
     ShaderLayer.customParams = {};
 
     /**
+     * True for wrapper layers whose GLSL is produced by an inner delegate ShaderLayer
+     * (time-series, channel-series). The wrapper owns the pre/post pipeline (the delegate is
+     * built with `pipelineHost: wrapper`) but does not run legacy use_* filters itself: the
+     * delegate migrates its own and the wrapper pulls them in via _collectLegacyPreNodes().
+     * @type {boolean}
+     */
+    ShaderLayer.delegatesSampling = false;
+
+    /**
+     * Flat name of the bool control backing setPipelineEnabled(); kept in sync with
+     * ShaderLayerPipeline.ENABLED_CONTROL.
+     * @type {string}
+     */
+    ShaderLayer.PIPELINE_ENABLED_CONTROL = "pipeline_enabled";
+
+    /**
      * Parameter to save shaderLayer's functionality that can be shared and reused between ShaderLayer instantions.
      */
     ShaderLayer.__globalIncludes = {};
@@ -7938,7 +8379,8 @@ ${code}
     //expression should be wrapped in parenthesses for safety: ["(....(", ")....)"] in the middle the
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
     //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
-    // TODO: implement filters as shader nodes instead!
+    // The built-in three run as pre-pipeline ShaderModule nodes, see ShaderLayer.filterModules;
+    // the one-liners below are kept for hosts that read them and as the contract for custom filters.
     ShaderLayer.filters = {};
     ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${ShaderLayer.toShaderFloatString(x, 1)})`];
     ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${ShaderLayer.toShaderFloatString(x, 1)}))`];
@@ -7951,6 +8393,20 @@ ${code}
     ShaderLayer.filterNames["use_gamma"] = "Gamma";
     ShaderLayer.filterNames["use_exposure"] = "Exposure";
     ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
+
+    /**
+     * Legacy filters that run as pre-pipeline ShaderModule nodes instead of their
+     * ShaderLayer.filters one-liner. The use_* param stays a read alias: its value seeds
+     * the node's control, and the node runs before params.pipeline.pre. The node is
+     * flattened like any pipeline node (e.g. `pre_legacy_gamma_gamma`) and is subject to
+     * setPipelineEnabled().
+     *
+     * @type {Object<string, {id: string, type: string, param: string, fallback: number}>}
+     */
+    ShaderLayer.filterModules = {};
+    ShaderLayer.filterModules["use_gamma"] = { id: "legacy_gamma", type: "gamma", param: "gamma", fallback: 1 };
+    ShaderLayer.filterModules["use_exposure"] = { id: "legacy_exposure", type: "exposure", param: "exposure", fallback: 1 };
+    ShaderLayer.filterModules["use_logscale"] = { id: "legacy_logscale", type: "logscale", param: "scale", fallback: 1 };
 
 
     $.FlexRenderer.ShaderLayer = ShaderLayer;
@@ -8312,6 +8768,47 @@ ${code}
              * @type {Object<string, string>}
              */
             this.inputRefs = this.config.inputs || {};
+
+            /**
+             * Prefix of the flat control names this node exposes on its owner. Graph nodes
+             * use "m"; ShaderLayerPipeline nodes use their stage ("pre" / "post").
+             *
+             * @private
+             * @type {string}
+             */
+            this._controlPrefix = options.controlPrefix || "m";
+        }
+
+        /**
+         * Whether a ShaderModule class can be used as a ShaderLayer pipeline node: a pure
+         * `vec4 color -> vec4 color` transform. Its static inputs() must declare `color` as a
+         * vec4 and require nothing else, and its static outputs() must offer a vec4 `color`.
+         *
+         * @param {typeof $.FlexRenderer.ShaderModule} Module - Module class to inspect.
+         * @returns {boolean} True when the module can be chained as a pipeline node.
+         */
+        static isPipelineCapable(Module) {
+            if (!Module || typeof Module.inputs !== "function" || typeof Module.outputs !== "function") {
+                return false;
+            }
+            const hasVec4 = (port) => {
+                if (!port) {
+                    return false;
+                }
+                const type = port.type;
+                return Array.isArray(type) ? type.length === 1 && type[0] === "vec4" : type === "vec4";
+            };
+            let inputs, outputs;
+            try {
+                inputs = Module.inputs() || {};
+                outputs = Module.outputs() || {};
+            } catch (e) {
+                return false;
+            }
+            if (!hasVec4(inputs.color) || !hasVec4(outputs.color)) {
+                return false;
+            }
+            return Object.keys(inputs).every(name => name === "color" || !inputs[name] || !inputs[name].required);
         }
 
         /**
@@ -8514,7 +9011,7 @@ ${code}
          * @returns {string} GLSL-safe flat control name owned by the parent ShaderLayer.
          */
         getControlName(localName) {
-            return $.FlexRenderer.sanitizeKey(`m_${this.id}_${localName}`);
+            return $.FlexRenderer.sanitizeKey(`${this._controlPrefix}_${this.id}_${localName}`);
         }
 
         /**
@@ -8545,6 +9042,34 @@ ${code}
          */
         control(localName) {
             return this.owner[this.getControlName(localName)];
+        }
+
+        /**
+         * Return a GLSL float expression carrying the *raw* value of a module-local float
+         * control, in the units of its configured `min`..`max` domain.
+         *
+         * The `range`, `number` and `range_input` controls upload a value normalized to
+         * `(v - min) / (max - min)`, so `control(name).sample()` alone yields 0..1, not the
+         * value the user picked. This de-normalizes it with the (compile-time constant)
+         * domain. Controls without a numeric domain return their plain sample().
+         *
+         * @param {string} localName - Module-local control name.
+         * @returns {string} GLSL float expression.
+         */
+        sampleValue(localName) {
+            const control = this.control(localName);
+            if (!control) {
+                throw new Error(`ShaderModule '${this.id}': control '${localName}' is not available.`);
+            }
+            const uniform = control.sample();
+            const params = control.params || {};
+            const min = Number(params.min);
+            const max = Number(params.max);
+            if (control.type !== "float" || !Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+                return uniform;
+            }
+            const f = (v) => $.FlexRenderer.ShaderLayer.toShaderFloatString(v, 0, 6);
+            return `(${f(min)} + ${f(max - min)} * ${uniform})`;
         }
 
         /**
@@ -8661,7 +9186,8 @@ ${code}
          */
         output(name, type) {
             this.graph.validateType(type, `node '${this.node.id}' output '${name}'`);
-            return $.FlexRenderer.sanitizeKey(`${this.graph.owner.uid}_${this.node.id}_output_${name}`);
+            const prefix = this.graph.outputPrefix || this.graph.owner.uid;
+            return $.FlexRenderer.sanitizeKey(`${prefix}_${this.node.id}_output_${name}`);
         }
 
         /**
@@ -10964,6 +11490,426 @@ ${compiled.execution}
 
     $.FlexRenderer.ShaderModuleRegistry = ShaderModuleRegistry;
 
+    /**
+     * Compile context class passed to ShaderModule#compile. Exposed so that other module
+     * hosts (ShaderLayerPipeline) compile modules exactly the way ShaderModuleGraph does.
+     *
+     * @private
+     */
+    $.FlexRenderer.ShaderModuleNodeCompileContext = ShaderModuleNodeCompileContext;
+
+})(OpenSeadragon);
+
+(function($) {
+
+    /**
+     * One node of a ShaderLayer pipeline stage.
+     *
+     * @typedef {object} ShaderLayerPipelineNodeConfig
+     * @property {string} id - GLSL-safe node id, unique within its stage.
+     * @property {string} type - Registered ShaderModule type; must be pipeline capable
+     *   (see ShaderModule.isPipelineCapable: `vec4 color -> vec4 color`).
+     * @property {object} [params] - Initial values of the module's controls, keyed by local name.
+     */
+
+    /**
+     * `params.pipeline` of any ShaderLayer.
+     *
+     * @typedef {object} ShaderLayerPipelineConfig
+     * @property {boolean} [enabled=true] - Seeds the runtime on/off uniform (setPipelineEnabled).
+     * @property {ShaderLayerPipelineNodeConfig[]} [pre] - Applied, in order, to every non-raw
+     *   sampleChannel(...) result of the layer.
+     * @property {ShaderLayerPipelineNodeConfig[]} [post] - Applied, in order, to the layer's
+     *   computed color before opacity, blending and clipping.
+     */
+
+    const STAGES = ["pre", "post"];
+    const ENABLED_CONTROL = "pipeline_enabled";
+
+    /**
+     * Pre/post chain of vec4 -> vec4 ShaderModules attached to one ShaderLayer.
+     *
+     * The pipeline is the ShaderModule system without the graph: each stage is a linear
+     * chain whose nodes take and return `color`. Every node compiles into its own GLSL
+     * function (so module locals never collide), and every stage into one chain function,
+     *   vec4 <uid>_pipeline_pre(vec4)   (+ float/vec2/vec3 overloads for sampleChannel)
+     *   vec4 <uid>_pipeline_post(vec4)
+     * guarded by two bool uniforms so the whole pipeline can be switched off without a relink:
+     * the persisted `pipeline_enabled` control and the transient `<uid>_pipeline_bypass`.
+     *
+     * Module controls are flattened onto the owning ShaderLayer as `pre_<node>_<control>` /
+     * `post_<node>_<control>`; the owner builds and uploads them like its own controls.
+     * Changing a value is a uniform update, adding or removing a node is a rebuild.
+     *
+     * Invalid nodes (bad id, duplicate id, unknown or non-vec4 module type) are reported
+     * through the owner and skipped: a broken adjustment must never hide the layer.
+     *
+     * @memberof OpenSeadragon.FlexRenderer
+     */
+    class ShaderLayerPipeline {
+        /**
+         * @param {ShaderLayer} owner - Owning ShaderLayer; supplies uid, controls and reporting.
+         * @param {ShaderLayerPipelineConfig|undefined} config - `params.pipeline`.
+         * @param {ShaderLayerPipelineNodeConfig[]} [legacyPre=[]] - Nodes migrated from the legacy
+         *   `use_gamma` / `use_exposure` / `use_logscale` filters, run before `config.pre`.
+         */
+        constructor(owner, config, legacyPre = []) {
+            this.owner = owner;
+            this.config = config && typeof config === "object" && !Array.isArray(config) ? config : {};
+            this.enabledDefault = this.config.enabled !== false;
+
+            /** @type {{pre: Array<{id:string, type:string, module:$.FlexRenderer.ShaderModule, legacy:boolean}>, post: Array}} */
+            this.stages = { pre: [], post: [] };
+            this.controlDefinitions = {};
+            this.controlMap = {};
+
+            this._addNodes("pre", legacyPre || [], true);
+            this._addNodes("pre", this.config.pre, false);
+            this._addNodes("post", this.config.post, false);
+
+            if (this.hasPre() || this.hasPost()) {
+                this.controlDefinitions[ENABLED_CONTROL] = {
+                    default: {
+                        type: "bool",
+                        default: this.enabledDefault,
+                        interactive: false,
+                        title: "Adjustments"
+                    },
+                    accepts: (type) => type === "bool"
+                };
+            }
+
+            this._compiled = null;
+        }
+
+        /** @returns {string[]} */
+        static get STAGES() {
+            return STAGES.slice();
+        }
+
+        /** Flat name of the on/off bool control. @returns {string} */
+        static get ENABLED_CONTROL() {
+            return ENABLED_CONTROL;
+        }
+
+        /**
+         * Flat control name of a node-local control.
+         * @param {"pre"|"post"} stage
+         * @param {string} nodeId
+         * @param {string} localName
+         * @returns {string}
+         */
+        static controlName(stage, nodeId, localName) {
+            return $.FlexRenderer.sanitizeKey(`${stage}_${nodeId}_${localName}`);
+        }
+
+        _report(code, message, extra = {}) {
+            if (this.owner && typeof this.owner._report === "function") {
+                this.owner._report("warn", code, message, extra);
+            } else {
+                $.console.warn(message, extra);
+            }
+        }
+
+        _addNodes(stage, list, legacy) {
+            if (list === undefined || list === null) {
+                return;
+            }
+            if (!Array.isArray(list)) {
+                this._report("pipeline-node-invalid",
+                    `ShaderLayer '${this.owner.id}': params.pipeline.${stage} must be an array; ignored.`,
+                    { stage });
+                return;
+            }
+
+            const seen = new Set(this.stages[stage].map(n => n.id));
+            list.forEach((nodeConfig, index) => {
+                const where = `params.pipeline.${stage}[${index}]`;
+                const skip = (why) => this._report("pipeline-node-invalid",
+                    `ShaderLayer '${this.owner.id}': ${where} ${why}; the node is skipped.`,
+                    { stage, index, node: nodeConfig });
+
+                if (!nodeConfig || typeof nodeConfig !== "object" || Array.isArray(nodeConfig)) {
+                    skip("must be an object {id, type, params}");
+                    return;
+                }
+                const id = nodeConfig.id;
+                let sanitized = null;
+                try {
+                    sanitized = typeof id === "string" ? $.FlexRenderer.sanitizeKey(id) : null;
+                } catch (e) {
+                    sanitized = null;
+                }
+                if (typeof id !== "string" || !id || sanitized !== id) {
+                    skip(`has id '${id}', which is not GLSL-safe (letters, digits, single inner '_')`);
+                    return;
+                }
+                if (seen.has(id)) {
+                    skip(`repeats id '${id}' within the stage`);
+                    return;
+                }
+                const ModuleClass = $.FlexRenderer.ShaderModuleRegistry.get(nodeConfig.type);
+                if (!ModuleClass) {
+                    skip(`has unknown module type '${nodeConfig.type}'`);
+                    return;
+                }
+                if (!$.FlexRenderer.ShaderModule.isPipelineCapable(ModuleClass)) {
+                    skip(`uses module '${nodeConfig.type}', which is not a vec4 color -> vec4 color transform`);
+                    return;
+                }
+                const params = nodeConfig.params && typeof nodeConfig.params === "object" ? nodeConfig.params : {};
+
+                let module;
+                try {
+                    module = new ModuleClass(id, {
+                        uid: $.FlexRenderer.sanitizeKey(`${this.owner.uid}_${stage}_${id}`),
+                        owner: this.owner,
+                        config: { type: nodeConfig.type, params },
+                        controlPrefix: stage
+                    });
+                } catch (e) {
+                    skip(`failed to construct (${e && e.message ? e.message : e})`);
+                    return;
+                }
+
+                const defs = module.getControlDefinitions() || {};
+                const flatNames = {};
+                for (const localName of Object.keys(defs)) {
+                    if (localName.startsWith("use_") || defs[localName] === false) {
+                        continue;
+                    }
+                    const flatName = module.getControlName(localName);
+                    if (this.controlDefinitions[flatName] || flatName === ENABLED_CONTROL) {
+                        skip(`control '${flatName}' collides with another pipeline control`);
+                        return;
+                    }
+                    flatNames[flatName] = localName;
+                }
+                for (const [flatName, localName] of Object.entries(flatNames)) {
+                    this.controlDefinitions[flatName] = $.extend(true, {}, defs[localName]);
+                    this.controlMap[flatName] = { stage, nodeId: id, localName, module };
+                }
+
+                seen.add(id);
+                this.stages[stage].push({ id, type: nodeConfig.type, module, legacy: !!legacy });
+            });
+        }
+
+        /** @returns {boolean} whether the pre stage has at least one node */
+        hasPre() {
+            return this.stages.pre.length > 0;
+        }
+
+        /** @returns {boolean} whether the post stage has at least one node */
+        hasPost() {
+            return this.stages.post.length > 0;
+        }
+
+        /** @returns {Object<string, object>} flattened control definitions */
+        getControlDefinitions() {
+            return $.extend(true, {}, this.controlDefinitions);
+        }
+
+        /**
+         * Caller-provided value for a flattened control (the node's `params[local]`).
+         * @param {string} flatName
+         * @returns {*}
+         */
+        getControlParams(flatName) {
+            const ref = this.controlMap[flatName];
+            if (!ref) {
+                return undefined;
+            }
+            return ref.module.getControlParam(ref.localName);
+        }
+
+        /**
+         * Whether a flat control name belongs to this pipeline.
+         * @param {string} name
+         * @returns {boolean}
+         */
+        ownsControl(name) {
+            return Object.prototype.hasOwnProperty.call(this.controlDefinitions, name);
+        }
+
+        /**
+         * Whether a cache key (control name + optional param suffix) belongs to this pipeline.
+         * @param {string} key
+         * @returns {boolean}
+         */
+        ownsCacheKey(key) {
+            if (typeof key !== "string") {
+                return false;
+            }
+            if (key === ENABLED_CONTROL || key.startsWith(ENABLED_CONTROL)) {
+                return true;
+            }
+            if (!key.startsWith("pre_") && !key.startsWith("post_")) {
+                return false;
+            }
+            for (const name in this.controlDefinitions) {
+                if (key === name || key.startsWith(name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Structural signature (stage, node ids and types) used to detect rebuild-worthy changes.
+         * @param {ShaderLayerPipelineConfig|undefined} config
+         * @returns {string}
+         */
+        static structureKey(config) {
+            if (!config || typeof config !== "object") {
+                return "";
+            }
+            const stage = (list) => Array.isArray(list) ?
+                list.map(n => (n && typeof n === "object") ? `${n.id}:${n.type}` : "?").join(",") : "";
+            return `pre[${stage(config.pre)}]post[${stage(config.post)}]`;
+        }
+
+        /** @returns {string} GLSL name of the pre chain function (overloaded for float..vec4) */
+        get preFunctionName() {
+            return `${this.owner.uid}_pipeline_pre`;
+        }
+
+        /**
+         * @returns {string} GLSL name of the chain of migrated legacy filter nodes only (overloaded
+         *   float..vec4); what ShaderLayer#filter() applies to derived values of raw samplers
+         */
+        get legacyFunctionName() {
+            return `${this.owner.uid}_pipeline_legacy`;
+        }
+
+        /** @returns {string} GLSL name of the post chain function */
+        get postFunctionName() {
+            return `${this.owner.uid}_pipeline_post`;
+        }
+
+        /**
+         * @returns {string} GLSL name of the transient bypass uniform (ShaderLayer#setPipelineBypass).
+         *   Uploaded by the owner directly, never through a UIControl: no cache, no event.
+         */
+        get bypassUniformName() {
+            return `${this.owner.uid}_pipeline_bypass`;
+        }
+
+        _enabledExpr() {
+            const control = this.owner[ENABLED_CONTROL];
+            return control && typeof control.sample === "function" ? control.sample() : "true";
+        }
+
+        _compileNode(stage, node) {
+            const owner = this.owner;
+            const graphStub = {
+                owner,
+                outputPrefix: $.FlexRenderer.sanitizeKey(`${owner.uid}_${stage}`),
+                errorPrefix: () => `ShaderLayer '${owner.id}' pipeline ${stage}`,
+                validateType: (type, label) => {
+                    if (type !== "vec4" && !["void", "bool", "int", "float", "vec2", "vec3"].includes(type)) {
+                        throw new Error(`ShaderLayer '${owner.id}' pipeline ${stage}: ${label} has unsupported value type '${type}'.`);
+                    }
+                }
+            };
+            const context = new $.FlexRenderer.ShaderModuleNodeCompileContext(graphStub, node.module, {
+                color: { type: "vec4", expr: "color_in" }
+            });
+            const compiled = node.module.compile(context) || {};
+            const output = compiled.outputs && compiled.outputs.color;
+            if (!output || !output.expr || output.type !== "vec4") {
+                throw new Error(`module '${node.type}' did not compile a vec4 'color' output`);
+            }
+            const fnName = $.FlexRenderer.sanitizeKey(`fr_pl_${owner.uid}_${stage}_${node.id}`);
+            const helper = node.module.getFragmentShaderDefinition();
+            const fn = `vec4 ${fnName}(vec4 color_in) {
+${(compiled.statements || "").trim()}
+    return ${output.expr};
+}`;
+            return { fnName, definition: [helper ? helper.trim() : "", fn].filter(Boolean).join("\n") };
+        }
+
+        _compileStage(stage) {
+            const calls = [];
+            const legacyCalls = [];
+            const definitions = [];
+            for (const node of this.stages[stage]) {
+                try {
+                    const result = this._compileNode(stage, node);
+                    definitions.push(result.definition);
+                    calls.push(`        c = ${result.fnName}(c);`);
+                    if (node.legacy) {
+                        legacyCalls.push(`        c = ${result.fnName}(c);`);
+                    }
+                } catch (e) {
+                    this._report("pipeline-node-compile-failed",
+                        `ShaderLayer '${this.owner.id}': pipeline ${stage} node '${node.id}' (${node.type}) ` +
+                        `failed to compile and is skipped.`, { stage, node: node.id, error: e });
+                }
+            }
+            return { calls, legacyCalls, definitions };
+        }
+
+        _emitChain(fn, calls, enabled, overloads) {
+            let code = `vec4 ${fn}(vec4 c) {
+    if (${enabled} && !${this.bypassUniformName}) {
+${calls.join("\n")}
+    }
+    return c;
+}`;
+            if (overloads) {
+                code += `
+float ${fn}(float v) { return ${fn}(vec4(v, v, v, 1.0)).r; }
+vec2 ${fn}(vec2 v) { return ${fn}(vec4(v, 0.0, 1.0)).rg; }
+vec3 ${fn}(vec3 v) { return ${fn}(vec4(v, 1.0)).rgb; }`;
+            }
+            return code;
+        }
+
+        /** @returns {boolean} whether the pre stage carries nodes migrated from legacy filters */
+        hasLegacyPre() {
+            return this.stages.pre.some(node => node.legacy);
+        }
+
+        /**
+         * GLSL definitions of the pipeline: per-node functions and the stage chain functions.
+         * Control uniforms are NOT included; the owner emits them (getPipelineDefinition()).
+         * Empty stages emit nothing.
+         *
+         * @returns {string}
+         */
+        getDefinition() {
+            if (this._compiled !== null) {
+                return this._compiled;
+            }
+            const enabled = this._enabledExpr();
+            const out = [];
+            if (this.hasPre() || this.hasPost()) {
+                out.push(`uniform bool ${this.bypassUniformName};`);
+            }
+
+            if (this.hasPre()) {
+                const pre = this._compileStage("pre");
+                out.push(...pre.definitions);
+                out.push(this._emitChain(this.preFunctionName, pre.calls, enabled, true));
+                if (this.hasLegacyPre()) {
+                    out.push(this._emitChain(this.legacyFunctionName, pre.legacyCalls, enabled, true));
+                }
+            }
+
+            if (this.hasPost()) {
+                const post = this._compileStage("post");
+                out.push(...post.definitions);
+                out.push(this._emitChain(this.postFunctionName, post.calls, enabled, false));
+            }
+
+            this._compiled = out.join("\n\n");
+            return this._compiled;
+        }
+    }
+
+    $.FlexRenderer.ShaderLayerPipeline = ShaderLayerPipeline;
+
 })(OpenSeadragon);
 
 (function($) {
@@ -12121,7 +13067,7 @@ float ${this.uid}_ring(
 (function ($) {
 
     $.FlexRenderer.ShaderModuleRegistry.register(
-        class HeatmapModule extends $.FlexRenderer.ShaderModule {
+        class GammaModule extends $.FlexRenderer.ShaderModule {
             static type() {
                 return "gamma";
             }
@@ -12131,7 +13077,7 @@ float ${this.uid}_ring(
             }
 
             static description() {
-                return "Applies a gamma filter to a color.";
+                return "Applies a gamma curve, rgb^(1/gamma), to a color. Alpha is kept. Identity at gamma 1.";
             }
 
             static inputs() {
@@ -12146,9 +13092,13 @@ float ${this.uid}_ring(
 
             static outputs() {
                 return {
-                    adjusted: {
+                    color: {
                         type: ["vec4"],
                         description: "RGBA color produced."
+                    },
+                    adjusted: {
+                        type: ["vec4"],
+                        description: "Legacy alias of 'color'."
                     },
                 };
             }
@@ -12165,9 +13115,13 @@ float ${this.uid}_ring(
 
             getOutputDefinitions() {
                 return {
-                    adjusted: {
+                    color: {
                         type: "vec4",
                         description: "RGBA color produced."
+                    },
+                    adjusted: {
+                        type: "vec4",
+                        description: "Legacy alias of 'color'."
                     },
                 };
             }
@@ -12176,11 +13130,11 @@ float ${this.uid}_ring(
                 return {
                     gamma: {
                         default: {
-                            type: "range_input",
+                            type: "range",
                             default: 1,
-                            min: 0,
+                            min: 0.1,
                             max: 10,
-                            step: 0.1,
+                            step: 0.05,
                             title: "Gamma",
                         },
                         accepts: (type) => type === "float"
@@ -12190,16 +13144,20 @@ float ${this.uid}_ring(
 
             compile(context) {
                 const color = context.input("color");
-                const output = context.output("inverted", "vec4");
-
-                const gamma = this.control("gamma").sample();
+                const output = context.output("color", "vec4");
+                // De-normalized: the range control uploads (v-min)/(max-min). The domain floor
+                // (0.1) keeps the division away from zero.
+                const gamma = this.sampleValue("gamma");
 
                 return {
                     statements: `
-    vec4 color = ${color};
-    vec4 ${output} = vec4(pow(color.rgb, vec3(1.0 / ${gamma})), color.a);
+    vec4 ${output} = vec4(pow(max((${color}).rgb, vec3(0.0)), vec3(1.0 / max(${gamma}, 1e-4))), (${color}).a);
 `,
                     outputs: {
+                        color: {
+                            type: "vec4",
+                            expr: output,
+                        },
                         adjusted: {
                             type: "vec4",
                             expr: output,
@@ -12337,7 +13295,7 @@ if (shows) {
 (function ($) {
 
     $.FlexRenderer.ShaderModuleRegistry.register(
-        class HeatmapModule extends $.FlexRenderer.ShaderModule {
+        class InvertModule extends $.FlexRenderer.ShaderModule {
             static type() {
                 return "invert";
             }
@@ -12347,7 +13305,8 @@ if (shows) {
             }
 
             static description() {
-                return "Inverts RGB and keeps alpha.";
+                return "Inverts RGB and keeps alpha: mix(rgb, 1 - rgb, amount). The default amount 1 is a full " +
+                    "inversion; amount 0 is the identity.";
             }
 
             static inputs() {
@@ -12362,9 +13321,13 @@ if (shows) {
 
             static outputs() {
                 return {
-                    inverted: {
+                    color: {
                         type: ["vec4"],
                         description: "RGBA color produced by inverting the input."
+                    },
+                    inverted: {
+                        type: ["vec4"],
+                        description: "Legacy alias of 'color'."
                     },
                 };
             }
@@ -12381,23 +13344,47 @@ if (shows) {
 
             getOutputDefinitions() {
                 return {
-                    inverted: {
+                    color: {
                         type: "vec4",
                         description: "RGBA color produced by inverting the input."
+                    },
+                    inverted: {
+                        type: "vec4",
+                        description: "Legacy alias of 'color'."
+                    },
+                };
+            }
+
+            static get defaultControls() {
+                return {
+                    amount: {
+                        default: {
+                            type: "range",
+                            default: 1,
+                            min: 0,
+                            max: 1,
+                            step: 0.01,
+                            title: "Invert",
+                        },
+                        accepts: (type) => type === "float"
                     },
                 };
             }
 
             compile(context) {
                 const color = context.input("color");
-                const output = context.output("inverted", "vec4");
+                const output = context.output("color", "vec4");
+                const amount = this.sampleValue("amount");
 
                 return {
                     statements: `
-    vec4 color = ${color};
-    vec4 ${output} = vec4(1.0 - color.rbg, color.a);
+    vec4 ${output} = vec4(mix((${color}).rgb, vec3(1.0) - (${color}).rgb, ${amount}), (${color}).a);
 `,
                     outputs: {
+                        color: {
+                            type: "vec4",
+                            expr: output,
+                        },
                         inverted: {
                             type: "vec4",
                             expr: output,
@@ -12407,6 +13394,235 @@ if (shows) {
             }
         }
     );
+
+})(OpenSeadragon);
+
+(function ($) {
+
+    /**
+     * Color adjustment modules: pure `vec4 color -> vec4 color` transforms usable both as
+     * modular-graph nodes and as ShaderLayer pipeline nodes (params.pipeline.pre / post).
+     *
+     * The color modules (levels, brightness-contrast, saturation, hue-rotate,
+     * color-temperature) are identities at their default control values, so a pipeline node
+     * may stay in the chain without any visual effect. exposure and logscale are not: they are
+     * the migration targets of the legacy use_exposure / use_logscale filters and have no
+     * identity value. Alpha is always passed through.
+     * Float controls are read with ShaderModule#sampleValue(), which undoes the
+     * (v-min)/(max-min) normalization the range control applies to its uniform.
+     */
+
+    const COLOR_INPUT = {
+        color: {
+            type: "vec4",
+            required: true,
+            description: "RGBA color to adjust."
+        }
+    };
+
+    const COLOR_OUTPUT = {
+        color: {
+            type: "vec4",
+            description: "Adjusted RGBA color; alpha is kept."
+        }
+    };
+
+    const rangeControl = (title, defaultValue, min, max, step) => ({
+        default: {
+            type: "range",
+            default: defaultValue,
+            min,
+            max,
+            step,
+            title
+        },
+        accepts: (type) => type === "float"
+    });
+
+    /**
+     * Register one vec4 -> vec4 color module.
+     *
+     * @param {object} spec
+     * @param {string} spec.type
+     * @param {string} spec.name
+     * @param {string} spec.description
+     * @param {object} spec.controls defaultControls map
+     * @param {boolean} [spec.identity=true] whether the module is an identity at its defaults
+     * @param {function(string, Object<string,string>, $.FlexRenderer.ShaderModule): string} spec.rgb
+     *   returns a GLSL vec3 expression computing the new rgb from the input expression and
+     *   de-normalized control expressions
+     */
+    function registerColorModule(spec) {
+        const controls = spec.controls;
+
+        $.FlexRenderer.ShaderModuleRegistry.register(class extends $.FlexRenderer.ShaderModule {
+            static type() {
+                return spec.type;
+            }
+
+            static name() {
+                return spec.name;
+            }
+
+            static description() {
+                return spec.description;
+            }
+
+            static docs() {
+                return {
+                    summary: spec.description,
+                    kind: "shader-module",
+                    notes: [
+                        spec.identity === false ?
+                            "Not an identity at any value: migration target of a legacy use_* filter." :
+                            "Identity at default control values.",
+                        "Usable as a ShaderLayer pipeline node (params.pipeline.pre / post)."
+                    ]
+                };
+            }
+
+            static inputs() {
+                return $.extend(true, {}, COLOR_INPUT);
+            }
+
+            static outputs() {
+                return {
+                    color: {
+                        type: ["vec4"],
+                        description: COLOR_OUTPUT.color.description
+                    }
+                };
+            }
+
+            getInputDefinitions() {
+                return $.extend(true, {}, COLOR_INPUT);
+            }
+
+            getOutputDefinitions() {
+                return $.extend(true, {}, COLOR_OUTPUT);
+            }
+
+            static get defaultControls() {
+                return $.extend(true, {}, controls);
+            }
+
+            compile(context) {
+                const color = context.input("color");
+                const output = context.output("color", "vec4");
+                const values = {};
+                for (const name of Object.keys(controls)) {
+                    values[name] = this.sampleValue(name);
+                }
+                const rgb = spec.rgb(`(${color}).rgb`, values, this);
+
+                return {
+                    statements: `
+    vec4 ${output} = vec4(${rgb}, (${color}).a);
+`,
+                    outputs: {
+                        color: {
+                            type: "vec4",
+                            expr: output
+                        }
+                    }
+                };
+            }
+        });
+    }
+
+    // Rec. 709 luma
+    const LUMA = "vec3(0.2126, 0.7152, 0.0722)";
+
+    registerColorModule({
+        type: "levels",
+        name: "Levels",
+        description: "Input levels: maps [black, white] to [0, 1], then applies gamma (rgb^(1/gamma)).",
+        controls: {
+            black: rangeControl("Black point", 0, 0, 1, 0.01),
+            white: rangeControl("White point", 1, 0, 1, 0.01),
+            gamma: rangeControl("Gamma", 1, 0.1, 5, 0.05)
+        },
+        rgb: (c, v) =>
+            `pow(max((${c} - vec3(${v.black})) / max(${v.white} - ${v.black}, 1e-5), vec3(0.0)), ` +
+            `vec3(1.0 / max(${v.gamma}, 1e-4)))`
+    });
+
+    registerColorModule({
+        type: "brightness-contrast",
+        name: "Brightness / Contrast",
+        description: "Contrast scales around mid-grey by (1 + contrast), then brightness is added.",
+        controls: {
+            brightness: rangeControl("Brightness", 0, -1, 1, 0.01),
+            contrast: rangeControl("Contrast", 0, -1, 1, 0.01)
+        },
+        rgb: (c, v) => `((${c} - vec3(0.5)) * (1.0 + ${v.contrast}) + vec3(0.5) + vec3(${v.brightness}))`
+    });
+
+    registerColorModule({
+        type: "saturation",
+        name: "Saturation",
+        description: "Mixes between Rec. 709 luma (0) and the original color (1); values above 1 oversaturate.",
+        controls: {
+            saturation: rangeControl("Saturation", 1, 0, 3, 0.01)
+        },
+        rgb: (c, v) => `mix(vec3(dot(${c}, ${LUMA})), ${c}, ${v.saturation})`
+    });
+
+    registerColorModule({
+        type: "hue-rotate",
+        name: "Hue rotate",
+        description: "Rotates hue around the grey axis by the given angle in degrees.",
+        controls: {
+            hue: rangeControl("Hue", 0, -180, 180, 1)
+        },
+        // Rodrigues rotation around k = normalize(1,1,1)
+        rgb: (c, v) => {
+            const angle = `radians(${v.hue})`;
+            return `(${c} * cos(${angle}) + cross(vec3(0.57735027), ${c}) * sin(${angle}) + ` +
+                `vec3(0.57735027) * dot(vec3(0.57735027), ${c}) * (1.0 - cos(${angle})))`;
+        }
+    });
+
+    registerColorModule({
+        type: "color-temperature",
+        name: "White balance",
+        description: "Temperature warms (+, more red, less blue) or cools (-); tint shifts towards magenta (+) or green (-).",
+        controls: {
+            temperature: rangeControl("Temperature", 0, -1, 1, 0.01),
+            tint: rangeControl("Tint", 0, -1, 1, 0.01)
+        },
+        rgb: (c, v) =>
+            `(${c} * vec3(1.0 + 0.3 * ${v.temperature}, 1.0 - 0.3 * ${v.tint}, 1.0 - 0.3 * ${v.temperature}))`
+    });
+
+    // The next two back the legacy use_exposure / use_logscale filters, which ShaderLayer
+    // migrates to pre-pipeline nodes. No value makes them an identity, matching the filters
+    // they replace (which only ever ran with an explicit, authored value).
+
+    registerColorModule({
+        type: "exposure",
+        name: "Exposure",
+        description: "Exposure curve 1 - exp(-rgb * exposure) (legacy use_exposure filter).",
+        identity: false,
+        controls: {
+            exposure: rangeControl("Exposure", 1, 0, 100, 0.1)
+        },
+        rgb: (c, v) => `(vec3(1.0) - exp(-(${c}) * ${v.exposure}))`
+    });
+
+    registerColorModule({
+        type: "logscale",
+        name: "Logarithmic scale",
+        description: "Logarithmic rescale (log(s + rgb) - log(s)) / (log(s + 1) - log(s)) (legacy use_logscale filter).",
+        identity: false,
+        controls: {
+            scale: rangeControl("Log scale", 1, 0.001, 100, 0.001)
+        },
+        rgb: (c, v) => {
+            const s = `max(${v.scale}, 1e-6)`;
+            return `((log(vec3(${s}) + ${c}) - vec3(log(${s}))) / (log(${s} + 1.0) - log(${s})))`;
+        }
+    });
 
 })(OpenSeadragon);
 
@@ -25961,7 +27177,25 @@ vec4 ${this.getShaderLayerComputeName(shaderLayer)}() {
         }
 
         try {
-            const definition = `
+            const computeName = this.getShaderLayerComputeName(shaderLayer);
+            // Pipeline first: its pre functions must exist before any layer helper that samples.
+            const pipelineDefinition = typeof shaderLayer.getPipelineDefinition === "function" ?
+                shaderLayer.getPipelineDefinition() : "";
+            const hasPost = typeof shaderLayer.hasPostPipeline === "function" && shaderLayer.hasPostPipeline();
+            // With a post stage the layer body moves to <compute>_body and the compute function
+            // applies the post chain, so every consumer (blend, clip, group stacks) sees it,
+            // always before opacity, blending and clipping.
+            const bodyName = hasPost ? `${computeName}_body` : computeName;
+            const postWrapper = hasPost ? `
+// ${shaderLayer.uid} - Post pipeline
+vec4 ${computeName}() {
+    return ${shaderLayer.getPostPipelineFunctionName()}(${bodyName}());
+}
+` : "";
+            const definition = `${pipelineDefinition ? `
+// ${shaderLayer.uid} - Pipeline
+${pipelineDefinition}
+` : ""}
 // ${shaderLayer.uid} - Definition
 ${shaderLayer.getFragmentShaderDefinition()}
 
@@ -25969,10 +27203,10 @@ ${shaderLayer.getFragmentShaderDefinition()}
 ${shaderLayer.getCustomBlendFunction(shaderLayer.uid + "_blend_func")}
 
 // ${shaderLayer.uid} - Shader code execution
-vec4 ${this.getShaderLayerComputeName(shaderLayer)}() {
+vec4 ${bodyName}() {
 ${shaderLayer.getFragmentShaderExecution()}
 }
-`;
+${postWrapper}`;
             // One unbalanced brace in one layer would otherwise fail the whole program, hiding
             // every other layer; isolate it like any other assembly error.
             const imbalance = $.FlexRenderer.findGlslImbalance(definition);
@@ -30847,10 +32081,38 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             //   - config.params.use_<filter>         (UTILITIES.setFilterOfLayer)
             // For mode/blend we re-run resetMode on the nav shader; for filters, resetFilters.
             // Both are idempotent and read directly from the params object.
+            let navProgramDirty = false;
             const syncConfig = (mainShader, navShader) => {
                 const mainConfig = typeof mainShader.getConfig === "function" ? mainShader.getConfig() : null;
                 const navConfig = typeof navShader.getConfig === "function" ? navShader.getConfig() : null;
-                if (!mainConfig || !navConfig || mainConfig === navConfig) {
+                if (!mainConfig || !navConfig) {
+                    return;
+                }
+
+                // Pipeline node structure (ids, types) changes the GLSL: mirror params.pipeline and
+                // rebuild the nav pipeline + program. Values and the on/off toggle are controls and
+                // ride syncControls below. Checked even for a shared config object, where only the
+                // nav layer's built pipeline can be stale.
+                if (typeof navShader.resetPipeline === "function" &&
+                        navShader.__pipelineStructureKey !== mainShader.__pipelineStructureKey) {
+                    if (mainConfig !== navConfig) {
+                        navConfig.params = navConfig.params || {};
+                        const mainPipeline = mainConfig.params && mainConfig.params.pipeline;
+                        if (mainPipeline === undefined) {
+                            delete navConfig.params.pipeline;
+                        } else {
+                            navConfig.params.pipeline = $.extend(true, {}, mainPipeline);
+                        }
+                    }
+                    try {
+                        navShader.resetPipeline(navConfig.params || {}, false);
+                        navProgramDirty = true;
+                    } catch (e) {
+                        $.console.warn("FlexDrawer: nav resetPipeline failed", mainShader.id, e);
+                    }
+                }
+
+                if (mainConfig === navConfig) {
                     return;
                 }
 
@@ -30892,6 +32154,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 if (filterChanged && typeof navShader.resetFilters === "function") {
                     try {
                         navShader.resetFilters(navParams, true, false);
+                        // legacy filters are pipeline nodes now: the nav GLSL changed
+                        navProgramDirty = true;
                     } catch (e) {
                         $.console.warn("FlexDrawer: nav resetFilters failed", mainShader.id, e);
                     }
@@ -30959,6 +32223,13 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     }
                     syncConfig(mainShader, navShader);
                     syncControls(mainShader, navShader);
+                    // transient before/after bypass: layer state, not a control or param, so
+                    // mirrored here without touching the (possibly shared) config or cache
+                    if (typeof navShader._applyPipelineBypass === "function" &&
+                            typeof mainShader.isPipelineBypassed === "function" &&
+                            navShader.isPipelineBypassed() !== mainShader.isPipelineBypassed()) {
+                        navShader._applyPipelineBypass(mainShader.isPipelineBypassed());
+                    }
                     if (mainShader.shaderLayers && navShader.shaderLayers) {
                         walk(mainShader.shaderLayers, navShader.shaderLayers);
                     }
@@ -30966,6 +32237,15 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             };
 
             walk(this.renderer.getAllShaders(), nav.drawer.renderer.getAllShaders());
+
+            if (navProgramDirty) {
+                const navRenderer = nav.drawer.renderer;
+                try {
+                    navRenderer.registerProgram(null, navRenderer.backend.secondPassProgramKey);
+                } catch (e) {
+                    $.console.warn("FlexDrawer: navigator program rebuild after pipeline sync failed", e);
+                }
+            }
         }
 
         _handleRefetchRequest(request = undefined) {
@@ -38863,6 +40143,8 @@ vec3 ${this.uid}_serial_color(int serialValue, vec3 evenColor, vec3 oddColor) {
                 this.resetChannel(resetOptions, false, false);
                 this.resetMode(this._params, false, false);
                 this.resetFilters(this._params, false, false);
+                // graph sampling bypasses sampleChannel(), so only the post stage affects output
+                this.resetPipeline(this._params, false);
                 this._buildControls();
             }
 
@@ -39927,8 +41209,38 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         return "time-series";
     }
 
+    // GLSL comes from the delegate layer; see ShaderLayer.delegatesSampling
+    static get delegatesSampling() {
+        return true;
+    }
+
     static name() {
         return "Time Series";
+    }
+
+    // the delegate samples, so its migrated legacy filter nodes run in this wrapper's pipeline
+    _collectLegacyPreNodes() {
+        return (this._renderer && this._renderer.__legacyFilterNodes) || [];
+    }
+
+    resetFilters(options = {}, force = true, evented = true) {
+        super.resetFilters(options, force, evented);
+        // the delegate params copy this wrapper's use_* (see _getDelegateShaderConfig), so a
+        // filter change on the wrapper (e.g. navigator sync) must reach the delegate too
+        const delegate = this._renderer;
+        if (!delegate || typeof delegate.resetFilters !== "function") {
+            return;
+        }
+        const source = options && Object.keys(options).length ? options : (this._params || {});
+        const delegateParams = delegate._params || (delegate._params = {});
+        for (const key in this.constructor.filters) {
+            if (source[key] === undefined) {
+                delete delegateParams[key];
+            } else {
+                delegateParams[key] = source[key];
+            }
+        }
+        delegate.resetFilters(delegateParams, force, false);
     }
 
     static description() {
@@ -40184,7 +41496,9 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
             refresh: this._refresh,
             refetch: this._refetch,
             // same namespace as this wrapper, so wrappers in different groups stay distinct
-            uidPrefix: this._uidPrefix
+            uidPrefix: this._uidPrefix,
+            // the wrapper owns params.pipeline; the delegate's sampling uses the wrapper's pre stage
+            pipelineHost: this
         });
         this._renderer.construct();
         this._renderer.removeControl("opacity");
@@ -40468,8 +41782,19 @@ ${this._renderer.htmlControls(...args)}`;
                 return "channel-series";
             }
 
+            // GLSL comes from the delegate layer; see ShaderLayer.delegatesSampling
+            static get delegatesSampling() {
+                return true;
+            }
+
             static name() {
                 return "Channel Series";
+            }
+
+            // the delegate samples, so its migrated legacy filter nodes run in this wrapper's
+            // pipeline; its use_* come from channelRendererConfig.params, not the wrapper's
+            _collectLegacyPreNodes() {
+                return (this._delegateShader && this._delegateShader.__legacyFilterNodes) || [];
             }
 
             static description() {
@@ -40694,7 +42019,9 @@ ${this._renderer.htmlControls(...args)}`;
                     refresh: this._refresh,
                     refetch: this._refetch,
                     // same namespace as this wrapper, so wrappers in different groups stay distinct
-                    uidPrefix: this._uidPrefix
+                    uidPrefix: this._uidPrefix,
+                    // the wrapper owns params.pipeline; the delegate's sampling uses the wrapper's pre stage
+                    pipelineHost: this
                 });
                 this._delegateShader.construct();
 
@@ -43372,6 +44699,8 @@ function resolveTileTemplate(template, dataUrl) {
             const uiControlEnvelopes = this._compileJsonSchemaUiControlEnvelopes();
             const shaderModules = this._compileShaderModuleJsonSchemas();
             const shaderModuleGraph = this._compileShaderModuleGraphJsonSchema(shaderModules);
+            const shaderLayerPipelineNodes = this._compileShaderLayerPipelineNodeJsonSchemas();
+            const shaderLayerPipeline = this._compileShaderLayerPipelineJsonSchema(shaderLayerPipelineNodes);
             const shaderLayerRefs = availableShaders.map(Shader => ({
                 $ref: `#/$defs/shaderLayers/${Shader.type()}`
             }));
@@ -43421,7 +44750,9 @@ function resolveTileTemplate(template, dataUrl) {
                     uiControlEnvelopes,
                     shaderLayers,
                     shaderModules,
-                    shaderModuleGraph
+                    shaderModuleGraph,
+                    shaderLayerPipelineNodes,
+                    shaderLayerPipeline
                 },
                 "x-schemaVersion": 3
             };
@@ -44284,6 +45615,74 @@ function resolveTileTemplate(template, dataUrl) {
             };
         },
 
+        /**
+         * Node schemas for `params.pipeline.pre/post`, one per pipeline-capable module
+         * (ShaderModule.isPipelineCapable: vec4 color -> vec4 color).
+         * @returns {Object<string, object>}
+         */
+        _compileShaderLayerPipelineNodeJsonSchemas() {
+            const Mediator = $.FlexRenderer.ShaderModuleRegistry;
+            const schemas = {};
+            if (!Mediator || typeof Mediator.availableShaderModules !== "function" ||
+                    !$.FlexRenderer.ShaderModule || typeof $.FlexRenderer.ShaderModule.isPipelineCapable !== "function") {
+                return schemas;
+            }
+
+            for (const Module of Mediator.availableShaderModules()) {
+                if (!$.FlexRenderer.ShaderModule.isPipelineCapable(Module)) {
+                    continue;
+                }
+                const type = Module.type();
+                schemas[type] = {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "type"],
+                    properties: {
+                        id: {
+                            type: "string",
+                            pattern: "^[0-9a-zA-Z]+(_[0-9a-zA-Z]+)*$",
+                            description: "GLSL-safe node id, unique within its stage. Controls are flattened as <stage>_<id>_<control>."
+                        },
+                        type: { const: type },
+                        params: {
+                            type: "object",
+                            description: "Initial values of the module controls, keyed by control name."
+                        }
+                    },
+                    title: typeof Module.name === "function" ? Module.name() : type,
+                    description: typeof Module.description === "function" ? Module.description() : "",
+                    "x-controls": this._compileShaderModuleControlDescriptors(Module)
+                };
+            }
+            return schemas;
+        },
+
+        _compileShaderLayerPipelineJsonSchema(nodeSchemas = {}) {
+            const types = Object.keys(nodeSchemas).sort();
+            const refs = types.map(type => ({ $ref: `#/$defs/shaderLayerPipelineNodes/${type}` }));
+            const stage = (description) => ({
+                type: "array",
+                items: refs.length ? { discriminator: { propertyName: "type" }, oneOf: refs } : { type: "object" },
+                description
+            });
+
+            return {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                    enabled: {
+                        type: "boolean",
+                        default: true,
+                        description: "Seeds the runtime on/off switch (ShaderLayer#setPipelineEnabled); a uniform, not a recompile."
+                    },
+                    pre: stage("Chain applied, in order, to every non-raw sampled value of the layer."),
+                    post: stage("Chain applied, in order, to the layer's computed color before opacity, blending and clipping.")
+                },
+                description: "Pre/post chains of vec4 -> vec4 ShaderModules, available on every shader layer.",
+                "x-moduleTypes": types
+            };
+        },
+
         _compileShaderModuleRefJsonSchema(description) {
             return {
                 type: "string",
@@ -44638,6 +46037,11 @@ function resolveTileTemplate(template, dataUrl) {
 
             for (const item of compiled.customParams || []) {
                 properties[item.key] = this._compileCustomParamJsonSchema(Shader, item);
+            }
+
+            // every ShaderLayer accepts the pre/post module pipeline
+            if (!properties.pipeline) {
+                properties.pipeline = { $ref: "#/$defs/shaderLayerPipeline" };
             }
 
             return {
@@ -46551,8 +47955,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.2
-//! Built on 2026-11-09
-//! Git commit: --55621d8
+//! Built on 2026-11-12
+//! Git commit: --d8cbf42
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -47207,8 +48611,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-11-09
-//! Git commit: --55621d8
+//! Built on 2026-11-12
+//! Git commit: --d8cbf42
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -47916,8 +49320,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.2
-//! Built on 2026-11-09
-//! Git commit: --55621d8
+//! Built on 2026-11-12
+//! Git commit: --d8cbf42
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

@@ -6,7 +6,8 @@ type ModelCapabilities = {
     files: CapabilityState;
     /** Token-streaming verdict, learned lazily from the first streamed attempt (never probed up front). */
     streaming?: CapabilityState;
-    source: 'probe' | 'provider-metadata' | 'manual' | 'default';
+    /** 'observed' = learned from a real turn (a model that accepted or rejected the media). 'probe' is legacy. */
+    source: 'probe' | 'provider-metadata' | 'manual' | 'default' | 'observed';
     checkedAt?: string;
 };
 

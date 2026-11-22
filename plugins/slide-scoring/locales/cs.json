@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "name": "Hodnocení sklíček",
+    "description": "Ohodnoťte nebo označte sklíčko otevřené v prohlížeči. Skóre se odesílá přes IO pipeline, takže je nasazení může směrovat do MLflow, GitHubu, REST backendu nebo kamkoli jinam bez změny tohoto pluginu."
+  },
+  "toolbar": {
+    "title": "Hodnocení",
+    "scoreLabel": "Ohodnotit aktuální sklíčko jako „{{label}}“",
+    "noSlide": "V tomto prohlížeči není otevřeno žádné sklíčko"
+  },
+  "label": {
+    "negative": "Negativní",
+    "uncertain": "Nejisté",
+    "positive": "Pozitivní"
+  },
+  "message": {
+    "scored": "Ohodnoceno jako „{{label}}“.",
+    "cleared": "Skóre vymazáno."
+  },
+  "error": {
+    "noViewer": "Před hodnocením otevřete sklíčko.",
+    "noSlideId": "Sklíčko v tomto prohlížeči nemá stabilní identitu, proto jeho skóre nebylo možné zaznamenat.",
+    "notPermitted": "Nemáte oprávnění hodnotit sklíčka.",
+    "failed": "Skóre se nepodařilo uložit: {{reason}}",
+    "badSchema": "Slovník hodnocení je chybně nakonfigurován: každý štítek musí odpovídat číslu.",
+    "importFailed": "Uložená skóre sklíček nebylo možné přečíst a byla ignorována."
+  }
+}

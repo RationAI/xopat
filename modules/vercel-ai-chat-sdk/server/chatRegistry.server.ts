@@ -2073,6 +2073,9 @@ class ChatServerRegistry {
 
     setModelCapabilities(providerId: string, modelId: string, capabilities: ModelCapabilities, scope?: string | null): ModelCapabilities {
         const next: ModelCapabilities = {
+            // Keep the lazily learned verdicts (`streaming`, `tools`): rebuilding the record
+            // from the four core fields silently dropped them on every write.
+            ...capabilities,
             text: capabilities.text || 'unknown',
             images: capabilities.images || 'unknown',
             files: capabilities.files || 'unknown',
@@ -2090,7 +2093,14 @@ class ChatServerRegistry {
         scope?: string | null
     ): ChatProviderModelInfo {
         const cached = this.getModelCapabilities(providerId, model.id, scope ?? null);
-        const capabilities = cached || discovered || {
+        // A cached media verdict that itself came from listing metadata (or from nothing) is
+        // no better than the listing in hand — refresh it, keeping any verdict learned since.
+        // Verdicts learned from a real turn ('observed') or set by hand win over metadata.
+        const refreshable = cached && discovered
+            && (cached.source === 'provider-metadata' || cached.source === 'default' || cached.source === 'probe');
+        const capabilities = (refreshable
+            ? { ...cached, text: discovered.text, images: discovered.images, files: discovered.files, source: discovered.source }
+            : null) || cached || discovered || {
             text: 'unknown',
             images: 'unknown',
             files: 'unknown',

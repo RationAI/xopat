@@ -8,7 +8,7 @@
 
 import type { MaskResult } from "./types";
 
-/** PNG blob → base64 (no data-URL prefix). */
+/** Image blob → base64 (no data-URL prefix). */
 export function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -55,9 +55,89 @@ export function pixelsToPngBlob(pixels: Uint8ClampedArray | number[], width: num
     canvas.height = height;
     const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
     ctx.putImageData(toImageData(ctx, pixels, width, height), 0, 0);
+    return encodeCanvas(canvas, { format: "png" }, "Failed to encode the background image.");
+}
+
+/**
+ * How an image bound for a vision model is encoded.
+ *
+ * JPEG is the default for model-bound images: a 2 MP field is several MB as PNG and a few
+ * hundred KB as JPEG, and the image travels base64-in-JSON through every hop — including
+ * ingresses whose body limit is 1 MB out of the box. PNG stays available for a deployment
+ * that wants lossless input and controls its own limits.
+ */
+export interface ImageEncoding {
+    format: "jpeg" | "png";
+    /** JPEG quality, 0..1. Ignored for PNG. */
+    quality?: number;
+}
+
+export const DEFAULT_VISION_ENCODING: ImageEncoding = { format: "jpeg", quality: 0.9 };
+
+/** Validate an operator-supplied encoding, falling back to `fallback` field by field. */
+export function normalizeImageEncoding(value: unknown, fallback: ImageEncoding = DEFAULT_VISION_ENCODING): ImageEncoding {
+    const raw = (typeof value === "string" ? { format: value } : value) as Partial<ImageEncoding> | null | undefined;
+    const format = raw?.format === "png" || raw?.format === "jpeg" ? raw.format : fallback.format;
+    const q = Number(raw?.quality);
+    const quality = Number.isFinite(q) && q > 0 && q <= 1 ? q : (fallback.quality ?? 0.9);
+    return { format, quality };
+}
+
+/** Encode a canvas. The canvas must already be opaque for JPEG — see {@link flattenOnWhite}. */
+export function encodeCanvas(canvas: HTMLCanvasElement, encoding: ImageEncoding, failure: string): Promise<Blob> {
     return new Promise((resolve, reject) =>
-        canvas.toBlob(b => (b ? resolve(b) : reject(new Error("Failed to encode the background image."))), "image/png")
+        canvas.toBlob(
+            b => (b ? resolve(b) : reject(new Error(failure))),
+            encoding.format === "jpeg" ? "image/jpeg" : "image/png",
+            encoding.format === "jpeg" ? (encoding.quality ?? 0.9) : undefined
+        )
     );
+}
+
+/**
+ * Draw `source` over white on a fresh canvas.
+ *
+ * JPEG has no alpha, and an encoder turns transparent pixels BLACK — on a slide render that
+ * is everything outside the tissue pyramid, which a model would then read as a dark mass.
+ * Glass is white, so white is what "nothing here" has to become.
+ */
+export function flattenOnWhite(source: CanvasImageSource, width: number, height: number): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, 0, 0, width, height);
+    return canvas;
+}
+
+/** RGBA pixels → an image blob in the requested encoding. */
+export async function pixelsToImageBlob(
+    pixels: Uint8ClampedArray | number[], width: number, height: number, encoding: ImageEncoding
+): Promise<Blob> {
+    if (encoding.format !== "jpeg") return pixelsToPngBlob(pixels, width, height);
+    const probe = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+    const bitmap = await createImageBitmap(toImageData(probe, pixels, width, height));
+    try {
+        return await encodeCanvas(flattenOnWhite(bitmap, width, height), encoding, "Failed to encode the image.");
+    } finally {
+        bitmap.close?.();
+    }
+}
+
+/** Re-encode an existing image blob (e.g. a PNG a server refused as too large) as JPEG. */
+export async function reencodeAsJpeg(blob: Blob, quality = DEFAULT_VISION_ENCODING.quality): Promise<Blob> {
+    const bitmap = await createImageBitmap(blob);
+    try {
+        return await encodeCanvas(
+            flattenOnWhite(bitmap, bitmap.width, bitmap.height),
+            { format: "jpeg", quality },
+            "Failed to re-encode the image."
+        );
+    } finally {
+        bitmap.close?.();
+    }
 }
 
 /** Otsu's method: the between-class-variance-maximizing threshold of a 0..255 histogram. */
@@ -197,7 +277,8 @@ export function planMontageLayout(
 export async function composeMontage(
     cells: MontageCell[],
     layout: MontageLayout,
-    style?: { background?: string; gutterColor?: string; labelColor?: string; font?: string }
+    style?: { background?: string; gutterColor?: string; labelColor?: string; font?: string },
+    encoding: ImageEncoding = { format: "png" }
 ): Promise<{ blob: Blob; width: number; height: number }> {
     if (!cells.length) throw new Error("composeMontage requires at least one cell.");
 
@@ -241,9 +322,8 @@ export async function composeMontage(
         }
     }
 
-    const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob(b => (b ? resolve(b) : reject(new Error("Failed to encode the montage."))), "image/png")
-    );
+    // Every pixel was painted (gutter fill first), so the canvas is opaque and JPEG-safe.
+    const blob = await encodeCanvas(canvas, encoding, "Failed to encode the montage.");
     return { blob, width, height };
 }
 

@@ -98,6 +98,12 @@ test("a zero component count is a result, not a missing value", () => {
     expect(byKey.components.computed).toBe(true);
 });
 
+// `globalThis` outlives this file in a reused worker, and an already-imported
+// `geometry-metrics.js` is not evaluated again: without handing the real
+// `geometry` back, the next file to use it finds the one-method stub below.
+const inheritedGeometry = globalThis.AnnotationMeasurements.geometry;
+test.afterAll(() => { globalThis.AnnotationMeasurements.geometry = inheritedGeometry; });
+
 test("aggregateStats sums areas and formats through the viewer converter", () => {
     globalThis.AnnotationMeasurements.geometry = {
         unitConverter: () => ({ formatArea: (px) => `${px} px²` }),

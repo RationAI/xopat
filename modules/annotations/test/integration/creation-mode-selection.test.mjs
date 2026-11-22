@@ -235,6 +235,9 @@ test("helper control points stay non-interactive across index refreshes", { tag:
         const polygon = module.getAnnotationObjectFactory("polygon");
         const preset = module.presets.addPreset(undefined, "poly", "#00ff00", polygon);
         module.presets.selectPreset(preset.presetID, true);
+        // The drawing tool is independent of the preset (see `getActiveFactory`):
+        // selecting a preset never changes it, and `withOneAnnotation` latched rect.
+        module.setActiveFactory(polygon);
         module.setModeById("custom");
         return window.__annotationTestCentre;
     });

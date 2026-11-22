@@ -17,10 +17,11 @@ import { computeOsdPerformanceOptions, getDeviceClass } from "./classes/app/osd-
 import { acquireFlexContextKey, releaseFlexContextKey } from "./classes/app/flex-renderer-context";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 import { downloadSlideFile } from "./classes/app/slide-file-download";
+import { slideCanonicalOf, slideHashOf, slideLegacyCanonicalOf } from "./classes/io/slide-hash";
 import { buildDemoOverlay } from "./classes/app/viewer-demo-overlay";
 import { ensureI18nNamespace, whenI18nReady } from "./classes/app/i18n-dom";
 import {
-    registerCoreCapabilities, allowCoreAction,
+    registerCoreCapabilities, allowCoreAction, CAP_IO_LOCAL_FILE,
     CAP_EXPORT_FILE, CAP_EXPORT_URL,
 } from "./classes/app/core-capabilities";
 import { installEventIsolation, withHandlerOwner, removeHandlersOwnedBy } from "./classes/app/event-isolation";
@@ -505,6 +506,33 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     function escapeHtml(value: unknown) {
         return String(value).replace(/[&<>"']/g, char =>
             ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!));
+    }
+
+    /**
+     * JSON for interpolation into a `<script>` body. `JSON.stringify` does not
+     * escape `<`, so a value holding `</script>` would close the tag. Mirrors
+     * `jsonForScript` in server/node/utils.js — keep the two in step.
+     */
+    function jsonForScript(value: unknown) {
+        return JSON.stringify(value === undefined ? null : value)
+            .replace(/[<\u2028\u2029]/g, char => "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0"));
+    }
+
+    /** Hand content to the browser as a download. Ungated: callers answer for their own capability. */
+    function saveAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
+        let data: Blob;
+        if (content instanceof Blob) data = content;
+        else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
+        else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
+
+        const downloadURL = window.URL.createObjectURL(data);
+        const elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
+        elem.href = downloadURL;
+        elem.setAttribute('download', filename);
+        elem.click();
+        // Revoking synchronously races the browser's read of a large blob —
+        // Firefox in particular aborts the save. Let the click settle first.
+        setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
     }
 
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
@@ -1762,6 +1790,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   restore-on-enter per (viewer, background) pair, driven by
          *   `viewer-open-pipeline` on slide change. `'all'` = global +
          *   per-viewer + per-viewer-background. See src/IO_PIPELINE.md.
+         * @param options.defaultFormat  the format (id registered under this
+         *   owner's domain in `IO_PIPELINE.formats`) a sink that takes any
+         *   format stores when neither the binding nor the sink's own config
+         *   pins one. Must be deployment-derived — never a user preference.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -1770,6 +1802,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+            defaultFormat?: () => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
@@ -1782,6 +1815,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 bundleScope: options.bundleScope,
                 exportBundle: options.exportBundle,
                 importBundle: options.importBundle,
+                defaultFormat: options.defaultFormat,
             });
             for (const cap of options.capabilities ?? []) {
                 IO_PIPELINE.registerCapability(this.__uid, cap);
@@ -2867,6 +2901,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /** Memoized verdict of `UTILITIES.canSyncSessionToUrl` — null until first asked. */
     let _sessionUrlSyncable: boolean | null = null;
 
+    const _slideHashCache = new Map<string, string>();
+
     /**
      * @namespace UTILITIES
      */
@@ -2940,6 +2976,58 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             // Virtual-region children key IO by the parent slide (see
             // explicitSlotBackgroundId) so all modes share one bundle.
             return typeof bg.virtualOf === "string" ? bg.virtualOf : bg.id;
+        },
+
+        /**
+         * Stable identity of the slide behind a background id, for naming stored
+         * data (`{slideHash}` / `{slideName}` in IO path templates).
+         *
+         * - `hash` — 16 hex chars of HMAC-SHA256(`hashKey`, data entry) (a path
+         *   string, or the object with its keys sorted and its display-only
+         *   fields left out — see `slideCanonicalOf`). Independent of an
+         *   explicit background `id` and of the session, unique in practice.
+         *   Keyed because slide paths are guessable: an unkeyed hash lets anyone
+         *   holding the stored data match candidate paths offline. `undefined`
+         *   when no key is given (`ENV.client.io.slideHashKey` unset) — callers
+         *   must refuse rather than fall back to an unkeyed hash.
+         * - `name` — the data entry's file name (`FNB-766-24-….czi`), or for an
+         *   object entry what {@link nameFromBGOrIndex} finds. Readable, but two
+         *   folders holding the same file name collide, and it may carry a case
+         *   number: use it for labels, not for addressing.
+         *
+         * Background ids are not unique per entry, but entries sharing one name
+         * the same data locator (see `BackgroundConfig.processId`), so the first
+         * match is the slide. `undefined` when the id names no background.
+         */
+        slideIdentityFor: function (backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string; legacyHash?: string } | undefined {
+            if (!backgroundId) return undefined;
+            const bg = (APPLICATION_CONTEXT.config.background || []).find((b: any) => b?.id === backgroundId);
+            if (!bg) return undefined;
+            const item = BackgroundConfig.dataFromDataId(bg.dataReference);
+            if (item === undefined || item === null) return undefined;
+            const canonical = slideCanonicalOf(item);
+            let hash: string | undefined;
+            if (typeof hashKey === "string" && hashKey) {
+                // Keyed by key AND entry: the key is static per page, but a
+                // host rewriting ENV.client.io at runtime must not get stale hashes.
+                const cacheKey = `${hashKey.length}:${hashKey}\u0000${canonical}`;
+                hash = _slideHashCache.get(cacheKey);
+                if (!hash) {
+                    hash = slideHashOf(hashKey, canonical);
+                    if (_slideHashCache.size >= 512) _slideHashCache.clear();
+                    _slideHashCache.set(cacheKey, hash);
+                }
+            }
+            let name = typeof item === "string"
+                ? UTILITIES.fileNameFromPath(item, false)
+                : UTILITIES.nameFromBGOrIndex({ dataReference: item } as any, false);
+            if (name === "unknown" || name === "undefined" || name === "error") name = "";
+            // Where this slide's data was addressed before display-only fields
+            // were left out of the hash; set only when that differs.
+            const legacy = slideLegacyCanonicalOf(item);
+            const legacyHash = legacy !== undefined && typeof hashKey === "string" && hashKey
+                ? slideHashOf(hashKey, legacy) : undefined;
+            return legacyHash ? { hash, name, legacyHash } : { hash, name };
         },
 
         /**
@@ -3420,7 +3508,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 ${form}
 </body></html>`;
 
-                UTILITIES.downloadAsFile("export.html", doc);
+                // Already allowed by `core.export.file` above: its own knob,
+                // not the local-file one.
+                saveAsFile("export.html", doc);
                 APPLICATION_CONTEXT.__cache.dirty = false;
                 // The file is written either way — the export is not "failed"
                 // because one owner was refused. But an export silently missing
@@ -3595,21 +3685,16 @@ ${form}
          * Download content as a file via a temporary link element. Strings are
          * written as `text/plain`; binary payloads keep their own type (a Blob's
          * own, `application/octet-stream` otherwise).
+         *
+         * Gated by `core.io.local-file`: this is the one door every plugin's
+         * "Download" goes through, so the role that closes local files closes
+         * it here once, for all of them. A refusal tells the user.
+         * @returns false when the download was refused
          */
-        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView) {
-            let data: Blob;
-            if (content instanceof Blob) data = content;
-            else if (typeof content === "string") data = new Blob([content], { type: 'text/plain' });
-            else data = new Blob([content as BlobPart], { type: 'application/octet-stream' });
-
-            let downloadURL = window.URL.createObjectURL(data);
-            let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
-            elem.href = downloadURL;
-            elem.setAttribute('download', filename);
-            elem.click();
-            // Revoking synchronously races the browser's read of a large blob —
-            // Firefox in particular aborts the save. Let the click settle first.
-            setTimeout(() => URL.revokeObjectURL(downloadURL), 60000);
+        downloadAsFile: function (filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): boolean {
+            if (!allowCoreAction(CAP_IO_LOCAL_FILE)) return false;
+            saveAsFile(filename, content);
+            return true;
         },
 
         /**
@@ -3628,6 +3713,8 @@ ${form}
          * @param mode - Read as text or as ArrayBuffer.
          */
         uploadFile: async function (onUploaded: (arg0: (string | ArrayBuffer)) => void, accept = ".json", mode = "text") {
+            // Asked before the picker opens, not after the user chose a file.
+            if (!allowCoreAction(CAP_IO_LOCAL_FILE)) return;
             const uploader = document.getElementById("file-upload-helper") as HTMLInputElement | null;
             if (!uploader) {
                 console.error("Upload helper input is missing from the document.");
@@ -3650,15 +3737,32 @@ ${form}
          * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
          */
         readFileUploadEvent: function (e: Event, mode = "text") {
+            const file = (e.currentTarget as HTMLInputElement | null)?.files?.[0];
+            if (!file) return Promise.reject("Invalid input file: no file.");
+            return UTILITIES.readLocalFile(file, mode);
+        },
+
+        /**
+         * Read a file the user picked or dropped. Gated by `core.io.local-file`
+         * like `downloadAsFile`; a refusal tells the user and rejects with an
+         * error whose `code` is `W_PERM_DENIED`.
+         * @param {File} file
+         * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
+         * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
+         */
+        readLocalFile: function (file: File, mode = "text") {
             return new Promise((resolve, reject) => {
-                let file = e.currentTarget.files?.[0];
-                if (!file) return reject("Invalid input file: no file.");
+                if (!allowCoreAction(CAP_IO_LOCAL_FILE)) {
+                    return reject(Object.assign(new Error("Local files are not available."), { code: "W_PERM_DENIED" }));
+                }
                 const fileReader = new FileReader();
                 fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
+                // Without this a failed read left the promise pending forever.
+                fileReader.onerror = () => reject(fileReader.error ?? new Error("File read failed."));
 
                 if (mode === "text") fileReader.readAsText(file);
                 else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
-                else throw "Invalid read file mode " + mode;
+                else reject(new Error("Invalid read file mode " + mode));
             });
         },
 
@@ -3982,7 +4086,8 @@ ${form}
          *   just silently missing from the exported document.
          */
         getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false, outcome?: IOResult[]) {
-            const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
+            // Lands in an HTML attribute below.
+            const url = escapeHtml((APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url);
 
             if (!APPLICATION_CONTEXT.env.server.supportsPost) {
                 return `
@@ -4010,8 +4115,8 @@ ${form}
             function addExport(key: string, data: any) {
                 form += `node = document.createElement("input");
 node.setAttribute("type", "hidden");
-node.setAttribute("name", "${key}");
-node.setAttribute("value", JSON.stringify(${JSON.stringify(data)}));
+node.setAttribute("name", ${jsonForScript(key)});
+node.setAttribute("value", JSON.stringify(${jsonForScript(data)}));
 form.appendChild(node);`;
             }
 
@@ -5275,6 +5380,35 @@ form.submit();
             });
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
+            });
+
+            // Focal-plane (z-stack) ruler on the bottom edge of this viewport.
+            // It shows only for multi-plane slides and reserves its own strip:
+            // the scalebar dock and the side menu are lifted by its height
+            // instead of being overlapped.
+            const depthRuler = new UI.DepthRuler({
+                id: `${cellId}-depth-ruler`,
+                onInsetChange: (px: number) => {
+                    // The cell first: it cannot fail, and the side menu must
+                    // move even if the scalebar is mid-rebuild for a new slide.
+                    cell.style.setProperty("--xo-viewer-bottom-inset", `${px}px`);
+                    (viewer as any).scalebar?.setBottomInset?.(px);
+                },
+            });
+            depthRuler.attachTo(viewer.container);
+            depthRuler.onLayoutChange({ width: window.innerWidth });
+            depthRuler.init(viewer);
+            (viewer as any).__depthRuler = depthRuler;
+            const depthRulerChromeKey = `depthRuler::${(viewer as any).uniqueId ?? index}`;
+            let depthRulerHidden = false;
+            (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(depthRulerChromeKey, {
+                is:  () => !depthRulerHidden,
+                on:  () => { depthRulerHidden = false; depthRuler.setHidden(false); },
+                off: () => { depthRulerHidden = true; depthRuler.setHidden(true); },
+            });
+            viewer.addOnceHandler?.("destroy", () => {
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(depthRulerChromeKey);
+                depthRuler.destroy();
             });
 
             // Navigator visibility is owned by the right-side viewer

@@ -201,11 +201,25 @@ export type VisualizationRegionRenderOptions = {
      */
     region: { x: number; y: number; width: number; height: number };
     /**
+     * HOW MUCH DETAIL — give exactly ONE of `size`, `magnification`, `targetPixels`.
+     *
      * Output bounding box in pixels. The region's aspect ratio is preserved: provide one
      * dimension to derive the other, or both to fit the region inside the box. Small sizes
      * (e.g. 512) are cheap — request only the resolution you need.
      */
-    size: { width?: number; height?: number };
+    size?: { width?: number; height?: number };
+    /**
+     * Render at this optical magnification (e.g. 5, 20) — the same number the scalebar shows.
+     * Needs a calibrated slide (throws otherwise; use `targetPixels`). A request, not a
+     * guarantee: the output is never upsampled past native resolution and never exceeds
+     * `maxPixels`, so read the result's `magnification` for what was actually rendered.
+     */
+    magnification?: number;
+    /**
+     * Render at whatever resolution fits this output AREA (e.g. 500000 ≈ 700×700). Works on
+     * uncalibrated slides. Capped the same way as `magnification`; read the result's `scale`.
+     */
+    targetPixels?: number;
     /**
      * Which shader layers to render. `"active"` (default) reproduces the user's full live
      * visualization (background + data layers, current control values). `"background"` renders
@@ -259,7 +273,23 @@ export type VisualizationRegionRenderOptions = {
     label?: string;
 };
 
-export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & {
+/** What a region render says about the resolution it actually produced. */
+export type VisualizationRegionResolution = {
+    /** Output pixels per level-0 image pixel (1 = native resolution, 0.25 = every 4th pixel). */
+    scale: number;
+    /** Effective optical magnification of the output; null on an uncalibrated slide. */
+    magnification: number | null;
+};
+
+export type VisualizationRegionPngResult = VisualizationRegionResolution & {
+    dataUrl: string;
+    width: number;
+    height: number;
+    isComplete: boolean;
+    stalled: boolean;
+};
+
+export type VisualizationRegionPixelsResult = VisualizationViewportPixelsResult & VisualizationRegionResolution & {
     /**
      * False when the render did not have every tile of the region — the tile-load wait ran out of
      * `timeoutMs`, or gave up early because no further tile could arrive (see `stalled`).
@@ -306,8 +336,18 @@ export interface VisualizationDataSourceInfo {
     dataId: string | null;
     /** Stable per-source identity. Prefer this over any URL: DICOMweb shares one baseUrl. */
     tileSourceId: string | null;
+    /** Name of the protocol that fetches this entry (e.g. `"dicom"`), when it declares one. */
+    protocol: string | null;
+    /**
+     * Whether the active viewer shows this source: one of its backgrounds, or drawn by the
+     * visualization it has selected. The list itself covers the WHOLE session — every viewer.
+     */
+    inActiveViewer: boolean;
     role: "background" | "overlay" | "unbound";
-    /** Whether the source is currently present in the viewer's world (probeable). */
+    /**
+     * Whether the source is currently present in the viewer's world. Only a loaded source can
+     * be measured: `probeData` on an unloaded one throws.
+     */
     loaded: boolean;
     worldIndex: number | null;
     width: number | null;
@@ -370,12 +410,16 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Describes every data source in the session — what it IS, before deciding how to render it.
      *
-     * One entry per `config.data` index: `dataReference`, `dataId`, `tileSourceId`, the source's
-     * own `metadata` (channels, µm/px, whatever the tile source publishes), pixel `width`/`height`,
-     * whether it is currently `loaded` into the viewer world, its `role`
+     * One entry per `config.data` index: `dataReference`, `dataId`, `tileSourceId`, `protocol`,
+     * the source's own `metadata` (channels, µm/px, whatever the tile source publishes), pixel
+     * `width`/`height`, whether it is currently `loaded` into the viewer world, its `role`
      * (`"background"` = the scan itself | `"overlay"` = rendered by a shader layer |
      * `"unbound"` = present but not rendered), and `referencedBy` — the visualization layers
      * that draw it.
+     *
+     * The list spans the WHOLE session, not one viewer. To answer for the active viewer, keep
+     * the rows with `inActiveViewer: true`. Rows with `loaded: false` carry no metadata and
+     * cannot be probed; do not ask the user to identify them by `dataReference`.
      *
      * Call this before proposing a visualization for data you have not inspected. It costs no
      * rendering and answers "what am I even mapping to colour".
@@ -399,12 +443,22 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Captures what the user currently sees and returns a vision model's written critique of it.
      *
+     * RENDERING QUALITY ONLY. `question` narrows the critique ("is the overlay distinguishable?");
+     * the model behind it is instructed to refuse tissue, morphology and diagnosis, so it is not a
+     * way to read a specimen. It reads the CURRENT VIEWPORT with overlays — never navigate the
+     * viewer or change the visualization to feed it. To look at tissue, render a region
+     * (`viewer.captureRegion`).
+     *
      * For questions the configuration cannot answer — "is this readable?", "why does the overlay
      * look washed out?" — where the subject is the composite on screen. Prefer `describeData` and
      * `probeData` first: they are cheaper and more precise. Returns `null` when no vision-capable
      * provider is configured, so treat a null as "ask the user" rather than as an error.
      *
      * Sends the rendered view to the configured model provider.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     critiqueCurrentRendering(
         question?: string,
@@ -479,11 +533,18 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Changes the active visualization selection for the current viewer session.
      * The user is asked for confirmation unless the scripting context bypasses consent dialogs.
+     *
+     * A single `index` switches the ACTIVE viewer only (see `application.setActiveViewer`);
+     * other viewers keep what they show. Pass an array to set several viewers at once — one
+     * entry per viewer, in viewer order. The same holds for `makeActive` on
+     * `addVisualization` / `updateVisualizationAt`.
      */
     setActiveVisualization(index: number | number[]): Promise<boolean>;
 
     /**
      * Replaces the full visualization list for the current session.
+     * Not for temporarily hiding overlays to look at the slide — render off-screen with
+     * `layers: "background"` instead.
      * Optional newData entries are appended to the session data array before the viewer reloads.
      */
     replaceVisualizations(
@@ -519,7 +580,34 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     ): Promise<boolean>;
 
     /**
-     * Removes a visualization from the current session.
+     * Returns the shader layers of the ACTIVE viewer's background — how the slide itself is
+     * rendered. A multi-channel slide (fluorescence) is typically drawn entirely by these
+     * layers, one per channel, with no visualization at all. Layers are addressed by their
+     * position in the returned array.
+     *
+     * When the user asks to restyle what the slide already shows (channel colours, gamma,
+     * a different shader type for a channel), read these FIRST. Adding a visualization
+     * instead draws new layers on top of the existing ones — it does not change them.
+     */
+    getBackgroundShaders(): VisualizationShaderGroupOrLayer[];
+
+    /**
+     * Applies a partial patch to background shader layer `index` (a position in
+     * `getBackgroundShaders()`) of the active viewer. Same merge rules as
+     * `updateVisualizationAt`: changing `type` replaces the layer, anything else merges, and
+     * the result is validated against `getSchema()` before it is applied. Undoable.
+     *
+     * One call changes one layer; restyle several channels with several calls in one script.
+     */
+    updateBackgroundShaderAt(
+        index: number,
+        patch: Partial<VisualizationShaderGroupOrLayer>
+    ): Promise<boolean>;
+
+    /**
+     * Removes a visualization from the current session. A change to the user's session — only
+     * when the user asked for it. NOT a way to uncover the slide for a look: an off-screen render
+     * with `layers: "background"` shows the scan without any overlay and changes nothing.
      */
     removeVisualization(index: number, nextActiveIndex?: number | number[]): Promise<boolean>;
 
@@ -527,6 +615,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * Renders the current viewport with a temporary standalone visualization configuration and returns a PNG data URL.
      * For transient rendering, tiledImages should already resolve against the active viewer, or dataReferences must map to
      * data already present in the current session.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentViewportPng(
         visualization: VisualizationLayerSource,
@@ -535,6 +627,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
 
     /**
      * Renders the current viewport with a temporary standalone visualization configuration and returns raw RGBA pixels.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentViewportPixels(
         visualization: VisualizationLayerSource,
@@ -544,6 +640,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     /**
      * Renders the current viewport's BACKGROUND image only (no data/visualization overlay) at the live
      * zoom/pan and returns a PNG data URL. Use this to read the raw slide when the overlay must be excluded.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentBackgroundPng(options?: VisualizationViewportRenderOptions): Promise<string>;
 
@@ -554,6 +654,10 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * This reads the LIVE viewport, so it never waits for tiles: `isComplete` is false whenever the
      * view was still streaming. Check it before measuring or caching anything derived from these
      * pixels — a mask computed over a half-loaded viewport describes the cache, not the slide.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderCurrentBackgroundPixels(options?: VisualizationViewportRenderOptions): Promise<VisualizationViewportPixelsResult>;
 
@@ -565,10 +669,17 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * location (active visualization, current control values); `layers: "background"` returns the
      * raw slide. Excludes annotation/DOM overlays (not part of the render pipeline).
      *
+     * Return the data URL from your script to view the image yourself on the next step.
+     * `viewer.captureRegion` is the same render with the resolution reported alongside.
+     *
      * THROWS when the render came back incomplete (some tiles had not loaded), because a data URL
      * cannot carry that and a partial render is indistinguishable from a real one. Pass
      * `onIncomplete: "allow"` to accept partial pixels, or call {@link renderRegionPngDetailed} to
      * receive the flag and decide yourself.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string>;
 
@@ -579,15 +690,23 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * `stalled` means the tile wait gave up because nothing further could arrive (e.g. the missing
      * tiles 404) rather than because it ran out of time; it is always false on a flex-renderer that
      * does not wait. Only `isComplete && !stalled` is a faithful read of the region.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }>;
+    ): Promise<VisualizationRegionPngResult>;
 
     /**
      * Renders an arbitrary image region off-screen and returns raw RGBA pixels plus `isComplete`
      * (false when the render did not have every tile of the region). Never moves the user's
      * viewport. Always check `isComplete` before treating the pixels as the region.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
     renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult>;
 

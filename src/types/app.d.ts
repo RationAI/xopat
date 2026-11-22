@@ -657,6 +657,12 @@ interface ApplicationContext {
     /** Central keyboard-shortcut registry + dispatcher (`classes/app/shortcut-manager.ts`). See src/SHORTCUTS.md. */
     shortcuts: ShortcutManagerLike;
     /**
+     * Display adjustments broker (`classes/app/adjustments.ts`): per-layer levels,
+     * brightness/contrast, saturation, … as post-pipeline modules, and per-data-item
+     * sampling. Always viewer-explicit. See src/README.md → "Display adjustments".
+     */
+    adjustments: import("../classes/app/adjustments").Adjustments;
+    /**
      * Dev-only render capture (`classes/app/render-debug-controller.ts`) — inert
      * until the Render Debug window is opened, gated on `debugMode`.
      */
@@ -1009,6 +1015,13 @@ interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
     currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
+    /**
+     * Stable identity of the slide behind a background id: `hash` (16 hex of
+     * HMAC-SHA256(`hashKey`, data entry) — use for addressing; absent without a
+     * key) and `name` (file name — labels only; may collide and may carry a
+     * case number). `undefined` for an unknown id.
+     */
+    slideIdentityFor(backgroundId: string | undefined, hashKey?: string): { hash?: string; name: string } | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;
@@ -1063,9 +1076,16 @@ interface XOpatUtilities {
 
     /**
      * Download content as a file via a temporary link element. Strings become
-     * `text/plain`; binary payloads keep their own type.
+     * `text/plain`; binary payloads keep their own type. Gated by
+     * `core.io.local-file`; returns false (after telling the user) when refused.
      */
-    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): void;
+    downloadAsFile(filename: string, content: string | Blob | ArrayBuffer | ArrayBufferView): boolean;
+
+    /**
+     * Read a file the user picked or dropped. Gated by `core.io.local-file`;
+     * rejects with `code: "W_PERM_DENIED"` (after telling the user) when refused.
+     */
+    readLocalFile(file: File, mode?: "text" | "bytes"): Promise<string | ArrayBuffer>;
 
     /**
      * Download the original slide file behind a tile source that implements the

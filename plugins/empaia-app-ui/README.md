@@ -53,16 +53,17 @@ the right tool at that point, not scrolling.
 
 ## Regions of interest are ordinary annotations
 
-The plugin owns no geometry. "Draw region" does exactly two things through the
+The plugin owns no geometry. "Draw region" does exactly three things through the
 annotation module's existing API:
 
 ```js
-presets.selectPreset(roiPresetId, true);   // preset carries the factory + colour
+presets.selectPreset(roiPresetId, true);   // the class: colour + name
+annotations.setActiveFactory(roiFactory);  // the shape; the user's tool is restored afterwards
 annotations.setMode(annotations.Modes.CUSTOM);
 ```
 
-The preset is bound to the factory the app's EAD asks for
-(`rectangle → rect`, `polygon → polygon`, `circle → ellipse`) and coloured from
+The shape is the factory the app's EAD asks for
+(`rectangle → rect`, `polygon → polygon`, `circle → ellipse`); the preset is coloured from
 the EAD's rendering hints. Everything the annotation module already provides
 therefore works on ROIs for free: undo/redo, the annotation board, the canvas
 context menu, measurements, presets, layers, and the fixed-area mode.

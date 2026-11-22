@@ -15,6 +15,7 @@ import { ClientLogging } from "./logging";
 import { CaptureIndicator } from "./capture-indicator";
 import { XOpatAuth } from "../auth/xopat-auth";
 import { ShortcutManager } from "./shortcut-manager";
+import { Adjustments } from "./adjustments";
 import { RenderDebugController } from "./render-debug-controller";
 import { TourEngine } from "./tutorial";
 import {
@@ -539,6 +540,15 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
      * @memberof APPLICATION_CONTEXT
      */
     ac.shortcuts = new ShortcutManager({ cache: ac.AppCache });
+
+    /**
+     * Display adjustments — per-layer levels / brightness / saturation … as
+     * renderer pipeline modules, plus per-data-item sampling. Backs the data
+     * panel, the navigator quick panel and the `adjustments` scripting
+     * namespace. See classes/app/adjustments.ts.
+     * @memberof APPLICATION_CONTEXT
+     */
+    ac.adjustments = new Adjustments();
 
     /**
      * Dev-only render capture — what the renderer was asked to draw (viewport

@@ -35,6 +35,14 @@ async function ready(xopat) {
     await xopat.launch({ params: { bypassCookies: true, bypassCache: true } });
     // menu-pages arrives as a dependency of whatever the deployment loads.
     await xopat.page.waitForFunction(() => Boolean(window.AdvancedMenuPages), null, { timeout: 30_000 });
+    // The builders wait for the sanitizer before rendering a config that needs
+    // it; `_pageToViewerItem` is below that seam, so the wait is done here.
+    // Without it the escaped-text fallback runs or not depending on whether
+    // something else loaded sanitize-html first.
+    await xopat.page.evaluate(() => new Promise(resolve => {
+        if (typeof window.SanitizeHtml === "function") return resolve();
+        window.UTILITIES.loadModules(() => resolve(), "sanitize-html");
+    }));
 }
 
 /**
@@ -54,7 +62,14 @@ const renderAndAttach = (pages) => {
 
     const result = {
         markup: host.innerHTML,
-        liveHandlers: host.querySelectorAll("[onerror],[onload],[onmouseover],[onclick]").length,
+        // Read from the parsed DOM, not the serialized markup: a payload that was
+        // correctly neutralised into an attribute VALUE (`class="&quot; onmouseover=…"`)
+        // still contains ` onmouseover=` as text, and no regex over `innerHTML`
+        // can tell that from a real attribute.
+        liveHandlers: [...host.querySelectorAll("*")]
+            .flatMap(el => [...el.attributes])
+            .filter(attr => /^on/i.test(attr.name))
+            .map(attr => attr.name),
         fired: window.__xopatXss ?? null,
     };
     host.remove();
@@ -68,20 +83,14 @@ test("no session page shape can execute script", { tag: ["@e2e"] }, async ({ xop
         const result = await xopat.page.evaluate(renderAndAttach, [page]);
 
         expect(result.fired, `payload "${name}" executed`).toBe(null);
-        expect(result.liveHandlers, `payload "${name}" left a live handler in the DOM`).toBe(0);
-        expect(result.markup, `payload "${name}" injected a raw <img>`).not.toContain("<img");
+        // The default allowlist permits a plain <img>; what it must never keep is
+        // an event-handler attribute — any `on*`, on any element.
+        expect(result.liveHandlers, `payload "${name}" kept an inline handler`).toEqual([]);
     }
 });
 
 test("benign markup survives, placeholders keep their ids", { tag: ["@e2e"] }, async ({ xopat }) => {
     await ready(xopat);
-
-    // The builders wait for the sanitizer before rendering a config that needs
-    // it; `_pageToViewerItem` is below that seam, so the wait is done here.
-    await xopat.page.evaluate(() => new Promise(resolve => {
-        if (typeof window.SanitizeHtml === "function") return resolve();
-        window.UTILITIES.loadModules(() => resolve(), "sanitize-html");
-    }));
 
     // The regression guard on the other side: closing the hole must not go back
     // to sanitizing the assembled body, which is what stripped these ids.

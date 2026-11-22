@@ -2,7 +2,7 @@ import van from "../vanjs.mjs";
 import { BaseComponent } from "../classes/baseComponent.mjs";
 import { componentIconNode } from "../classes/elements/ph-icon.mjs";
 
-const { button, span } = van.tags;
+const { button, div, span } = van.tags;
 
 /**
  * VIEWER CONTROLS — per-viewport icon buttons (e.g. slide-info's prev/next
@@ -37,6 +37,8 @@ export class ViewerControls {
      * @param {string} [opts.hint] longer description (Catalog only)
      * @param {string} [opts.kbd] key combo shown as "label (kbd)"
      * @param {number} [opts.order] ascending sort key, default 0
+     * @param {boolean} [opts.detached] render apart from the other controls and in the
+     *   error colour, for an action a slip of the pointer must not trigger (close, delete)
      * @param {function(OpenSeadragon.Viewer): boolean} [opts.visible] false hides it on that viewer
      * @param {function({viewer: OpenSeadragon.Viewer}): void} opts.onClick
      * @returns {string} the id
@@ -128,13 +130,20 @@ export class ViewerControls {
      */
     mount(container, viewer) {
         if (!container || !viewer) return () => {};
-        container.classList.add("join", "flex-nowrap");
+        container.classList.add("flex", "flex-nowrap", "items-center");
+        container.style.gap = "0.5rem";
         const render = () => {
-            const nodes = this.list()
-                .filter(entry => this.isVisible(entry, viewer))
-                .map(entry => this._button(entry, viewer));
-            container.replaceChildren(...nodes);
-            container.style.display = nodes.length ? "" : "none";
+            const entries = this.list().filter(entry => this.isVisible(entry, viewer));
+            // Two groups, so a destructive control never sits flush against
+            // the ones used in quick succession (prev/next slide).
+            const group = (detached) => {
+                const nodes = entries.filter(entry => !!entry.detached === detached)
+                    .map(entry => this._button(entry, viewer));
+                return nodes.length ? div({ class: "join flex-nowrap" }, ...nodes) : null;
+            };
+            const groups = [group(false), group(true)].filter(Boolean);
+            container.replaceChildren(...groups);
+            container.style.display = groups.length ? "" : "none";
         };
         render();
         const off = this.onChange(render);
@@ -150,7 +159,7 @@ export class ViewerControls {
         const icon = componentIconNode(entry.icon);
         return button({
             type: "button",
-            class: "btn btn-xs join-item border-none px-1",
+            class: "btn btn-xs join-item border-none px-1" + (entry.detached ? " text-error" : ""),
             title,
             "aria-label": title,
             "data-viewer-control": entry.id,

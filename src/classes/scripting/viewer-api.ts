@@ -1,8 +1,10 @@
 import type {ScriptApiMetadata} from "./abstract-types";
 import type {
+    ViewerCaptureRegionOptions,
     ViewerMagnificationInfo,
     ViewerMetadata,
     ViewerPlaneInfo,
+    ViewerRegionCapture,
     ViewerScriptApi,
     ViewerViewportInfo,
     ViewerZoomTarget
@@ -25,8 +27,12 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
             promptTier: "full",
             examples: [
                 "To read metadata from the active viewer: `const metadata = await viewer.getMetadata(); return metadata;`",
-                "To capture a screenshot with metadata: `const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return [\"Viewport screenshot captured.\", screenshot, metadata];`",
+                "To look at a part of the slide without moving the user's view: `const m = await viewer.getMetadata(); return await viewer.captureRegion({ region: { x: 0, y: 0, width: m.width, height: m.height }, targetPixels: 400000 });`",
             ],
+            framing: `### Looking is not navigating
+- \`viewer.focusOn\`, \`focusOnImage\`, \`setMagnification\`, \`frameImageRegion\`, \`setZDepth\` and \`stepZDepth\` change what the USER sees. Use them when the user asked to go somewhere or to show them a result — never to inspect a place for yourself.
+- To see any part of a slide yourself, call \`viewer.captureRegion({ region, magnification | targetPixels })\` and return its result: it renders off-screen, the image reaches you on the next step, and the user's view does not move. It shows the scan WITHOUT overlays by default, so nothing ever has to be hidden, dimmed or removed to see the tissue.
+- Pixel statistics you compute (mean colour, thresholds, object counts, variance) describe an image, not pathology. Never present them as findings. When no allowed namespace offers tissue analysis, look at the captured image and describe the visible morphology as a model-assisted read, or say in one sentence that no tissue-analysis capability is available in this session.`,
         },
     };
 
@@ -394,19 +400,85 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
         };
     }
 
-    getViewportScreenshot(options?: {
+    async captureRegion(options: ViewerCaptureRegionOptions = {}): Promise<ViewerRegionCapture> {
+        // One render path and one pixel-read consent: the visualization namespace owns both.
+        // Bound to THIS invocation's context, so consent, viewer selection and sensitivity
+        // policy are the caller's own rather than a synthetic in-process context's.
+        const context = this._invocationContext;
+        const visualization: any = context
+            && (APPLICATION_CONTEXT as any).Scripting?.getApi?.("visualization")?.bindInvocationContext(context);
+        if (!visualization?.renderRegionPngDetailed) {
+            throw new Error("Region capture is unavailable: the visualization scripting API is not registered.");
+        }
+
+        const item: any = this._getTiledImage(0);
+        const cropped = this._croppedSourceOf(item);
+        const requested = options.region && options.region !== "viewport"
+            ? this._rect(options.region)
+            : this.getViewportBoundsInImage(0);
+
+        // Scripts speak PARENT-GLOBAL pixels; the render wants the reference item's own.
+        const toLocal = (x: number, y: number) => cropped ? cropped.fromParentImageCoordinates({ x, y }) : { x, y };
+        const a = toLocal(requested.x, requested.y);
+        const b = toLocal(requested.x + requested.width, requested.y + requested.height);
+        const content = item.getContentSize();
+        // Clamp to the image: a viewport routinely extends past the slide.
+        const left = Math.max(0, Math.min(a.x, b.x));
+        const top = Math.max(0, Math.min(a.y, b.y));
+        const right = Math.min(content.x, Math.max(a.x, b.x));
+        const bottom = Math.min(content.y, Math.max(a.y, b.y));
+        if (!(right > left) || !(bottom > top)) {
+            throw new Error("The requested region does not overlap the slide.");
+        }
+
+        const layers = options.layers === "active" ? "active" : "background";
+        const detail = options.size || options.magnification !== undefined
+            ? { size: options.size, magnification: options.magnification, targetPixels: options.targetPixels }
+            : { targetPixels: options.targetPixels ?? 500_000 };
+        const out = await visualization.renderRegionPngDetailed({
+            region: { x: left, y: top, width: right - left, height: bottom - top },
+            layers,
+            ...detail,
+            ...(Number.isFinite(options.timeoutMs as number) ? { timeoutMs: Number(options.timeoutMs) } : {}),
+        });
+
+        const toParent = (x: number, y: number) => cropped ? cropped.toParentImageCoordinates({ x, y }) : { x, y };
+        const tl = toParent(left, top);
+        const br = toParent(right, bottom);
+        return {
+            image: out.dataUrl,
+            region: {
+                x: Math.round(Math.min(tl.x, br.x)),
+                y: Math.round(Math.min(tl.y, br.y)),
+                width: Math.round(Math.abs(br.x - tl.x)),
+                height: Math.round(Math.abs(br.y - tl.y)),
+            },
+            width: out.width,
+            height: out.height,
+            scale: out.scale,
+            magnification: out.magnification,
+            layers,
+            isComplete: out.isComplete,
+            stalled: out.stalled,
+        };
+    }
+
+    async getViewportScreenshot(options?: {
         width?: number;
         height?: number;
         x?: number;
         y?: number;
         regionWidth?: number;
         regionHeight?: number;
-    }): string {
+    }): Promise<string> {
         const viewer: any = this.activeViewer;
 
         if (!viewer?.drawer?.canvas) {
             throw new Error("No viewport canvas is available.");
         }
+
+        // Pixels leave the viewer for the caller (and so for the model that asked).
+        await this.requirePixelReadConsent(viewer, $.t("scripting.consent.pixelReadViewportScreenshot"));
 
         const focus = (options?.regionWidth && options?.regionHeight)
             ? new OpenSeadragon.Rect(

@@ -184,7 +184,9 @@ addPlugin("pathology-medgemma", class extends XOpatPlugin {
                             system: MEDGEMMA_SYSTEM,
                             prompt: prompt || "Describe the tissue and any notable features in this view.",
                             imageBase64,
-                            mediaType: "image/png",
+                            // The foundation module picks the encoding (JPEG by default,
+                            // PNG when configured) — report what was actually sent.
+                            mediaType: imageBlob.type || "image/png",
                         },
                         // `contextId` selects the server-side verifier context for
                         // this call; omit it entirely when the provider needs no login.

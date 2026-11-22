@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "slide-scoring records land in MLflow experiments/runs",
+    "hint": "Needs an MLflow tracking server reachable at MLFLOW_URL",
+    "env": {
+      "MLFLOW_URL": "Base URL of the MLflow tracking server"
+    },
     "dimension": "io",
     "defaults": { "MLFLOW_URL": "http://localhost:5000/" }
   },
@@ -128,10 +132,8 @@
            escape the prefix (W_MLFLOW_ARTIFACT_DENIED). Trusted config —
            keep it set for the same reason as experimentAllow.
 
-           NO TRAILING SLASH. The check compares against
-           `sanitizeArtifactPath(prefix)`, which rewrites the empty segment a
-           trailing slash produces into `_` — so "xopat/" becomes "xopat/_" and
-           denies every path the template actually emits. */
+           Matched on whole path segments: "xopat" admits `xopat/…`, never
+           `xopat-other/…`. A trailing slash is ignored. */
         "artifactPathPrefix": "xopat",
         "auth": null
       }

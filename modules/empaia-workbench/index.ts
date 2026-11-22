@@ -24,6 +24,9 @@
  *   6. `empaia-ready` raised — the plugin renders from there.
  */
 
+// First on purpose: installs the sender check before the library below adds
+// its own `message` listener at import.
+import "./vaci-sender-guard";
 import {
     addScopeListener, addTokenListener, addWbsUrlListener,
     type Scope, type Token, type WbsUrl,
@@ -327,7 +330,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         });
 
         this._watchTabVisibility();
-        setAnnotationMappingContextProvider(() => this._mappingContext());
+        // Answered per dispatch: the slide a conversion is about, not the focused one.
+        setAnnotationMappingContextProvider((io) => this._mappingContextFor(io));
 
         this._readyPromise = this._boot().catch((e: any) => {
             this._failure = e?.message ?? String(e);
@@ -348,10 +352,10 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * there is no handshake race to guard against here.
      *
      * Note the library does not validate the sender (see the README and
-     * UPSTREAM.md), so any frame holding a handle to this window can push a
-     * `wbsUrl`. The client built from it carries the workbench token, so the
-     * URL is held to an operator allowlist (`wbsOrigins`) — otherwise a
-     * sibling frame winning the handshake race receives the real token.
+     * UPSTREAM.md). `vaci-sender-guard.ts` drops handshake messages that do
+     * not come from `window.top` before the library sees them; the operator
+     * allowlist (`wbsOrigins`) is the second wall for `wbsUrl`, because the
+     * client built from it carries the workbench token.
      */
     private _listenToWorkbench(): void {
         addScopeListener((scope: Scope) => {
@@ -1137,8 +1141,8 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
      * Make the drawing tool produce ROIs of the type the app wants.
      *
      * Everything here is existing annotation-module API — the preset carries the
-     * factory and the colour, `setMode` switches to the ordinary manual-create
-     * tool. No bespoke drawing code exists in this integration.
+     * colour, the active factory is the shape, `setMode` switches to the ordinary
+     * manual-create tool. No bespoke drawing code exists in this integration.
      */
     activateRoiTool(roiType?: EadAnnotationType): void {
         const annotations = this.getAnnotations();
@@ -1171,7 +1175,39 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
             return false;
         }
         annotations.presets.selectPreset(preset.presetID, true);
+        this._armRoiFactory(annotations, preset.objectFactory);
         return true;
+    }
+
+    /** The user's own tool while the ROI shape is borrowed, see {@link _armRoiFactory}. */
+    private _roiToolLoan?: { previous: any; factory: any };
+
+    /**
+     * Selecting a preset does not change the drawing tool, so the ROI shape is
+     * set explicitly — and handed back once drawing ends (the mode returns to
+     * AUTO), unless the user picked another tool in the meantime.
+     */
+    private _armRoiFactory(annotations: any, factory: any): void {
+        const previous = annotations.getActiveFactory();
+        if (!factory || previous === factory) return;
+        annotations.setActiveFactory(factory);
+
+        if (this._roiToolLoan) {
+            // Still borrowed: only the ROI type changed, the user's tool is the same.
+            this._roiToolLoan.factory = factory;
+            return;
+        }
+        const loan = this._roiToolLoan = { previous, factory };
+        // Checked a microtask later, not in the event: switching between two
+        // non-AUTO modes can pass THROUGH AUTO (leaving selection-edit does),
+        // and handing the tool back there draws the region with the user's shape.
+        const giveBack = () => queueMicrotask(() => {
+            if (this._roiToolLoan !== loan || !annotations.isModeAuto()) return;
+            annotations.removeHandler("mode-changed", giveBack);
+            this._roiToolLoan = undefined;
+            if (annotations.getActiveFactory() === loan.factory) annotations.setActiveFactory(loan.previous);
+        });
+        annotations.addHandler("mode-changed", giveBack);
     }
 
     /** Preset id ROIs are drawn with — the plugin filters `annotation-create` on it. */
@@ -2896,7 +2932,11 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
     private _configureAnnotationsModule(): void {
         const annotations = this.getAnnotations();
         if (!annotations) return;
-        annotations.setIOOption("format", "empaia");
+        // No `setIOOption("format", "empaia")` any more: the annotations sink
+        // declares the format it takes (`formats` in sink.ts) and the pipeline
+        // asks for it per destination. Flipping the module-wide format also
+        // changed the user's own file export, and broke this sink the moment
+        // the user picked another format in that dialog.
         this._disposeProps = annotations.registerPersistedProperties
             ? annotations.registerPersistedProperties(...REQUIRED_EXPORT_PROPS)
             : (REQUIRED_EXPORT_PROPS.forEach(p => { annotations.forceExportsProp = p; }), undefined);

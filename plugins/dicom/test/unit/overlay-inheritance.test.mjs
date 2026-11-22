@@ -78,6 +78,48 @@ test("this slide's own generated overlays are reused, never re-appended @unit", 
     expect(event.visualizationIndex).toBe(0);
 });
 
+/** `_topUpOverlayVisualization` against a `this` whose discovery returns `built`. */
+function topUp(existing, requested, built) {
+    let builds = 0;
+    const self = { _buildOverlayVisualization: async (_s, _u, _n, only) => { builds++; self.only = only; return built; } };
+    return Captured.prototype._topUpOverlayVisualization
+        .call(self, existing, { studyUID: STUDY, seriesUID: SLIDE_A }, "Slide A", requested)
+        .then(result => ({ result, builds, only: self.only }));
+}
+
+const layer = (uid, extra = {}) => ({ [`dicom-seg-${uid}`]: { type: "dicom-seg", visible: 1, ...extra } });
+
+test("a reused entry that already shows every requested object costs no discovery @unit", async () => {
+    const existing = { ...generated(SLIDE_A), shaders: layer("1.9.1") };
+    const { result, builds } = await topUp(existing, ["1.9.1"], null);
+
+    expect(result).toBe(null);
+    expect(builds).toBe(0);
+});
+
+test("a reused entry gains the objects it does not show yet, hidden, and keeps the rest @unit", async () => {
+    // A saved session carries the generated entry; an object stored afterwards
+    // (or added to `derived`) must still appear — without disturbing what the
+    // user already arranged.
+    const existing = { ...generated(SLIDE_A), shaders: layer("1.9.1", { visible: 0, params: { edited: true } }) };
+    const built = { ...generated(SLIDE_A), shaders: { ...layer("1.9.1"), ...layer("1.9.2") } };
+
+    const explicit = await topUp(existing, ["1.9.1", "1.9.2"], built);
+    expect(explicit.only).toEqual(["1.9.2"]);
+    expect(Object.keys(explicit.result.shaders)).toEqual(["dicom-seg-1.9.1", "dicom-seg-1.9.2"]);
+    expect(explicit.result.shaders["dicom-seg-1.9.1"]).toEqual({ type: "dicom-seg", visible: 0, params: { edited: true } });
+    expect(explicit.result.shaders["dicom-seg-1.9.2"].visible).toBe(0);
+    expect(explicit.result[marker()]).toBe(SLIDE_A);
+    expect(existing.shaders["dicom-seg-1.9.2"], "the stored entry is not mutated").toBeUndefined();
+
+    const auto = await topUp(existing, "auto", built);
+    expect(auto.only).toBe(null);
+    expect(Object.keys(auto.result.shaders)).toHaveLength(2);
+
+    expect((await topUp(existing, "auto", { shaders: layer("1.9.1") })).result, "nothing new").toBe(null);
+    expect((await topUp(existing, "auto", null)).result, "discovery found nothing").toBe(null);
+});
+
 test("an author-written visualization is left alone @unit", async () => {
     const event = { visualizationIndex: 0, background: { name: "Slide B" } };
 
@@ -106,6 +148,36 @@ test("opening a derived series as its own background drops the inherited overlay
         { visualizations: [generated(SLIDE_A)] });
 
     expect(event.visualizationIndex).toBe(null);
+});
+
+test("the reuse marker survives the session serializers @unit", () => {
+    // `safeStringify` (src/app.ts) and the renderer export drop every key starting
+    // with `_`. An underscore-prefixed marker was gone after each reload, so each
+    // reload appended another copy of the visualization and its data entries.
+    expect(marker().startsWith("_")).toBe(false);
+});
+
+test("rebuilding a slide's overlays reuses its data entries @unit", async () => {
+    const DERIVED = "1.2.840.999.7";
+    globalThis.APPLICATION_CONTEXT.config = { data: [] };
+    const self = {
+        constructor: Captured,
+        t: (key) => key,
+        _derivedIndexFor: async () => ({
+            smSeriesCount: 1,
+            derived: [{ seriesUID: DERIVED, kind: "seg", segments: [], referencedSeries: [SLIDE_A] }],
+        }),
+        _makeDataOverride: Captured.prototype._makeDataOverride,
+    };
+    const build = () => Captured.prototype._buildOverlayVisualization.call(
+        self, STUDY, SLIDE_A, "Slide A", [DERIVED]);
+
+    const first = await build();
+    const second = await build();
+    const refs = (viz) => Object.values(viz.shaders).flatMap(s => s.dataReferences);
+
+    expect(globalThis.APPLICATION_CONTEXT.config.data.length).toBe(1);
+    expect(refs(second)).toEqual(refs(first));
 });
 
 test("a session that asked for no overlays at all is not touched @unit", async () => {

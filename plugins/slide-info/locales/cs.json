@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "name": "Sklíčka",
+    "description": "Procházejte dostupná sklíčka, přepínejte sklíčko zobrazené v prohlížeči a prohlížejte jeho metadata."
+  },
+  "capabilities": {
+    "downloadSlide": "Stáhnout původní soubor sklíčka"
+  },
+  "switcher": {
+    "title": "Sklíčka",
+    "openViewers": "Otevřené prohlížeče ({{num}})",
+    "closeAll": "Zavřít vše",
+    "closeAllTitle": "Zavřít všechny otevřené prohlížeče",
+    "activeViewer": "Aktivní prohlížeč",
+    "inactiveViewer": "Neaktivní prohlížeč",
+    "focusViewer": "Zaměřit tento prohlížeč",
+    "closeViewer": "Zavřít tento prohlížeč",
+    "faultyViewer": "Toto sklíčko se nepodařilo načíst — zavřete jej nebo zde otevřete jiné sklíčko",
+    "faultyBadge": "chybné",
+    "open": "Otevřít",
+    "openBadge": "otevřeno",
+    "visitedBadge": "viděno",
+    "visitedTitle": "Toto sklíčko jste již dříve otevřeli",
+    "openTitle": "Otevřít toto sklíčko v aktivním prohlížeči",
+    "openCardHint": "Kliknutím otevřete v aktivním prohlížeči, nebo přetáhněte do oblasti prohlížeče — rychlé puštění otevře nový výřez, podržení nad výřezem jej nahradí",
+    "dropNewHint": "Pustit: otevřít v novém prohlížeči (podržením nahradit)",
+    "dropReplaceHint": "Pustit: nahradit tento prohlížeč",
+    "dropHereHint": "Pustit: otevřít zde",
+    "focusCardHint": "Toto sklíčko je již otevřené — kliknutím zaměříte jeho prohlížeč",
+    "alreadyOpen": "Toto sklíčko je již otevřené — jeho prohlížeč byl zaměřen.",
+    "moreOptions": "Další možnosti",
+    "openInViewerItem": "Otevřít ve V{{index}} · {{name}}",
+    "openInViewerItemActive": "Otevřít ve V{{index}} (aktivní) · {{name}}",
+    "openInNew": "Otevřít v novém prohlížeči",
+    "hideLabel": "Skrýt štítek",
+    "showLabel": "Zobrazit štítek",
+    "noSlides": "Nejsou k dispozici žádná sklíčka",
+    "noSlidesToDisplay": "Nejsou k dispozici žádná sklíčka k zobrazení",
+    "noConfig": "Chyba: pro toto sklíčko neexistuje konfigurace",
+    "firstSlide": "Toto je první sklíčko na této úrovni.",
+    "lastSlide": "Toto je poslední sklíčko na této úrovni."
+  },
+  "keymap": {
+    "prevSlide": "Předchozí sklíčko",
+    "nextSlide": "Další sklíčko",
+    "prevSlideDesc": "Přepnout zaměřený prohlížeč na předchozí sklíčko v aktuální úrovni prohlížení",
+    "nextSlideDesc": "Přepnout zaměřený prohlížeč na další sklíčko v aktuální úrovni prohlížení"
+  },
+  "demo": {
+    "title": "Není načteno žádné sklíčko",
+    "hint": "Vyberte sklíčko a začněte prohlížet. Správce sklíček zobrazuje vše, co máte k dispozici.",
+    "open": "Otevřít správce sklíček",
+    "menuHint": "Kdykoli jej můžete znovu otevřít z nabídky Zobrazení."
+  },
+  "info": {
+    "title": "Informace o sklíčku",
+    "loadFailed": "Informace o sklíčku se nepodařilo načíst.",
+    "noMetadata": "Pro toto sklíčko nejsou k dispozici žádná metadata.",
+    "clinicalTitle": "Klinické informace",
+    "technicalTitle": "Technické podrobnosti",
+    "downloadSlide": "Stáhnout sklíčko"
+  },
+  "lastSlide": "Toto je poslední sklíčko.",
+  "firstSlide": "Toto je první sklíčko."
+}

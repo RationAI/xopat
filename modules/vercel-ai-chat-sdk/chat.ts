@@ -2956,10 +2956,16 @@ When scripting is not available or insufficient, explain the limitation clearly.
      * Deliberately read-only and session-free: it names a model, it does not create,
      * hydrate or touch a chat session.
      */
-    getAssistantTextModel(): { providerId: string; modelId: string | null } | null {
+    getAssistantTextModel(): { providerId: string; modelId: string | null; images: CapabilityState } | null {
         const providerId = this.chatPanel?._providerId;
         if (!providerId) return null;
-        return { providerId, modelId: this.chatPanel?._modelId || null };
+        const modelId = this.chatPanel?._modelId || null;
+        // Image support as the panel knows it: 'unknown' unless the provider said, or a turn
+        // learned it. Callers that send images (the pathology `assistant` driver) treat only
+        // 'unsupported' as a refusal, matching the chat's own optimistic attachment policy.
+        const model = (this.chatService.getCachedModels?.(providerId) || []).find((m: any) => m.id === modelId);
+        const images: CapabilityState = model?.capabilities?.images || 'unknown';
+        return { providerId, modelId, images };
     }
 
     /**

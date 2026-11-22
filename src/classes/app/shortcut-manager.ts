@@ -102,6 +102,13 @@ export type ShortcutSpec = {
      * arm on a held modifier and query {@link ShortcutManager#pointerModifiersMatch}.
      */
     capture?: "key" | "modifiers";
+    /**
+     * Modifier-only bindings only: the pointer gesture the modifier arms
+     * (e.g. `"drag"`, `"wheel"`). Conflicts are enforced per gesture, so the
+     * same modifier may arm Ctrl+drag and Ctrl+wheel without clashing — a
+     * pointer event is never both. Default `"pointer"` (one shared namespace).
+     */
+    gesture?: string;
     /** Call `preventDefault()` on the matched event. Default `true`. */
     preventDefault?: boolean;
     /** Press callback. */
@@ -410,13 +417,22 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         const parts = parseCombo(combo);
         if (!parts) return [];
         this._sync();
+        // Modifier-only combos conflict only within the gesture of the shortcut
+        // being rebound; without one, any gesture counts.
+        const gesture = parts.modifierOnly && excludeId ? this._gestureOf(excludeId) : null;
         const key = comboIndexKey(parts);
         const out: string[] = [];
         for (const [id, eff] of this._effective) {
             if (id === excludeId) continue;
+            if (gesture !== null && this._gestureOf(id) !== gesture) continue;
             if (eff.parsed.some(p => comboIndexKey(p) === key)) out.push(id);
         }
         return out;
+    }
+
+    /** Conflict namespace of a modifier-only binding (see {@link ShortcutSpec.gesture}). */
+    private _gestureOf(id: string): string {
+        return this._specs.get(id)?.gesture || "pointer";
     }
 
     // ── User remapping ──────────────────────────────────────────────────────
@@ -602,7 +618,9 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         const claim = (id: string, combo: string, suppressed: string[]): ComboParts | null => {
             const parts = parseCombo(combo);
             if (!parts) return null;
-            const key = comboIndexKey(parts);
+            const key = parts.modifierOnly
+                ? `${comboIndexKey(parts)}:${this._gestureOf(id)}`
+                : comboIndexKey(parts);
             const owner = taken.get(key);
             if (owner) {
                 // Unique assignment: first claim wins; a losing DEFAULT is

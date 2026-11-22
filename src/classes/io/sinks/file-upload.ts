@@ -17,18 +17,43 @@ export const fileUploadSink: IOSink = {
     async readBundle(ctx) {
         const U = (globalThis as any).UTILITIES;
         try {
-            const fileContent = await pickFile(ctx, U);
-            if (fileContent === null) {
+            const picked = await pickFile(ctx, U);
+            if (picked === null) {
                 return { ok: false, refused: true, reason: "user cancelled", code: "W_IO_CANCELLED" };
             }
-            return { ok: true, payload: fileContent };
+            // The name travels with the content: it is the only evidence of the
+            // file's format that is not the content itself.
+            return { ok: true, payload: picked.content, meta: { fileName: picked.fileName } };
         } catch (e: any) {
             return { ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_UPLOAD_THREW" };
         }
     },
 };
 
-function pickFile(ctx: IOContext, U: any): Promise<string | null> {
+/**
+ * Is the picked file one of the owner's binary formats? Reading such a file as
+ * text corrupts it before any decoder sees it. A format pinned on the context
+ * decides; otherwise the longest registered extension the name ends with —
+ * the only evidence available before the file is read.
+ */
+function isBinaryFile(ctx: IOContext, fileName: string): boolean {
+    if (ctx.format) return !!ctx.format.binary;
+    const formats = (globalThis as any).IO_PIPELINE?.formats as IOFormatRegistryLike | undefined;
+    if (!formats || !ctx.ownerId) return false;
+    const name = fileName.toLowerCase();
+    let binary = false, longest = 0;
+    for (const format of formats.list(ctx.ownerId)) {
+        for (const ext of format.extensions ?? []) {
+            if (name.endsWith(ext) && ext.length > longest) {
+                longest = ext.length;
+                binary = !!format.binary;
+            }
+        }
+    }
+    return binary;
+}
+
+function pickFile(ctx: IOContext, U: any): Promise<{ content: string | ArrayBuffer; fileName: string } | null> {
     return new Promise((resolve, reject) => {
         const input = document.createElement("input");
         input.type = "file";
@@ -45,17 +70,20 @@ function pickFile(ctx: IOContext, U: any): Promise<string | null> {
         input.addEventListener("change", async (e) => {
             settled = true;
             try {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                const fileName = file?.name ?? "";
+                const binary = isBinaryFile(ctx, fileName);
                 if (U?.readFileUploadEvent) {
-                    const data = await U.readFileUploadEvent(e);
+                    const data = await U.readFileUploadEvent(e, binary ? "bytes" : "text");
                     cleanup();
-                    resolve(data);
+                    resolve({ content: data, fileName });
                 } else {
-                    const file = (e.target as HTMLInputElement).files?.[0];
                     if (!file) { cleanup(); resolve(null); return; }
                     const reader = new FileReader();
-                    reader.onload = () => { cleanup(); resolve(reader.result as string); };
+                    reader.onload = () => { cleanup(); resolve({ content: reader.result as string | ArrayBuffer, fileName }); };
                     reader.onerror = () => { cleanup(); reject(reader.error); };
-                    reader.readAsText(file);
+                    if (binary) reader.readAsArrayBuffer(file);
+                    else reader.readAsText(file);
                 }
             } catch (err) { cleanup(); reject(err); }
         }, { once: true });

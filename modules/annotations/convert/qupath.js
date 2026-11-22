@@ -1,32 +1,10 @@
-OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convertor.IConvertor {
-    static title = 'QuPath Annotations';
-    static description = 'Annotations for quPath (GeoJSON format).';
-    static exportsPresets = false;
-    static includeAllAnnotationProps = false;
-
-    static lossy = true;
-    static lossyReason = "QuPath stores geometry only — text, custom factory metadata, and presets do not round-trip. Lines and angles import back as plain polylines.";
-
-    static getSuffix() {
-        return 'qu.geo.json';
+OSDAnnotations.QuPathCodec = class {
+    /** @param {IOFormatContext} fctx */
+    constructor(fctx) {
+        this.options = fctx.options;
+        this.module = fctx.context?.module || OSDAnnotations.instance();
+        this.offset = this.options.addOffset ? this._normalizeOffset(this.options.imageCoordinatesOffset) : undefined;
     }
-
-    static options = {
-        "_title": {
-            type: "text",
-            content: "Note: QuPath is a lossy format, since some annotations (like text) cannot be preserved."
-        },
-        "addOffset": {
-            type: "checkBox",
-            label: "Export/Import with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
-            default: true
-        },
-        "trimToDefaultPresets": {
-            type: "checkBox",
-            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes. Replace them when exporting to prevent this error.</span>",
-            default: true
-        },
-    };
 
     //default presets in quPath that are safe to export
     _defaultQuPathPresets = [{"color":"#b4b4b4","factoryID":"polygon","presetID":"Ignore*","meta":{"category":
@@ -50,11 +28,13 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return res && res.length === 3 ? res.map(v => parseInt(v, 16)) : null;
         }
 
-        if (this._presetReplacer && !this._validPresets.includes(preset.presetID)) {
+        // `preset` may be missing (deleted, or never imported): the feature is
+        // then written without a classification rather than not at all.
+        if (this._presetReplacer && (!preset || !this._validPresets.includes(preset.presetID))) {
             preset = this._presetReplacer;
         }
 
-        const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
+        const factory = this.module.getAnnotationObjectFactory(object.factoryID);
         let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
         let coordinates;
 
@@ -73,19 +53,19 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                 coordinates = poly;
             }
 
-            const props = {
-                "objectType": "annotation",
-                "classification": {
+            const props = { "objectType": "annotation" };
+            if (preset) {
+                props.classification = {
                     "name": preset.meta.category.value,
                     "color": hexToRgb(preset.color)
-                }
-            };
+                };
+            }
 
             //qupath ellipse flag
             if (factory.id === "ellipse") props.isEllipse = true;
             //allow only hex colors
-            if (object.fill && preset.color != object.fill && object.fill[0] == "#") props.color = hexToRgb(object.fill);
-            if (object.meta?.category && preset.meta.category.value != object.meta.category) props.name = object.meta.category;
+            if (object.fill && preset?.color != object.fill && object.fill[0] == "#") props.color = hexToRgb(object.fill);
+            if (object.meta?.category && preset?.meta.category.value != object.meta.category) props.name = object.meta.category;
 
             for (let p of deleteProps) delete props[p];
             return {
@@ -167,24 +147,24 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     //decode all unsupported geometries
     decoders = {
         Point: (object, featureParentDict) => {
-            let factory = OSDAnnotations.instance().getAnnotationObjectFactory("point");
-            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.context.module.presets.getCommonProperties());
+            let factory = this.module.getAnnotationObjectFactory("point");
+            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.module.presets.getCommonProperties());
         },
         MultiPoint: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Point"),
         LineString: (object, featureParentDict) => {
-            let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polyline");
-            return factory.create(this._toNativeRing(object.coordinates, false), this.context.module.presets.getCommonProperties());
+            let factory = this.module.getAnnotationObjectFactory("polyline");
+            return factory.create(this._toNativeRing(object.coordinates, false), this.module.presets.getCommonProperties());
         },
         MultiLineString: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "LineString"),
         Polygon: (object, featureParentDict) => {
             if (object.coordinates.length > 1) {
-                let factory = OSDAnnotations.instance().getAnnotationObjectFactory("multipolygon");
+                let factory = this.module.getAnnotationObjectFactory("multipolygon");
                 const rings = object.coordinates.map(ring => this._toNativeRing(ring));
-                return factory.create(rings, this.context.module.presets.getCommonProperties());
+                return factory.create(rings, this.module.presets.getCommonProperties());
             }
 
-            let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polygon");
-            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.context.module.presets.getCommonProperties());
+            let factory = this.module.getAnnotationObjectFactory("polygon");
+            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.module.presets.getCommonProperties());
         },
         MultiPolygon: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Polygon"),
         GeometryCollection: (object, featureParentDict) => {
@@ -194,22 +174,6 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             result.objects = result._objects; //hack, import works without underscore
             return result;
         },
-    }
-
-    static encodeFinalize(output) {
-        let result = {
-            type: "FeatureCollection",
-            features: []
-        };
-        let list = result.features;
-
-        if (Array.isArray(output.objects)) {
-            for (let obj of output.objects) {
-                const data = typeof obj === "string" ? JSON.parse(obj) : obj;
-                list.push(data);
-            }
-        }
-        return JSON.stringify(result);
     }
 
     /**
@@ -228,43 +192,48 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         return undefined;
     }
 
-    async encodePartial(annotationsGetter, presetsGetter) {
-        const result = {}
-        if (!this.options.exportsObjects) return result;
-        this.offset = this.options.addOffset ? this._normalizeOffset(this.options.imageCoordinatesOffset) : undefined;
-        this._presetReplacer = this.options.trimToDefaultPresets ?
-            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context.module) : false;
-        this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
+    encode(model) {
+        const features = [];
+        const annotations = this.options.exportsObjects !== false ? model.objects : undefined;
+        if (Array.isArray(annotations)) {
+            this._presetReplacer = this.options.trimToDefaultPresets ?
+                OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.module) : false;
+            this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
+            // Presets are not written, but each feature's classification is read from its preset.
+            const presets = model.presets || [];
+            const skipped = {};
 
-        const annotations = annotationsGetter();
-        const presets = presetsGetter();
-
-        // for each object (annotation) create new annotation element with coresponding coordinates
-        if (annotations) {
-            result.objects = [];
             for (let obj of annotations) {
                 if (!obj.factoryID || obj.factoryID.startsWith("_")) {
                     continue;
                 }
 
+                // Without a preset there is no classification to write — but the
+                // geometry is still the user's data, so it is exported unclassified.
                 // noinspection JSUnresolvedVariable
-                if (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== "")) {
-                    let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
-                    if (encoded) {
-                        encoded.type = "Feature";
-                        if (this.options.serialize) encoded = JSON.stringify(encoded);
-                        result.objects.push(encoded);
-                    }
+                const preset = (Number.isInteger(obj.presetID) || (typeof obj.presetID === "string" && obj.presetID !== ""))
+                    ? presets.find(p => p.presetID == obj.presetID)
+                    : undefined;
+                const encoder = this.encoders[obj.factoryID];
+                if (!encoder) {
+                    skipped[obj.factoryID] = (skipped[obj.factoryID] || 0) + 1;
+                    continue;
+                }
+                const encoded = encoder(obj, preset);
+                if (encoded) {
+                    encoded.type = "Feature";
+                    features.push(encoded);
                 }
             }
+            if (Object.keys(skipped).length) {
+                console.warn("[annotations] QuPath export left out shapes it cannot express:", skipped);
+            }
         }
-        return result;
+        return JSON.stringify({ type: "FeatureCollection", features });
     }
 
-    async decode(data) {
-        this.offset = this.options.addOffset ? this._normalizeOffset(this.options.imageCoordinatesOffset) : undefined;
-
-        data = JSON.parse(data);
+    decode(data) {
+        if (typeof data === "string") data = JSON.parse(data);
 
         function asHexColor(arr) {
             return "#" + arr.map(x => x.toString(16).padStart(2, '0')).join('');
@@ -296,7 +265,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                 // define if not exists
                 if (!presets[pid]) {
                     presets[pid] = builtInPreset || {
-                        color: this.context.module.presets.randomColorHexString(),
+                        color: this.module.presets.randomColorHexString(),
                         factoryID: "polygon",
                         presetID: pid,
                         meta: {
@@ -331,7 +300,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         let skippedInvalid = 0;
         const parseFeature = (object, presets, annotations) => {
             if (object.geometry === null) {
-                throw "Invalid feature! ";
+                throw new Error("Invalid feature!");
             }
 
             if (hasInvalidCoord(object.geometry?.coordinates)) {
@@ -352,7 +321,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             } else if (result) {
                 addAnnotations(result, object, presets, annotations);
             } else {
-                throw "Could not import!";
+                throw new Error("Could not import!");
             }
         };
 
@@ -368,7 +337,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             //single feature
             parseFeature(data, presets, annotations);
         } else {
-            throw "Unsupported quPath GEOJson Type " + data.type;
+            throw new Error("Unsupported quPath GEOJson Type " + data.type);
         }
 
         if (skippedInvalid > 0 && typeof Dialogs !== 'undefined' && Dialogs?.show) {
@@ -385,4 +354,46 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             presets: Object.values(presets)
         };
     }
+};
+
+IO_PIPELINE.formats.register({
+    domain: "annotations",
+    id: "qupath",
+    title: 'QuPath Annotations',
+    description: 'Annotations for quPath (GeoJSON format).',
+    extensions: [".qu.geo.json"],
+    contentType: "application/geo+json",
+    lossy: "QuPath stores geometry only — text, custom factory metadata, and presets do not round-trip. Lines and angles import back as plain polylines.",
+    traits: { allProps: false, presets: false },
+    options: {
+        "_title": {
+            type: "text",
+            content: "Note: QuPath is a lossy format, since some annotations (like text) cannot be preserved."
+        },
+        "addOffset": {
+            type: "checkBox",
+            label: "Export/Import with offset<br><span class='text-small'>QuPath renders WSI without padding. xOpat depends on the underlying server. If you experience shift in annotations, change this property.</span>",
+            default: true
+        },
+        "trimToDefaultPresets": {
+            type: "checkBox",
+            label: "Replace custom presets with 'Ignore*'<br><span class='text-small'>QuPath import fails with foreign annotation classes. Replace them when exporting to prevent this error.</span>",
+            default: true
+        },
+    },
+
+    encode: (model, fctx) => new OSDAnnotations.QuPathCodec(fctx).encode(model),
+    decode: (data, fctx) => new OSDAnnotations.QuPathCodec(fctx).decode(data),
+
+    sniff(_data, hint) {
+        const json = hint.json;
+        if (!json || typeof json !== "object") return 0;
+        const features = Array.isArray(json) ? json
+            : json.type === "FeatureCollection" ? (json.features || [])
+            : json.type === "Feature" ? [json] : null;
+        if (!features || !features.length) return 0;
+        if (features.slice(0, 20).some(f => f?.properties?.objectType)) return 0.9;
+        // A plain feature list is something only this format reads.
+        return Array.isArray(json) && features[0]?.type === "Feature" ? 0.5 : 0.1;
+    },
 });

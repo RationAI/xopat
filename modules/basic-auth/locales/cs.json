@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "name": "HTTP Basic autentizace",
+    "description": "Vyžádá uživatelské jméno a heslo a připojí je jako přihlašovací údaj HTTP Basic.",
+    "longDescription": "Zdroj přihlašovacích údajů pro typ tajemství `basic`. Registruje autentizačního zprostředkovatele, aby kterákoli funkce mohla vyžadovat přihlášení pro pojmenovaný kontext, poté uchovává uživatelské jméno a heslo pouze v paměti a nechává HttpClient připojit `Authorization: Basic`. Pokud je přihlášení vázané na nasazení, nikoli na uživatele, dejte přednost přihlašovacím údajům proxy na straně serveru."
+  },
+  "title": "Přihlásit se do {{service}}",
+  "username": "Uživatelské jméno",
+  "submit": "Přihlásit se",
+  "error": {
+    "usernameRequired": "Zadejte uživatelské jméno.",
+    "insecureOrigin": "Přihlašovací údaje Basic nelze odeslat přes nešifrované spojení. Použijte HTTPS."
+  }
+}

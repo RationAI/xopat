@@ -139,12 +139,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // deployment config is reported and downgraded once here instead of
         // throwing inside Convertor.get() on every bundle flush. A runtime
         // choice (setIOOption, itself validated) still wins.
-        const formatOf = (ctx) => {
-            if (ctx.meta && ctx.meta.format) return ctx.meta.format;
-            const fallback = this.defaultFormat;
-            return this.getExportOptions()?.format || fallback;
-        };
+        // `ctx.format` is the pipeline's answer: the format the destination
+        // takes, was pinned to, or returned — for a sink that takes any format
+        // and has no pin, the deployment `defaultFormat` handed over below.
+        // Absent, the CONFIGURED format applies on both routes: `_ioArgs.format`
+        // is deployment/session configuration (`convertors.format`, or the
+        // annotations plugin's `ioFormat` through setIOOption) — never the pick
+        // in the download dialog, which the plugin keeps to itself. A stored
+        // destination therefore still never follows a UI preference.
+        const configuredFormat = () => this.getExportOptions()?.format || this.defaultFormat;
+        const formatOf = (ctx) => ctx.format?.id || configuredFormat();
         await this.initIO({
+            // The configured format (validated), else native. What a
+            // format-agnostic sink (GitHub, MLflow, http-rest) stores when
+            // neither the binding nor the sink's own config pins a format, and
+            // what a bound `file-download` writes.
+            defaultFormat: () => configuredFormat(),
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
             // auto-fires flush-on-leave + restore-on-enter when the active
@@ -157,7 +167,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return undefined;
-                return fabric.export({ format: formatOf(ctx) }, true, true);
+                // The binding's `formatOptions` (only those it sets; they win over
+                // the user's values) and the dispatch itself go to the format: a format
+                // that needs slide-scoped data resolves it from `io`.
+                return fabric.export({ ...ctx.format?.options, format: formatOf(ctx), io: ctx }, true, true);
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
@@ -189,18 +202,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 }
                 if (data === undefined || data === null) return;
                 try {
-                    // Payload-specific sinks (e.g. DICOM SR) wrap their content
-                    // as `{ format, meta, buffer }` so they can carry both the
-                    // wire-format hint and any decoder-side metadata (slide
-                    // pixel spacing, FrameOfReferenceUID, …). Unwrap here so
-                    // the convertor receives the raw payload + its meta.
-                    const isWrapped = typeof data === "object"
-                        && data !== null
-                        && typeof data.format === "string"
-                        && "buffer" in data;
-                    const importOptions = isWrapped
-                        ? { format: data.format, meta: data.meta }
-                        : { format: formatOf(ctx) };
+                    // The pipeline has already resolved what this payload is
+                    // (`ctx.format`: the sink's own tag, the binding, or
+                    // detection) and merged any decoder-side metadata the sink
+                    // returned (slide pixel spacing, FrameOfReferenceUID, …)
+                    // into `ctx.meta`.
+                    // The binding's `formatOptions` apply both ways, so a value
+                    // written with one setting is read back with the same one.
+                    const importOptions = { ...ctx.format?.options, format: formatOf(ctx), meta: ctx.meta, io: ctx };
                     // Slide-aware restores aren't user actions; skip history
                     // so the populate is synchronous too (same race that the
                     // clear above was hitting). The legacy per-viewer path
@@ -216,8 +225,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                         importOptions.history = false;
                         importOptions.presetMode = 'merge';
                     }
-                    const payload = isWrapped ? data.buffer : data;
-                    await fabric.import(payload, importOptions, true);
+                    await fabric.import(data, importOptions, true);
                 } catch (e) {
                     // Rethrow so the IO pipeline surfaces the failure to the
                     // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
@@ -679,21 +687,38 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this._ioArgs;
     }
 
-    async exportViewerData(viewer, key, viewerTargetID) {
-        const fabric = this.getFabric(viewer);
-        return fabric.export();
+    /**
+     * Set a value for one of a format's own options (those it declares in
+     * `IOFormat.options`). Held per format for this session and merged into
+     * every export/import that uses the format.
+     * @param {string} format registered format id
+     * @param {string} name option name
+     * @param {*} value
+     */
+    setFormatOption(format, name, value) {
+        if (!this._formatOptions) this._formatOptions = {};
+        (this._formatOptions[format] || (this._formatOptions[format] = {}))[name] = value;
     }
 
-    async importViewerData(viewer, key, viewerTargetID, data) {
-        if (data === undefined || data === null) return;
-
-        const fabric = this.getFabric(viewer);
-        const options = { inheritSession: true, history: false };
-        await fabric.import(data, options);
+    /**
+     * The values set through {@link setFormatOption} for one format.
+     * Declared defaults are applied by the registry, not here.
+     * @param {string?} format
+     * @return {object}
+     */
+    getFormatOptions(format) {
+        return (format && this._formatOptions?.[format]) || {};
     }
 
+    /**
+     * File extension (with the leading dot) the given format is written with.
+     * @param {string?} format default the module's format
+     * @return {string}
+     */
 	getFormatSuffix(format=undefined) {
-		return OSDAnnotations.Convertor.getSuffix(format);
+		const registered = IO_PIPELINE.formats.get(OSDAnnotations.Convertor.DOMAIN,
+			format || this._ioArgs.format || this.defaultFormat);
+		return registered?.extensions[0] || "";
 	}
 
 	/**
@@ -806,10 +831,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         for (let instance of OSDAnnotations.FabricWrapper.instances()) {
             instance.setMouseOSDInteractive(isOSDInteractive);
         }
-        if (isOSDInteractive) {
-            if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-            if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
-        }
+        if (isOSDInteractive) this.getActiveFactory().finishIndirect();
 		this.mouseOSDInteractive = isOSDInteractive;
 		if (_raise) this.raiseEvent('osd-interactivity-toggle');
 	}
@@ -831,6 +853,51 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.objectFactories.hasOwnProperty(objectType))
 			return this.objectFactories[objectType];
 		return undefined;
+	}
+
+	/**
+	 * The drawing tool: the factory a click creates an annotation with. It is
+	 * independent of the active preset (class) - selecting a preset never changes
+	 * it. Shared by both mouse buttons.
+	 *
+	 * Resolution: explicitly set factory -> the one cached from the last session
+	 * -> the active preset's (deprecated) default factory -> polygon. Whatever is
+	 * resolved first is latched, so the tool also stays put for a user who never
+	 * picked a shape.
+	 * @param {boolean} [isLeftClick=true] which button's preset supplies the default
+	 * @return {OSDAnnotations.AnnotationObjectFactory}
+	 */
+	getActiveFactory(isLeftClick=true) {
+		let factory = this._activeFactoryID && this.getAnnotationObjectFactory(this._activeFactoryID);
+		if (factory) return factory;
+
+		// Factories may register late; an id that does not resolve (yet) is not latched.
+		factory = this.getAnnotationObjectFactory(this.cache.get('tool.factory'));
+		if (!factory) {
+			const preset = this.presets.getActivePreset(isLeftClick) || this.presets.getActivePreset(!isLeftClick);
+			factory = preset?.objectFactory;
+			// Nothing to derive from: answer polygon, but leave the latch open for a preset.
+			if (!factory) return this.polygonFactory;
+		}
+		this._activeFactoryID = factory.factoryID;
+		return factory;
+	}
+
+	/**
+	 * Set the drawing tool, see getActiveFactory().
+	 * @event active-factory-change
+	 * @param {OSDAnnotations.AnnotationObjectFactory|string} factory instance or factoryID
+	 * @return {boolean} false if the factory is not registered
+	 */
+	setActiveFactory(factory) {
+		if (typeof factory === "string") factory = this.getAnnotationObjectFactory(factory);
+		if (!factory) return false;
+		if (this._activeFactoryID === factory.factoryID) return true;
+
+		this._activeFactoryID = factory.factoryID;
+		this.cache.set('tool.factory', factory.factoryID);
+		this.raiseEvent('active-factory-change', {factory});
+		return true;
 	}
 
 	/**
@@ -2402,8 +2469,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_setModeToAuto(switching) {
 		this._wasModeFiredByKey = false;
-		if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
-		if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
+		this.getActiveFactory().finishIndirect();
 
 		if (this.mode.setToAuto(switching)) {
 			// Assign first: a handler reading `context.mode` must not see the mode
@@ -2700,7 +2766,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 * @return {boolean} true if the event was handled, i.e. do not bubble up
 	 */
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2725,7 +2792,8 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {TouchEvent | MouseEvent} o original js event
 	 * @param {Point} point mouse position in image coordinates (pixels)
 	 * @param {boolean} isLeftClick true if left mouse button
-	 * @param {OSDAnnotations.AnnotationObjectFactory}objectFactory factory currently bound to the button
+	 * @param {OSDAnnotations.AnnotationObjectFactory} objectFactory the active drawing tool
+	 *   (getActiveFactory()), undefined when no preset is bound to the button
 	 */
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		//do nothing
@@ -3342,8 +3410,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	handleMouseMove(e, point) {
 		//todo experiment with this condition, also is it necessary for fft?
 		if (this.context.isMouseOSDInteractive()) {
-			if (this.context.presets.left) this.context.presets.left.objectFactory.updateCreate(point.x, point.y);
-			if (this.context.presets.right) this.context.presets.right.objectFactory.updateCreate(point.x, point.y);
+			// the in-flight shape keeps its own factory even if the tool changed meanwhile
+			(this._lastUsed || this.context.getActiveFactory()).updateCreate(point.x, point.y);
 			this.context.fabric.rerender();
 		}
 	}

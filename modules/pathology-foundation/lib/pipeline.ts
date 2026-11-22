@@ -41,8 +41,15 @@ export interface PipelineOptions<TField, TRaster, TResult> {
     /**
      * Called when a field fails, instead of failing the run. A walk that loses its whole
      * remaining budget because one region timed out is worse than a walk with a gap in it.
+     *
+     * `at.stage` says WHICH half threw: `"render"` means no raster exists, `"analyze"` means
+     * the raster (passed along) was produced and the model call failed. A caller reporting
+     * the failure must not collapse the two — one is a tile/render problem, the other a
+     * model/transport one, and they send a reader to opposite fixes.
      */
-    onError?: (field: TField, error: unknown) => TResult | null;
+    onError?: (
+        field: TField, error: unknown, at: { stage: "render" | "analyze"; raster?: TRaster }
+    ) => TResult | null;
     /** Rasters allowed in flight or waiting. Default `visionConcurrency + 1`. */
     renderWindow?: number;
     /**
@@ -93,9 +100,10 @@ export async function* runFieldPipeline<TField, TRaster, TResult>(
     const renders = createSemaphore(Math.max(1, opts.renderConcurrency ?? 1));
 
     const startOne = async (field: TField): Promise<TResult | null> => {
+        let raster: TRaster | undefined;
+        let stage: "render" | "analyze" = "render";
         try {
             const releaseRender = await renders.acquire();
-            let raster: TRaster;
             try {
                 // Checked after the permit, not before: a field that waited behind others for
                 // its turn must not render into a run the caller has already cancelled.
@@ -105,6 +113,7 @@ export async function* runFieldPipeline<TField, TRaster, TResult>(
                 releaseRender();
             }
             if (opts.signal?.aborted) return null;
+            stage = "analyze";
             const release = await vision.acquire();
             try {
                 if (opts.signal?.aborted) return null;
@@ -112,11 +121,11 @@ export async function* runFieldPipeline<TField, TRaster, TResult>(
             } finally {
                 release();
                 // The analysis is done with the pixels whether it succeeded or not; the
-                // PNG it derived is what the model needed, and that is far smaller.
+                // image it derived is what the model needed, and that is far smaller.
                 opts.onRasterConsumed?.(raster);
             }
         } catch (e) {
-            if (opts.onError) return opts.onError(field, e);
+            if (opts.onError) return opts.onError(field, e, stage === "analyze" ? { stage, raster } : { stage });
             return null;
         }
     };

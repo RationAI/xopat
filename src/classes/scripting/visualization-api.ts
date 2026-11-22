@@ -6,6 +6,7 @@ import type {
     VisualizationViewportPixelsResult,
     VisualizationRegionRenderOptions,
     VisualizationRegionPixelsResult,
+    VisualizationRegionPngResult,
     VisualizationFirstPassExtractOptions,
     VisualizationLayerSource,
     VisualizationShaderGroupOrLayer,
@@ -17,6 +18,7 @@ import type {
 import { XOpatScriptingApi } from "./abstract-api";
 import { fetchDtsCached } from "./dts-fetch";
 import { VISUALIZATION_ASSISTANT_HINTS } from "./visualization-api.assistant";
+import { resolveRegionRenderSize } from "./region-render-size";
 import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
 import {
     compileVisualizationConfigSchema,
@@ -27,6 +29,37 @@ import {
     validateVisualizations,
     type VisualizationIssue,
 } from "../app/visualization-validation";
+import { ViewerSelectionState } from "../app/viewer-selection-state";
+import { deserializeScene, serializeSceneFromViewer } from "../app/canonical-scene";
+
+/**
+ * Merge a layer patch onto an existing layer: a `type` change REPLACES the layer (the old
+ * type's controls do not transfer), anything else deep-merges.
+ *
+ * A control's current value lives in `cache[type][control]` and is re-applied on load, so
+ * it outranks `params[control]`. A patch that sets `params.opacity` on a layer whose cache
+ * already holds an `opacity` would otherwise validate, apply, and change nothing — so the
+ * cached value of every param the patch names is dropped first.
+ */
+function mergeLayerPatch(existingLayer: any, patchLayer: any): any {
+    const patchType = isPlainObject(patchLayer) ? patchLayer.type : undefined;
+    const existingType = isPlainObject(existingLayer) ? existingLayer.type : undefined;
+    if (patchType && existingType && patchType !== existingType) {
+        return cloneJson(patchLayer);
+    }
+
+    const base: any = OpenSeadragon.extend(true, {}, existingLayer || {});
+    const patchedParams = isPlainObject(patchLayer?.params) ? Object.keys(patchLayer.params) : [];
+    if (patchedParams.length && isPlainObject(base.cache)) {
+        for (const key of patchedParams) {
+            delete base.cache[key];                             // flat 3.x cache
+            for (const bucket of Object.values<any>(base.cache)) {
+                if (isPlainObject(bucket)) delete bucket[key];  // { [type]: { [control]: value } }
+            }
+        }
+    }
+    return OpenSeadragon.extend(true, base, cloneJson(patchLayer));
+}
 
 /**
  * Thrown by `requireVisualizationReview` when the user clicks "Send to LLM with
@@ -36,6 +69,12 @@ import {
  * the feedback verbatim — the LLM treats it as a normal "user wants refinement"
  * signal and re-plans.
  */
+/**
+ * Client deadline for a `runVisionInference` RPC. At or above the server's own budget for the
+ * method (300 s), so the server's result or timeout ends the call rather than the browser.
+ */
+const VISION_RPC_TIMEOUT_MS = 315_000;
+
 class VisualizationReviewFeedbackError extends Error {
     feedback: string;
     editedSnapshot: VisualizationStateSnapshot;
@@ -291,7 +330,24 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         });
     }
 
-    protected buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
+    /**
+     * The per-slot selection with ONE slot changed: the script's active viewer.
+     *
+     * The open pipeline broadcasts a scalar, or the first element of a short array, to every
+     * viewer that has no entry of its own. "Make this visualization active" passed as `index`
+     * or `[index]` therefore switched every open viewer — overlays for one slide landed on all
+     * of them. Handing back the full slot-aligned selection leaves the others as they are.
+     */
+    protected selectionForActiveViewer(index: number): Array<number | undefined> {
+        const next = (this.getActiveVisualizationSelection() || []).slice();
+        let slot: any = (VIEWER_MANAGER as any)?.getViewerSlotIndex?.(this.activeViewer);
+        if (!Number.isInteger(slot) || slot < 0) slot = 0;
+        while (next.length <= slot) next.push(undefined);
+        next[slot] = index;
+        return next;
+    }
+
+    protected _buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
         const visualizations = cloneJson(Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : []);
         // Persisted visualizations may carry top-level shader entries whose ids
         // collide with config.background[i].id. The playground assembler keys
@@ -308,7 +364,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         };
     }
 
-    protected async applyVisualizationStateSnapshot(
+    protected async _applyVisualizationStateSnapshot(
         snapshot: VisualizationStateSnapshot,
         options: {
             historyLabel?: string;
@@ -390,6 +446,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             cancelLabel?: string;
             rejectedMessage?: string;
             cacheKey?: string;
+            /** Index of the visualization this change is about; see `VisualizationReviewOptions`. */
+            targetIndex?: number;
         } = {}
     ): Promise<VisualizationStateSnapshot> {
         const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
@@ -403,7 +461,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const playgroundAvailable = !!(PLAYGROUND && typeof PLAYGROUND.open === "function" && typeof document !== "undefined");
 
         // Defensive strip: even if the snapshot was built ad-hoc by a caller
-        // (instead of going through buildVisualizationStateSnapshot), guarantee
+        // (instead of going through _buildVisualizationStateSnapshot), guarantee
         // the playground/headless commit never sees a viz shader whose id
         // collides with a configured background. Operates on a clone so the
         // caller's object is left intact.
@@ -431,7 +489,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         const viewer = this.activeViewer;
         // Apply-on-accept is OFF: the caller pipeline (APPLICATION_CONTEXT.updateVisualization
-        // or applyVisualizationStateSnapshot) commits after this returns, so we don't want
+        // or _applyVisualizationStateSnapshot) commits after this returns, so we don't want
         // the helper to apply twice. The helper still runs the playground UI and returns
         // the user's decision.
         const noopApply = async () => true;
@@ -443,6 +501,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 title: options.title,
                 rationale: options.rationale,
                 historyLabel: options.historyLabel,
+                targetIndex: options.targetIndex,
             },
         );
 
@@ -618,16 +677,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (patchShaders) {
             if (!isPlainObject(merged.shaders)) merged.shaders = {};
             for (const [layerKey, patchLayer] of Object.entries(patchShaders)) {
-                const existingLayer = merged.shaders[layerKey];
-                const patchType = isPlainObject(patchLayer) ? (patchLayer as any).type : undefined;
-                const existingType = isPlainObject(existingLayer) ? (existingLayer as any).type : undefined;
-
-                if (patchType && existingType && patchType !== existingType) {
-                    // Type change → fresh layer. Don't drag old controls along.
-                    merged.shaders[layerKey] = cloneJson(patchLayer);
-                } else {
-                    merged.shaders[layerKey] = OpenSeadragon.extend(true, {}, existingLayer || {}, cloneJson(patchLayer));
-                }
+                merged.shaders[layerKey] = mergeLayerPatch(merged.shaders[layerKey], patchLayer);
             }
         }
 
@@ -1012,7 +1062,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * back, so a capture → restore round-trip is unaffected by the masking.
      */
     captureState(): VisualizationStateSnapshot {
-        const snapshot = this.buildVisualizationStateSnapshot();
+        const snapshot = this._buildVisualizationStateSnapshot();
         return { ...snapshot, data: this.maskDataEntries(snapshot.data) };
     }
 
@@ -1041,7 +1091,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             rejectedMessage: "Visualization state restore was canceled by the user.",
             cacheKey: "visualization:restore-state",
         });
-        return await this.applyVisualizationStateSnapshot(accepted, {
+        return await this._applyVisualizationStateSnapshot(accepted, {
             historyLabel: this.getHistoryLabel("restore-state"),
             requireConsent: false,
         });
@@ -1066,7 +1116,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         });
 
         const visualizations = this.getVisualizations();
-        return await APPLICATION_CONTEXT.updateVisualization(visualizations, [], index);
+        // A single index targets the script's active viewer; an array is the caller's own
+        // explicit per-viewer selection and is passed through.
+        const selection = Number.isInteger(index) ? this.selectionForActiveViewer(index as number) : index;
+        return await APPLICATION_CONTEXT.updateVisualization(visualizations, [], selection as any);
     }
 
     /**
@@ -1121,7 +1174,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive !== false) {
-            nextActiveIndex = [next.length - 1];
+            nextActiveIndex = this.selectionForActiveViewer(next.length - 1);
         }
 
         const proposedSnapshot: VisualizationStateSnapshot = {
@@ -1142,6 +1195,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ],
             rejectedMessage: "Adding the visualization was canceled by the user.",
             cacheKey: "visualization:add",
+            targetIndex: next.length - 1,
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
@@ -1169,12 +1223,20 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         }
 
         const merged = this.mergeVisualizationPatch(next[index], patch || {});
+        // Visualizations saved by an earlier review carry the live payload's `state` envelope
+        // on each layer — a field the schema rejects, so every later update of them failed
+        // validation whatever the patch said. Fold it into the layer and drop it.
+        this.forEachShaderLayer(merged?.shaders, (layer: any) => {
+            if (layer.state === undefined) return;
+            (UTILITIES as any).applySnapshotState?.(layer, layer.state);
+            delete layer.state;
+        });
         next[index] = this.normalizeVisualizationInput(merged);
         this.runFullValidation([next[index]]);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive === true) {
-            nextActiveIndex = [index];
+            nextActiveIndex = this.selectionForActiveViewer(index);
         }
 
         const proposedSnapshot: VisualizationStateSnapshot = {
@@ -1194,10 +1256,121 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ],
             rejectedMessage: "Updating the visualization was canceled by the user.",
             cacheKey: "visualization:update",
+            targetIndex: index,
         });
 
         const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
         return await APPLICATION_CONTEXT.updateVisualization(acceptedVisualizations, options.newData || [], nextActiveIndex as any);
+    }
+
+    /** The background entry the script's active viewer shows, and its index in `config.background`. */
+    protected _activeBackgroundEntry(): { index: number; entry: any } {
+        const index = ViewerSelectionState.getViewerSelectionIndex(
+            this.activeViewer, "activeBackgroundIndex", APPLICATION_CONTEXT as any, VIEWER_MANAGER
+        );
+        const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background)
+            ? APPLICATION_CONTEXT.config.background
+            : [];
+        const entry = Number.isInteger(index) ? backgrounds[index as number] : undefined;
+        if (!entry) throw new Error("The active viewer shows no background.");
+        return { index: index as number, entry };
+    }
+
+    /**
+     * The active viewer's background with its live control values merged in, as plain JSON.
+     * An entry that declares no shaders renders through one implicit `identity` layer; it is
+     * materialized here so there is always a layer 0 to read and to patch.
+     */
+    protected _activeBackgroundSnapshot(): { index: number; background: any } {
+        const { index, entry } = this._activeBackgroundEntry();
+        const background: any = serializeSceneFromViewer(this.activeViewer, { background: [entry] }).background[0];
+        if (!Array.isArray(background.shaders) || !background.shaders.length) {
+            background.shaders = [{ type: "identity" }];
+        }
+        return { index, background };
+    }
+
+    /**
+     * Returns the shader layers of the active viewer's BACKGROUND — the slide's own rendering,
+     * as opposed to a visualization drawn over it.
+     */
+    getBackgroundShaders(): VisualizationShaderGroupOrLayer[] {
+        const mask = !this.mayExposeSensitive;
+        return this._activeBackgroundSnapshot().background.shaders.map((layer: any) => {
+            const out: any = cloneJson(layer);
+            // Derived from the background id, which comes from the slide's path; addressed
+            // by position instead.
+            delete out.id;
+            // Seeded from the slide's display name.
+            if (mask) delete out.name;
+            for (const key of Object.keys(out)) {
+                if (key.startsWith("_")) delete out[key];
+            }
+            return out;
+        });
+    }
+
+    /**
+     * Applies a partial patch to one shader layer of the active viewer's background.
+     */
+    async updateBackgroundShaderAt(
+        index: number,
+        patch: Partial<VisualizationShaderGroupOrLayer>
+    ): Promise<boolean> {
+        const { index: backgroundIndex, background } = this._activeBackgroundSnapshot();
+        if (!Number.isInteger(index) || index < 0 || index >= background.shaders.length) {
+            throw new Error(
+                `Background shader index must be an integer in 0..${background.shaders.length - 1}; ` +
+                "read visualization.getBackgroundShaders() for the current layers."
+            );
+        }
+        if (!isPlainObject(patch)) {
+            throw new Error("Background shader patch must be an object.");
+        }
+
+        // The layer's renderer id is derived from the background id and its position — not
+        // the caller's to set.
+        const cleanPatch: any = cloneJson(patch);
+        delete cleanPatch.id;
+        const merged = mergeLayerPatch(background.shaders[index], cleanPatch);
+
+        // Validate the one layer that changed. Host-private markers (`_`-prefixed, e.g. an
+        // owner's "these params were auto-filled" stamp) are not part of the renderer schema.
+        const forValidation: any = cloneJson(merged);
+        for (const key of Object.keys(forValidation)) {
+            if (key.startsWith("_") || key === "id") delete forValidation[key];
+        }
+        this.runFullValidation([{ name: "background", shaders: { background: forValidation } }]);
+
+        await this.requireActionConsent({
+            title: $.t("scripting.visualization.backgroundUpdateTitle"),
+            description: $.t("scripting.visualization.backgroundUpdateDescription"),
+            details: [$.t("scripting.visualization.backgroundUpdateUndo")],
+            mode: "warning",
+            rejectedMessage: "Changing the background rendering was canceled by the user.",
+            cacheKey: "visualization:update-background",
+        });
+
+        background.shaders[index] = merged;
+
+        // Only this viewer's background entry changes; every other entry, the visualizations
+        // and the slot mapping are handed back exactly as they are.
+        const config: any = APPLICATION_CONTEXT.config;
+        const backgrounds = [...(Array.isArray(config.background) ? config.background : [])];
+        backgrounds[backgroundIndex] = background;
+        await deserializeScene({
+            version: 1,
+            data: Array.isArray(config.data) ? config.data : [],
+            background: backgrounds,
+            visualizations: Array.isArray(config.visualizations) ? config.visualizations : [],
+            activeBackgroundIndex: ViewerSelectionState.normalizeSelectionValue(
+                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
+            ),
+        } as any, {
+            historyMode: "visualization-step",
+            historyLabel: this.getHistoryLabel("update-background"),
+        });
+        return true;
     }
 
     /**
@@ -1248,6 +1421,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         visualization: VisualizationLayerSource,
         options: VisualizationViewportRenderOptions = {}
     ): Promise<string> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const canvas = await this.extractCanvasForVisualization(visualization, options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted viewport canvas does not support toDataURL().");
@@ -1297,6 +1471,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         visualization: VisualizationLayerSource,
         options: VisualizationViewportRenderOptions = {}
     ): Promise<VisualizationViewportPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const canvas = await this.extractCanvasForVisualization(visualization, options);
         return this.readCanvasPixels(canvas, options, "Failed to create a 2D context for pixel extraction.");
     }
@@ -1410,6 +1585,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * finished streaming — a data URL cannot carry that, and a partial one looks identical.
      */
     async renderCurrentBackgroundPng(options: VisualizationViewportRenderOptions = {}): Promise<string> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadBackgroundRender"));
         const { canvas } = await this.extractBackgroundCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted background canvas does not support toDataURL().");
@@ -1422,6 +1598,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * plus `isComplete` — false when the live viewport was still streaming tiles as it was read.
      */
     async renderCurrentBackgroundPixels(options: VisualizationViewportRenderOptions = {}): Promise<VisualizationViewportPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadBackgroundRender"));
         const { canvas, isComplete } = await this.extractBackgroundCanvas(options);
         const pixels = this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
         return { ...pixels, isComplete };
@@ -1685,7 +1862,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     protected async extractRegionCanvas(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean }> {
+    ): Promise<{
+        canvas: HTMLCanvasElement; isComplete: boolean; stalled: boolean;
+        scale: number; magnification: number | null;
+    }> {
         const viewer: any = this.activeViewer;
         const region = options?.region;
         if (!region || !(Number(region.width) > 0) || !(Number(region.height) > 0)) {
@@ -1713,8 +1893,25 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             }
         }
 
+        // Resolved before the pass is queued, so a bad size request fails without taking a turn.
+        // The output keeps the region's aspect ratio — the standalone viewport letterboxes a
+        // mismatched one with out-of-region content.
+        const rendered = resolveRegionRenderSize({
+            regionWidth: Number(region.width),
+            regionHeight: Number(region.height),
+            size: options.size,
+            magnification: options.magnification,
+            targetPixels: options.targetPixels,
+            nativeMagnification: (viewer as any)?.scalebar?.magnification || null,
+            maxPixels: Number.isFinite(options.maxPixels as number)
+                ? Number(options.maxPixels)
+                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS,
+        });
+        const outWidth = rendered.width;
+        const outHeight = rendered.height;
+
         const announcedRefIndex = Number.isInteger(options.refIndex) ? Number(options.refIndex) : 0;
-        return this.runSerializedRegionTask(viewer, async () => {
+        const pass = await this.runSerializedRegionTask(viewer, async () => {
             const drawer = this.getCurrentStandaloneDrawer();
             const mirrors = await this.getRegionMirrorImages(viewer, drawer);
 
@@ -1731,28 +1928,6 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             const bounds = ref.imageToViewportRectangle(
                 new osd.Rect(Number(region.x) || 0, Number(region.y) || 0, Number(region.width), Number(region.height))
             );
-
-            // Fit the region's aspect ratio into the requested size box — the standalone
-            // viewport letterboxes mismatched aspect ratios with out-of-region content.
-            const aspect = Number(region.width) / Number(region.height);
-            let outWidth = Number(options.size?.width);
-            let outHeight = Number(options.size?.height);
-            if (!(outWidth > 0) && !(outHeight > 0)) {
-                throw new Error("renderRegion requires size.width and/or size.height.");
-            }
-            if (!(outHeight > 0)) outHeight = outWidth / aspect;
-            else if (!(outWidth > 0)) outWidth = outHeight * aspect;
-            else if (outWidth / outHeight > aspect) outWidth = outHeight * aspect;
-            else outHeight = outWidth / aspect;
-            outWidth = Math.max(1, Math.round(outWidth));
-            outHeight = Math.max(1, Math.round(outHeight));
-
-            const maxPixels = Number.isFinite(options.maxPixels as number)
-                ? Number(options.maxPixels)
-                : XOpatVisualizationScriptApi.REGION_DEFAULT_MAX_PIXELS;
-            if (outWidth * outHeight > maxPixels) {
-                throw new Error("Requested region render is too large. Reduce the output size or raise maxPixels.");
-            }
 
             // STOP-GAP (AGENTS.md §1: renderer internals belong in the library). The standalone
             // DRAWER does not clear its target between passes — the standalone RENDERER facade does
@@ -1805,6 +1980,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             ...(Number.isFinite(options.queueTimeoutMs as number)
                 ? { queueTimeoutMs: Number(options.queueTimeoutMs) } : {}),
         });
+        return { ...pass, scale: rendered.scale, magnification: rendered.magnification };
     }
 
     /**
@@ -1818,7 +1994,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * {@link renderRegionPngDetailed}, which hands you the flag instead of deciding for you.
      */
     async renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string> {
-        const { dataUrl, isComplete } = await this.renderRegionPngDetailed(options);
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
+        const { dataUrl, isComplete } = await this._regionPngDetailed(options);
         if (!isComplete && (options?.onIncomplete ?? "throw") === "throw") {
             throw new Error(
                 "The region render is incomplete — some tiles had not loaded. Retry with a larger " +
@@ -1839,12 +2016,23 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     async renderRegionPngDetailed(
         options: VisualizationRegionRenderOptions
-    ): Promise<{ dataUrl: string; isComplete: boolean; stalled: boolean }> {
-        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
+    ): Promise<VisualizationRegionPngResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
+        return this._regionPngDetailed(options);
+    }
+
+    /** Unchecked body of {@link renderRegionPngDetailed}: callers have already asked for pixel consent. */
+    protected async _regionPngDetailed(
+        options: VisualizationRegionRenderOptions
+    ): Promise<VisualizationRegionPngResult> {
+        const { canvas, isComplete, stalled, scale, magnification } = await this.extractRegionCanvas(options);
         if (typeof canvas.toDataURL !== "function") {
             throw new Error("The extracted region canvas does not support toDataURL().");
         }
-        return { dataUrl: canvas.toDataURL("image/png"), isComplete, stalled };
+        return {
+            dataUrl: canvas.toDataURL("image/png"), isComplete, stalled,
+            width: canvas.width, height: canvas.height, scale, magnification,
+        };
     }
 
     /**
@@ -1853,7 +2041,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * with partially loaded data). Never moves the user's viewport.
      */
     async renderRegionPixels(options: VisualizationRegionRenderOptions): Promise<VisualizationRegionPixelsResult> {
-        const { canvas, isComplete, stalled } = await this.extractRegionCanvas(options);
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
+        const { canvas, isComplete, stalled, scale, magnification } = await this.extractRegionCanvas(options);
         // Guard readback with the SAME default as the region render, so a region the render
         // allowed never throws on readback (readCanvasPixels otherwise defaults to 1024*1024).
         const readbackOptions: VisualizationViewportRenderOptions = {
@@ -1867,7 +2056,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             readbackOptions,
             "Failed to create a 2D context for region extraction."
         );
-        return { ...pixels, isComplete, stalled };
+        return { ...pixels, isComplete, stalled, scale, magnification };
     }
 
     /**
@@ -1912,6 +2101,22 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             if (Number.isInteger(background?.dataReference)) backgroundRefs.add(background.dataReference);
         }
 
+        // `config.data` is one list for the whole session, shared by every viewer. What THIS
+        // viewer shows is its world's backgrounds plus whatever their visualization renders.
+        const viewerRefs = new Set<number>();
+        const itemCount = viewer?.world?.getItemCount ? viewer.world.getItemCount() : 0;
+        for (let i = 0; i < itemCount; i++) {
+            const background: any = viewer.world.getItemAt(i)?.getConfig?.("background");
+            if (!background) continue;
+            if (Number.isInteger(background.dataReference)) viewerRefs.add(background.dataReference);
+            const shown: any = Number.isInteger(background.visualizationIndex)
+                ? visualizations[background.visualizationIndex]
+                : null;
+            this.forEachShaderLayer(shown?.shaders || {}, (layer: any) => {
+                for (const ref of sanitizeArrayOfIntegers(layer?.dataReferences)) viewerRefs.add(ref);
+            });
+        }
+
         return data.map((entry: any, index: number): VisualizationDataSourceInfo => {
             const worldIndex = worldIndexOf.has(index) ? worldIndexOf.get(index)! : null;
             const item: any = worldIndex != null && viewer?.world?.getItemAt
@@ -1932,6 +2137,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             const rawDataId = typeof entry === "string" ? entry : (entry?.id ?? null);
             const rawTileSourceId = source?.tileSourceId ?? null;
             const mask = !this.mayExposeSensitive;
+            // A protocol NAME ("dicom") says how the entry is fetched, not whose it is. Anything
+            // that is not a bare name could be a URL template, so it is withheld.
+            const protocol = typeof entry?.protocol === "string" && /^[A-Za-z][\w-]{0,31}$/.test(entry.protocol)
+                ? entry.protocol
+                : null;
 
             return {
                 dataReference: index,
@@ -1939,10 +2149,16 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 // xOpat, not to a reader: they routinely embed the case. Same for `tileSourceId`,
                 // which for DICOMweb is the store URL with the study/series UIDs in it. Masked
                 // positionally so `dataReference` still joins the rows together.
-                dataId: mask && rawDataId != null ? this.maskedHandle("data", index) : rawDataId,
+                //
+                // Every masked entry gets a handle, including object entries that carry no `id`
+                // (`{dataID, protocol}`): a `null` there read as "nothing is here" and left a
+                // session full of rows with no way to refer to one.
+                dataId: mask && entry != null ? this.maskedHandle("data", index) : rawDataId,
                 tileSourceId: mask && rawTileSourceId != null
                     ? this.maskedHandle("source", index)
                     : rawTileSourceId,
+                protocol,
+                inActiveViewer: worldIndex != null || viewerRefs.has(index),
                 role: backgroundRefs.has(index)
                     ? "background"
                     : (layers.length ? "overlay" : "unbound"),
@@ -1997,14 +2213,18 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const outWidth = Math.max(1, Math.floor(sourceWidth * scale));
         const outHeight = Math.max(1, Math.floor(sourceHeight * scale));
 
-        const probe = await this.renderCurrentViewportPixels(
+        // Unchecked extract, not renderCurrentViewportPixels: only per-channel statistics leave
+        // this method, never pixels, so there is nothing to ask pixel-read consent for.
+        const probeOptions: VisualizationViewportRenderOptions = { width: outWidth, height: outHeight, maxPixels, pixelFormat: "typed" };
+        const probeCanvas = await this.extractCanvasForVisualization(
             {
                 shaders: {
                     __probe: { id: "__probe", type: "identity", dataReferences: [dataReference], params: {} },
                 },
             } as unknown as VisualizationLayerSource,
-            { width: outWidth, height: outHeight, maxPixels, pixelFormat: "typed" }
+            probeOptions
         );
+        const probe = this.readCanvasPixels(probeCanvas, probeOptions, "Failed to create a 2D context for pixel extraction.");
 
         const pixels: any = probe.data;
         const total = probe.width * probe.height;
@@ -2086,11 +2306,12 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const model = chat?.getAssistantTextModel?.();
         const rpc = (globalThis as any).xserver?.module?.["vercel-ai-chat-sdk"];
         if (!model?.providerId || !rpc?.runVisionInference) return null;
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadCritique"));
 
         // Detailed, not renderRegionPng: a critique of a half-loaded view is worth having (the
         // shader settings it judges are visible in whatever DID render), but the model must be told
         // the blanks are missing tiles, not a rendering fault it should explain.
-        const { dataUrl, isComplete } = await this.renderRegionPngDetailed({
+        const { dataUrl, isComplete } = await this._regionPngDetailed({
             ...(options as any),
             region: this.currentViewportImageRegion(),
             layers: "active",
@@ -2114,8 +2335,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                     : `${$.t("scripting.visualization.critiqueIncomplete")}\n\n${basePrompt}`,
                 imageBase64: base64,
                 mediaType: "image/png",
-                maxOutputTokens: 512,
-            }, { priority: "background" });
+                // Room for a reasoning model: 512 was spent before the critique finished.
+                maxOutputTokens: 1024,
+                // Not the HttpClient default (30 s): the server grants this method 300 s and a
+                // reasoning model needs more than 30, so the default made every critique fail.
+            }, { priority: "background", timeoutMs: VISION_RPC_TIMEOUT_MS });
             const text = typeof result?.text === "string" ? result.text.trim() : "";
             return text || null;
         } catch (e) {
@@ -2155,6 +2379,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * Extracts a first-pass texture or stencil layer from the active viewer's standalone renderer state.
      */
     async extractCurrentFirstPassLayer(options: VisualizationFirstPassExtractOptions): Promise<VisualizationViewportPixelsResult> {
+        // Raw RGBA of the slide leaves the page here, like every other pixel read.
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const drawer = this.getCurrentStandaloneDrawer();
         const viewer: any = this.activeViewer;
 

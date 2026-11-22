@@ -90,6 +90,32 @@ export type ViewerTiledImageInfo = {
     viewportBounds?: ViewerRect | null;
 };
 
+export type ViewerCaptureRegionOptions = {
+    region?: ViewerRect | "viewport";
+    magnification?: number;
+    targetPixels?: number;
+    size?: { width?: number; height?: number };
+    layers?: "background" | "active";
+    /** Tile-load budget in ms (default 10000). */
+    timeoutMs?: number;
+};
+
+export type ViewerRegionCapture = {
+    /** PNG data URL. */
+    image: string;
+    /** The region that was rendered, in level-0 image pixels. */
+    region: ViewerRect;
+    width: number;
+    height: number;
+    /** Output pixels per image pixel (1 = native resolution). */
+    scale: number;
+    /** Effective optical magnification of the image; null on an uncalibrated slide. */
+    magnification: number | null;
+    layers: "background" | "active";
+    isComplete: boolean;
+    stalled: boolean;
+};
+
 export type ViewerScreenshotOptions = {
     width?: number;
     height?: number;
@@ -153,6 +179,8 @@ export interface ViewerScriptApi extends ScriptApiObject {
 
     /**
      * Pans and zooms this script context's viewer to a specific location or depth.
+     * MOVES THE USER'S VIEW. Call it when the user asked to go there, or to show them a result —
+     * never as a way for the script to inspect a place (`captureRegion` looks without moving).
      * IMPORTANT: `x` and `y` are OpenSeadragon VIEWPORT coordinates (x is in 0..1 across the slide width),
      * NOT image pixels. To navigate to an image-pixel location use `focusOnImage(...)`, and to frame an
      * image-space rectangle (e.g. an annotation) use `frameImageRegion(...)`; or convert first with
@@ -172,6 +200,8 @@ export interface ViewerScriptApi extends ScriptApiObject {
      * Pans (and optionally zooms) the viewer to an IMAGE-PIXEL location — the convenient counterpart to
      * `focusOn`. Coordinates are in the tiled image's pixel space (annotation points, pathology results, and
      * `getMetadata()` dimensions are all in this space).
+     * MOVES THE USER'S VIEW. Call it when the user asked to go there, or to show them a result —
+     * never as a way for the script to inspect a place (`captureRegion` looks without moving).
      *
      * "Go to 20× at the centre of the slide" is `focusOnImage(width/2, height/2, 20)`.
      * @param imageX image-pixel x.
@@ -192,6 +222,8 @@ export interface ViewerScriptApi extends ScriptApiObject {
     /**
      * Zooms to an optical magnification WITHOUT panning — the write-side counterpart of
      * `getMagnification()`. `setMagnification(20)` puts the scalebar at 20×.
+     * MOVES THE USER'S VIEW. Call it when the user asked to go there, or to show them a result —
+     * never as a way for the script to inspect a place (`captureRegion` looks without moving).
      * Throws when the slide has no magnification calibration; use `frameImageRegion(...)` there.
      * @param magnification target optical magnification (e.g. 2, 10, 20, 40).
      */
@@ -200,6 +232,8 @@ export interface ViewerScriptApi extends ScriptApiObject {
     /**
      * Frames an IMAGE-SPACE rectangle (e.g. an annotation's or pathology result's `bounds`) so the whole region
      * fits in the viewport. Prefer this to `focusOn` when you want to "go to" a detected region.
+     * MOVES THE USER'S VIEW. Call it when the user asked to go there, or to show them a result —
+     * never as a way for the script to inspect a place (`captureRegion` looks without moving).
      * @param rect image-pixel rectangle `{ x, y, width, height }`.
      * @param options `padding` (fraction of the rect added around it, default 0.1) and `tiledImageIndex`
      *   (default 0 = full-resolution background slide).
@@ -238,7 +272,39 @@ export interface ViewerScriptApi extends ScriptApiObject {
     getViewportBoundsInImage(tiledImageIndex?: number): ViewerRect;
 
     /**
-     * Takes a screenshot of the current viewport.
+     * LOOKS at a part of the slide WITHOUT moving the user's view: renders the region off-screen
+     * and returns it as a PNG. This is how a script inspects tissue — any location, any
+     * resolution, while the user keeps navigating. Return the result from your script to view
+     * the image yourself on the next step.
+     *
+     * - `region`: a level-0 image-pixel rectangle (the space of `getMetadata()` dimensions,
+     *   annotation coordinates and `frameImageRegion`), or `"viewport"` for what the user has
+     *   in view right now. Default `"viewport"`.
+     * - Detail: ONE of `magnification` (optical, e.g. 10 — calibrated slides only),
+     *   `targetPixels` (output area budget, works everywhere; default 500000) or `size`.
+     *   Requests are capped at native resolution — read `magnification` / `scale` on the result.
+     *   Whole slide at a glance = a large region with a small `targetPixels`; cellular detail =
+     *   a small region at high `magnification`.
+     * - `layers`: `"background"` (default) is the scan itself with NO overlay, so nothing ever
+     *   needs to be hidden or removed to see the tissue; `"active"` is what the user sees,
+     *   visualization included. Annotations are in neither.
+     *
+     * `isComplete: false` means some tiles had not loaded: the image is provisional — retry with
+     * a larger `timeoutMs` or a smaller region before describing it.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
      */
-    getViewportScreenshot(options?: ViewerScreenshotOptions): string;
+    captureRegion(options?: ViewerCaptureRegionOptions): Promise<ViewerRegionCapture>;
+
+    /**
+     * Takes a screenshot of the current viewport (PNG data URL) — exactly what is on screen NOW,
+     * overlays included, at screen resolution. To look anywhere else, or at the slide without
+     * overlays, use `captureRegion` rather than navigating first.
+     * Asks the user first (slide pixels leave the viewer); the user may remember the answer for
+     * this slide, all slides for a period, or always. Throws when the user declines — do not
+     * retry the same read, ask the user or work from metadata instead.
+     */
+    getViewportScreenshot(options?: ViewerScreenshotOptions): Promise<string>;
 }

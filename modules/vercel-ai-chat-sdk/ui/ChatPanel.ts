@@ -3034,6 +3034,30 @@ export class ChatPanel extends BaseComponent {
         };
     }
 
+    /**
+     * The model refused an attached image/file this turn. Media support is optimistic for models
+     * whose provider does not say, so this is where the user learns it: the server already
+     * answered without the media and cached the verdict (which `chatService` folded into the
+     * model catalogue) — disable the matching buttons and say why.
+     */
+    _noteMediaRejected(reply: ChatMessage | null | undefined): void {
+        const rejected = (reply as any)?.metadata?.mediaRejected;
+        if (!Array.isArray(rejected) || !rejected.length) return;
+        // `_models` is a snapshot from when the list was loaded; the service has
+        // since folded the verdict into NEW model objects. Without re-reading,
+        // the buttons below keep the capabilities the model no longer has.
+        if (this._providerId) {
+            const fresh = this.chatService.getCachedModels(this._providerId);
+            if (Array.isArray(fresh) && fresh.length) this._models = fresh;
+        }
+        this._updateAttachmentCapabilityState();
+        const images = rejected.includes('images');
+        const files = rejected.includes('files');
+        this._setStatus(_t(images && files
+            ? 'mediaRejectedByModel'
+            : images ? 'imagesRejectedByModel' : 'filesRejectedByModel'));
+    }
+
     _updateAttachmentCapabilityState(): void {
         const model = this._getCurrentModelInfo();
         const caps = model?.capabilities;
@@ -4164,6 +4188,7 @@ export class ChatPanel extends BaseComponent {
                 if ((reply as any)?.metadata?.historyTruncatedTo != null) {
                     this._setStatus(_t('historyTruncatedHint'));
                 }
+                this._noteMediaRejected(reply);
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
                 // A reply cut off at the output limit usually ends mid-script, which then
@@ -4440,6 +4465,7 @@ export class ChatPanel extends BaseComponent {
             } finally {
                 this._endStreamStep();
             }
+            this._noteMediaRejected(finalReply);
             if (this._shouldStopAssistantLoop()) {
                 // Same bargain as the in-loop stop: the answer exists, so show it.
                 this._messages.push(finalReply);

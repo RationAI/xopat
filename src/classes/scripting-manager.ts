@@ -12,6 +12,7 @@ import { XOpatViewerScriptApi } from "./scripting/viewer-api";
 import { XOpatVisualizationScriptApi } from "./scripting/visualization-api";
 import { XOpatPatientScriptApi } from "./scripting/patient-api";
 import { XOpatUiScriptApi } from "./scripting/ui-api";
+import { XOpatAdjustmentsScriptApi } from "./scripting/adjustments-api";
 
 
 /**
@@ -145,6 +146,36 @@ function createExecId(): string {
  * every match against a member is anchored at its start. Exported for the
  * parser's unit test.
  */
+/**
+ * The methods of an API instance a script may call.
+ *
+ * TypeScript `protected`/`private` is erased at runtime, so the class alone cannot say
+ * which of its methods are helpers. The namespace's declaration (`.scripts.d.ts`, or the
+ * equivalent `ScriptApiMetadata` tables) is the contract: when one exists, ONLY what it
+ * declares is exposed. A helper is then unreachable whatever it is called, and a method
+ * added without a declaration stays private until someone decides it is public.
+ * A namespace with no declaration at all falls back to the underscore convention.
+ */
+export function scriptCallableMethodNames(
+    apiInstance: object,
+    declared?: Iterable<string> | null
+): { exposed: string[]; withheld: string[] } {
+    // Through descriptors: a getter is not a method, and must not be run to find that out.
+    const candidates = Object.entries(Object.getOwnPropertyDescriptors(Object.getPrototypeOf(apiInstance)))
+        .filter(([name, descriptor]) =>
+            name !== "constructor" &&
+            !name.startsWith("_") &&
+            typeof descriptor.value === "function"
+        )
+        .map(([name]) => name);
+    const allow = declared ? new Set(declared) : null;
+    if (!allow?.size) return { exposed: candidates, withheld: [] };
+    return {
+        exposed: candidates.filter(name => allow.has(name)),
+        withheld: candidates.filter(name => !allow.has(name)),
+    };
+}
+
 export function stripLeadingLineComments(text: string): string {
     let rest = text;
     // Only `//` lines: a leading `/** */` is the member's own doc block and is
@@ -1886,6 +1917,7 @@ export class ScriptingManager<
                 new XOpatVisualizationScriptApi("visualization"),
                 new XOpatPatientScriptApi("patient"),
                 new XOpatUiScriptApi("ui"),
+                new XOpatAdjustmentsScriptApi("adjustments"),
             ];
 
             // Warm the declaration cache up front so the serial ingest below —
@@ -1977,13 +2009,15 @@ export class ScriptingManager<
         try {
             const parsedDts = await this.loadDtsMetadata(apiInstance, metadata);
 
-            const prototype = Object.getPrototypeOf(apiInstance);
-            const methodNames = Object.getOwnPropertyNames(prototype)
-                .filter(name =>
-                    name !== "constructor" &&
-                    !name.startsWith("_") &&
-                    typeof (apiInstance as any)[name] === "function"
-                ) as MethodKeys<TApi>[];
+            const { exposed, withheld } = scriptCallableMethodNames(apiInstance, [
+                ...Object.keys(parsedDts?.tsSignature || {}),
+                ...Object.keys(metadata?.tsSignature || {}),
+                ...Object.keys(metadata?.docs || {}),
+            ]);
+            const methodNames = exposed as MethodKeys<TApi>[];
+            if (withheld.length) {
+                scriptingDebugLog(`namespace '${ns}': undeclared methods are not script-callable`, withheld);
+            }
 
             methodNames.forEach(name => {
                 schema[name] = true;

@@ -26,6 +26,15 @@ globalThis.window.APPLICATION_CONTEXT = globalThis.APPLICATION_CONTEXT;
 // returns the key's last segment, which is what the app does before i18next
 // initializes. Echoing the key would hide a wrong namespace.
 globalThis.window.$ = globalThis.window.$ ?? { t: (key) => String(key).split(".").pop() };
+// A worker runs several files and `globalThis` outlives each of them, so the
+// `??` above inherits whatever stub an earlier file left (an echo-the-key one
+// turned every label into "radiology.modality"). Own the stub while this file runs.
+let inherited$;
+test.beforeAll(() => {
+    inherited$ = globalThis.window.$;
+    globalThis.window.$ = { t: (key) => String(key).split(".").pop() };
+});
+test.afterAll(() => { globalThis.window.$ = inherited$; });
 
 const { withPlane } = await import("../../../../src/classes/app/viewer-depth-controller.ts");
 const { RadiologySeriesTileSource } = await import("../../radiology-tile-source.mjs");

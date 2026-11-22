@@ -125,16 +125,22 @@ test("showUi renders the message as text", { tag: ["@synthetic", "@e2e"] }, asyn
             message: `<img src=x onerror="window.__xss = true">Open settings here`,
         });
         await new Promise(r => setTimeout(r, 300));
-        const label = document.querySelector(".xo-tour-label, [class*='xo-tour']");
-        const injected = !!document.querySelector("[class*='xo-tour'] img");
+        const label = document.querySelector(".xo-tour-label");
+        // Scoped to the tour root: while a tour runs, <body> itself carries
+        // `xo-tour-locked`, so `[class*='xo-tour'] img` matched every logo on the page.
+        const injected = !!document.querySelector(".xo-tour-root img");
+        const labelText = label?.textContent ?? "";
         window.APPLICATION_CONTEXT.tutorials.stop();
-        return { shown, xss: window.__xss, injected, hasLabel: !!label };
+        return { shown, xss: window.__xss, injected, hasLabel: !!label, labelText };
     });
 
     expect(result.shown.shown).toBe(true);
     expect(result.shown.target).toBe("appbar:settings");
     expect(result.xss).toBe(false);
     expect(result.injected).toBe(false);
+    // Shown as text: decoded once when the sanitizer rendered the escaped
+    // message, verbatim-escaped in its text fallback before it loads.
+    expect(result.labelText).toMatch(/<img|&lt;img/);
 });
 
 test("invokeUiAction runs an action and refuses non-actions", { tag: ["@synthetic", "@e2e"] }, async ({ xopat }) => {

@@ -1,6 +1,11 @@
 {
   "$meta": {
     "description": "A generated DeepZoom pyramid served by the viewer itself — no image server, no download, no credentials",
+    "hint": "Slide id is synthetic.dzi; npm run up generates it on first start (npm run fixtures:synthetic does the same by hand)",
+    "fixtures": ["synthetic"],
+    "env": {
+      "XOPAT_NODE_PORT": "Port the viewer listens on"
+    },
     "dimension": "data",
     "clientKey": "localhost"
   },

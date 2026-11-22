@@ -6,11 +6,12 @@
  * so what this project tests and what a deployment can actually be composed into
  * are one thing rather than two copies.
  *
- * `base/core` + `data/wsi-service` is byte-equivalent to `env/env.default.json`
- * (asserted in `test/suites/unit/env-compose.test.mjs`), so this differs from the
- * `default` project in exactly one layer. That matters more here than tidiness:
- * a project that also changed which plugins load, or which slide protocol is
- * default, could not attribute a failure to `secureMode`.
+ * `base/core` + `data/synthetic-dzi` is the data half of the `synthetic` project
+ * (`test/env/synthetic.json`), so this differs from it by the flag. That matters
+ * more here than tidiness: a project that also changed which plugins load, or
+ * which slide protocol is default, could not attribute a failure to `secureMode`.
+ * The slide is the generated one because no project may depend on an image
+ * server it does not start itself.
  *
  * `secureMode` is reachable only from a deployment: it lives at
  * `core.client.<active_client>.secureMode`, reaches the client as
@@ -19,5 +20,5 @@
  * any attempt to set it from a session bundle or URL params.
  */
 {
-  "$base": ["base/core", "data/wsi-service", "flags/secure-mode"]
+  "$base": ["base/core", "data/synthetic-dzi", "flags/secure-mode"]
 }

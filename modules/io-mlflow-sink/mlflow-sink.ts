@@ -11,7 +11,7 @@
 // The MLflow credential lives **server-side only**, under
 // `server.secure.proxies.<alias>.headers.Authorization`. See README.md.
 
-import { makeMlflowSink, type MlflowSinkConfig } from "./mlflow-sink-factory";
+import { makeMlflowSink, normalizeTarget, type MlflowSinkConfig, type MlflowSessionTarget } from "./mlflow-sink-factory";
 import { BUILT_IN_TEMPLATES, TEMPLATE_DESCRIPTIONS, type MlflowMapper } from "./templates";
 
 const HARDCODED_DEFAULTS: MlflowSinkConfig = {
@@ -24,7 +24,10 @@ const HARDCODED_DEFAULTS: MlflowSinkConfig = {
 };
 
 /** Config keys a mapper/script may never influence — they pick the destination. */
-const TRUSTED_ONLY_KEYS = ["proxy", "baseURL", "auth", "experimentAllow"] as const;
+const TRUSTED_ONLY_KEYS = ["proxy", "baseURL", "auth", "experimentAllow", "sessionTarget"] as const;
+
+/** Module log channel; never `console`, and never the untrusted value itself. */
+const log = () => (globalThis as any).APPLICATION_CONTEXT?.log?.("module.io-mlflow-sink");
 
 class IOMlflowSink extends XOpatModuleSingleton {
     /** Runtime-registered mappers. Take precedence over built-in templates. */
@@ -33,6 +36,13 @@ class IOMlflowSink extends XOpatModuleSingleton {
     private _templateOverride?: string;
     /** Returned by registerSink; held for hot-reload / tests. */
     private _disposeSink?: () => void;
+    /** Session-selected destination. Seeded once from `params.ioSinks.mlflow.target`. */
+    private _target?: MlflowSessionTarget;
+    private _targetSeeded = false;
+    /** The session supplied `params.ioSinks.mlflow.target` but it failed validation. */
+    private _targetRejected = false;
+    /** Held so `isTargetHonoured` can compose the deployment-default options. */
+    private _pipeline?: any;
 
     constructor() {
         super();
@@ -46,12 +56,15 @@ class IOMlflowSink extends XOpatModuleSingleton {
             console.warn("[io-mlflow-sink] IO_PIPELINE not available — module is inert.");
             return;
         }
+        this._pipeline = pipeline;
 
         const sink = makeMlflowSink({
             id: "mlflow",
             label: "MLflow",
             getOptions: (ctx?: IOContext) => this._composeOptions(pipeline, ctx),
             getMapper: (name) => this._mappers.get(name) ?? BUILT_IN_TEMPLATES[name],
+            getTarget: () => this.getTarget(),
+            isTargetRejected: () => this.isTargetRejected(),
         });
         this._disposeSink = pipeline.registerSink(sink);
     }
@@ -141,6 +154,92 @@ class IOMlflowSink extends XOpatModuleSingleton {
     /** Drop the session override and fall back to the configured template. */
     resetTemplate(): void {
         this._templateOverride = undefined;
+    }
+
+    /**
+     * The destination this session selected, or `undefined`.
+     *
+     * First call seeds it from the session's `params.ioSinks.mlflow.target`
+     * (`{"experiment": "...", "run"?: "...", "artifact"?: "..."}`), which the IO
+     * pipeline hands out only when the operator marked the sink
+     * `sessionControllable`. Whether the sink then honours it is the operator's
+     * `sessionTarget` setting, not this getter's.
+     */
+    getTarget(): MlflowSessionTarget | undefined {
+        const pipeline = this._pipeline;
+        if (!this._targetSeeded && typeof pipeline?.sessionSinkConfig === "function") {
+            this._targetSeeded = true;
+            try {
+                // Session settings reach a sink only through the pipeline, which
+                // applies the operator's gate. Never read the raw session payload.
+                const raw = pipeline.sessionSinkConfig("mlflow")?.target;
+                if (raw != null) {
+                    this._target = normalizeTarget(raw);
+                    this._targetRejected = !this._target;
+                    // The value may name a case or patient; say THAT it was rejected, not what it was.
+                    if (!this._target) log()?.warn("invalid params.ioSinks.mlflow.target (expected {experiment, run?, artifact?} with plain names); dispatches will be refused");
+                }
+            } catch (e) {
+                log()?.warn(e, "reading params.ioSinks.mlflow.target failed");
+            }
+        }
+        return this._target ? { ...this._target } : undefined;
+    }
+
+    /**
+     * Select the experiment (and optionally the run) for this session. Not
+     * persisted. Bounded by `experimentAllow` / `runAllow` at dispatch, and only
+     * read at all when the deployment sets `sessionTarget`.
+     */
+    setTarget(target: MlflowSessionTarget): MlflowSessionTarget {
+        const normalized = this.validateTarget(target);
+        this._targetSeeded = true;
+        this._targetRejected = false;
+        this._target = normalized;
+        return { ...normalized };
+    }
+
+    /**
+     * True when the session supplied a target that failed validation. The sink
+     * then refuses rather than falling back to the templates: a broken choice is
+     * not "no choice". Cleared by `setTarget` / `clearTarget`.
+     */
+    isTargetRejected(): boolean {
+        this.getTarget(); // seeds from params on first call
+        return this._targetRejected;
+    }
+
+    /**
+     * Whether the deployment-default config honours a session target at all
+     * (`sessionTarget` enabled AND `experimentAllow` bounded). Per-binding config
+     * (`ENV.client.io.bindings`) may still differ for a given owner, so this is
+     * advisory — used to warn before asking consent, never as a security gate.
+     */
+    isTargetHonoured(): boolean {
+        if (!this._pipeline) return false;
+        const o = this._composeOptions(this._pipeline);
+        return (o.sessionTarget === "allowed" || o.sessionTarget === "required")
+            && Array.isArray(o.experimentAllow) && o.experimentAllow.length > 0;
+    }
+
+    /**
+     * Normalize an untrusted target without applying it (throws when invalid), so
+     * a caller can show the user exactly what will be set before setting it.
+     */
+    validateTarget(target: unknown): MlflowSessionTarget {
+        const normalized = normalizeTarget(target);
+        if (!normalized) {
+            throw new Error("setTarget: `experiment` is required, `run` and `artifact` optional; names may use only " +
+                "letters, digits, space and . _ - / : plus {placeholders}, at most 250 characters");
+        }
+        return normalized;
+    }
+
+    /** Forget the session target. With `sessionTarget: "required"` the sink then declines. */
+    clearTarget(): void {
+        this._targetSeeded = true;
+        this._targetRejected = false;
+        this._target = undefined;
     }
 }
 

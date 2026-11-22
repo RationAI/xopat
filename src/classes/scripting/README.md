@@ -77,6 +77,10 @@ A good namespace usually has:
 - one public class extending `XOpatScriptingApi`
 - one `.scripts.d.ts` file describing the script-visible API
 - private helper methods prefixed with `_`
+- **the declaration is the allowlist**: with a `.scripts.d.ts` (or `ScriptApiMetadata` `tsSignature`/`docs`
+  tables) only declared methods are script-callable. `protected`/`private` is erased at runtime, so an
+  undeclared helper would otherwise be a public scripting method. A new method stays unreachable until
+  it is declared; a namespace with no declaration falls back to the `_` convention alone
 - public methods that return plain data and accept plain inputs
 - no direct dependence on "who is globally active right now"
 
@@ -545,6 +549,42 @@ Properties:
 `namespace.method` pairs (same rendering as `getAllowedApiManifest`); pair it with the
 static `ScriptingManager.extractApiReferences(script, knownNamespaces)` text scan to
 attach exact signatures of the methods a failing script referenced.
+
+### Asking consent — remember scopes and pixel reads
+
+`requireActionConsent({ ..., cacheKey, slideKey? })` shows one **Remember** select whose options depend on
+the action (logic in `consent-scope.ts`):
+- only this time
+- until reload, all slides (the default, and what the `window.confirm` fallback grants)
+- this slide until reload, and this slide for 7 days — only when you pass `slideKey`
+- all slides for 1, 7 or 30 days, and always
+
+Persistent options are hidden under `secureMode` or when the action passes `allowRemember: false`. Pass
+`slideKey: this.slideConsentKey(viewer)` when the decision is naturally per slide. It is a hash, so the slide
+path never reaches storage. A slide grant never satisfies another slide.
+
+**Any method that hands slide pixels to the caller** (a PNG, a data URL, RGBA values) calls
+`await this.requirePixelReadConsent(viewer, $.t("…what…"))` first. That is one shared action class
+(`core:pixel-read`), so the user decides once for every kind of read. Methods that only return
+*statistics* computed from pixels (`probeData`) do not ask. A trusted in-process caller that already holds
+consent for the same pixels sets `pixelReadPreapproved: true` on its synthetic context. Pathology-foundation
+does this because its own remote-driver consent covers it. Never set it to silence the prompt.
+
+### Looking is not acting
+
+A script that only needs to SEE the slide must leave the user's session as it found it. The core verb is
+`viewer.captureRegion({ region, magnification | targetPixels | size, layers })`: an off-screen render of any
+region, the scan without overlays by default, with the effective `scale` / `magnification` reported back. It
+is a thin delegate to `visualization.renderRegionPngDetailed`, bound to the caller's own invocation context,
+so there is one render path and one pixel-read consent. Output sizing lives in `region-render-size.ts`, and
+callers state a request (`magnification` / `targetPixels`) rather than computing a size — pathology-foundation's
+region renders go through the same rule.
+
+Two consequences for namespace authors:
+- A method that inspects takes a `region` and renders off-screen. It never navigates the viewer, and it never
+  hides, removes or re-activates a visualization to get an unobstructed read (`layers: "background"` already is one).
+- Say so in the declaration. An assistant picks its tools from the `.scripts.d.ts` text, and a navigation or
+  mutation method that does not say "changes what the user sees" gets used as a way to look.
 
 ---
 

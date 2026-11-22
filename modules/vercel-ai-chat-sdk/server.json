@@ -16,7 +16,7 @@
   //   turnBudgetMs               540000     whole-turn deadline, inside the 600s RPC ceiling
   //   attemptTimeoutMs           300000     per-attempt ceiling for one upstream call
   //   maxRetries                 1          transport-stall retries only
-  //   probeBudgetMs              25000      shared ceiling for the capability probes
+  //   probeBudgetMs              25000      deprecated no-op (capability probes removed)
   //   maxInlineAttachmentBytes   524288
   //   maxOutputTokens            16384      shared with reasoning tokens on reasoning models
   //   decodedMediaCacheBytes     67108864

@@ -1,0 +1,69 @@
+name: Dispatch desktop installers and pip release
+
+# A published release here starts the release pipeline of RationAI/xopat-deploy
+# (.github/workflows/release.yml there), which builds the standalone binaries and the
+# desktop installers from THIS tag, signs the Windows installer, publishes the pip
+# package, and finally writes a "Desktop installers and pip" block back into the
+# release notes here (between the <!-- xopat-deploy:start/end --> markers).
+#
+# The link appears only once that pipeline finished: the Windows installer may wait
+# for a manual code-signing approval first.
+#
+# Needs the secret XOPAT_DEPLOY_TOKEN: a token with Contents: write on
+# RationAI/xopat-deploy (repository_dispatch requires it).
+
+run-name: Dispatch deploy release ${{ github.event.release.tag_name || inputs.version }}
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published release tag to (re)send, e.g. 3.2.2'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_REPO: RationAI/xopat-deploy
+  VERSION: ${{ github.event.release.tag_name || inputs.version }}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate tag
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
+            || { echo "::error::Not a release version: '$VERSION'"; exit 1; }
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+
+      # The binaries report package.json's version; a tag that disagrees with it
+      # would ship as a different version than the release it is attached to.
+      - name: Tag must match package.json
+        run: |
+          packaged="$(jq -r .version package.json)"
+          [ "$packaged" = "$VERSION" ] \
+            || { echo "::error::Tag $VERSION carries package.json version $packaged. Fix the version and re-tag."; exit 1; }
+
+      - name: Dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TOKEN: ${{ secrets.XOPAT_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_TOKEN" ] || { echo "::error::Secret XOPAT_DEPLOY_TOKEN is not set (needs Contents: write on $DEPLOY_REPO)."; exit 1; }
+          prerelease="$(gh release view "$VERSION" -R "$GITHUB_REPOSITORY" --json isPrerelease -q .isPrerelease)"
+          GH_TOKEN="$DEPLOY_TOKEN" gh api "repos/$DEPLOY_REPO/dispatches" \
+            -f event_type=xopat-release \
+            -f "client_payload[version]=$VERSION" \
+            -F "client_payload[prerelease]=$prerelease"
+          echo "Dispatched \`$VERSION\` to [$DEPLOY_REPO](https://github.com/$DEPLOY_REPO/actions/workflows/release.yml)." >> "$GITHUB_STEP_SUMMARY"

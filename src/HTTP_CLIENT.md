@@ -173,7 +173,7 @@ Where:
                          // no Content-Type set (browser picks it, e.g. multipart boundary).
                          // A caller-supplied Content-Type header always wins.
   query: { ... },        // optional query string object — appended via URLSearchParams; arrays become repeated keys
-  expect: "json" | "text" | "auto", // default "auto" — drives response parsing
+  expect: "json" | "text" | "bytes" | "auto", // default "auto" — drives response parsing
   }
 
 `expect` in detail:
@@ -182,6 +182,8 @@ Where:
   bare `SyntaxError`), so it surfaces immediately instead of being replayed by the
   retry arm.
 - `"text"` — `res.text()`, verbatim.
+- `"bytes"` — `res.arrayBuffer()`. Use it for anything binary: reading bytes as text
+  corrupts them irreversibly.
 - `"auto"` (default) — a JSON content-type parses as JSON; otherwise the body is
   read once, parsed as JSON opportunistically, and returned as **text** when that
   fails. An empty body returns `{}`.

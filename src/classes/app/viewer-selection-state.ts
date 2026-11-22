@@ -1,3 +1,5 @@
+import { BackgroundConfig } from "../background-config";
+
 export class ViewerSelectionState {
     static normalizeSelectionValue(value: any): Array<number | undefined> | undefined {
         if (value == null) {
@@ -68,18 +70,11 @@ export class ViewerSelectionState {
     }
 
     /**
-     * Whether a visualization is offered for a background. A visualization
-     * without `backgrounds` belongs to every background; otherwise one entry
-     * must equal the background's `id` or the data id the background shows.
+     * Whether a visualization is offered for a background — the same rule the
+     * open pipeline enforces, see {@link BackgroundConfig.visualizationAppliesTo}.
      */
     static visualizationAppliesTo(visualization: any, background: any, data: any[] = []): boolean {
-        const targets = visualization?.backgrounds;
-        if (!Array.isArray(targets) || !targets.length) return true;
-        if (!background) return false;
-        const ref = background.dataReference;
-        const entry = typeof ref === "number" ? data[ref] : ref;
-        const dataId = typeof entry === "string" ? entry : entry?.dataID;
-        return targets.some((t: any) => t === background.id || (dataId !== undefined && t === dataId));
+        return BackgroundConfig.visualizationAppliesTo(visualization, background, data);
     }
 
     /**

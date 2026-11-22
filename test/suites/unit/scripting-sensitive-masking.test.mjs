@@ -192,6 +192,32 @@ test("describeData leaks nothing anywhere in its payload", () => {
     expectNoIdentifiers("describeData()", vizApi({ alias: true }).describeData());
 });
 
+test("describeData gives every masked entry a handle, a protocol name, and says which viewer shows it", () => {
+    const config = globalThis.APPLICATION_CONTEXT.config;
+    const original = config.data;
+    // The DICOM shape: an object entry with no `id`. It used to come out as `dataId: null`,
+    // so a session of such entries was a list of rows with nothing to tell them apart.
+    config.data = [
+        REAL_PATH,
+        { dataID: { studyUID: STUDY_UID, seriesUID: SERIES_UID, role: "seg" }, protocol: "dicom" },
+        { dataID: { studyUID: STUDY_UID }, protocol: `https://pacs.hospital.local/${STUDY_UID}` },
+    ];
+    try {
+        const rows = vizApi({ alias: true }).describeData();
+
+        expect(rows.map((row) => row.dataId)).toEqual(
+            ["xopat:masked-data:0", "xopat:masked-data:1", "xopat:masked-data:2"]);
+        expect(rows[1].protocol).toBe("dicom");
+        // Not a bare name — could be a URL template, so it is withheld rather than trusted.
+        expect(rows[2].protocol).toBe(null);
+        // config.data spans every viewer; only the first entry is this viewer's.
+        expect(rows.map((row) => row.inActiveViewer)).toEqual([true, false, false]);
+        expectNoIdentifiers("describeData() with object entries", rows);
+    } finally {
+        config.data = original;
+    }
+});
+
 test("describeData returns real ids once sensitive data is consented", () => {
     const [entry] = vizApi({ alias: true, sensitiveAllowed: true }).describeData();
 

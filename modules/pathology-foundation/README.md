@@ -149,6 +149,38 @@ agent — no session, history, or personality. It must be bound to a **dedicated
 (`providerId`) so the model + secrets are separate from whatever drives the agent above. The pathology module
 never hard-depends on the chat module; the driver throws a clear error if it is absent.
 
+### `assistant` (built-in fallback)
+
+Implements `analyze` on the **chat assistant's own model** (`chat.getAssistantTextModel()`), through the same
+stateless `runVisionInference` call: the region image and a pathology system prompt
+(`pathology.assistantDriverSystem`), no session or history. It is `fallback: true`, so it is chosen only when
+no other driver implements `analyze` (no MedGemma, no configured `vercel` driver), and only while a chat model
+is selected whose image support is not `unsupported`. A dedicated provider always wins automatic resolution;
+the assistant can still ask for it explicitly with `{ driver: "assistant" }`. It is `local: false`, so the
+remote-consent dialog asks first and names it as the chat's own model.
+
+A dedicated driver that **fails** never silently switches to it — the user consented to a specific model. The
+error instead tells the assistant it can retry with `{ driver: "assistant" }` or render the region and look
+itself (`_invokeAnalyze`).
+
+### Which model receives the pixels
+
+Consent is asked for one driver, by id, and that id is the one used. The scripting
+adapter resolves an absent `driver` to an id *before* the dialog opens and hands the
+engine that id, so a driver registering while the dialog is open (plugins register
+asynchronously) cannot become the recipient. A recursive overview pins the id for
+the whole walk, `runPlan` asks about the plan's own driver, and `refineOverview`
+asks again when a different driver is named.
+
+**Known limitation — `defaultDrivers` is a preference, not a guarantee.** When the
+driver named there is not registered (not loaded, failed to load, or still starting
+up), the first capable driver serves instead, and the built-in `assistant` driver
+(the chat model) last. The user is shown the driver actually used, but the
+operator's choice is not enforced. Set `"strictDefaultDrivers": true` to make it
+binding: the feature then fails until the named driver is there. It is off by
+default because a deployment that lists a default for a plugin it does not always
+load would otherwise lose the feature entirely.
+
 ### Custom drivers (runtime registration)
 
 Any module/plugin can add a driver — this is how the SAM plugin contributes its in-browser engine:
@@ -183,6 +215,9 @@ The built-in tissue driver is always available. Additional `http` / `vercel` dri
     "analyze": "vlm-sdk"
     // (a feature with no override uses the first registered capable driver;
     //  tissue-mask defaults to "builtin" unless you register a replacement)
+    // While the named driver is not registered the first capable driver serves
+    // instead. Set "strictDefaultDrivers": true to make the override binding:
+    // the feature then fails rather than falling back to another model.
   },
   "drivers": {
     // Server tissue detector, overriding the built-in one:
@@ -230,6 +265,33 @@ Spending a load budget is not a failure: the render returns the tiles it got, ma
 the field is analyzed and reported as the partial read it is. Spending the queue budget *is* a failure — the
 pass never started — and is reported as such rather than as an unreadable region.
 
+### Vision calls: deadline and image encoding
+
+Two more deployment knobs govern the model call itself (static meta, same reasoning as above):
+
+| Key | What it bounds | Default |
+| --- | --- | --- |
+| `visionTimeoutMs` | client deadline for ONE `runVisionInference` call — the wait for a background request slot plus the model's answer. Clamped to 30000..1800000. Keep it ≥ the server's budget (`XOPAT_PATHOLOGY_VISION_TIMEOUT_MS`, 300000) | 315000 |
+| `visionImage` | encoding of every image sent to a vision model: `{ "format": "jpeg" \| "png", "quality": 0..1 }` | `{ "format": "jpeg", "quality": 0.9 }` |
+
+JPEG is the default because the image travels base64-in-JSON through every hop: a 2 MP field is several MB as
+PNG and a few hundred KB as JPEG, and a proxy in front of a model server commonly refuses bodies over 1 MB.
+Transparent pixels are flattened onto white (glass) first. PNG remains available — set
+`"visionImage": { "format": "png" }`, or `"imageFormat": "png"` on one driver (a runtime-registered driver sets
+`imageFormat` on the object it registers) — and a PNG the endpoint refuses as too large (HTTP 413) is re-encoded
+and retried **once** as JPEG, on the same driver. Drivers must send `imageBlob.type` as the media type.
+
+### When a read fails
+
+A failed read is reported by **stage**, because the remedies are opposite:
+
+- `interrogateRegion` fields carry `error` and `errorStage`. `"render"` → `warnFieldsUnread` (tiles/render;
+  re-running is reasonable). `"analyze"` → `warnFieldsAnalyzeFailed` (the image was rendered, the model call was
+  refused / timed out / errored; re-running unchanged repeats it).
+- `buildOverview` adds `warnReadsFailed` with the count and the first reason whenever nodes errored, and drops
+  the "never found a region it could read closely" note when *every* read failed — "go deeper" is wrong advice
+  for a refused payload.
+
 A field whose render fails is retried up to three times: twice at the planned resolution (the second attempt
 runs over the tile cache the first one warmed, which is usually enough), then once one pyramid level coarser,
 which reports its real `deliveredMpp` so features that need finer detail come back as
@@ -245,6 +307,10 @@ Injected into the agent's system prompt automatically (with its inline type decl
 agent toward concrete jobs instead of guessing. Select the viewer first (`application.setActiveViewer(...)`).
 Consent is requested **only when the resolved driver is remote** (a snapshot would leave the viewer); the
 built-in tissue jobs run silently.
+
+The namespace exists only when this module is part of the deployment (`npm run up -- <chat fragment>
+demo/annotations-pathology`). Without it an assistant still has the core off-screen look
+(`viewer.captureRegion`), but none of the survey, checklist or evidence machinery below.
 
 ```ts
 pathology.listDrivers(): PathologyDriverInfo[];                       // { id, label, local, features[] }
@@ -628,7 +694,7 @@ takes the viewer explicitly (multi-viewport-safe).
 | `analyzeRegion(viewer, { prompt, driver?, source?, region?, mpp?, magnification?, targetPixels? })` | Vision → `{ findings, isComplete?, coveredFraction? }`. `mpp` is DELIVERED (the region is sampled rather than squashed); `magnification`/`targetPixels` are requests the render may clamp. Without `region`: the current view (composite incl. overlays, or raw background). With `region` (parent-global px): rendered off-screen at the requested size — the user's viewport is untouched. |
 | `pickViewportPoint(viewer, { message?, timeoutMs? })` | Await a user click → `{x,y}` image coords (or null). |
 | `getSelectedAnnotationId(viewer)` / `awaitAnnotationSelection(viewer, ...)` | Current / awaited annotation selection. |
-| `captureViewportImage(viewer, label?)` | `{ blob, width, height, isComplete }` on-screen composite PNG (used by `analyze` / SAM). Settles the view, then waits (bounded) for the pyramid; `isComplete: false` means the blob holds partially streamed tiles. |
+| `captureViewportImage(viewer, label?, encoding?)` | `{ blob, width, height, isComplete }` on-screen composite, PNG unless `encoding` says JPEG (used by `analyze` / SAM). Settles the view, then waits (bounded) for the pyramid; `isComplete: false` means the blob holds partially streamed tiles. |
 | `maskToPolygon(mask, ref, w, h, ratio, viewer)` | Trace a mask's largest region to image-space points (shared infra). |
 
 Feature ids: `tissue-mask`, `segment`, `analyze`, `cellularity`.

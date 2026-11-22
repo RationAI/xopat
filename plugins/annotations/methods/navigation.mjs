@@ -23,35 +23,19 @@ export const navigationMethods = {
         }
         if (this.context.mode) this.context.mode._lastUsed = null;
 
-        // Apply the factory swap upfront so both cross-mode and same-mode
-        // paths converge through the same update. Previously, the cross-mode
-        // branch silently no-op'd when no preset existed yet (early-load
-        // race), leaving the canvas drawing with the prior factory.
+        // Apply the tool swap upfront so both cross-mode and same-mode paths
+        // converge through the same update. The shape is the module's active
+        // factory - a tool choice, never written into a preset (class).
         if (id === 'custom' && factory) {
-            let preset = this.context.presets.getActivePreset(isLeftClick);
-            const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+            this.context.setActiveFactory(factory);
 
-            // Ensure at least one active preset exists when entering CUSTOM.
-            // If none exists yet, create one bound to the user-picked factory
-            // — otherwise the canvas-click lazy fallback in annotations-canvas
-            // would create a polygon-bound preset and snap the toolbar back
-            // to polygon after the first annotation.
-            if (!preset && !otherPreset) {
-                let fallback = this.context.presets.get();
-                if (!fallback) {
-                    const factoryInstance = this.context.getAnnotationObjectFactory(factory);
-                    fallback = this.context.presets.addPreset(undefined, '', undefined, factoryInstance);
-                }
-                if (fallback) {
-                    this.context.setPreset(fallback, isLeftClick);
-                    preset = fallback;
-                }
+            // Ensure at least one active preset exists when entering CUSTOM:
+            // the canvas only hands a factory to the mode when a class is bound.
+            if (!this.context.presets.getActivePreset(isLeftClick)
+                && !this.context.presets.getActivePreset(!isLeftClick)) {
+                const fallback = this.context.presets.get() || this.context.presets.addPreset();
+                if (fallback) this.context.setPreset(fallback, isLeftClick);
             }
-
-            // setPresetFactory, not updatePresetWith: picking a shape must work
-            // with enablePresetModify off — it is a tool choice, not a class edit.
-            if (preset)      this.setPresetFactory(preset.presetID,      factory);
-            if (otherPreset) this.setPresetFactory(otherPreset.presetID, factory);
         }
 
         if (sameMode) {

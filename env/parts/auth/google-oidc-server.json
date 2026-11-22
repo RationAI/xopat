@@ -1,6 +1,10 @@
 {
   "$meta": {
     "description": "Google as IdP, confidential server-side flow — the client secret never reaches the browser",
+    "env": {
+      "GOOGLE_CLIENT_ID": "OAuth client id of the Google confidential client",
+      "GOOGLE_CLIENT_SECRET": "OAuth client secret of the Google confidential client"
+    },
     "dimension": "auth",
     "requires": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
   },

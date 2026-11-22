@@ -8,7 +8,7 @@ sidebar_position: 0
 ![xOpat banner](/img/xopat-banner-v3.png)
 
 **xOpat** — the e**X**plainable **O**pen **P**athology **A**nalysis **T**ool — is a
-flexible, browser-based whole slide image (WSI) viewer built for AI-assisted
+flexible, browser-based whole slide image (WSI) viewing _framework_ built for AI-assisted
 digital pathology. It is server-agnostic, modular, and extensible through
 plugins and modules.
 

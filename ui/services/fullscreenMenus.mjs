@@ -268,8 +268,14 @@ export class FullscreenMenus {
         APPLICATION_CONTEXT?.AppCache?.set?.(this._visibilityCacheKey, !!visible);
     }
 
+    /**
+     * Whether the menu is on screen. Answered by the panel, never by the cache:
+     * `AppCache` is where the state is remembered for the next load, and with
+     * `bypassCache` it stores nothing and reads back the default — which made
+     * an open menu report itself closed to the catalogue and to hide-UI.
+     */
     isVisible() {
-        return !!APPLICATION_CONTEXT?.AppCache?.get?.(this._visibilityCacheKey, false);
+        return !!this.menu?.isOpen();
     }
 
     _registerChrome() {
@@ -800,10 +806,18 @@ export class FullscreenMenus {
 
         const interactionCard = this.card($.t('settings.card.interaction'),
             this.createCheckbox(
-                "scroll-requires-ctrl-checkbox",
-                $.t('settings.scrollRequiresCtrl'),
-                liveOnCheck('scrollRequiresCtrl'),
-                APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
+                "scroll-requires-click-checkbox",
+                $.t('settings.scrollRequiresClick'),
+                function () {
+                    // `scrollRequiresCtrl` is the former name; the controller still
+                    // honours it, so a stored legacy value has to go with the new one
+                    // or the switch could never be turned off.
+                    APPLICATION_CONTEXT.setOption('scrollRequiresCtrl', undefined);
+                    APPLICATION_CONTEXT.setOption('scrollRequiresClick', this.checked);
+                    refreshInputControllers();
+                },
+                !!APPLICATION_CONTEXT.getOption('scrollRequiresClick')
+                    || !!APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
             ),
             this.createCheckbox(
                 "reverse-scroll-checkbox",

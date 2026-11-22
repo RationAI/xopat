@@ -177,7 +177,6 @@
       "add": "Add",
       "color": "Color",
       "delete": "Delete class",
-      "typeLabel": "Type",
       "fieldsLabel": "Fields",
       "unnamed": "Unnamed Class",
       "emptyState": "No classes yet. Use \"Add new class\" to create one.",

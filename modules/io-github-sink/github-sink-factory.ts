@@ -29,6 +29,9 @@ export type GithubSinkConfig = {
      *   {ownerId} {ownerUid} {xoType} {direction}
      *   {capabilityId} {capabilityGroup}
      *   {viewerId} {backgroundId} {key} {resourceName} {itemId}
+     *   {slideHash} {slideName} {ext}
+     * `{ext}` is the file extension of the format this dispatch travels in
+     * (see `formats`), `json` when none is known.
      *
      * `{viewerId}` resolves to "_global" for a global-scope dispatch,
      * `{backgroundId}` to "_any" when the owner is not slide-scoped.
@@ -55,6 +58,13 @@ export type GithubSinkConfig = {
     committer?: { name: string; email: string };
     /** Forwarded into PUT body verbatim. */
     author?: { name: string; email: string };
+    /**
+     * The format each domain is stored in: `{ annotations: "geo-json" }`, or
+     * `{ annotations: { id: "geo-json", options: {...} } }`; `"*"` for any
+     * domain. A binding's `{sink, format}` still wins. Unset, the owner's
+     * deployment default applies (never the user's download-dialog choice).
+     */
+    formats?: Record<string, IOFormatPin>;
 };
 
 export interface GithubSinkOptions {
@@ -312,6 +322,12 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
         // via `io:invalid-binding` instead of losing writes silently.
         supports: { kinds: ["bundle"] },
 
+        // Stores whatever it is handed; the `formats` key of the composed
+        // config picks which. Older cores without the helper: no pin.
+        preferredFormat(domain: string, ctx: IOContext): IOFormatPin | undefined {
+            return (globalThis as any).IO_PIPELINE?.pinnedFormatFrom?.(opts.getOptions(ctx), domain);
+        },
+
         accepts(ctx: IOContext): boolean | IOAcceptDecision {
             const o = opts.getOptions(ctx) ?? {};
             if (!o.repo) {
@@ -357,6 +373,12 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
                         } as IOBinaryPayload,
                     };
                 }
+                // A binding pinned to a binary format (`ctx.format`, e.g. DICOM)
+                // stored bytes; hand the same bytes back, not a UTF-8 reading
+                // of them.
+                if ((ctx as any).format?.binary) {
+                    return { ok: true, payload: base64ToBytes(raw) };
+                }
                 const payload = base64ToUtf8(raw);
                 return { ok: true, payload };
             } catch (e: any) {
@@ -376,9 +398,16 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
             // would produce `{"bytes":{"0":137,...}}` — a JSON dump of a typed
             // array, inflating a recording by an order of magnitude and being
             // unreadable on the way back.
-            const contentBase64 = isBinaryPayload(payload)
-                ? bytesToBase64(payload.bytes)
-                : utf8ToBase64(typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+            // Bare bytes are what a binary FORMAT encodes to (see `ctx.format`).
+            const rawBytes = payload instanceof ArrayBuffer ? payload
+                : ArrayBuffer.isView(payload)
+                    ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+                    : undefined;
+            const contentBase64 = rawBytes
+                ? bytesToBase64(rawBytes)
+                : isBinaryPayload(payload)
+                    ? bytesToBase64(payload.bytes)
+                    : utf8ToBase64(typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
             // Cheap upper-bound check before incurring a round-trip.
             if (contentBase64.length > MAX_BUNDLE_BYTES * 1.4) {
                 return fail(

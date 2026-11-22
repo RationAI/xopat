@@ -4,6 +4,7 @@ import { Div } from "../elements/div.mjs";
 import { iconComponentFor } from "../elements/ph-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Menu } from "./menu.mjs";
+import { bindHorizontalWheel } from "../elements/horizontalScroll.mjs";
 
 const { div, span } = van.tags
 
@@ -116,9 +117,7 @@ class TabsMenu extends Menu {
      * @private
      * The strip scrolls on the X axis only, and a mouse wheel emits deltaY — so
      * without this the strip is unreachable by wheel and the user is forced to
-     * drag the scrollbar. Map the dominant wheel axis onto scrollLeft and only
-     * swallow the event while the strip can actually move, so a wheel over a
-     * fully-visible strip still scrolls whatever is underneath.
+     * drag the scrollbar.
      */
     _bindStripWheel() {
         if (!this._scrollableTabs) return;
@@ -126,17 +125,7 @@ class TabsMenu extends Menu {
         // re-bind when create() produced a fresh node, never twice on the same one
         if (!strip || this._wheelBoundEl === strip) return;
         this._wheelBoundEl = strip;
-        strip.addEventListener("wheel", (e) => {
-            if (e.ctrlKey) return;   // browser zoom
-            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-            if (!delta) return;
-            const max = strip.scrollWidth - strip.clientWidth;
-            if (max <= 0) return;
-            const next = Math.max(0, Math.min(max, strip.scrollLeft + delta));
-            if (next === strip.scrollLeft) return;
-            strip.scrollLeft = next;
-            e.preventDefault();
-        }, { passive: false });
+        bindHorizontalWheel(strip);
     }
 
     addTab(item) {

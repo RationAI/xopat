@@ -40,10 +40,11 @@ import {
 } from "./lib/geometry";
 import {
     blobToBase64, builtinTissueMask, composeMontage, decodeBase64Mask, densityGrid,
-    montageCellLabel, pixelsToPngBlob, planMontageLayout, saturationChannel,
+    encodeCanvas, flattenOnWhite, montageCellLabel, normalizeImageEncoding, pixelsToImageBlob,
+    pixelsToPngBlob, planMontageLayout, reencodeAsJpeg, saturationChannel,
     stainConcentration, DEFAULT_STAIN_VECTORS,
 } from "./lib/imaging";
-import type { MontageCell, StainVectors } from "./lib/imaging";
+import type { ImageEncoding, MontageCell, StainVectors } from "./lib/imaging";
 import { isTemplateEcho, keywordInterest, normalizeScore, parseOverviewVerdict } from "./lib/verdict";
 import {
     fallbackChecklist, sanitizeChecklist, splitByResolution, unassessable, exceedsSlide,
@@ -632,7 +633,10 @@ export interface SegmentInput extends PixelSource {
 }
 
 export interface AnalyzeInput {
-    /** PNG of the on-screen composite (may include the overlay). */
+    /**
+     * The image to read (may include the overlay). JPEG by default, PNG when the deployment
+     * or the driver asks for it — send `imageBlob.type` as the media type, never a literal.
+     */
     imageBlob: Blob;
     prompt: string;
     /**
@@ -685,6 +689,23 @@ export interface FmDriver {
     id: string;
     label?: string;
     local?: boolean;
+    /**
+     * A last-resort driver: chosen for a feature only when no other registered driver
+     * implements it (an explicit `driver` id still picks it). The built-in `assistant`
+     * analyze driver is one — a dedicated vision provider, when present, wins.
+     */
+    fallback?: boolean;
+    /**
+     * Whether the driver can serve right now (e.g. a model is selected). Drivers without it
+     * are always available. An unavailable fallback is skipped by automatic resolution.
+     */
+    isAvailable?: () => boolean;
+    /**
+     * Encoding this driver wants its `analyze` image in, overriding the module's
+     * `visionImage` default (JPEG). Set `"png"` only for an endpoint that needs lossless
+     * input AND accepts multi-megabyte bodies; a PNG refused as too large is retried as JPEG.
+     */
+    imageFormat?: "jpeg" | "png";
     config?: Record<string, unknown>;
     features: {
         "tissue-mask"?: (input: TissueMaskInput) => Promise<MaskResult>;
@@ -713,6 +734,10 @@ export interface PathologyDriverInfo {
     id: string;
     label: string;
     local: boolean;
+    /** Last-resort driver (see {@link FmDriver.fallback}). */
+    fallback: boolean;
+    /** Can serve right now. */
+    available: boolean;
     features: PathologyFeature[];
 }
 
@@ -720,6 +745,8 @@ export interface ResolvedDriverInfo {
     id: string;
     label: string;
     local: boolean;
+    /** The built-in fallback that runs on the chat assistant's own model. */
+    fallback: boolean;
 }
 
 export interface TissueMaskSummary {
@@ -811,6 +838,12 @@ export interface InterrogationField {
     answers: FeatureAnswer[];
     findings: string | null;
     error?: string;
+    /**
+     * Where `error` happened. `"render"`: no image was produced. `"analyze"`: the image was
+     * rendered and the MODEL CALL failed (payload refused, timeout, upstream error) — a
+     * different problem with a different remedy, so the two are never reported as one.
+     */
+    errorStage?: "render" | "analyze";
 }
 
 export interface InterrogationResult {
@@ -1419,6 +1452,13 @@ export interface BuildOverviewOptions {
 interface ResolvedOverviewOptions {
     query?: string;
     driver?: string;
+    /**
+     * The `analyze` driver this run sends pixels to, RESOLVED to an id once. The raw
+     * `driver` option is often absent, and resolving the default per call let a driver
+     * that registered mid-walk take over under a consent given for another model.
+     * Unset only when no analyze driver existed at plan time ({@link planAnalyzeDriver}).
+     */
+    analyzeDriver?: string;
     context: SlideContext;
     repairVerdict: boolean;
     measureFill: boolean;
@@ -1655,9 +1695,13 @@ class VercelAnalyzeDriver implements FmDriver {
     private _model?: string;
     private _system?: string;
     private _scopeId: string;
+    private _timeoutMs: number;
+    imageFormat?: "jpeg" | "png";
 
-    constructor(id: string, cfg: Record<string, any>) {
+    constructor(id: string, cfg: Record<string, any>, timeoutMs: number) {
         this.id = id;
+        this._timeoutMs = timeoutMs;
+        if (cfg.imageFormat === "png" || cfg.imageFormat === "jpeg") this.imageFormat = cfg.imageFormat;
         this.label = cfg.label || id;
         this._providerId = cfg.providerId;
         this._model = cfg.model;
@@ -1678,25 +1722,110 @@ class VercelAnalyzeDriver implements FmDriver {
         if (!scope?.runVisionInference) {
             throw new Error(`The "${this._scopeId}" module is not available; cannot use vercel driver "${this.id}".`);
         }
-        const base64 = await blobToBase64(input.imageBlob);
-        const res = await scope.runVisionInference({
-            providerId: this._providerId,
-            model: this._model,
-            system: this._system,
-            prompt: input.prompt,
-            imageBase64: base64,
-            mediaType: "image/png",
-            // Diagnostics only — the server logs it beside the image and never
-            // puts it in the model's message. This is what turns a logged vision
-            // call from an anonymous PNG into "region 2.1 of this slide, read at
-            // 1.6 µm/px".
-            context: input.context,
-        }, {
-            // Yield connection slots to interactive tile loading — bounded per
-            // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
-            priority: "background",
-        });
-        return { text: typeof res?.text === "string" ? res.text : "" };
+        return callVisionInference(scope, this._providerId, this._model, this._system, input, this._timeoutMs);
+    }
+}
+
+/**
+ * Whether an analyze failure is the endpoint refusing the request BODY for its size.
+ *
+ * xOpat's own RPC cap answers 413 `RPC_BODY_TOO_LARGE`; an upstream model server or an
+ * ingress in front of it answers with the bare HTTP reason phrase, which reaches here only
+ * as message text relayed through the RPC error.
+ */
+function isPayloadTooLarge(error: any): boolean {
+    const status = error?.status ?? error?.statusCode;
+    return status === 413
+        || error?.code === "RPC_BODY_TOO_LARGE"
+        || /entity too large|payload too large|body exceeds/i.test(String(error?.message || ""));
+}
+
+/**
+ * One stateless vision call through the vercel-ai-chat-sdk `runVisionInference` RPC — shared
+ * by the configured `vercel` drivers and the built-in `assistant` fallback.
+ */
+async function callVisionInference(
+    scope: any, providerId: string, model: string | null | undefined, system: string | undefined,
+    input: AnalyzeInput, timeoutMs: number
+): Promise<AnalyzeResult> {
+    const base64 = await blobToBase64(input.imageBlob);
+    const res = await scope.runVisionInference({
+        providerId,
+        model,
+        system,
+        prompt: input.prompt,
+        imageBase64: base64,
+        mediaType: input.imageBlob.type || "image/png",
+        // Diagnostics only — the server logs it beside the image and never
+        // puts it in the model's message. This is what turns a logged vision
+        // call from an anonymous image into "region 2.1 of this slide, read at
+        // 1.6 µm/px".
+        context: input.context,
+    }, {
+        // Yield connection slots to interactive tile loading — bounded per
+        // origin by APPLICATION_CONTEXT.requestScheduler (background lane).
+        priority: "background",
+        // Explicit, because the HttpClient default (30 s) is far below what the server
+        // grants this method (300 s) and its clock also covers the background-lane queue:
+        // a reasoning model never answered inside it, so every read failed as a timeout.
+        timeoutMs,
+    });
+    return { text: typeof res?.text === "string" ? res.text : "" };
+}
+
+/**
+ * The `analyze` driver of last resort: the chat assistant's OWN model, called session-less.
+ *
+ * A deployment without a dedicated pathology vision provider (no MedGemma, no configured
+ * `vercel` driver) used to have no analyze driver at all, so every look at the slide failed.
+ * The assistant may well be multimodal, and a one-shot call — the region image, the
+ * pathology prompt, no chat history — costs far less than putting images into the
+ * conversation. It is `fallback: true`, so a dedicated provider always wins automatic
+ * resolution, and `local: false`, so it is consented like any other remote driver.
+ *
+ * Resolved per call: the assistant can switch models mid-session.
+ */
+class AssistantAnalyzeDriver implements FmDriver {
+    id = "assistant";
+    /** Translated at read time: the dialog and the model both see it, after i18n is up. */
+    get label(): string {
+        return $.t("pathology.assistantDriverLabel");
+    }
+    local = false;
+    fallback = true;
+    features: FmDriver["features"];
+    private _timeoutMs: number;
+
+    constructor(timeoutMs: number) {
+        this._timeoutMs = timeoutMs;
+        this.features = { "analyze": (input) => this._analyze(input) };
+    }
+
+    private _target(): { scope: any; providerId: string; modelId: string | null; images: string } | null {
+        const chat = (globalThis as any).singletonModule?.("vercel-ai-chat-sdk");
+        const ref = chat?.getAssistantTextModel?.();
+        const scope = (window as any).xserver?.module?.["vercel-ai-chat-sdk"];
+        if (!ref?.providerId || !scope?.runVisionInference) return null;
+        return { scope, providerId: ref.providerId, modelId: ref.modelId ?? null, images: ref.images || "unknown" };
+    }
+
+    isAvailable(): boolean {
+        const target = this._target();
+        return !!target && target.images !== "unsupported";
+    }
+
+    private async _analyze(input: AnalyzeInput): Promise<AnalyzeResult> {
+        const target = this._target();
+        if (!target) {
+            throw new Error("The \"assistant\" driver needs a chat model selected in the chat panel.");
+        }
+        if (target.images === "unsupported") {
+            throw new Error("The \"assistant\" driver cannot read images: the selected chat model does not accept image input.");
+        }
+        return callVisionInference(
+            target.scope, target.providerId, target.modelId, $.t("pathology.assistantDriverSystem"), input,
+            this._timeoutMs
+        );
     }
 }
 
@@ -1771,12 +1900,25 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      * and caching it would make a transient network state permanent for the session.
      */
     private _surveys: Map<string, SlideSurvey> = new Map();
+    /**
+     * Client deadline for one `runVisionInference` call, in ms. A DEPLOYMENT knob
+     * (`visionTimeoutMs`): keep it at or above the server's own budget for the method
+     * (`XOPAT_PATHOLOGY_VISION_TIMEOUT_MS`, 300 s), or the browser gives up on a call the
+     * server is still running.
+     */
+    readonly visionTimeoutMs: number;
+    /** Default encoding of model-bound images (`visionImage`); a driver may override the format. */
+    private _visionImage: ImageEncoding;
 
     constructor() {
         super();
         this._drivers = new Map();
         this.MagicWand = null;
         this._defaultForFeature = (this.getStaticMeta("defaultDrivers", {}) as Record<string, string>) || {};
+        this.visionTimeoutMs = clampNumber(
+            this.getStaticMeta("visionTimeoutMs", undefined) as number | undefined, 315_000, 30_000, 1_800_000
+        );
+        this._visionImage = normalizeImageEncoding(this.getStaticMeta("visionImage", undefined));
 
         // Built-in, dependency-free tissue detector so the module works out of
         // the box. Registered first → default for `tissue-mask`. local => no
@@ -1809,6 +1951,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             },
         });
 
+        // Last-resort analyze driver: the chat assistant's own model (see AssistantAnalyzeDriver).
+        this.registerDriver(new AssistantAnalyzeDriver(this.visionTimeoutMs));
+
         // Configured transports: { "<id>": { type:"http"|"vercel", ... } }.
         const drivers = this.getStaticMeta("drivers", {}) as Record<string, any>;
         for (const [id, cfg] of Object.entries(drivers || {})) {
@@ -1818,7 +1963,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (type === "http") {
                     this.registerDriver(new HttpMaskDriver(id, cfg));
                 } else if (type === "vercel") {
-                    this.registerDriver(new VercelAnalyzeDriver(id, cfg));
+                    this.registerDriver(new VercelAnalyzeDriver(id, cfg, this.visionTimeoutMs));
                 } else {
                     console.warn(`[pathology-foundation] driver "${id}" has unknown type "${type}"; skipped.`);
                 }
@@ -1852,6 +1997,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             id: d.id,
             label: d.label || d.id,
             local: !!d.local,
+            fallback: !!d.fallback,
+            available: d.isAvailable ? d.isAvailable() : true,
             features: Object.keys(d.features).filter(
                 k => typeof (d.features as any)[k] === "function"
             ) as PathologyFeature[],
@@ -1874,10 +2021,26 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (preferred) {
             const d = this._drivers.get(preferred);
             if (d && typeof d.features[feature] === "function") return d;
+            // Opt-in (`strictDefaultDrivers`, deployment config): the operator named the
+            // model this feature goes to, and while it is absent (not registered yet, or
+            // never loaded) nothing else may stand in for it. Off by default, where the
+            // first capable driver serves as it always has -- consent is asked on, and the
+            // walk pinned to, whichever driver that turns out to be.
+            if (this.getStaticMeta("strictDefaultDrivers", false) === true) {
+                throw new Error(
+                    `The default "${feature}" driver "${preferred}" configured for this deployment is not `
+                    + `available${d ? ` (it does not implement "${feature}")` : " (not registered)"}.`
+                );
+            }
         }
-        for (const d of this._drivers.values()) {
-            if (typeof d.features[feature] === "function") return d;
-        }
+        // Dedicated drivers first; a fallback (the assistant's own model) only when none
+        // implements the feature, and only when it can serve right now.
+        const candidates = Array.from(this._drivers.values())
+            .filter(d => typeof d.features[feature] === "function");
+        const dedicated = candidates.find(d => !d.fallback);
+        if (dedicated) return dedicated;
+        const fallback = candidates.find(d => d.fallback && (d.isAvailable ? d.isAvailable() : true));
+        if (fallback) return fallback;
         // Name what IS here. A bare "feature X is missing" tells a caller nothing about what to
         // do next, so an agent's only move is to guess at another call and spend a turn finding
         // out that one is missing too — the inventory is what turns one dead end into a choice.
@@ -1888,9 +2051,64 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         );
     }
 
+    /**
+     * Run a driver's `analyze`, naming the way out when a DEDICATED driver fails.
+     *
+     * There is no silent switch to another driver: the user consented to sending pixels to a
+     * specific model, and a different one is a different decision. But a bare upstream error
+     * leaves the assistant guessing, so the error says what it can do instead — use the
+     * built-in `assistant` driver (itself, session-less), or render the region and look.
+     */
+    private async _invokeAnalyze(driver: FmDriver, input: AnalyzeInput): Promise<AnalyzeResult> {
+        try {
+            try {
+                return await driver.features["analyze"]!(input);
+            } catch (error: any) {
+                // A lossless image the endpoint (or an ingress in front of it) refused for its
+                // size: the same pixels as JPEG are several times smaller, so try that once
+                // before reporting a failure. Same driver, same image — not a driver switch.
+                if (!isPayloadTooLarge(error) || input.imageBlob.type === "image/jpeg") throw error;
+                (globalThis as any).APPLICATION_CONTEXT?.log?.("module.pathology-foundation")?.warn?.(
+                    "analyze image refused as too large; retrying as JPEG",
+                    { driver: driver.id, bytes: input.imageBlob.size, type: input.imageBlob.type }
+                );
+                const imageBlob = await reencodeAsJpeg(input.imageBlob, this._visionImage.quality);
+                return await driver.features["analyze"]!({ ...input, imageBlob });
+            }
+        } catch (error: any) {
+            const fallback = this._drivers.get("assistant");
+            const aborted = error?.name === "AbortError";
+            if (aborted || driver.fallback || !fallback?.isAvailable?.()) throw error;
+            const message = String(error?.message || error);
+            const wrapped: any = new Error(
+                `${message} — the "${driver.id}" analyze driver failed. You can retry with ` +
+                `{ driver: "assistant" } (that is YOU: your own model, called once with the region ` +
+                `image and no conversation history), or render the region with ` +
+                `visualization.renderRegionPng and look at it yourself.`
+            );
+            wrapped.cause = error;
+            throw wrapped;
+        }
+    }
+
+    /** The encoding `driver` gets its analyze image in: its own format, else the module default. */
+    private _visionEncoding(driver: FmDriver): ImageEncoding {
+        return driver.imageFormat
+            ? { format: driver.imageFormat, quality: this._visionImage.quality }
+            : this._visionImage;
+    }
+
+    /** Encode a raster for `driver`. PNG reuses the raster's memoized blob. */
+    private _visionBlob(raster: PixelSource, driver: FmDriver): Promise<Blob> {
+        const encoding = this._visionEncoding(driver);
+        return encoding.format === "png"
+            ? raster.toBlob()
+            : pixelsToImageBlob(raster.pixels, raster.width, raster.height, encoding);
+    }
+
     describeDriverForFeature(feature: PathologyFeature, driverId?: string | null): ResolvedDriverInfo {
         const d = this.getDriverForFeature(feature, driverId);
-        return { id: d.id, label: d.label || d.id, local: !!d.local };
+        return { id: d.id, label: d.label || d.id, local: !!d.local, fallback: !!d.fallback };
     }
 
     // ---- tissue jobs (built on the `tissue-mask` feature) ----
@@ -1971,6 +2189,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         viewer: any,
         options?: {
             driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number;
+            /** Pinned `analyze` driver for the hint; see {@link interrogateRegion}. */
+            analyzeDriver?: string;
             /** Re-derive the tissue survey instead of reusing the cached one. */
             refresh?: boolean;
             scope?: ExplorationScope;
@@ -1986,13 +2206,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
 
         let hint: string | null | undefined;
-        if (options?.hint && this._hasFeature("analyze", options?.driver)) {
+        const hintDriver = options?.analyzeDriver ?? options?.driver;
+        if (options?.hint && this._hasFeature("analyze", hintDriver)) {
             // Reuse the survey raster when this call produced it. A cached survey kept the
             // mask and dropped the pixels, so an opt-in hint then pays for its own render —
             // which is the right trade: the mask is asked for constantly, the pixels once.
             const res = await this.analyzeRegion(viewer, {
                 prompt: t("pathology.overviewHintPrompt"),
-                driver: options?.driver,
+                driver: hintDriver,
                 source: "background",
                 region: survey.surveyBounds,
                 ...(raster ? { preRead: raster } : { targetPixels: MASK_TARGET_PIXELS }),
@@ -2042,13 +2263,19 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         /** Fields to read. More fields cover more of the region and cost more calls. */
         maxFields?: number;
         driver?: string;
+        /**
+        * The id consent was asked on, when the caller resolved it up front. Takes the place
+        * of `driver` for the feature call only, so a driver that registers between the
+        * prompt and the call cannot become the one that receives the pixels.
+        */
+        analyzeDriver?: string;
         context?: SlideContext;
         signal?: AbortSignal;
         concurrency?: number;
     }): Promise<InterrogationResult> {
         if (!viewer) throw new Error("interrogateRegion() requires a viewer.");
         if (!options?.region) throw new Error("interrogateRegion() requires a region.");
-        if (!this._hasFeature("analyze", options?.driver)) {
+        if (!this._hasFeature("analyze", options?.analyzeDriver ?? options?.driver)) {
             throw new Error("interrogateRegion needs an 'analyze' driver (e.g. a configured vision model).");
         }
         // Naming a region is what makes it the subject; a later unqualified call follows it.
@@ -2122,7 +2349,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                             ...assessable.map(f => t("pathology.fieldChecklistItem", { id: f.id, question: f.question })),
                             t("pathology.fieldAnswerContract"),
                         ].join(" "),
-                        driver: options.driver,
+                        driver: options.analyzeDriver ?? options.driver,
                         source: "background",
                         region: field.bounds,
                         preRead: raster,
@@ -2141,19 +2368,22 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     findings,
                 };
             },
-            onError: (field, error) => {
-                // Nothing was rendered, so nothing was read: the result cannot claim to be
-                // complete, and the features are `unread` — not `unparsed`, which would let
-                // the aggregate report "the model could not tell" about an image the model
-                // was never shown.
+            onError: (field, error, at) => {
+                // Nothing was READ, so the result cannot claim to be complete, and the features
+                // are `unread` — not `unparsed`, which would let the aggregate report "the model
+                // could not tell" about an image the model never answered on. WHICH half failed
+                // is kept: a render that produced nothing and a model call that was refused or
+                // timed out have opposite remedies.
                 isComplete = false;
+                const stage = at?.stage ?? "render";
                 return {
                     label: field.label,
                     bounds: field.bounds,
-                    deliveredMpp: null,
+                    deliveredMpp: stage === "analyze" ? (at?.raster?.deliveredMpp ?? null) : null,
                     answers: checklist.features.map(f => unassessable(f.id, "unread")),
                     findings: null,
                     error: (error as any)?.message || String(error),
+                    errorStage: stage,
                 };
             },
             visionConcurrency: Math.max(1, options.concurrency ?? 4),
@@ -2171,15 +2401,27 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const coveredArea = fields.reduce(
             (sum, f) => sum + (f.error ? 0 : f.bounds.width * f.bounds.height), 0
         );
-        const warnings = unread.length
-            // Named as a rendering failure, because the aggregate answers alone read as a
-            // resolution problem and send the reader to zoom in — which cannot help.
-            ? [t("pathology.warnFieldsUnread", {
-                count: unread.length,
+        // Named by cause, because the aggregate answers alone read as a resolution problem and
+        // send the reader to zoom in — which cannot help either kind. The two are kept apart
+        // because their remedies differ: a failed render is worth re-running as-is, a refused
+        // or timed-out model call is not.
+        const unrendered = unread.filter(f => f.errorStage !== "analyze");
+        const unanalyzed = unread.filter(f => f.errorStage === "analyze");
+        const warnings: string[] = [];
+        if (unrendered.length) {
+            warnings.push(t("pathology.warnFieldsUnread", {
+                count: unrendered.length,
                 total: fields.length,
-                reason: unread[0]?.error ?? "",
-            })]
-            : [];
+                reason: unrendered[0]?.error ?? "",
+            }));
+        }
+        if (unanalyzed.length) {
+            warnings.push(t("pathology.warnFieldsAnalyzeFailed", {
+                count: unanalyzed.length,
+                total: fields.length,
+                reason: unanalyzed[0]?.error ?? "",
+            }));
+        }
         return {
             region: options.region,
             checklist,
@@ -2277,7 +2519,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
         if (!cells.length) throw new Error("None of the requested regions could be rendered.");
 
-        const composite = await composeMontage(cells, layout);
+        const driver = this.getDriverForFeature("analyze", options.driver);
+        const composite = await composeMontage(cells, layout, undefined, this._visionEncoding(driver));
         const context = this._normalizeContext(options.context ?? this.getSlideContext(viewer) ?? undefined);
         const checklist = options.features
             ? sanitizeChecklist(options.features, { source: "explicit" })
@@ -2308,11 +2551,10 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             t("pathology.montageContract"),
         ].join(" ");
 
-        const driver = this.getDriverForFeature("analyze", options.driver);
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: null });
         let text: string | null = null;
         try {
-            const res = await driver.features["analyze"]!({
+            const res = await this._invokeAnalyze(driver, {
                 imageBlob: composite.blob,
                 prompt: [...this._contextPreamble(context, this._montageFacts(cellSizeUm, composite), 0, null), prompt].join(" "),
                 // A montage is many non-adjacent fields in one image, so there is no
@@ -2352,7 +2594,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async buildDensityMap(
         viewer: any,
-        options?: { driver?: string; cell?: number; refresh?: boolean }
+        options?: { driver?: string; cell?: number; refresh?: boolean;
+            /** Pinned `cellularity` driver; see {@link interrogateRegion}. */
+            cellularityDriver?: string }
     ): Promise<DensityMap> {
         if (!viewer) throw new Error("buildDensityMap() requires a viewer.");
         const { survey, raster } = await this._surveySlide(viewer, {
@@ -2367,7 +2611,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             layers: "background",
             label: t("pathology.captureDensity"),
         });
-        const density = await this._runCellularity(viewer, options?.driver, pixels, survey, options?.cell);
+        const density = await this._runCellularity(
+            viewer, options?.cellularityDriver ?? options?.driver, pixels, survey, options?.cell);
         if (!options?.cell) survey.density = density;
         return density;
     }
@@ -2682,6 +2927,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             feature?: PathologyFeature;
             prompt?: string;
             driver?: string;
+            /** Pinned `analyze` driver; see {@link interrogateRegion}. */
+            analyzeDriver?: string;
         }
     ): Promise<RegionReviewResult[]> {
         if (!viewer) throw new Error("reviewRegions() requires a viewer.");
@@ -2716,7 +2963,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (feature === "analyze") {
                     const res = await this.analyzeRegion(viewer, {
                         prompt: options?.prompt || t("pathology.reviewRegionPrompt"),
-                        driver: options?.driver,
+                        driver: options?.analyzeDriver ?? options?.driver,
                         source: "background",
                         region: region.bounds,
                         magnification: options?.magnification,
@@ -2871,14 +3118,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async runPlan(viewer: any, planId: string, edits?: OverviewPlanEdits): Promise<OverviewResult | OverviewPlanExpired> {
         if (!viewer) throw new Error("runPlan() requires a viewer.");
-        if (!this._hasFeature("analyze", edits?.driver)) {
-            throw new Error("runPlan needs an 'analyze' driver (e.g. a configured vision model).");
-        }
         const slideKey = this._slideKey(viewer);
         const plan = slideKey ? this._overviewPlans.get(`${slideKey}|plan|${planId}`) : undefined;
         // Degrade closed: silently re-planning would charge the user for a survey they
         // believe they already paid for, against a region list they never saw.
         if (!plan) return { status: "plan-expired", planId };
+        if (!this._hasFeature("analyze", plan.run.opts.analyzeDriver || plan.run.opts.driver)) {
+            throw new Error("runPlan needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+        // The driver is part of what was planned, and consent is asked on it. `edits.driver`
+        // has never changed which driver the walk uses and still does not; what changed is
+        // that consent is no longer asked about it instead of about the plan's own driver.
+        this.planAnalyzeDriver(viewer, planId);
 
         const keep = applyPlanEdits(plan.exploration.regions, edits);
         if (!keep.length) return { status: "plan-expired", planId, reason: "no-regions" };
@@ -2895,6 +3146,41 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : plan.run;
         this.setSlideContext(viewer, run.opts.context);
         return this._walkOverview(viewer, run, plan.options, { ...plan.exploration, regions: keep });
+    }
+
+    /**
+     * The analyze driver id a run is pinned to. `analyzeDriver` is honoured as given: it is
+     * how a caller that already asked consent for one id (the scripting adapter) makes the
+     * walk use exactly that id. Undefined when nothing can serve `analyze` yet — a plan is
+     * still worth drawing up, and {@link planAnalyzeDriver} pins it before it runs.
+     */
+    private _pinAnalyzeDriver(options?: { driver?: string; analyzeDriver?: string }): string | undefined {
+        try {
+            return this.describeDriverForFeature("analyze", options?.analyzeDriver || options?.driver).id;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * The analyze driver a stored plan will send pixels to, pinned on first ask. Consent
+     * for {@link runPlan} is asked on THIS id. Undefined when the plan is gone.
+     */
+    planAnalyzeDriver(viewer: any, planId: string): string | undefined {
+        const slideKey = this._slideKey(viewer);
+        const plan = slideKey ? this._overviewPlans.get(`${slideKey}|plan|${planId}`) : undefined;
+        if (!plan) return undefined;
+        const opts = plan.run.opts;
+        if (!opts.analyzeDriver) {
+            opts.analyzeDriver = this.describeDriverForFeature("analyze", opts.driver).id;
+        }
+        return opts.analyzeDriver;
+    }
+
+    /** The analyze driver the cached overview of this slide was walked with, if any. */
+    overviewAnalyzeDriver(viewer: any): string | undefined {
+        const key = this._slideKey(viewer);
+        return (key ? this._overviewRuns.get(key) : null)?.opts.analyzeDriver;
     }
 
     /** Monotonic within a session; a plan is only ever looked up beside its slide key. */
@@ -2928,6 +3214,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const opts: ResolvedOverviewOptions = {
             query: options?.query,
             driver: options?.driver,
+            analyzeDriver: this._pinAnalyzeDriver(options),
             scopeBounds: scope.bounds,
             context: this._normalizeContext(options?.context),
             repairVerdict: options?.repairVerdict ?? true,
@@ -3137,7 +3424,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // limit a consumer applies.
         const result: OverviewResult = {
             status: anythingRead && surveyComplete ? "ok" : "incomplete",
-            driver: this.describeDriverForFeature("analyze", opts.driver).id,
+            driver: opts.analyzeDriver ?? this.describeDriverForFeature("analyze", opts.driver).id,
             query: opts.query,
             context: opts.context,
             slide: exploration?.slide ?? { width: 0, height: 0, micronsPerPixel: null, magnification: null },
@@ -3266,7 +3553,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : run.opts.checklist;
         const opts: ResolvedOverviewOptions = {
             ...run.opts,
-            ...(options?.driver ? { driver: options.driver } : {}),
+            ...(options?.driver
+                ? { driver: options.driver, analyzeDriver: this.describeDriverForFeature("analyze", options.driver).id }
+                : {}),
             ...(options?.query ? { query: options.query } : {}),
             checklist,
             maxDepth: Math.round(clampNumber(options?.maxDepth, run.opts.maxDepth, 1, 8)),
@@ -3789,8 +4078,29 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // and questions still open did not examine the tissue, and every number below reads as
         // if it had. This is the shape the old fill veto produced — one call out of
         // twenty-eight, `truncated: false`, everything "not-assessable".
+        // Before the "no progress" note, and INSTEAD of it when every region failed: a walk
+        // whose reads all threw did not fail to find a readable region, it never got an answer,
+        // and "go deeper" is the wrong advice for a refused payload or a timed-out model.
+        let failedReads = 0;
+        let okReads = 0;
+        let firstReadError = "";
+        const countReads = (n: OverviewNode) => {
+            if (n.error) {
+                failedReads++;
+                firstReadError ||= n.error;
+            } else {
+                okReads++;
+            }
+            n.children.forEach(countReads);
+        };
+        roots.forEach(countReads);
+        if (failedReads) {
+            warnings.push(t("pathology.warnReadsFailed", {
+                count: failedReads, total: failedReads + okReads, reason: firstReadError,
+            }));
+        }
         const stalled = (evidence ?? []).some(r => r.underResolved);
-        if (budget.focusUnspent > 0 && stalled) {
+        if (budget.focusUnspent > 0 && stalled && !(failedReads && !okReads)) {
             warnings.push(t("pathology.warnNoProgress", { unspent: budget.focusUnspent }));
         }
         if (budget.plannedNotRead > 0) {
@@ -4236,7 +4546,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             if (!scheduled?.charged) budget.analyzeCalls++;
             const res = await this.analyzeRegion(viewer, {
                 prompt,
-                driver: opts.driver,
+                driver: opts.analyzeDriver ?? opts.driver,
                 source: "background",
                 region: viewBounds,
                 preRead: raster,
@@ -4254,7 +4564,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 budget.repairCalls++;
                 const repair = await this.analyzeRegion(viewer, {
                     prompt: `${prompt}\n\n${t("pathology.answerRepairPrompt")}`,
-                    driver: opts.driver,
+                    driver: opts.analyzeDriver ?? opts.driver,
                     source: "background",
                     region: viewBounds,
                     preRead: raster,
@@ -5361,7 +5671,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                     label: t("pathology.captureAnalyze"),
                 });
             }
-            imageBlob = await raster.toBlob();
+            imageBlob = await this._visionBlob(raster, driver);
             isComplete = raster.isComplete;
             if (options?.context && !options?.raw) {
                 prompt = await this._groundPrompt(viewer, options.context, raster, options.driver, prompt);
@@ -5373,10 +5683,12 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             // let a half-loaded frame be reported as a finished read.
             if (options?.source === "background") {
                 const bg = await this._readBackground(viewer, { label: t("pathology.captureAnalyze") });
-                imageBlob = await bg.toBlob();
+                imageBlob = await this._visionBlob(bg, driver);
                 isComplete = bg.isComplete;
             } else {
-                const shot = await this.captureViewportImage(viewer, t("pathology.captureAnalyze"));
+                const shot = await this.captureViewportImage(
+                    viewer, t("pathology.captureAnalyze"), this._visionEncoding(driver)
+                );
                 imageBlob = shot?.blob;
                 isComplete = shot?.isComplete;
             }
@@ -5399,7 +5711,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         });
         this.raiseEvent("analysis-started", { driver: driver.id, feature: "analyze", region: context.region });
         try {
-            const res = await driver.features["analyze"]!({ imageBlob, prompt, context });
+            const res = await this._invokeAnalyze(driver, { imageBlob, prompt, context });
             return {
                 driver: driver.id,
                 findings: res?.text ?? null,
@@ -5983,25 +6295,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             label?: string;
         }
     ): Promise<RegionRaster> {
-        const { region, aspect, nativeMag } = this._regionRenderGeometry(viewer, bounds);
+        const { region, nativeMag } = this._regionRenderGeometry(viewer, bounds);
 
-        let outWidth: number;
-        if (typeof opts?.magnification === "number" && opts.magnification > 0 && nativeMag) {
-            outWidth = region.width * (opts.magnification / nativeMag);
-        } else {
-            const target = opts?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS;
-            outWidth = Math.sqrt(target * aspect);
-        }
-        // Never upsample past native resolution; keep the raster area bounded.
-        outWidth = Math.min(outWidth, region.width);
-        const maxArea = opts?.targetPixels ? Math.min(MASK_MAX_PIXELS, REGION_RENDER_MAX_PIXELS) : REGION_RENDER_MAX_PIXELS;
-        if ((outWidth * outWidth) / aspect > maxArea) {
-            outWidth = Math.sqrt(maxArea * aspect);
-        }
-        outWidth = Math.max(16, Math.round(outWidth));
-
+        // The output size is the core render's decision (`region-render-size.ts`: never
+        // upsampled past native, shrunk to `maxPixels`) — this only says what is wanted. An
+        // uncalibrated slide cannot honour a magnification, so it falls back to the area budget.
+        const byMagnification = typeof opts?.magnification === "number" && opts.magnification > 0 && !!nativeMag;
         return this._renderRegionAt(viewer, bounds, region, nativeMag, {
-            outWidth,
+            ...(byMagnification
+                ? { magnification: opts!.magnification }
+                : { targetPixels: opts?.targetPixels ?? REGION_ANALYZE_TARGET_PIXELS }),
+            maxPixels: opts?.targetPixels ? Math.min(MASK_MAX_PIXELS, REGION_RENDER_MAX_PIXELS) : REGION_RENDER_MAX_PIXELS,
             layers: opts?.layers,
             timeoutMs: opts?.timeoutMs,
             label: opts?.label,
@@ -6152,8 +6456,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         region: Bounds,
         nativeMag: number | null,
         opts: {
-            outWidth: number;
+            /** Exact output size (a planned field), OR one of the two requests below. */
+            outWidth?: number;
             outHeight?: number;
+            magnification?: number;
+            targetPixels?: number;
             maxPixels?: number;
             layers?: "background" | "active";
             timeoutMs?: number;
@@ -6178,10 +6485,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const res = await withTimeout<RawPixelsResult & { isComplete?: boolean; stalled?: boolean }>(
             viz.renderRegionPixels({
                 region,
-                size: {
-                    width: opts.outWidth,
-                    ...(opts.outHeight ? { height: opts.outHeight } : {}),
-                },
+                ...(opts.outWidth
+                    ? { size: { width: opts.outWidth, ...(opts.outHeight ? { height: opts.outHeight } : {}) } }
+                    : opts.magnification
+                        ? { magnification: opts.magnification }
+                        : { targetPixels: opts.targetPixels }),
                 layers: opts.layers ?? "background",
                 refIndex,
                 pixelFormat: "typed",
@@ -6245,6 +6553,11 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 getActiveViewerContextId: () => uid,
                 activeViewerContextId: uid,
                 isConsentDialogBypassed: () => false,
+                // These renders feed this module's own drivers. Pixels only leave the
+                // browser through a remote driver, and the scripting adapter asks for that
+                // (`_consentIfRemote`) — a second core pixel-read prompt per render would
+                // ask the same question again, once per field of a walk.
+                pixelReadPreapproved: true,
             },
         });
     }
@@ -6319,7 +6632,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
     // ---- capture (on-screen composite) + mask→polygon infra ----
 
     /**
-     * Capture the on-screen composite of a viewer as a PNG blob (device pixels).
+     * Capture the on-screen composite of a viewer as an image blob (device pixels) — PNG unless
+     * `encoding` says otherwise (the `analyze` path passes the model-bound encoding).
      * Includes the visualization overlay — used only where that is desirable
      * (the `analyze` feature). Tissue/segment read the raw background instead
      * (see {@link _readBackground}). The SAM plugin also delegates here.
@@ -6332,7 +6646,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async captureViewportImage(
         viewer: any,
-        label?: string
+        label?: string,
+        encoding: ImageEncoding = { format: "png" }
     ): Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null> {
         const sourceCanvas = viewer?.drawer?.canvas;
         if (!sourceCanvas || sourceCanvas.width < 1) {
@@ -6379,18 +6694,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             ctx.drawImage(sourceCanvas, 0, 0);
         }
 
-        return new Promise<{ blob: Blob; width: number; height: number; isComplete: boolean } | null>(resolve => {
-            ctx!.canvas.toBlob(blob => {
-                if (!blob) {
-                    console.error("[pathology-foundation] failed to capture viewport image.");
-                    announce("end", false);
-                    resolve(null);
-                    return;
-                }
-                announce("end", true);
-                resolve({ blob, width, height, isComplete });
-            }, "image/png");
-        });
+        try {
+            // JPEG has no alpha: whatever the composite left transparent must become glass, not black.
+            const out = encoding.format === "jpeg" ? flattenOnWhite(ctx.canvas, width, height) : ctx.canvas;
+            const blob = await encodeCanvas(out, encoding, "Failed to capture the viewport image.");
+            announce("end", true);
+            return { blob, width, height, isComplete };
+        } catch (e) {
+            console.error("[pathology-foundation] failed to capture viewport image.");
+            announce("end", false);
+            return null;
+        }
     }
 
     /**

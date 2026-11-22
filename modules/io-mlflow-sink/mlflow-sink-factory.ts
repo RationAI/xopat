@@ -39,7 +39,7 @@ export type MlflowSinkConfig = {
      * Placeholders, resolved by `IO_PIPELINE.formatPath` (the same set every
      * sink uses): {ownerId} {ownerUid} {xoType} {direction} {capabilityId}
      * {capabilityGroup} {viewerId} {backgroundId} {key} {resourceName}
-     * {itemId}. Substituted values are reduced to `[A-Za-z0-9._-]`.
+     * {itemId} {slideHash} {slideName}. Substituted values are reduced to `[A-Za-z0-9._-]`.
      *
      * Prefer {capabilityGroup} over {capabilityId} for anything that must
      * address the same run on both write and read — the latter differs
@@ -71,7 +71,148 @@ export type MlflowSinkConfig = {
     artifactPathPrefix?: string | null;
     /** Artifacts adapter config, forwarded to MlFlowClient. */
     artifacts?: Record<string, unknown> | null;
+    /**
+     * The format each domain's bundle artifact is written in:
+     * `{ annotations: "geo-json" }` (or `{ id, options }`; `"*"` for any
+     * domain). A binding's `{sink, format}` still wins. Unset, the owner's
+     * deployment default applies (never the user's download-dialog choice).
+     */
+    formats?: Record<string, IOFormatPin>;
+    /**
+     * Whether a session may pick the experiment/run (see {@link MlflowSessionTarget}).
+     * Trusted config only — the operator decides if the session's choice is read.
+     *   - absent/`null`: a session target is ignored; templates decide.
+     *   - `"allowed"`:   a session target, when present, replaces the mapped experiment/run.
+     *   - `"required"`:  as `"allowed"`, and without a target the sink declines every dispatch.
+     * The chosen names are still bounded by `experimentAllow` / `runAllow`, and a
+     * session target is only ever honoured when `experimentAllow` is configured:
+     * without it a hostile session could route data to any experiment.
+     */
+    sessionTarget?: "allowed" | "required" | null;
+    /**
+     * Tighten what a session target may name. Trusted config only; default `false`.
+     * By default only the experiment must be bounded (`experimentAllow`), so a
+     * session may name any run and any artifact path inside an allowed experiment --
+     * deliberate, for deployments where everyone sharing an experiment is trusted.
+     * With `true` a session target is additionally refused when it
+     *   - names a `run` while `runAllow` is unset,
+     *   - names an `artifact` while `artifactPathPrefix` is unset,
+     *   - uses `{slideHash}` / `{backgroundId}` on a dispatch that has no slide
+     *     (they would resolve to the constant `_any`, one address for everyone).
+     * Templates, mappers and the allowlists themselves are unaffected by this key.
+     */
+    strictSessionTarget?: boolean | null;
 };
+
+/**
+ * Where a session asks its data to land. Comes from `params.ioSinks.mlflow.target`
+ * (via `IO_PIPELINE.sessionSinkConfig`) or `setTarget()`, i.e. untrusted input: it
+ * only names a destination inside the deployment's allowlists, never an endpoint.
+ */
+export type MlflowSessionTarget = {
+    /**
+     * Experiment name. Created on first write if missing. May carry the shared
+     * placeholders (`{backgroundId}`, `{viewerId}`, `{ownerId}`, ...), resolved per
+     * dispatch and sanitized before the allowlist sees the result.
+     */
+    experiment: string;
+    /**
+     * Run name, placeholders as above (`"review-{backgroundId}"` = one run per slide).
+     * Matched against MLflow's own `mlflow.runName` tag, so an existing run of that
+     * name is reused (also one created outside xOpat); created if missing.
+     * Absent: the template's run layout applies inside the chosen experiment.
+     */
+    run?: string;
+    /**
+     * Artifact path, placeholders as above (`"annotations/{slideHash}.json"`).
+     * Replaces the path of the ONE artifact a template writes (`bundle-artifact`);
+     * ignored by templates that write none; refused for a template writing
+     * several. Still bounded by `artifactPathPrefix`. Without a slide placeholder,
+     * every slide writes the same file.
+     */
+    artifact?: string;
+};
+
+/** MLflow caps experiment and run names well above this; longer input is a mistake, not a name. */
+const MAX_TARGET_NAME = 250;
+// eslint-disable-next-line no-control-regex
+const TARGET_CTRL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+/**
+ * Characters a session-chosen name may contain. Braces carry placeholders and are
+ * resolved (and re-checked) per dispatch. Quotes, backslashes and backticks are
+ * out: the run name ends up inside an MLflow search filter, and a name that needs
+ * them is far more likely an injection attempt than a real experiment.
+ */
+const TARGET_NAME_CHARS = /^[A-Za-z0-9 ._\-/:{}]+$/;
+/**
+ * Placeholders a session-chosen name may use. Deliberately narrower than the
+ * `formatPath` set:
+ *  - no `{slideName}` — the raw file name may carry a case number, and a
+ *    session bundle or script must not be able to publish it into experiment,
+ *    run or artifact names (operator templates may still use it);
+ *  - no `{resourceName}` / `{itemId}` — empty on a bundle dispatch, so they
+ *    would collapse every record into one name.
+ */
+const TARGET_PLACEHOLDERS = new Set([
+    "slideHash", "backgroundId", "viewerId", "ownerId", "ownerUid",
+    "capabilityGroup", "capabilityId", "xoType", "key",
+]);
+
+/** Tokens that address data by slide; without a slide they resolve to the constant `_any`. */
+const SLIDE_TARGET_TOKENS = /\{(?:slideHash|backgroundId)\}/;
+
+/**
+ * Whether `safe` (already sanitized) lies under the operator's `artifactPathPrefix`.
+ *
+ * The prefix names a directory, so it is matched on whole path segments: `"xopat"`
+ * admits `xopat/a.json` and `xopat` itself, never `xopat-other/a.json`. A bare
+ * `startsWith` let anything sharing the leading characters through. A trailing slash
+ * on the prefix is dropped first -- sanitizing it would append a `_` segment and
+ * deny every path.
+ */
+function withinArtifactPrefix(safe: string, prefix: string): boolean {
+    const root = sanitizeArtifactPath(String(prefix).replace(/\/+$/, ""));
+    return safe === root || safe.startsWith(`${root}/`);
+}
+
+/** Every brace belongs to a whole `{token}` from TARGET_PLACEHOLDERS. */
+function placeholdersAllowed(name: string): boolean {
+    for (const m of name.matchAll(/\{(\w+)\}/g)) {
+        if (!TARGET_PLACEHOLDERS.has(m[1]!)) return false;
+    }
+    return !/[{}]/.test(name.replace(/\{\w+\}/g, ""));
+}
+
+/**
+ * Untrusted input → a target, or `undefined`. Names are trimmed, stripped of
+ * control characters, length-capped and charset-bound (see TARGET_NAME_CHARS);
+ * anything else is rejected rather than coerced. The allowlists, not this
+ * function, decide where writes may go — and they judge the name only after its
+ * placeholders are resolved, per dispatch, in the sink.
+ */
+export function normalizeTarget(raw: unknown): MlflowSessionTarget | undefined {
+    if (typeof raw === "string") {
+        try { raw = JSON.parse(raw); } catch { return undefined; }
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const name = (v: unknown): string | undefined => {
+        if (typeof v !== "string") return undefined;
+        const s = v.replace(TARGET_CTRL_CHARS, "").trim();
+        return s && s.length <= MAX_TARGET_NAME && TARGET_NAME_CHARS.test(s) && placeholdersAllowed(s)
+            ? s : undefined;
+    };
+    const r = raw as Record<string, unknown>;
+    const experiment = name(r.experiment);
+    if (!experiment) return undefined;
+    if (r.run !== undefined && r.run !== null && !name(r.run)) return undefined;
+    if (r.artifact !== undefined && r.artifact !== null && !name(r.artifact)) return undefined;
+    const run = name(r.run);
+    const artifact = name(r.artifact);
+    return { experiment, ...(run ? { run } : {}), ...(artifact ? { artifact } : {}) };
+}
+
+/** Tag MLflow sets on every named run; a session-selected run is found by it. */
+const RUN_NAME_TAG = "mlflow.runName";
 
 export interface MlflowSinkOptions {
     id?: string;
@@ -82,6 +223,10 @@ export interface MlflowSinkOptions {
     getMapper: (name: string) => MlflowMapper | undefined;
     /** Optional fine-grained gate, composed with the built-in config check. */
     accepts?: (ctx: IOContext) => boolean;
+    /** The session's destination choice, if any. Read only when `sessionTarget` allows it. */
+    getTarget?: () => MlflowSessionTarget | undefined;
+    /** True when the session supplied a target that failed validation (refused, never ignored). */
+    isTargetRejected?: () => boolean;
 }
 
 /**
@@ -97,6 +242,16 @@ function fail(reason: string, code: string, userMessage?: string): IOResult {
     return userMessage
         ? { ok: false, refused: true, reason, code, userMessage }
         : { ok: false, refused: true, reason, code };
+}
+
+/**
+ * `.catch` handler for a lookup whose 404 means "does not exist yet". Anything
+ * else (auth, 5xx, no answer) is rethrown: reading an outage as "nothing
+ * stored" lets the next save replace data that was never loaded.
+ */
+function absentIfNotFound(e: any): undefined {
+    if (e?.statusCode === 404) return undefined;
+    throw e;
 }
 
 function classifyHttpError(e: any): IOResult {
@@ -138,21 +293,28 @@ function matchesPattern(value: string, pattern: string): boolean {
 
 /**
  * Build the MLflow search filter that finds a run by its identifier tag.
+ * Delegates to the mlflow module's `Utils.buildTagFilter` (which `getOrCreateRunByTag`
+ * uses too), so lookup and creation can never disagree on escaping.
  *
- * Both halves are mapper output, so both are untrusted. The key was
- * previously spliced in raw — a mapper deriving it from `ctx` could break out
- * of the expression and read other runs — and the value carried a naive
- * `"`-escape that a trailing backslash defeats. The key goes through the same
- * charset helper the log-batch payloads use; the value is escaped backslash
- * first, then quote, which is the only order that composes.
+ * Both halves are mapper output, so both are untrusted and neither may end its
+ * literal early. MLflow strips the surrounding quotes and decodes no escapes,
+ * so the text is kept verbatim inside a delimiter it does not contain (backtick
+ * for the key, `"` or else `'` for the value); anything else would either let it
+ * break out or make lookup disagree with the tag written on create. Throws when
+ * no delimiter fits.
  */
 function buildTagFilter(tag: KV): string {
     const MlFlow = (globalThis as any).MlFlow;
-    const key = MlFlow?.Utils?.sanitizeMetricKey
-        ? MlFlow.Utils.sanitizeMetricKey(tag.key)
-        : String(tag.key).replace(/[^A-Za-z0-9._\- /]/g, "_");
-    const value = String(tag.value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `tags.${key} = "${value}"`;
+    if (typeof MlFlow?.Utils?.buildTagFilter === "function") {
+        return MlFlow.Utils.buildTagFilter(tag.key, tag.value);
+    }
+    // Fallback for an mlflow module predating Utils.buildTagFilter -- same encoding.
+    const key = String(tag.key ?? "");
+    if (!key || key.includes("`")) throw new Error("tag key must be non-empty and contain no backtick");
+    const value = String(tag.value ?? "");
+    const q = !value.includes('"') ? '"' : !value.includes("'") ? "'" : null;
+    if (!q) throw new Error("tag value containing both ' and \" cannot be matched by MLflow search");
+    return `tags.\`${key}\` = ${q}${value}${q}`;
 }
 
 let unboundedWarned = false;
@@ -171,6 +333,35 @@ function warnUnbounded() {
     );
 }
 
+let targetUnboundedWarned = false;
+/** `sessionTarget` without `experimentAllow` is a misconfiguration; say so once. */
+function warnTargetUnbounded() {
+    if (targetUnboundedWarned) return;
+    targetUnboundedWarned = true;
+    console.warn(
+        "[io-mlflow-sink] `sessionTarget` is set but `experimentAllow` is not -- session targets are " +
+        "IGNORED until an allowlist bounds them. Set io.sinkOverrides.mlflow.experimentAllow.",
+    );
+}
+
+/**
+ * Resolve one session-target name for a dispatch: placeholders checked against
+ * TARGET_PLACEHOLDERS, substituted (each value sanitized by `formatPath`), then
+ * rejected if anything placeholder-like survived. A token that resolves to
+ * nothing is substituted with the `{}` sentinel so it is caught too: dropping it
+ * silently would turn `review-{typo}` into `review-` and pour every slide into
+ * one run. Empty = invalid.
+ */
+function resolveTargetName(name: string, ctx: IOContext): string | undefined {
+    if (!placeholdersAllowed(name)) return undefined;
+    const pipeline = (globalThis as any).IO_PIPELINE;
+    const resolved = (typeof pipeline?.formatPath === "function"
+        ? pipeline.formatPath(name, ctx, { mode: "name", empty: "{}" })
+        : interpolate(name, ctx)).trim();
+    if (!resolved || /[{}]/.test(resolved)) return undefined;
+    return resolved;
+}
+
 export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
     const id = opts.id ?? "mlflow";
 
@@ -180,10 +371,13 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
 
     const resolved = (ctx?: IOContext): MlflowSinkConfig => opts.getOptions(ctx) ?? {};
 
-    const mapperOptionsOf = (o: MlflowSinkConfig): MapperOptions => ({
+    const mapperOptionsOf = (o: MlflowSinkConfig, target?: MlflowSessionTarget): MapperOptions => ({
         experimentTemplate: o.experimentTemplate ?? "xopat-{ownerId}",
         runTemplate: o.runTemplate ?? "xopat-{viewerId}",
         identifierTag: o.identifierTag ?? "data_id",
+        // A session-fixed run collects records the template would have spread
+        // over many runs; the mapper must then keep them apart by key/path.
+        sharedRun: !!target?.run,
     });
 
     const buildClient = (o: MlflowSinkConfig) => {
@@ -237,7 +431,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         for (const artifact of mapping.artifacts) {
             const safe = sanitizeArtifactPath(String(artifact.path ?? ""));
             artifact.path = safe;
-            if (prefix && !safe.startsWith(sanitizeArtifactPath(prefix))) {
+            if (prefix && !withinArtifactPrefix(safe, prefix)) {
                 return fail(
                     `mapper emitted artifact path "${safe}" outside artifactPathPrefix "${prefix}"`,
                     "W_MLFLOW_ARTIFACT_DENIED",
@@ -248,8 +442,84 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         return undefined;
     };
 
+    const NO_TARGET_REASON =
+        "the session selected no usable MLflow target (params.ioSinks.mlflow.target missing under \"required\", invalid, or resolved to nothing)";
+    const missingTarget = (): IOResult => fail(NO_TARGET_REASON, "W_MLFLOW_NO_TARGET", t("error.targetMissing"));
+    const UNBOUNDED_REASON =
+        "sessionTarget is set but experimentAllow is not: a session target is ignored without an allowlist";
+    const unboundedTarget = (): IOResult =>
+        fail(UNBOUNDED_REASON, "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetUnbounded"));
+
+    /** `strictSessionTarget` refusals; `undefined` when the target passes (or strict is off). */
+    const strictTargetRefusal = (ctx: IOContext, o: MlflowSinkConfig, raw: MlflowSessionTarget)
+        : IOResult | undefined => {
+        if (o.strictSessionTarget !== true) return undefined;
+        if (raw.run !== undefined && !(Array.isArray(o.runAllow) && o.runAllow.length)) {
+            return fail("strictSessionTarget: a session-chosen run requires runAllow",
+                "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetRunUnbounded"));
+        }
+        if (raw.artifact !== undefined && !o.artifactPathPrefix) {
+            return fail("strictSessionTarget: a session-chosen artifact path requires artifactPathPrefix",
+                "W_MLFLOW_TARGET_UNBOUNDED", t("error.targetArtifactUnbounded"));
+        }
+        const names = [raw.experiment, raw.run, raw.artifact].filter((n): n is string => !!n);
+        if (names.some((n) => SLIDE_TARGET_TOKENS.test(n))) {
+            const pipeline = (globalThis as any).IO_PIPELINE;
+            const noSlide = !ctx.backgroundId
+                || (names.some((n) => n.includes("{slideHash}")) && typeof pipeline?.formatPath === "function"
+                    && pipeline.formatPath("{slideHash}", ctx, { mode: "name" }) === "_any");
+            if (noSlide) {
+                return fail("strictSessionTarget: the target addresses data by slide, but this dispatch has no slide",
+                    "W_MLFLOW_NO_TARGET", t("error.targetNoSlide"));
+            }
+        }
+        return undefined;
+    };
+
+    /**
+     * The session target for this dispatch, resolved, or a refusal.
+     *
+     * The target is untrusted (session bundle / script), so it is honoured only
+     * when the operator both enabled `sessionTarget` AND bounded experiments with
+     * `experimentAllow` -- degrade closed: without the allowlist a hostile session
+     * could route a user's data into any experiment on the tracking server.
+     * Placeholders are resolved here, before the allowlists judge the result.
+     */
+    const resolveTarget = (ctx: IOContext, o: MlflowSinkConfig)
+        : { target?: MlflowSessionTarget } | { refusal: IOResult } => {
+        if (o.sessionTarget !== "allowed" && o.sessionTarget !== "required") return {};
+        const required = o.sessionTarget === "required";
+        if (!Array.isArray(o.experimentAllow) || o.experimentAllow.length === 0) {
+            warnTargetUnbounded();
+            return required ? { refusal: unboundedTarget() } : {};
+        }
+        const raw = opts.getTarget?.();
+        // A supplied-but-invalid target refuses even under "allowed": falling back
+        // to the template would write somewhere the user did not pick.
+        if (!raw?.experiment) {
+            return required || opts.isTargetRejected?.() ? { refusal: missingTarget() } : {};
+        }
+
+        const strict = strictTargetRefusal(ctx, o, raw);
+        if (strict) return { refusal: strict };
+
+        const experiment = resolveTargetName(raw.experiment, ctx);
+        const run = raw.run !== undefined ? resolveTargetName(raw.run, ctx) : undefined;
+        const artifact = raw.artifact !== undefined ? resolveTargetName(raw.artifact, ctx) : undefined;
+        // A target that resolves to nothing is a broken choice, never "no choice":
+        // falling back to the template would write somewhere the user did not pick.
+        if (!experiment || (raw.run !== undefined && !run) || (raw.artifact !== undefined && !artifact)) {
+            return { refusal: missingTarget() };
+        }
+        return { target: { experiment, ...(run ? { run } : {}), ...(artifact ? { artifact } : {}) } };
+    };
+
     const resolveMapping = (ctx: IOContext, item: unknown, o: MlflowSinkConfig)
         : { mapping: MlflowMapping } | { refusal: IOResult } | { skip: true } => {
+        const targetStep = resolveTarget(ctx, o);
+        if ("refusal" in targetStep) return targetStep;
+        const { target } = targetStep;
+
         const name = o.template ?? DEFAULT_TEMPLATE;
         const mapper = opts.getMapper(name);
         if (!mapper) {
@@ -262,7 +532,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
 
         let mapping: MlflowMapping | null;
         try {
-            mapping = mapper(ctx, item, mapperOptionsOf(o));
+            mapping = mapper(ctx, item, mapperOptionsOf(o, target));
         } catch (e: any) {
             return { refusal: fail(
                 `mapper "${name}" threw: ${e?.message ?? String(e)}`,
@@ -278,6 +548,25 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 "W_MLFLOW_MAPPER_INVALID",
                 t("error.mapperShape", { name }),
             ) };
+        }
+        // The session's choice replaces the destination the template derived;
+        // the template still shapes the content (metrics, tags, artifacts).
+        // Applied before the allowlist checks, so it is bounded like any mapper.
+        if (target) {
+            mapping.experiment = target.experiment;
+            if (target.run) {
+                mapping.run = {
+                    ...mapping.run,
+                    name: target.run,
+                    identifierTag: { key: RUN_NAME_TAG, value: target.run },
+                };
+            }
+            if (target.artifact && mapping.artifacts?.length) {
+                // Moving one of several files would leave the rest where the
+                // template put them -- a split the user never chose.
+                if (mapping.artifacts.length > 1) return { refusal: missingTarget() };
+                mapping.artifacts = [{ ...mapping.artifacts[0], path: target.artifact }];
+            }
         }
         const denied = checkExperiment(o, mapping.experiment)
             ?? checkRun(o, mapping.run);
@@ -364,6 +653,12 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
         label: opts.label ?? "MLflow",
         supports: { kinds: ["bundle", "crud"] },
 
+        // Artifacts store whatever they are handed; the `formats` key of the
+        // composed config picks which. Older cores without the helper: no pin.
+        preferredFormat(domain: string, ctx: IOContext): IOFormatPin | undefined {
+            return (globalThis as any).IO_PIPELINE?.pinnedFormatFrom?.(resolved(ctx), domain);
+        },
+
         accepts(ctx: IOContext): boolean | IOAcceptDecision {
             const o = opts.getOptions(ctx) ?? {};
             if (!o.proxy && !o.baseURL) {
@@ -375,6 +670,19 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                     reason: "mlflow sink has no `proxy` or `baseURL` configured",
                     userMessage: t("error.notConfigured"),
                 };
+            }
+            if (o.sessionTarget === "required") {
+                // Plugged in but not pointed anywhere (or pointed somewhere the
+                // operator never bounded): decline loudly rather than fall back to
+                // a template-derived experiment the user never chose.
+                const step = resolveTarget(ctx, o);
+                if ("refusal" in step) {
+                    return {
+                        accept: false,
+                        reason: step.refusal.reason ?? NO_TARGET_REASON,
+                        userMessage: step.refusal.userMessage,
+                    };
+                }
             }
             if (opts.accepts && !opts.accepts(ctx)) {
                 return { accept: false, reason: `mlflow sink declined ${ctx.ownerId}` };
@@ -444,7 +752,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 const client = buildClient(o);
                 // A missing experiment/run is "no data yet", not an error — never
                 // create one on the import path.
-                const found = await client.experiments.getByName(mapping.experiment).catch(() => undefined);
+                const found = await client.experiments.getByName(mapping.experiment).catch(absentIfNotFound);
                 const expId = found?.experiment?.experiment_id;
                 if (!expId) return { ok: true };
 
@@ -454,7 +762,35 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
                 const run = search?.runs?.[0];
                 if (!run?.info?.run_id) return { ok: true };
 
-                return { ok: true, payload: run.data ?? undefined };
+                // Artifact templates (`bundle-artifact`) store the bundle as a file,
+                // not as tags — return that file. Score templates keep returning
+                // the run data they wrote.
+                const artifact = mapping.artifacts?.[0];
+                if (!artifact) return { ok: true, payload: run.data ?? undefined };
+                // A binding pinned to a binary format (DICOM, …) stored bytes:
+                // hand the same bytes back. A text download would decode them
+                // as UTF-8 and corrupt them irreversibly.
+                const binary = !!ctx.format?.binary;
+                if (binary && typeof client.artifacts.downloadBytes !== "function") {
+                    return {
+                        ok: false, refused: true, code: "W_MLFLOW_NO_BINARY_READ",
+                        reason: `artifacts adapter cannot download bytes; cannot read binary format "${ctx.format!.id}"`,
+                    };
+                }
+                let text: string;
+                try {
+                    if (binary) {
+                        const bytes = await client.artifacts.downloadBytes(run.info.run_id, artifact.path);
+                        return { ok: true, payload: new Uint8Array(bytes) };
+                    }
+                    text = await client.artifacts.downloadText(run.info.run_id, artifact.path);
+                } catch (e: any) {
+                    if (e?.statusCode === 404) return { ok: true }; // nothing saved yet
+                    throw e;
+                }
+                if (artifact.contentType !== "application/json") return { ok: true, payload: text };
+                // A string bundle is stored verbatim, so it need not be JSON.
+                try { return { ok: true, payload: JSON.parse(text) }; } catch { return { ok: true, payload: text }; }
             } catch (e: any) {
                 return classifyHttpError(e);
             }
@@ -471,7 +807,7 @@ export function makeMlflowSink(opts: MlflowSinkOptions): IOSink {
             const { mapping } = step;
 
             const client = buildClient(o);
-            const found = await client.experiments.getByName(mapping.experiment).catch(() => undefined);
+            const found = await client.experiments.getByName(mapping.experiment).catch(absentIfNotFound);
             const expId = found?.experiment?.experiment_id;
             if (!expId) return;
 

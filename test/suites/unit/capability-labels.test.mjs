@@ -43,9 +43,13 @@ window.OpenSeadragon = globalThis.OpenSeadragon;
 const en = JSON.parse(
     await (await import("node:fs/promises")).readFile(
         new URL("../../../src/locales/en.json", import.meta.url), "utf8")).translation;
+const inherited$ = globalThis.$;
 globalThis.$ = {
     t: (key) => key.split(".").reduce((o, k) => (o ?? {})[k], en) ?? key.split(".").pop(),
 };
+// `globalThis` outlives this file in a reused worker: hand the previous `$` back,
+// or every later `$ ?? stub` file translates through the real dictionary.
+test.afterAll(() => { globalThis.$ = inherited$; });
 
 const { XOpatUser } = await import("../../../src/classes/user.ts");
 

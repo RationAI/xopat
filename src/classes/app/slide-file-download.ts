@@ -1,3 +1,5 @@
+import { allowCoreAction, CAP_IO_LOCAL_FILE } from "./core-capabilities";
+
 /**
  * Download the *original* slide file behind an open (or merely resolved) tile
  * source. Exposed as `UTILITIES.downloadSlideFile(...)`.
@@ -312,6 +314,10 @@ export async function downloadSlideFile(
     options: DownloadSlideFileOptions = {}
 ): Promise<void> {
     const Dialogs = (globalThis as any).Dialogs;
+
+    // Up front: the native-download route never reaches `downloadAsFile`, and
+    // the streamed one would fetch the whole slide before being refused there.
+    if (!allowCoreAction(CAP_IO_LOCAL_FILE)) return;
 
     if (typeof source?.canDownloadSlideFile !== "function" || !source.canDownloadSlideFile()) {
         Dialogs?.show($.t("messages.slideDownloadUnsupported"), 5000, Dialogs?.MSG_WARN);

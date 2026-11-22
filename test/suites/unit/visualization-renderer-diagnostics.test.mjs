@@ -10,8 +10,11 @@
 import { test, expect } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
-globalThis.$ = globalThis.$ ?? {};
-globalThis.$.t = (key, vars) => `${key}:${vars?.count ?? ""}`;
+// Replaced, not mutated, and handed back afterwards: `globalThis` outlives this
+// file in a reused worker, and a `$.t` left behind changes what later files assert on.
+const inherited$ = globalThis.$;
+globalThis.$ = { ...inherited$, t: (key, vars) => `${key}:${vars?.count ?? ""}` };
+test.afterAll(() => { globalThis.$ = inherited$; });
 
 const { ClientLogging } = await import("../../../src/classes/app/logging.ts");
 const { ViewerVisualizationRuntime } = await import("../../../src/classes/app/viewer-visualization-runtime.ts");

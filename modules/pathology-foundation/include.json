@@ -113,6 +113,21 @@
   // "surveyLoadTimeoutMs": 15000,
   // "renderQueueTimeoutMs": 20000,
 
+  // Client deadline for ONE vision model call (ms, clamped to 30000..1800000). Covers the
+  // wait for a background request slot AND the model's answer. Keep it at or above the
+  // server's own budget for the call (env XOPAT_PATHOLOGY_VISION_TIMEOUT_MS, 300000), or
+  // the browser gives up on a call the server is still running — the symptom is every
+  // field failing with "aborted after N ms", worst with reasoning models.
+  // "visionTimeoutMs": 315000,
+
+  // How images sent to a vision model are encoded. JPEG is the default: a 2 MP field is
+  // several MB as PNG and a few hundred KB as JPEG, and the image travels base64-in-JSON
+  // through every hop, including ingresses that refuse bodies over 1 MB. Set
+  // { "format": "png" } for lossless input when every hop accepts large bodies; a PNG
+  // refused as too large (HTTP 413) is retried once as JPEG. A single driver can override
+  // the format with its own "imageFormat".
+  // "visionImage": { "format": "jpeg", "quality": 0.9 },
+
   // Absorbance vectors of the stain basis used to unmix the NUCLEAR stain, which is
   // how the module derives its free "where are the nuclei" prior (feature
   // "cellularity"). A COLOUR BASIS, not a clinical vocabulary: `nuclear` is the
@@ -129,11 +144,15 @@
   //   "counter": [0.072, 0.990, 0.105],
   //   "third":   [0.268, 0.570, 0.776]
   // },
+  // true = a "defaultDrivers" entry is binding (the feature fails while that driver
+  // is not registered); false = the first capable driver serves meanwhile.
+  "strictDefaultDrivers": false,
   "defaultDrivers": {
     // Optional per-feature default driver overrides, e.g. { "analyze": "vlm-sdk" }.
     // When a feature has no override the first registered capable driver wins;
     // for "tissue-mask" that is the always-present built-in detector unless you
-    // register a replacement here.
+    // register a replacement here. While an override's driver is not registered
+    // the first capable driver serves instead, unless "strictDefaultDrivers" is true.
   },
   "drivers": {
     // Register foundation models here. Each entry is one driver, keyed by the
@@ -154,8 +173,9 @@
     //
     // Vision -> text analysis through the Vercel AI SDK (reaches any provider
     // the SDK adapts). Runs in a context ISOLATED from the chat agent;
-    // `providerId` MUST name a DEDICATED pathology provider from the chat
-    // registry, never the agent's provider. It is a provider REFERENCE — an
+    // `providerId` should name a DEDICATED pathology provider from the chat
+    // registry (without any analyze driver, the built-in `assistant` fallback
+    // uses the chat model itself, session-less). It is a provider REFERENCE — an
     // instance id, a managed key ("<plugin>:<type>:default"), a plugin id or a
     // provider type id. Prefer the plugin id: managed instance ids are re-minted
     // on every server start and cannot be written into config at all:
@@ -163,6 +183,7 @@
     //   "type": "vercel",
     //   "providerId": "pathology-medgemma",
     //   "model": "medgemma-4b-it", "label": "MedGemma (SDK)"
+    //   // optional: "imageFormat": "png"  (overrides visionImage.format for this driver)
     // }
   }
 }

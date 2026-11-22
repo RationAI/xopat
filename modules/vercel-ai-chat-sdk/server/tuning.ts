@@ -28,7 +28,7 @@ export interface ChatTuning {
     attemptTimeoutMs: number;
     /** SDK retries for transport-level stalls (a clear error never retries). */
     maxRetries: number;
-    /** Shared ceiling for the three capability probes. */
+    /** Deprecated no-op: capability probing was removed (media support is learned from real turns). Still parsed so existing configs stay valid. */
     probeBudgetMs: number;
     /** Attachment bytes that may be inlined into a model message. */
     maxInlineAttachmentBytes: number;

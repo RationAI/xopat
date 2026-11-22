@@ -37,6 +37,23 @@ is the same deployment without any of that.
 
 ## Tier 0 — nothing but the repository
 
+### `default` — what Enter in the picker gives you
+
+```bash
+npm run up:dev -- default
+# http://localhost:9000/?slides=synthetic.dzi
+```
+
+The same layers as `synthetic` below; `npm run up` generates the slide on first
+start, so there is no setup step at all. Every other preset is a variation of
+this one, and none of them needs an image server unless its name says so — put
+real slides under any of them by naming a data layer after it
+(`npm run up:dev -- default data/tiff-webtiff`).
+
+Verify: the report printed before the server starts lists every environment
+variable the composition reads and whether you set it or a default applies; the
+slide opens as described under `synthetic`.
+
 ### `synthetic` — the zero-dependency viewer
 
 ```bash
@@ -249,20 +266,27 @@ On `annotations-lab-overlay` (the same slide with a prediction heatmap):
 
 ---
 
-## Tier 2 — a wsi-service container
+## Tier 2 — one more service
+
+Only `wsi-service` and `image-proxy` need the wsi-service container. The other
+presets in this tier run on the generated slide and need whatever their own
+section names (a token, an MLflow server, nothing). To exercise any of them over
+real slides, name the data layer after the preset —
+`npm run up:dev -- roles-dev data/wsi-service` — and start the container first.
 
 ```bash
 docker compose -f docker/wsi-service/docker-compose.yml up -d
 ```
 
-It publishes **9002:8080**, so `WSI_PORT=9002` in `env/.env`. Slides are by default
+It publishes **9002:8080**, so `WSI_PORT=9002` in `env/.env` — `npm run up` says
+so when the variable is left at its default. Slides are by default
 read from the repo-root `test/fixtures/data/slides/` directory. Opionally use `DOCKER_COMPOSE_WSI_SERVER_DATA`
 ENV variable to change the default position.
 
-### `default` — the shipped standalone deployment
+### `wsi-service` — an image server on localhost
 
 ```bash
-npm run up:dev -- default
+npm run up:dev -- wsi-service
 ```
 
 Verify: the slide browser lists what is in `test/fixtures/data/slides/`, a slide opens, tiles
