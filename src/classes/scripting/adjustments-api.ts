@@ -53,11 +53,19 @@ export class XOpatAdjustmentsScriptApi extends XOpatScriptingApi implements Adju
     }
 
     protected requireLayer(layerId: string): string {
-        const viewer = this.activeViewer;
-        if (typeof layerId !== "string" || !this.broker.listLayers(viewer).some(l => l.id === layerId)) {
-            throw new Error(`Unknown layer '${String(layerId)}'. Use adjustments.listData() for valid layer ids.`);
+        const layers = this.broker.listLayers(this.activeViewer);
+        // Without the sensitive grant `listData()` hands out positional handles (layer ids are
+        // derived from the slide's path); resolve one back to the layer it stands for.
+        const prefix = this.maskedHandle("layer", 0).slice(0, -1);
+        if (typeof layerId === "string" && layerId.startsWith(prefix)) {
+            const index = Number(layerId.slice(prefix.length));
+            const layer = Number.isInteger(index) ? layers[index] : undefined;
+            if (layer) return layer.id;
+        } else if (typeof layerId === "string" && this.mayExposeSensitive && layers.some(l => l.id === layerId)) {
+            return layerId;
         }
-        return layerId;
+        // The id is not echoed: without the grant a raw id must not be confirmable either.
+        throw new Error("Unknown layer. Use adjustments.listData() for valid layer ids.");
     }
 
     isSupported(): boolean {
@@ -81,13 +89,15 @@ export class XOpatAdjustmentsScriptApi extends XOpatScriptingApi implements Adju
         // Layer names and data labels are usually the slide's file name — withheld data
         // unless the sensitive grant is present.
         const expose = this.mayExposeSensitive;
+        // Positions in the same list `requireLayer` resolves a handle against.
+        const order = expose ? [] : this.broker.listLayers(this.activeViewer).map(l => l.id);
         return items.map((item, i) => ({
             dataReference: item.dataReference,
             role: item.role,
             label: expose ? item.label : `${item.role} ${i + 1}`,
             sampling: item.sampling,
             layers: item.layers.map((layer, j) => ({
-                id: layer.id,
+                id: expose ? layer.id : this.maskedHandle("layer", order.indexOf(layer.id)),
                 title: expose ? layer.title : `${layer.role} layer ${j + 1}`,
                 type: layer.type,
                 role: layer.role,

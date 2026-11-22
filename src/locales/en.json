@@ -89,6 +89,8 @@
       "ioOffline": "{{count}} change(s) are waiting to be sent — you appear to be offline. Nothing has been lost.",
       "ioRefusedNoReason": "Your change to {{what}} was refused and has not been saved.",
       "ioSlideHashKey": "Storage is misconfigured: data is addressed by slide, but the deployment sets no slide hash key.",
+      "ioNotHydrated": "{{owner}}: not saved — the data stored for this slide could not be loaded, and saving now would overwrite it. Reopen the slide once storage is reachable, or export to a file.",
+      "ioRestoreUnreadable": "{{owner}}: the data stored for this slide could not be loaded. Changes made here will not be saved until it loads. Retrying replaces what is on screen with the stored data — export to a file first to keep new work.",
       "nothingToRender": "No data to view.",
       "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "shaderProgramFailed": "The visualization could not be compiled and the change was not applied. This usually means too many layers, or too many colormap / advanced slider controls, for what this device supports.",
@@ -352,6 +354,7 @@
     },
     "messages": {
       "loading": "Loading...",
+      "ioRestoreRecovered": "{{owner}}: stored data loaded. Changes are being saved again.",
       "slideDownloadTitle": "Downloading slide",
       "slideDownloadStarted": "Download started — check your browser's downloads.",
       "slideDownloadProgress": "{{done}} / {{total}} MB",

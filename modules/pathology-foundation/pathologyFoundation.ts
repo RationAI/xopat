@@ -1452,6 +1452,13 @@ export interface BuildOverviewOptions {
 interface ResolvedOverviewOptions {
     query?: string;
     driver?: string;
+    /**
+     * The `analyze` driver this run sends pixels to, RESOLVED to an id once. The raw
+     * `driver` option is often absent, and resolving the default per call let a driver
+     * that registered mid-walk take over under a consent given for another model.
+     * Unset only when no analyze driver existed at plan time ({@link planAnalyzeDriver}).
+     */
+    analyzeDriver?: string;
     context: SlideContext;
     repairVerdict: boolean;
     measureFill: boolean;
@@ -2014,6 +2021,17 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         if (preferred) {
             const d = this._drivers.get(preferred);
             if (d && typeof d.features[feature] === "function") return d;
+            // Opt-in (`strictDefaultDrivers`, deployment config): the operator named the
+            // model this feature goes to, and while it is absent (not registered yet, or
+            // never loaded) nothing else may stand in for it. Off by default, where the
+            // first capable driver serves as it always has -- consent is asked on, and the
+            // walk pinned to, whichever driver that turns out to be.
+            if (this.getStaticMeta("strictDefaultDrivers", false) === true) {
+                throw new Error(
+                    `The default "${feature}" driver "${preferred}" configured for this deployment is not `
+                    + `available${d ? ` (it does not implement "${feature}")` : " (not registered)"}.`
+                );
+            }
         }
         // Dedicated drivers first; a fallback (the assistant's own model) only when none
         // implements the feature, and only when it can serve right now.
@@ -2171,6 +2189,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         viewer: any,
         options?: {
             driver?: string; annotate?: boolean; hint?: boolean; minAreaFraction?: number;
+            /** Pinned `analyze` driver for the hint; see {@link interrogateRegion}. */
+            analyzeDriver?: string;
             /** Re-derive the tissue survey instead of reusing the cached one. */
             refresh?: boolean;
             scope?: ExplorationScope;
@@ -2186,13 +2206,14 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         }
 
         let hint: string | null | undefined;
-        if (options?.hint && this._hasFeature("analyze", options?.driver)) {
+        const hintDriver = options?.analyzeDriver ?? options?.driver;
+        if (options?.hint && this._hasFeature("analyze", hintDriver)) {
             // Reuse the survey raster when this call produced it. A cached survey kept the
             // mask and dropped the pixels, so an opt-in hint then pays for its own render —
             // which is the right trade: the mask is asked for constantly, the pixels once.
             const res = await this.analyzeRegion(viewer, {
                 prompt: t("pathology.overviewHintPrompt"),
-                driver: options?.driver,
+                driver: hintDriver,
                 source: "background",
                 region: survey.surveyBounds,
                 ...(raster ? { preRead: raster } : { targetPixels: MASK_TARGET_PIXELS }),
@@ -2242,13 +2263,19 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         /** Fields to read. More fields cover more of the region and cost more calls. */
         maxFields?: number;
         driver?: string;
+        /**
+        * The id consent was asked on, when the caller resolved it up front. Takes the place
+        * of `driver` for the feature call only, so a driver that registers between the
+        * prompt and the call cannot become the one that receives the pixels.
+        */
+        analyzeDriver?: string;
         context?: SlideContext;
         signal?: AbortSignal;
         concurrency?: number;
     }): Promise<InterrogationResult> {
         if (!viewer) throw new Error("interrogateRegion() requires a viewer.");
         if (!options?.region) throw new Error("interrogateRegion() requires a region.");
-        if (!this._hasFeature("analyze", options?.driver)) {
+        if (!this._hasFeature("analyze", options?.analyzeDriver ?? options?.driver)) {
             throw new Error("interrogateRegion needs an 'analyze' driver (e.g. a configured vision model).");
         }
         // Naming a region is what makes it the subject; a later unqualified call follows it.
@@ -2322,7 +2349,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                             ...assessable.map(f => t("pathology.fieldChecklistItem", { id: f.id, question: f.question })),
                             t("pathology.fieldAnswerContract"),
                         ].join(" "),
-                        driver: options.driver,
+                        driver: options.analyzeDriver ?? options.driver,
                         source: "background",
                         region: field.bounds,
                         preRead: raster,
@@ -2567,7 +2594,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async buildDensityMap(
         viewer: any,
-        options?: { driver?: string; cell?: number; refresh?: boolean }
+        options?: { driver?: string; cell?: number; refresh?: boolean;
+            /** Pinned `cellularity` driver; see {@link interrogateRegion}. */
+            cellularityDriver?: string }
     ): Promise<DensityMap> {
         if (!viewer) throw new Error("buildDensityMap() requires a viewer.");
         const { survey, raster } = await this._surveySlide(viewer, {
@@ -2582,7 +2611,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             layers: "background",
             label: t("pathology.captureDensity"),
         });
-        const density = await this._runCellularity(viewer, options?.driver, pixels, survey, options?.cell);
+        const density = await this._runCellularity(
+            viewer, options?.cellularityDriver ?? options?.driver, pixels, survey, options?.cell);
         if (!options?.cell) survey.density = density;
         return density;
     }
@@ -2897,6 +2927,8 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             feature?: PathologyFeature;
             prompt?: string;
             driver?: string;
+            /** Pinned `analyze` driver; see {@link interrogateRegion}. */
+            analyzeDriver?: string;
         }
     ): Promise<RegionReviewResult[]> {
         if (!viewer) throw new Error("reviewRegions() requires a viewer.");
@@ -2931,7 +2963,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 if (feature === "analyze") {
                     const res = await this.analyzeRegion(viewer, {
                         prompt: options?.prompt || t("pathology.reviewRegionPrompt"),
-                        driver: options?.driver,
+                        driver: options?.analyzeDriver ?? options?.driver,
                         source: "background",
                         region: region.bounds,
                         magnification: options?.magnification,
@@ -3086,14 +3118,18 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
      */
     async runPlan(viewer: any, planId: string, edits?: OverviewPlanEdits): Promise<OverviewResult | OverviewPlanExpired> {
         if (!viewer) throw new Error("runPlan() requires a viewer.");
-        if (!this._hasFeature("analyze", edits?.driver)) {
-            throw new Error("runPlan needs an 'analyze' driver (e.g. a configured vision model).");
-        }
         const slideKey = this._slideKey(viewer);
         const plan = slideKey ? this._overviewPlans.get(`${slideKey}|plan|${planId}`) : undefined;
         // Degrade closed: silently re-planning would charge the user for a survey they
         // believe they already paid for, against a region list they never saw.
         if (!plan) return { status: "plan-expired", planId };
+        if (!this._hasFeature("analyze", plan.run.opts.analyzeDriver || plan.run.opts.driver)) {
+            throw new Error("runPlan needs an 'analyze' driver (e.g. a configured vision model).");
+        }
+        // The driver is part of what was planned, and consent is asked on it. `edits.driver`
+        // has never changed which driver the walk uses and still does not; what changed is
+        // that consent is no longer asked about it instead of about the plan's own driver.
+        this.planAnalyzeDriver(viewer, planId);
 
         const keep = applyPlanEdits(plan.exploration.regions, edits);
         if (!keep.length) return { status: "plan-expired", planId, reason: "no-regions" };
@@ -3110,6 +3146,41 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : plan.run;
         this.setSlideContext(viewer, run.opts.context);
         return this._walkOverview(viewer, run, plan.options, { ...plan.exploration, regions: keep });
+    }
+
+    /**
+     * The analyze driver id a run is pinned to. `analyzeDriver` is honoured as given: it is
+     * how a caller that already asked consent for one id (the scripting adapter) makes the
+     * walk use exactly that id. Undefined when nothing can serve `analyze` yet — a plan is
+     * still worth drawing up, and {@link planAnalyzeDriver} pins it before it runs.
+     */
+    private _pinAnalyzeDriver(options?: { driver?: string; analyzeDriver?: string }): string | undefined {
+        try {
+            return this.describeDriverForFeature("analyze", options?.analyzeDriver || options?.driver).id;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * The analyze driver a stored plan will send pixels to, pinned on first ask. Consent
+     * for {@link runPlan} is asked on THIS id. Undefined when the plan is gone.
+     */
+    planAnalyzeDriver(viewer: any, planId: string): string | undefined {
+        const slideKey = this._slideKey(viewer);
+        const plan = slideKey ? this._overviewPlans.get(`${slideKey}|plan|${planId}`) : undefined;
+        if (!plan) return undefined;
+        const opts = plan.run.opts;
+        if (!opts.analyzeDriver) {
+            opts.analyzeDriver = this.describeDriverForFeature("analyze", opts.driver).id;
+        }
+        return opts.analyzeDriver;
+    }
+
+    /** The analyze driver the cached overview of this slide was walked with, if any. */
+    overviewAnalyzeDriver(viewer: any): string | undefined {
+        const key = this._slideKey(viewer);
+        return (key ? this._overviewRuns.get(key) : null)?.opts.analyzeDriver;
     }
 
     /** Monotonic within a session; a plan is only ever looked up beside its slide key. */
@@ -3143,6 +3214,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         const opts: ResolvedOverviewOptions = {
             query: options?.query,
             driver: options?.driver,
+            analyzeDriver: this._pinAnalyzeDriver(options),
             scopeBounds: scope.bounds,
             context: this._normalizeContext(options?.context),
             repairVerdict: options?.repairVerdict ?? true,
@@ -3352,7 +3424,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
         // limit a consumer applies.
         const result: OverviewResult = {
             status: anythingRead && surveyComplete ? "ok" : "incomplete",
-            driver: this.describeDriverForFeature("analyze", opts.driver).id,
+            driver: opts.analyzeDriver ?? this.describeDriverForFeature("analyze", opts.driver).id,
             query: opts.query,
             context: opts.context,
             slide: exploration?.slide ?? { width: 0, height: 0, micronsPerPixel: null, magnification: null },
@@ -3481,7 +3553,9 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             : run.opts.checklist;
         const opts: ResolvedOverviewOptions = {
             ...run.opts,
-            ...(options?.driver ? { driver: options.driver } : {}),
+            ...(options?.driver
+                ? { driver: options.driver, analyzeDriver: this.describeDriverForFeature("analyze", options.driver).id }
+                : {}),
             ...(options?.query ? { query: options.query } : {}),
             checklist,
             maxDepth: Math.round(clampNumber(options?.maxDepth, run.opts.maxDepth, 1, 8)),
@@ -4472,7 +4546,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
             if (!scheduled?.charged) budget.analyzeCalls++;
             const res = await this.analyzeRegion(viewer, {
                 prompt,
-                driver: opts.driver,
+                driver: opts.analyzeDriver ?? opts.driver,
                 source: "background",
                 region: viewBounds,
                 preRead: raster,
@@ -4490,7 +4564,7 @@ class PathologyFoundation extends (XOpatModuleSingleton as any) {
                 budget.repairCalls++;
                 const repair = await this.analyzeRegion(viewer, {
                     prompt: `${prompt}\n\n${t("pathology.answerRepairPrompt")}`,
-                    driver: opts.driver,
+                    driver: opts.analyzeDriver ?? opts.driver,
                     source: "background",
                     region: viewBounds,
                     preRead: raster,

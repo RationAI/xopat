@@ -23,7 +23,7 @@ export interface AdjustmentType {
 
 /** A shader layer of the active viewer that can be adjusted. */
 export interface AdjustmentLayerInfo {
-    /** Layer id — pass it to the other methods. */
+    /** Layer id — pass it to the other methods. May be an opaque handle; treat it as a token. */
     id: string;
     /** Layer name; masked when sensitive data is not granted. */
     title: string;

@@ -36,7 +36,7 @@ export interface VisualizationReviewOptions {
      * regions and dim the background noise."). Shown as a one-line subtitle.
      */
     rationale?: string;
-    /** Forwarded to applyVisualizationStateSnapshot when the user accepts. */
+    /** Forwarded to _applyVisualizationStateSnapshot when the user accepts. */
     historyLabel?: string;
     /**
      * Index of the visualization under review. Without it the first selected index in the
@@ -65,7 +65,7 @@ export function isReviewInFlight(): boolean {
  * @param viewer    The OSD viewer whose slide is shown in the playground.
  * @param proposed  The snapshot the LLM (or any other producer) wants applied.
  * @param applySnapshot Callback that actually applies a snapshot to the source
- *                      session — usually `applyVisualizationStateSnapshot` from
+ *                      session — usually `_applyVisualizationStateSnapshot` from
  *                      visualization-api. Called only on accept.
  * @param options   Display + history labels.
  *

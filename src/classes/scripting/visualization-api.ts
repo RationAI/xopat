@@ -347,7 +347,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         return next;
     }
 
-    protected buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
+    protected _buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
         const visualizations = cloneJson(Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : []);
         // Persisted visualizations may carry top-level shader entries whose ids
         // collide with config.background[i].id. The playground assembler keys
@@ -364,7 +364,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         };
     }
 
-    protected async applyVisualizationStateSnapshot(
+    protected async _applyVisualizationStateSnapshot(
         snapshot: VisualizationStateSnapshot,
         options: {
             historyLabel?: string;
@@ -461,7 +461,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const playgroundAvailable = !!(PLAYGROUND && typeof PLAYGROUND.open === "function" && typeof document !== "undefined");
 
         // Defensive strip: even if the snapshot was built ad-hoc by a caller
-        // (instead of going through buildVisualizationStateSnapshot), guarantee
+        // (instead of going through _buildVisualizationStateSnapshot), guarantee
         // the playground/headless commit never sees a viz shader whose id
         // collides with a configured background. Operates on a clone so the
         // caller's object is left intact.
@@ -489,7 +489,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         const viewer = this.activeViewer;
         // Apply-on-accept is OFF: the caller pipeline (APPLICATION_CONTEXT.updateVisualization
-        // or applyVisualizationStateSnapshot) commits after this returns, so we don't want
+        // or _applyVisualizationStateSnapshot) commits after this returns, so we don't want
         // the helper to apply twice. The helper still runs the playground UI and returns
         // the user's decision.
         const noopApply = async () => true;
@@ -1062,7 +1062,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * back, so a capture → restore round-trip is unaffected by the masking.
      */
     captureState(): VisualizationStateSnapshot {
-        const snapshot = this.buildVisualizationStateSnapshot();
+        const snapshot = this._buildVisualizationStateSnapshot();
         return { ...snapshot, data: this.maskDataEntries(snapshot.data) };
     }
 
@@ -1091,7 +1091,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             rejectedMessage: "Visualization state restore was canceled by the user.",
             cacheKey: "visualization:restore-state",
         });
-        return await this.applyVisualizationStateSnapshot(accepted, {
+        return await this._applyVisualizationStateSnapshot(accepted, {
             historyLabel: this.getHistoryLabel("restore-state"),
             requireConsent: false,
         });
@@ -1264,7 +1264,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /** The background entry the script's active viewer shows, and its index in `config.background`. */
-    protected activeBackgroundEntry(): { index: number; entry: any } {
+    protected _activeBackgroundEntry(): { index: number; entry: any } {
         const index = ViewerSelectionState.getViewerSelectionIndex(
             this.activeViewer, "activeBackgroundIndex", APPLICATION_CONTEXT as any, VIEWER_MANAGER
         );
@@ -1281,8 +1281,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * An entry that declares no shaders renders through one implicit `identity` layer; it is
      * materialized here so there is always a layer 0 to read and to patch.
      */
-    protected activeBackgroundSnapshot(): { index: number; background: any } {
-        const { index, entry } = this.activeBackgroundEntry();
+    protected _activeBackgroundSnapshot(): { index: number; background: any } {
+        const { index, entry } = this._activeBackgroundEntry();
         const background: any = serializeSceneFromViewer(this.activeViewer, { background: [entry] }).background[0];
         if (!Array.isArray(background.shaders) || !background.shaders.length) {
             background.shaders = [{ type: "identity" }];
@@ -1296,7 +1296,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     getBackgroundShaders(): VisualizationShaderGroupOrLayer[] {
         const mask = !this.mayExposeSensitive;
-        return this.activeBackgroundSnapshot().background.shaders.map((layer: any) => {
+        return this._activeBackgroundSnapshot().background.shaders.map((layer: any) => {
             const out: any = cloneJson(layer);
             // Derived from the background id, which comes from the slide's path; addressed
             // by position instead.
@@ -1317,7 +1317,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         index: number,
         patch: Partial<VisualizationShaderGroupOrLayer>
     ): Promise<boolean> {
-        const { index: backgroundIndex, background } = this.activeBackgroundSnapshot();
+        const { index: backgroundIndex, background } = this._activeBackgroundSnapshot();
         if (!Number.isInteger(index) || index < 0 || index >= background.shaders.length) {
             throw new Error(
                 `Background shader index must be an integer in 0..${background.shaders.length - 1}; ` +
@@ -1995,7 +1995,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     async renderRegionPng(options: VisualizationRegionRenderOptions): Promise<string> {
         await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
-        const { dataUrl, isComplete } = await this.regionPngDetailed(options);
+        const { dataUrl, isComplete } = await this._regionPngDetailed(options);
         if (!isComplete && (options?.onIncomplete ?? "throw") === "throw") {
             throw new Error(
                 "The region render is incomplete — some tiles had not loaded. Retry with a larger " +
@@ -2018,11 +2018,11 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         options: VisualizationRegionRenderOptions
     ): Promise<VisualizationRegionPngResult> {
         await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadRegionRender"));
-        return this.regionPngDetailed(options);
+        return this._regionPngDetailed(options);
     }
 
     /** Unchecked body of {@link renderRegionPngDetailed}: callers have already asked for pixel consent. */
-    protected async regionPngDetailed(
+    protected async _regionPngDetailed(
         options: VisualizationRegionRenderOptions
     ): Promise<VisualizationRegionPngResult> {
         const { canvas, isComplete, stalled, scale, magnification } = await this.extractRegionCanvas(options);
@@ -2311,7 +2311,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         // Detailed, not renderRegionPng: a critique of a half-loaded view is worth having (the
         // shader settings it judges are visible in whatever DID render), but the model must be told
         // the blanks are missing tiles, not a rendering fault it should explain.
-        const { dataUrl, isComplete } = await this.regionPngDetailed({
+        const { dataUrl, isComplete } = await this._regionPngDetailed({
             ...(options as any),
             region: this.currentViewportImageRegion(),
             layers: "active",
@@ -2379,6 +2379,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * Extracts a first-pass texture or stencil layer from the active viewer's standalone renderer state.
      */
     async extractCurrentFirstPassLayer(options: VisualizationFirstPassExtractOptions): Promise<VisualizationViewportPixelsResult> {
+        // Raw RGBA of the slide leaves the page here, like every other pixel read.
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
         const drawer = this.getCurrentStandaloneDrawer();
         const viewer: any = this.activeViewer;
 

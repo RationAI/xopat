@@ -163,6 +163,24 @@ A dedicated driver that **fails** never silently switches to it — the user con
 error instead tells the assistant it can retry with `{ driver: "assistant" }` or render the region and look
 itself (`_invokeAnalyze`).
 
+### Which model receives the pixels
+
+Consent is asked for one driver, by id, and that id is the one used. The scripting
+adapter resolves an absent `driver` to an id *before* the dialog opens and hands the
+engine that id, so a driver registering while the dialog is open (plugins register
+asynchronously) cannot become the recipient. A recursive overview pins the id for
+the whole walk, `runPlan` asks about the plan's own driver, and `refineOverview`
+asks again when a different driver is named.
+
+**Known limitation — `defaultDrivers` is a preference, not a guarantee.** When the
+driver named there is not registered (not loaded, failed to load, or still starting
+up), the first capable driver serves instead, and the built-in `assistant` driver
+(the chat model) last. The user is shown the driver actually used, but the
+operator's choice is not enforced. Set `"strictDefaultDrivers": true` to make it
+binding: the feature then fails until the named driver is there. It is off by
+default because a deployment that lists a default for a plugin it does not always
+load would otherwise lose the feature entirely.
+
 ### Custom drivers (runtime registration)
 
 Any module/plugin can add a driver — this is how the SAM plugin contributes its in-browser engine:
@@ -197,6 +215,9 @@ The built-in tissue driver is always available. Additional `http` / `vercel` dri
     "analyze": "vlm-sdk"
     // (a feature with no override uses the first registered capable driver;
     //  tissue-mask defaults to "builtin" unless you register a replacement)
+    // While the named driver is not registered the first capable driver serves
+    // instead. Set "strictDefaultDrivers": true to make the override binding:
+    // the feature then fails rather than falling back to another model.
   },
   "drivers": {
     // Server tissue detector, overriding the built-in one:

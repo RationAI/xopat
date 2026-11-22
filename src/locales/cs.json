@@ -85,6 +85,8 @@
       "ioSinkNotReady": "Čekající změny: {{count}}. Cílové úložiště zatím není připojeno. Nic se neztratilo – změny budou odeslány, jakmile bude dostupné.",
       "ioOffline": "Čekající změny k odeslání: {{count}}. Zdá se, že jste offline. Nic se neztratilo.",
       "ioRefusedNoReason": "Vaše změna ({{what}}) byla odmítnuta a nebyla uložena.",
+      "ioRestoreUnreadable": "{{owner}}: data uložená pro tento snímek se nepodařilo načíst. Změny provedené zde se neuloží, dokud se nenačtou. Opakované načtení nahradí obsah na obrazovce uloženými daty – novou práci si nejprve exportujte do souboru.",
+      "ioNotHydrated":"{{owner}}: neuloženo – data uložená pro tento snímek se nepodařilo načíst a uložení by je nyní přepsalo. Otevřete snímek znovu, až bude úložiště dostupné, nebo exportujte do souboru.",
       "nothingToRender": "Nejsou žádná data k zobrazení.",
       "nothingToRenderDetails": "Aktivní relace neurčuje žádný obrázek ani vrstvy k otevření. Je váš odkaz platný?",
       "shaderProgramFailed": "Vizualizaci se nepodařilo zkompilovat a změna nebyla použita. Obvykle to znamená příliš mnoho vrstev nebo příliš mnoho ovládacích prvků barevné mapy či pokročilých posuvníků, než toto zařízení zvládne.",
@@ -348,6 +350,7 @@
     },
     "messages": {
       "loading": "Načítání...",
+      "ioRestoreRecovered": "{{owner}}: uložená data byla načtena. Změny se opět ukládají.",
       "slideDownloadTitle": "Stahování sklíčka",
       "slideDownloadStarted": "Stahování zahájeno – sledujte stahování ve svém prohlížeči.",
       "slideDownloadProgress": "{{done}} / {{total}} MB",
