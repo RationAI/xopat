@@ -1081,6 +1081,13 @@ addPlugin('dicom', class extends XOpatPlugin {
         const existing = visualizations.findIndex(v => v && v[marker] === id.seriesUID);
         if (existing >= 0) {
             event.visualizationIndex = existing;
+            // Reused, but not frozen: the marker survives a session export, so
+            // without this a saved session would never show an object stored
+            // after it was saved, nor one added to `derived` by hand.
+            // Nothing can be added without the renderer's shader layers.
+            const merged = registerDicomShaderLayers() ? await this._topUpOverlayVisualization(
+                visualizations[existing], id, event.background?.name || "", requested) : null;
+            if (merged) event.visualization = merged;
             return;
         }
 
@@ -1107,6 +1114,45 @@ addPlugin('dicom', class extends XOpatPlugin {
         console.info(
             `[dicom] attached ${Object.keys(built.shaders).length} overlay(s) to ${id.seriesUID} ` +
             `as visualization #${event.visualizationIndex}`);
+    }
+
+    /**
+     * Add the derived objects a reused overlay visualization does not show yet.
+     *
+     * Only ever ADDS, and adds hidden: layers already there keep whatever the
+     * user did to them. An explicit list is checked against the entry first, so
+     * the common case — nothing new — costs no request; `"auto"` asks the store,
+     * as the first open did.
+     *
+     * @returns {Promise<?object>} a new visualization object, or null when the
+     *   existing one is complete (or nothing can be built right now)
+     */
+    async _topUpOverlayVisualization(existing, id, slideName, requested) {
+        const shaders = existing?.shaders && typeof existing.shaders === "object" ? existing.shaders : {};
+        const has = (uid) => Object.keys(shaders).some(key => key.startsWith("dicom-") && key.endsWith(`-${uid}`));
+
+        let only = null;
+        if (Array.isArray(requested)) {
+            only = requested.filter(uid => typeof uid === "string" && !has(uid));
+            if (!only.length) return null;
+        }
+
+        let built;
+        try {
+            built = await this._buildOverlayVisualization(id.studyUID, id.seriesUID, slideName, only);
+        } catch (e) {
+            // The slide and the overlays it already has must still open.
+            console.warn(`[dicom] could not refresh the overlays of series ${id.seriesUID}`, e);
+            return null;
+        }
+        const added = Object.entries(built?.shaders ?? {}).filter(([key]) => !(key in shaders));
+        if (!added.length) return null;
+
+        console.info(`[dicom] added ${added.length} new overlay(s) to ${id.seriesUID}`);
+        return {
+            ...existing,
+            shaders: { ...shaders, ...Object.fromEntries(added.map(([key, shader]) => [key, { ...shader, visible: 0 }])) },
+        };
     }
 
     /**
