@@ -802,8 +802,16 @@ export class FullscreenMenus {
             this.createCheckbox(
                 "scroll-requires-click-checkbox",
                 $.t('settings.scrollRequiresClick'),
-                liveOnCheck('scrollRequiresClick'),
-                APPLICATION_CONTEXT.getOption('scrollRequiresClick')
+                function () {
+                    // `scrollRequiresCtrl` is the former name; the controller still
+                    // honours it, so a stored legacy value has to go with the new one
+                    // or the switch could never be turned off.
+                    APPLICATION_CONTEXT.setOption('scrollRequiresCtrl', undefined);
+                    APPLICATION_CONTEXT.setOption('scrollRequiresClick', this.checked);
+                    refreshInputControllers();
+                },
+                !!APPLICATION_CONTEXT.getOption('scrollRequiresClick')
+                    || !!APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')
             ),
             this.createCheckbox(
                 "reverse-scroll-checkbox",

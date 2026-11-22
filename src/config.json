@@ -410,6 +410,9 @@
         // and again once the pointer leaves it. Recommended for notebook /
         // scrollable-host embeddings. (Former name: scrollRequiresCtrl.)
         "scrollRequiresClick": false,
+        /* Deprecated alias of `scrollRequiresClick`, declared so a session or
+           embedder still sending the old name is not dropped as unknown. */
+        "scrollRequiresCtrl": null,
         // invert the scroll-to-zoom direction (scroll down to zoom in, up to zoom out)
         "reverseScroll": false,
         // when the slide has a resolved native magnification, scroll snaps between
