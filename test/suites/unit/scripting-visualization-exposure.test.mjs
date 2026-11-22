@@ -61,3 +61,35 @@ test("extractCurrentFirstPassLayer asks for pixel-read consent before reading @u
         .rejects.toThrow("declined");
     expect(order, "nothing may be read once consent is declined").toEqual(["consent"]);
 });
+
+test("the declaration is the allowlist: an undeclared helper is not script-callable @unit @security", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { ScriptingManager, scriptCallableMethodNames } = await import("../../../src/classes/scripting-manager.ts");
+
+    // The real parser over the real declaration, as `ingestApi` runs it.
+    const dts = readFileSync(new URL("../../../src/classes/scripting/visualization-api.scripts.d.ts", import.meta.url), "utf8");
+    const api = Object.create(XOpatVisualizationScriptApi.prototype);
+    const parsed = Object.create(ScriptingManager.prototype).parseDtsForApi(api, dts);
+    const { exposed, withheld } = scriptCallableMethodNames(api, Object.keys(parsed.tsSignature));
+
+    // No underscore, never declared: helpers that hand out canvases, pixels and raw configuration.
+    for (const name of ["extractRegionCanvas", "extractBackgroundCanvas", "readCanvasPixels", "harvestBackgroundConfiguration"]) {
+        expect(typeof XOpatVisualizationScriptApi.prototype[name], `${name} should exist`).toBe("function");
+        expect(exposed).not.toContain(name);
+        expect(withheld).toContain(name);
+    }
+    for (const name of ["renderRegionPng", "getBackgroundShaders", "captureState", "restoreState"]) {
+        expect(exposed).toContain(name);
+    }
+    // Everything exposed is declared, and nothing declared was lost to the filter.
+    expect(exposed.every(name => name in parsed.tsSignature)).toBe(true);
+    expect(Object.keys(parsed.tsSignature).filter(name => typeof XOpatVisualizationScriptApi.prototype[name] === "function" && !Object.getOwnPropertyDescriptor(XOpatVisualizationScriptApi.prototype, name)?.get).sort())
+        .toEqual([...exposed].sort());
+});
+
+test("without a declaration the underscore convention still applies @unit @security", async () => {
+    const { scriptCallableMethodNames } = await import("../../../src/classes/scripting-manager.ts");
+    class Api { open() {} helper() {} _hidden() {} }
+    expect(scriptCallableMethodNames(new Api()).exposed.sort()).toEqual(["helper", "open"]);
+    expect(scriptCallableMethodNames(new Api(), ["open"])).toEqual({ exposed: ["open"], withheld: ["helper"] });
+});

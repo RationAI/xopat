@@ -77,6 +77,10 @@ A good namespace usually has:
 - one public class extending `XOpatScriptingApi`
 - one `.scripts.d.ts` file describing the script-visible API
 - private helper methods prefixed with `_`
+- **the declaration is the allowlist**: with a `.scripts.d.ts` (or `ScriptApiMetadata` `tsSignature`/`docs`
+  tables) only declared methods are script-callable. `protected`/`private` is erased at runtime, so an
+  undeclared helper would otherwise be a public scripting method. A new method stays unreachable until
+  it is declared; a namespace with no declaration falls back to the `_` convention alone
 - public methods that return plain data and accept plain inputs
 - no direct dependence on "who is globally active right now"
 

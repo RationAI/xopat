@@ -63,6 +63,11 @@
   `{slideHash}` / `{slideName}` resolve in its templates.
 * Binary data downloaded as a file contained the text `[object Object]`.
 * EMPAIA: regions of interest saved in bulk lost their ROI flag; a failed save could leave or repeat a record.
+  Editing, undoing or deleting a stored annotation could lose it, duplicate it or leave it undeletable.
+* Stored data that cannot be read (storage outage) is no longer treated as "nothing stored": saving for that
+  slide is paused, with a Retry, instead of overwriting what was never loaded.
+* Chat: one unsupported attachment no longer switches a model to non-streamed replies for good.
+* Viewport sync state survives a scalebar rebuild (reset, reload).
 
 **Security / maintenance**:
 
@@ -76,6 +81,13 @@
 * Docker: Node 24.22.3 (security release of 2026-11-10); the PHP image moved from Ubuntu 22.04 (PHP 8.1,
   no longer receiving security fixes) to 24.04 (PHP 8.3).
 * Security fix in MLflow run lookup: run names can no longer alter the search query.
+* Security fixes in scripting (internal helpers were callable by scripts, skipping consent, masking and
+  review), in chat attachments (**breaking:** a remote URL is no longer fetched by the server; attachments
+  must be inline data) and in the exported HTML session file.
+* Pathology assistant: consent is asked for the model that actually receives the slide, and asked again
+  when another one is named. `strictDefaultDrivers` refuses to fall back when the configured model is absent.
+* MLflow: `strictSessionTarget` requires `runAllow` / `artifactPathPrefix` before a session may name a run
+  or a file; `artifactPathPrefix` now matches whole path segments.
 
 
 ### 3.2.1
