@@ -1,0 +1,50 @@
+{
+  "$meta": {
+    "description": "user-actions — load the module with two operator-provided demo actions"
+  },
+  /*
+   * Deployment actions are trusted operator config (the same trust as include.json):
+   * they need no approval and users cannot edit them. They work with no assistant at all.
+   * Users (and assistants, through the `actions` scripting namespace) can add their own
+   * in Tools → Manage actions… See modules/user-actions/README.md.
+   *
+   * Also the ENV of modules/user-actions/test/e2e (via its test/env file).
+   */
+  "modules": {
+    "user-actions": {
+      "enabled": true,
+      "permaLoad": true,
+      "actions": [
+        {
+          "id": "count-per-class",
+          "label": { "en": "Count annotations by class", "cs": "Počet anotací dle třídy" },
+          "description": { "en": "Number of annotations per preset (class) in the current viewer." },
+          "icon": "ph-chart-bar",
+          "script": [
+            "const presets = await annotationsRead.getPresets();",
+            "const names = Object.fromEntries(presets.map(p => [p.presetID, p.meta?.category?.value || p.presetID]));",
+            "const counts = {};",
+            "for (const a of await annotationsRead.getAnnotations()) {",
+            "  const name = names[a.presetID] || 'unassigned';",
+            "  counts[name] = (counts[name] || 0) + 1;",
+            "}",
+            "return Object.keys(counts).length ? counts : 'No annotations.';"
+          ],
+          "placements": [
+            { "surface": "quick", "pinned": true },
+            { "surface": "context-menu" },
+            { "surface": "shortcut", "combo": "Alt+KeyC" }
+          ]
+        },
+        {
+          "id": "trigger-info",
+          "label": "Show trigger",
+          "icon": "ph-info",
+          "script": "return { trigger: input.trigger, hasViewer: input.viewerId !== null, hasPosition: !!input.position };",
+          "placements": [{ "surface": "tools" }, { "surface": "viewer-control" }, { "surface": "context-menu" }],
+          "output": "window"
+        }
+      ]
+    }
+  }
+}
