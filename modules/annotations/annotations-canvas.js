@@ -449,8 +449,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // `io` and `meta` are handed over by reference, never deep-copied: the
         // dispatch context and a sink's metadata can hold live objects.
         const { io, meta, ...given } = options;
+        // The user's per-format options are held under the format's own id, so
+        // "auto" has to be resolved before they can be looked up — otherwise an
+        // auto-detected QuPath file imports with the defaults the user changed.
+        const domain = OSDAnnotations.Convertor.DOMAIN;
+        const optionsFormat = options.format === "auto"
+            ? IO_PIPELINE.formats.detect(domain, data, { fileName: options.filename })
+            : options.format;
         const decodeOptions = OpenSeadragon.extend(true, {},
-            this.module.getExportOptions(), this.module.getFormatOptions(options.format), given);
+            this.module.getExportOptions(), this.module.getFormatOptions(optionsFormat), given);
         decodeOptions.meta = meta;
         const decoded = await IO_PIPELINE.formats.decode(
             OSDAnnotations.Convertor.DOMAIN, options.format, data,

@@ -8,8 +8,11 @@ import * as MlflowUtils from "../../../mlflow/utils.mjs";
 import { makeMlflowSink } from "../../mlflow-sink-factory.ts";
 import { BUILT_IN_TEMPLATES } from "../../templates.ts";
 
-globalThis.$ = globalThis.$ ?? {};
-globalThis.$.t = (key) => key;
+// Replaced, not mutated, and handed back afterwards: `globalThis` outlives this
+// file in a reused worker, and a `$.t` left behind changes what later files assert on.
+const inherited$ = globalThis.$;
+globalThis.$ = { ...inherited$, t: (key) => key };
+test.afterAll(() => { globalThis.$ = inherited$; });
 
 function installFakeMlflow({ files = {}, runData = { tags: [{ key: "t", value: "v" }] }, experimentError } = {}) {
     const calls = { downloads: [] };

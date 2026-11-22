@@ -142,22 +142,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // `ctx.format` is the pipeline's answer: the format the destination
         // takes, was pinned to, or returned — for a sink that takes any format
         // and has no pin, the deployment `defaultFormat` handed over below.
-        // Absent, the user's choice (download dialog) applies only to the local
-        // file route; a stored destination never follows a UI preference.
-        const formatOf = (ctx) => {
-            if (ctx.format?.id) return ctx.format.id;
-            if (ctx.route === "local") return this.getExportOptions()?.format || this.defaultFormat;
-            return this.defaultFormat;
-        };
+        // Absent, the CONFIGURED format applies on both routes: `_ioArgs.format`
+        // is deployment/session configuration (`convertors.format`, or the
+        // annotations plugin's `ioFormat` through setIOOption) — never the pick
+        // in the download dialog, which the plugin keeps to itself. A stored
+        // destination therefore still never follows a UI preference.
+        const configuredFormat = () => this.getExportOptions()?.format || this.defaultFormat;
+        const formatOf = (ctx) => ctx.format?.id || configuredFormat();
         await this.initIO({
-            // Deployment `convertors.format` (validated), else native. What a
+            // The configured format (validated), else native. What a
             // format-agnostic sink (GitHub, MLflow, http-rest) stores when
-            // neither the binding nor the sink's own config pins a format.
-            // A local file (bound `file-download`) is the user's own copy and
-            // follows the format picked in the export dialog, like `formatOf`.
-            defaultFormat: (ctx) => ctx?.route === "local"
-                ? (this.getExportOptions()?.format || this.defaultFormat)
-                : this.defaultFormat,
+            // neither the binding nor the sink's own config pins a format, and
+            // what a bound `file-download` writes.
+            defaultFormat: () => configuredFormat(),
             // Annotations are bound to their target slide. The pipeline keys
             // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
             // auto-fires flush-on-leave + restore-on-enter when the active

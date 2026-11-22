@@ -103,13 +103,14 @@ export const ioMethods = {
         // onchange handler typically clears e.target.value synchronously right after
         // dispatching importFromFile, so e.currentTarget.files is empty by the time
         // any await resumes here. The File blob captured above is independent.
-        const data = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = ev => resolve(ev.target?.result);
-            reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
-            if (binary) reader.readAsArrayBuffer(file);
-            else reader.readAsText(file);
-        });
+        // The core reader asks `core.io.local-file` and tells the user itself.
+        let data;
+        try {
+            data = await UTILITIES.readLocalFile(file, binary ? 'bytes' : 'text');
+        } catch (e) {
+            if (e?.code === 'W_PERM_DENIED') return { cancelled: true };
+            throw e;
+        }
         const fabric = this.context.getFabric(target.viewer);
         // fabric.import mutates options.format to the resolved format (relevant
         // for auto-detect); pass a fresh options object so we can read it back.
@@ -221,8 +222,9 @@ export const ioMethods = {
             // Typed, so a binary format downloads as its bytes and a text one
             // with its own MIME type rather than text/plain.
             const format = IO_PIPELINE.formats.descriptor('annotations', toFormat);
-            UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat),
-                new Blob([result], { type: format.contentType }));
+            // false: refused by `core.io.local-file`, and the user was told.
+            if (!UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat),
+                new Blob([result], { type: format.contentType }))) return;
 
             // Lossy-format heads-up: the file just downloaded does not round-trip
             // cleanly. Surfaced after the download so it doesn't block the action.

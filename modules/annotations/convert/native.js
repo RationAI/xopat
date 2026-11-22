@@ -7,7 +7,11 @@ IO_PIPELINE.formats.register({
     contentType: "application/json",
     traits: { allProps: false },
 
-    encode(model) {
+    encode(model, fctx) {
+        // `toModel` always carries the presets (other formats read a feature's
+        // class from them); whether to WRITE them is the caller's `withPresets`,
+        // which arrives here as `exportsPresets`.
+        const withPresets = fctx?.options?.exportsPresets !== false;
         //todo consider as global-level option, data would arrive trimmed...
         return JSON.stringify({
             metadata: {
@@ -15,7 +19,9 @@ IO_PIPELINE.formats.register({
                 created: Date.now(),
             },
             objects: model.objects,
-            presets: OSDAnnotations.Convertor.filterUnusedPresets(model.objects, model.presets),
+            presets: withPresets
+                ? OSDAnnotations.Convertor.filterUnusedPresets(model.objects, model.presets)
+                : undefined,
         });
     },
 
