@@ -96,14 +96,14 @@ jobs:
           # image:tag pairs that are actually published
           targets="$(for img in $IMAGES; do
                        have="$(gh api --paginate "orgs/$OWNER/packages/container/$img/versions?per_page=100" --jq '.[].metadata.container.tags[]')"
-                       for t in $selected; do grep -qxF "$t" <<<"$have" && echo "$img:$t"; done
+                       for t in $selected; do if grep -qxF "$t" <<<"$have"; then echo "$img:$t"; fi; done
                      done | jq -R . | jq -sc .)"
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
           echo "older=$(printf '%s\n' $older | jq -R . | jq -sc 'map(select(length>0))')" >> "$GITHUB_OUTPUT"
           {
             echo "### Plan"
             echo "Targets: \`$(jq -r 'join(" ")' <<<"$targets")\`"
-            [ -n "$older" ] && echo "Older (not patched, will be marked unsupported): \`$(echo $older)\`"
+            if [ -n "$older" ]; then echo "Older (not patched, will be marked unsupported): \`$(echo $older)\`"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   repatch:
