@@ -989,17 +989,21 @@ deployment's call, not a session's.
 
 ### Remote attachments and the SSRF guard
 
-A message part may reference an asset by `url` instead of carrying it inline, and
-that URL comes from the client. When the target model does not accept URLs of that
-media type, **the SDK resolves the asset from the server process** — so the turn
-path always supplies `experimental_download` (`server/asset-download.ts`), which
-routes the fetch through `XOPAT_SERVER.safeRequest` (connect-time validation,
-no redirects, private/metadata IP rejection), caps it at
-`maxInlineAttachmentBytes`, and refuses outright when the guard is unavailable. A
-model that *does* accept URLs gets the URL untouched — the fetch then happens at
-the provider, on the provider's network. Do not remove the hook: without it the
-SDK falls back to plain `fetch`, which turns a client-supplied URL into a
-server-side request.
+**A message part carries its payload inline (`data:`) or by `attachmentId`; a
+remote `url` is not accepted.** It used to be, and the URL came from the client:
+the SSRF guard blocks private addresses but honours the operator's allowlist of
+internal hosts (`XOPAT_SSRF_ALLOWED_HOSTS` / `_CIDRS`), and the SDK trusts the
+client's `mimeType`, so a `text/*` part aimed at an allowlisted backend had its
+body inlined into the prompt and returned in the reply. Now `uploadAttachment`
+refuses anything but a base64 `data:` URL, incoming parts are stripped of `url`
+and of a non-`data:` `dataUrl`, and `resolvePartPayload`
+(`server/model-messages.ts`) resolves nothing else — which also covers history
+stored before the check existed.
+
+The turn path still supplies `experimental_download` (`server/asset-download.ts`,
+routed through `XOPAT_SERVER.safeRequest`, capped at `maxInlineAttachmentBytes`)
+as defence in depth. Do not remove the hook: without it the SDK falls back to
+plain `fetch` should a URL ever reach it again.
 
 `core.server.secure.storage.retention["vercel-ai-chat-sdk"]` still takes
 precedence over the retention values for the storage namespaces themselves — see

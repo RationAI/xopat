@@ -10,13 +10,28 @@
  */
 import { getChatTuning } from './tuning';
 import { errorText } from './abort-utils';
+/**
+ * A payload is inline (`data:`) or it is nothing.
+ *
+ * Parts once could name a remote `url`; the SDK then fetched it from the server
+ * process. That URL is client input, the SSRF guard honours the operator's
+ * allowlist of internal hosts, and the SDK trusts the client `mimeType` — a
+ * `text/*` part pointed at an internal endpoint came back inside the reply.
+ * Filtering here covers every way a source arrives: the part's own fields, a
+ * stored attachment, and replayed history written before the upload check.
+ */
+export function isInlineDataUrl(value: unknown): value is string {
+    return typeof value === 'string' && /^\s*data:/i.test(value);
+}
+
 export function resolvePartPayload(
     part: any,
     attachmentIndex?: Map<string, ChatAttachmentRecord>
 ): { source: string; mimeType?: string; name?: string } {
     const attachment = part?.attachmentId ? attachmentIndex?.get(part.attachmentId) : undefined;
+    const source = [part?.dataUrl, attachment?.dataUrl].find(isInlineDataUrl);
     return {
-        source: String(part?.dataUrl || part?.url || attachment?.dataUrl || '').trim(),
+        source: String(source || '').trim(),
         mimeType: part?.mimeType || attachment?.mimeType || undefined,
         name: part?.name || attachment?.name || undefined,
     };
@@ -177,17 +192,6 @@ export function toModelMessage(
                     } as const;
                 }
 
-                if (/^https?:\/\//i.test(resolved.source)) {
-                    // A bare string in `data` means base64 bytes — a remote image MUST be
-                    // handed over as a URL object or the SDK would try to decode the href.
-                    return {
-                        type: 'file',
-                        data: new URL(resolved.source),
-                        mediaType: resolved.mimeType || 'image/*',
-                        ...(resolved.name ? { filename: resolved.name } : {}),
-                    } as const;
-                }
-
                 return {
                     type: 'text',
                     text: resolved.name ? `[Image unavailable: ${resolved.name}]` : '[Image unavailable]',
@@ -217,19 +221,6 @@ export function toModelMessage(
                         type: 'file',
                         data: inline.bytes,
                         mediaType: resolved.mimeType || inline.mediaType || 'application/octet-stream',
-                        filename: resolved.name,
-                    } as const;
-                }
-
-                if (/^https?:\/\//i.test(resolved.source)) {
-                    // A bare string in `data` is INLINE BASE64 by the prompt schema, not a
-                    // URL — passing the href there base64-decodes the URL text into garbage
-                    // and ships it upstream, silently, because it still validates. A URL
-                    // object (or a `{type:'url'}` tag) is the only way to mean "fetch this".
-                    return {
-                        type: 'file',
-                        data: new URL(resolved.source),
-                        mediaType: resolved.mimeType || 'application/octet-stream',
                         filename: resolved.name,
                     } as const;
                 }
@@ -297,4 +288,21 @@ export function mediaUnsupportedKind(error: any, sent: Set<MediaKind>): MediaKin
     if (sent.has('images') && /image|vision|multimodal|multi-modal/.test(msg)) return 'images';
     if (sent.has('files') && /\bfile\b|file part|document|media type|input_file|attachment/.test(msg)) return 'files';
     return null;
+}
+
+/**
+ * Did the provider refuse to STREAM (as opposed to refusing something in the request)?
+ *
+ * The verdict this feeds is cached per model and never re-tested, so it must not fire on
+ * anything else. `UnsupportedFunctionalityError` alone is not evidence: the SDK throws it for
+ * unsupported file parts, media types and tools — one rejected attachment used to switch a
+ * model to buffered replies for good. Both branches therefore need the error to actually talk
+ * about streaming.
+ */
+export function isStreamingUnsupportedError(error: any): boolean {
+    const text = `${String(error?.functionality || '')} ${errorText(error)}`;
+    if (!/stream/i.test(text)) return false;
+    if (/UnsupportedFunctionality/i.test(String(error?.name || ''))) return true;
+    const status = Number(error?.statusCode ?? error?.status ?? error?.cause?.statusCode ?? error?.cause?.status);
+    return status >= 400 && status < 500;
 }

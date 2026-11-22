@@ -94,7 +94,7 @@ type ChatMessagePart =
     attachmentId: string;
     mimeType: string;
     name?: string;
-    url?: string;
+    /** Inline payload. Must be a `data:` URL: the server never fetches a remote source. */
     dataUrl?: string;
     metadata?: Record<string, unknown>;
 }
@@ -103,7 +103,7 @@ type ChatMessagePart =
     attachmentId: string;
     mimeType: string;
     name: string;
-    url?: string;
+    /** Inline payload. Must be a `data:` URL: the server never fetches a remote source. */
     dataUrl?: string;
     metadata?: Record<string, unknown>;
 }

@@ -41,7 +41,7 @@ async function loadServerModule(name) {
     return import(pathToFileURL(outfile).href);
 }
 
-const { toModelMessage, conversationMediaKinds, mediaUnsupportedKind } = await loadServerModule("model-messages");
+const { toModelMessage, conversationMediaKinds, mediaUnsupportedKind, isStreamingUnsupportedError } = await loadServerModule("model-messages");
 const { createGuardedDownload } = await loadServerModule("asset-download");
 const { generateText, streamText } = await import("ai");
 
@@ -108,27 +108,24 @@ test("an inline image becomes a file part carrying raw bytes @unit", async () =>
     expect(file.data.type ?? "data").toBe("data");
 });
 
-test("a remote image is sent as a URL, not as base64 @unit", async () => {
-    const parts = await promptPartsFor(userMessage([
-        { type: "image", mimeType: "image/png", url: REMOTE_IMAGE },
-    ]));
-
-    const file = parts.find((p) => p.type === "file");
-    expect(file).toBeTruthy();
-    expect(String(file.data.url ?? file.data)).toBe(REMOTE_IMAGE);
-    expect(typeof file.data === "string",
-        "a bare string in `data` means inline base64 — the URL would be decoded as bytes").toBe(false);
-});
-
-test("a remote file is sent as a URL, not as base64 @unit", async () => {
-    const parts = await promptPartsFor(userMessage([
-        { type: "file", mimeType: "application/pdf", url: REMOTE_FILE, name: "report.pdf" },
-    ]));
-
-    const file = parts.find((p) => p.type === "file");
-    expect(file).toBeTruthy();
-    expect(String(file.data.url ?? file.data)).toBe(REMOTE_FILE);
-    expect(typeof file.data === "string").toBe(false);
+// A remote source is client input the server would fetch itself: through the SSRF
+// guard's operator allowlist, with the client's mimeType deciding whether the body
+// is inlined into the prompt. Nothing but `data:` may become a payload.
+test("a remote source never becomes a payload, whichever field carries it @unit @security", async () => {
+    const stored = new Map([["att-1", { id: "att-1", mimeType: "text/plain", dataUrl: REMOTE_FILE }]]);
+    const cases = [
+        [{ type: "image", mimeType: "image/png", url: REMOTE_IMAGE }],
+        [{ type: "image", mimeType: "image/png", dataUrl: REMOTE_IMAGE }],
+        [{ type: "file", mimeType: "text/plain", url: REMOTE_FILE, name: "report.txt" }],
+        [{ type: "file", mimeType: "text/plain", dataUrl: REMOTE_FILE, name: "report.txt" }],
+        [{ type: "file", mimeType: "text/plain", attachmentId: "att-1", name: "report.txt" }],
+    ];
+    for (const parts of cases) {
+        const { content } = toModelMessage(userMessage(parts), stored);
+        const sent = Array.isArray(content) ? content : [{ type: "text", text: content }];
+        expect(sent.some((p) => p.type === "file"), JSON.stringify(parts)).toBe(false);
+        expect(JSON.stringify(sent)).not.toContain("example");
+    }
 });
 
 test("media is replaced by text when the model cannot take it @unit", async () => {
@@ -175,6 +172,24 @@ test("mediaUnsupportedKind recognizes a media refusal, and only for media that w
     expect(mediaUnsupportedKind(new Error("400 Bad Request"), both)).toBe(null);
 });
 
+test("a refused attachment is not a refused stream @unit", () => {
+    // What the SDK throws for an attachment it cannot convert. The streaming verdict is
+    // cached per model and never re-tested, so none of these may read as "cannot stream".
+    const unsupported = (functionality) => Object.assign(
+        new Error(`'${functionality}' functionality not supported.`),
+        { name: "AI_UnsupportedFunctionalityError", functionality },
+    );
+    expect(isStreamingUnsupportedError(unsupported("file part media type text/plain"))).toBe(false);
+    expect(isStreamingUnsupportedError(unsupported("PDF file parts with URLs"))).toBe(false);
+    expect(isStreamingUnsupportedError(unsupported("media type: image/tiff"))).toBe(false);
+    expect(isStreamingUnsupportedError({ statusCode: 400, message: "image input is not supported" })).toBe(false);
+
+    expect(isStreamingUnsupportedError(unsupported("streaming"))).toBe(true);
+    expect(isStreamingUnsupportedError({ statusCode: 400, message: "This model does not support stream=true" })).toBe(true);
+    // A server fault that mentions streaming is an outage, not a capability.
+    expect(isStreamingUnsupportedError({ statusCode: 503, message: "stream backend unavailable" })).toBe(false);
+});
+
 test("the system prompt travels as instructions, not as a message @unit", async () => {
     const { model, seen } = stubModel();
     await generateText({
@@ -188,6 +203,14 @@ test("the system prompt travels as instructions, not as a message @unit", async 
     expect(JSON.stringify(seen.prompt[0])).toContain("SYSTEM-PROMPT");
     expect(roles.at(-1)).toBe("user");
 });
+
+// `toModelMessage` no longer emits a URL part, so the hook is exercised with a message
+// built the way the SDK would see one: it stays as defence in depth should a URL
+// ever reach the SDK again.
+const REMOTE_SDK_MESSAGE = {
+    role: "user",
+    content: [{ type: "file", data: new URL(REMOTE_IMAGE), mediaType: "image/png" }],
+};
 
 test("a remote asset the model cannot take is fetched through the SSRF guard @unit", async () => {
     // Without this hook the SDK resolves the URL with plain `fetch` from the server
@@ -212,7 +235,7 @@ test("a remote asset the model cannot take is fetched through the SSRF guard @un
         await generateText({
             model,
             instructions: "S",
-            messages: [toModelMessage(userMessage([{ type: "image", mimeType: "image/png", url: REMOTE_IMAGE }]))],
+            messages: [REMOTE_SDK_MESSAGE],
             experimental_download: createGuardedDownload(),
         });
 
@@ -234,7 +257,7 @@ test("a remote asset is refused when the SSRF guard is unavailable @unit", async
         await expect(generateText({
             model,
             instructions: "S",
-            messages: [toModelMessage(userMessage([{ type: "image", mimeType: "image/png", url: REMOTE_IMAGE }]))],
+            messages: [REMOTE_SDK_MESSAGE],
             experimental_download: createGuardedDownload(),
         })).rejects.toThrow(/SSRF guard/i);
     } finally {

@@ -48,3 +48,26 @@ export function stripDuplicatedMessagePayloads(messages: ChatMessage[]): ChatMes
     });
     return changed ? next : messages;
 }
+
+/**
+ * Drop every remote source from a message's parts: `url` always, and a `dataUrl`
+ * that is not `data:`. The server never fetches on a client's behalf (see
+ * `server/model-messages.ts` → `isInlineDataUrl`); stripping at the way in keeps
+ * such a value out of stored history as well. Returns the input when nothing changed.
+ */
+export function stripRemotePartSources(message: ChatMessage): ChatMessage {
+    const parts = message?.parts as any[] | undefined;
+    if (!parts?.length) return message;
+    let changed = false;
+    const next = parts.map((part) => {
+        if (!part || typeof part !== 'object') return part;
+        const remoteDataUrl = part.dataUrl !== undefined
+            && !(typeof part.dataUrl === 'string' && /^\s*data:/i.test(part.dataUrl));
+        if (part.url === undefined && !remoteDataUrl) return part;
+        changed = true;
+        const { url, ...rest } = part;
+        if (remoteDataUrl) delete rest.dataUrl;
+        return rest;
+    });
+    return changed ? { ...message, parts: next } : message;
+}

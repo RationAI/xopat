@@ -2,12 +2,12 @@ import { generateText, streamText, tool, jsonSchema } from 'ai';
 import { ChatServerRegistry, resolveUserScope, assertProviderRead, assertProviderWrite, normalizeContexts, assertLanguageModelCompatible } from './chatRegistry.server';
 import { createTimeoutLinkedSignal, isAbortError, errorText } from './abort-utils';
 import { getChatTuning, chatLog } from './tuning';
-import { toModelMessage, coerceMessageText, isContentlessAssistantMessage, conversationMediaKinds, mediaUnsupportedKind } from './model-messages';
+import { toModelMessage, coerceMessageText, isContentlessAssistantMessage, conversationMediaKinds, mediaUnsupportedKind, isStreamingUnsupportedError } from './model-messages';
 import type { MediaKind } from './model-messages';
 import { createGuardedDownload } from './asset-download';
 import { hasToolEnvelopeTokens, recoverToolEnvelopeToScriptFence } from '../shared/tool-envelope';
 import { findScriptFence } from '../shared/script-text';
-import { stripDuplicatedPartPayloads } from '../shared/attachment-parts';
+import { stripDuplicatedPartPayloads, stripRemotePartSources } from '../shared/attachment-parts';
 import { hashScriptApiManifest, MANIFEST_MISS_CODE } from '../shared/manifest-handle';
 import { buildSystemInstructions, type SystemSegment } from '../shared/system-segments';
 import { stripApiInterfaceDeclaration } from '../shared/api-declarations';
@@ -805,7 +805,7 @@ async function buildTurnAttachmentIndex(
     for (const message of windowMessages) {
         for (const part of (message?.parts || []) as any[]) {
             // A part that carries its own payload needs nothing fetched.
-            if (part?.attachmentId && !part?.dataUrl && !part?.url) wanted.add(String(part.attachmentId));
+            if (part?.attachmentId && !part?.dataUrl) wanted.add(String(part.attachmentId));
         }
     }
     if (!wanted.size) return index;
@@ -1607,7 +1607,7 @@ async function resolveAutoTitle(
  * `shared/attachment-parts.ts` for why the duplication exists at all.
  */
 function normalizeIncomingMessage(input: ChatMessage): ChatMessage {
-    const message = stripDuplicatedPartPayloads(input);
+    const message = stripRemotePartSources(stripDuplicatedPartPayloads(input));
     if (message.parts?.length) {
         return {
             ...message,
@@ -2250,6 +2250,17 @@ export async function uploadAttachment(ctx: any, input: {
 }): Promise<ChatAttachmentRecord> {
     await requireSessionAccess(ctx, input.sessionId);
 
+    // Despite its name the field usually carries a `data:` URL; bare base64 is
+    // accepted too. Any other scheme (an http URL in particular) would be stored
+    // as the payload and resolved later, so it is refused here.
+    if (typeof input?.dataBase64 !== 'string'
+        || (/^\s*[a-z][a-z0-9+.-]*:/i.test(input.dataBase64) && !/^\s*data:/i.test(input.dataBase64))) {
+        throw Object.assign(new Error('uploadAttachment accepts inline data only (base64 or a data: URL).'), { status: 400 });
+    }
+    if (typeof input.mimeType !== 'string' || !input.mimeType) {
+        throw Object.assign(new Error('uploadAttachment requires a mimeType.'), { status: 400 });
+    }
+
     const record: ChatAttachmentRecord = {
         id: getRegistry().newId('att'),
         sessionId: input.sessionId,
@@ -2364,12 +2375,6 @@ class PartialEmissionError extends Error {
         this.cause = cause;
         this.partialText = partialText;
     }
-}
-
-function isStreamingUnsupportedError(error: any): boolean {
-    if (/UnsupportedFunctionality/i.test(String(error?.name || ''))) return true;
-    const status = Number(error?.statusCode ?? error?.status ?? error?.cause?.statusCode ?? error?.cause?.status);
-    return status >= 400 && status < 500 && /stream/i.test(errorText(error));
 }
 
 async function runTurn(
@@ -2539,14 +2544,23 @@ async function runTurn(
     // media; a reply that carried media records 'supported'. Local state is updated first so
     // the rebuilt conversation drops the media even if the cache write fails.
     const mediaRejected: MediaKind[] = [];
-    const cacheMediaVerdict = async (kind: MediaKind, verdict: 'supported' | 'unsupported') => {
+    /** This turn's view only. Returns whether anything changed. */
+    const noteMediaVerdict = (kind: MediaKind, verdict: 'supported' | 'unsupported'): boolean => {
         const caps: any = modelCaps.capabilities;
-        if (!caps || caps[kind] === verdict) return;
+        if (!caps || caps[kind] === verdict) return false;
         caps[kind] = verdict;
         caps.source = 'observed';
+        return true;
+    };
+    const persistMediaVerdicts = async () => {
+        const caps: any = modelCaps.capabilities;
+        if (!caps) return;
         try {
             await registry.setModelCapabilities(session.providerId, session.modelId, { ...caps }, safeUserScope(ctx));
         } catch (_) { /* verdict cache is best-effort */ }
+    };
+    const cacheMediaVerdict = async (kind: MediaKind, verdict: 'supported' | 'unsupported') => {
+        if (noteMediaVerdict(kind, verdict)) await persistMediaVerdicts();
     };
 
     // Two ways in: the model id looks like a known Harmony deployment (free head start on turn
@@ -3066,8 +3080,13 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                         await cacheStreamingVerdict('supported');
                         return res;
                     } catch (streamError) {
+                        // A refused attachment is not a refused stream, even when the
+                        // provider's text mentions both: it goes to the media branch
+                        // below and leaves the (cached, never re-tested) streaming
+                        // verdict alone.
                         if (!(streamError instanceof PartialEmissionError)
                             && !isAbortError(streamError)
+                            && !mediaUnsupportedKind(streamError, conversationMediaKinds(conversation))
                             && isStreamingUnsupportedError(streamError)) {
                             // Provider cannot stream this model — remember the verdict
                             // and serve the SAME rung buffered inside the streaming
@@ -3092,10 +3111,15 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                     // SAME rung with the media replaced by the "[Image omitted …]" placeholder,
                     // so the user gets a reply (and the model knows something was dropped).
                     llm.warn({ modelId: session.modelId, kind: rejectedMedia }, 'model rejected media input; retrying without it');
-                    await cacheMediaVerdict(rejectedMedia, 'unsupported');
+                    // Dropped for the rest of THIS turn right away (the rebuild below
+                    // reads it), but remembered for the model only once the media-free
+                    // retry answers: until then the rejection is a reading of an error
+                    // message, and a wrong one would disable the model's vision.
+                    const learned = noteMediaVerdict(rejectedMedia, 'unsupported');
                     mediaRejected.push(rejectedMedia);
                     conversation = buildConversation(count);
                     result = await attemptOnce();
+                    if (learned) await persistMediaVerdicts();
                 // A provider that rejects the `tools` param outright: drop tools and
                 // retry the SAME rung fence-only (the fenced-block contract stays in
                 // the prompt). Streamed partials are terminal and never re-run.
