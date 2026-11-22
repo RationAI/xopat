@@ -244,9 +244,12 @@ function report(result, childEnv, { force, json, provenance, suspect = [], user 
     const missing = [...placeholders.values()].filter(
         (p) => !p.hasDefault && (childEnv[p.name] === undefined || childEnv[p.name] === ""));
     const required = new Set();
-    for (const layer of layers) {
+    // Layers of a named deployment (`--deployment`, `deployments.<id>.$layers`)
+    // come back separately; their requirements are as binding as the main ones.
+    for (const layer of [...layers, ...(result.deploymentLayers ?? [])]) {
+        const label = layer.deployment ? `${layer.id}@${layer.deployment}` : layer.id;
         for (const name of layer.meta?.requires ?? []) {
-            if (childEnv[name] === undefined || childEnv[name] === "") required.add(`${name} (${layer.id})`);
+            if (childEnv[name] === undefined || childEnv[name] === "") required.add(`${name} (${label})`);
         }
     }
     // Only tracked layers are a supply-chain concern; a developer's own

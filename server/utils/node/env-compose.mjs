@@ -676,6 +676,8 @@ export function collectPlaceholders(env) {
             if (m[2]) {
                 entry.hasDefault = true;
                 entry.inlineDefault ??= m[3] ?? "";
+                // `:-` also replaces an EMPTY value, `-` only an unset one.
+                entry.inlineOp ??= m[2];
             }
             entry.paths.push(p);
             found.set(name, entry);
@@ -722,7 +724,7 @@ export function describeVariables(result, sources = {}) {
     for (const p of collectPlaceholders(result.env).values()) {
         const v = entry(p.name);
         v.paths = p.paths;
-        if (p.hasDefault) v.inlineDefault = p.inlineDefault;
+        if (p.hasDefault) { v.inlineDefault = p.inlineDefault; v.inlineOp = p.inlineOp; }
     }
     for (const layer of all) {
         const label = layer.deployment ? `${layer.id}@${layer.deployment}` : layer.id;
@@ -743,9 +745,20 @@ export function describeVariables(result, sources = {}) {
         }
     }
 
-    return [...vars.values()].sort((a, b) => a.name.localeCompare(b.name)).map(({ inlineDefault, ...v }) => {
+    return [...vars.values()].sort((a, b) => a.name.localeCompare(b.name)).map(({ inlineDefault, inlineOp, ...v }) => {
         const out = { ...v, layers: [...v.layers] };
         if (present(user[v.name])) return { ...out, status: "set" };
+        // `VAR=` is an assignment: `layerEnv` (dotenv.js) only fills what is
+        // undefined, so neither a preset `env` value nor `$meta.defaults` is
+        // injected over it. Only an inline `:-` default still applies
+        // (core.js `parseEnvConfig`). Reporting a default here would describe
+        // a deployment that is not the one that boots.
+        if (Object.hasOwn(user, v.name) && user[v.name] === "") {
+            if (inlineDefault !== undefined && inlineOp === ":-") {
+                return { ...out, status: "default", source: "inline", value: inlineDefault };
+            }
+            return { ...out, status: "unset", source: "empty assignment" };
+        }
         if (present(presetEnv[v.name])) {
             return { ...out, status: "default", source: "preset env", value: String(presetEnv[v.name]) };
         }
@@ -777,7 +790,9 @@ export function formatVariables(variables) {
     return variables.map((v) => {
         const state = v.status === "set" ? "set"
             : v.status === "default" ? `not set — default ${JSON.stringify(v.value)} (${v.source})`
-            : `UNSET, no default${v.required ? " — required" : ""}`;
+            : v.source === "empty assignment"
+                ? `set EMPTY — blocks every default${v.required ? " — required" : ""}`
+                : `UNSET, no default${v.required ? " — required" : ""}`;
         const where = v.layers.length ? `  [${v.layers.join(", ")}]` : "";
         return { status: v.status, text: `${v.name.padEnd(w)}  ${state}${where}${v.description ? `  ${v.description}` : ""}` };
     });
