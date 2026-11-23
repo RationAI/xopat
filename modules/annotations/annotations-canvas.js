@@ -3929,6 +3929,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 _this._abortForControlInteraction(event, true);
                 return;
             }
+            if (_this._lastPressRepeated) return;
 
             _this.module.cursor.mouseTime = Date.now();
 
@@ -3965,7 +3966,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
             let factory = _this.module.presets.left ? _this.module.getActiveFactory(true) : undefined;
             let point = screenToPixelCoords(event.x, event.y);
-            if (_this.module.mode.handleClickUp(event, point, true, factory)) {
+            // Read by the `mouse:dblclick` handler: a double-click whose first click
+            // already did something must not go on to cycle the selection.
+            _this._lastReleaseConsumed = !!_this.module.mode.handleClickUp(event, point, true, factory);
+            if (_this._lastReleaseConsumed) {
                 event.preventDefault();
             } else /*if (!_this.isModeAuto())*/ {
                 // left click up handles selection for all modes if mode did not handle the event
@@ -3996,6 +4000,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 _this._abortForControlInteraction(event, true);
                 return;
             }
+            if (_this._lastPressRepeated) return;
 
             _this.module.cursor.mouseTime = Date.now();
             // Auto-select a preset on click-down when none is bound to the left
@@ -4014,6 +4019,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         // annotationCanvas.addEventListener("mousedown", function (event) {
         this.canvas.on('mouse:down', function(e) {
+            // Asked once per press and remembered: the release cannot answer it (it is
+            // a `pointerup`, whose `detail` is always 0), and the check keeps state.
+            _this._lastPressRepeated = _this._isRepeatedPress(e.e);
             if (_this.module.disabledInteraction || (!_this.module.mode.supportsZoomAnimation() && _this.module.mode.isZooming)) return;
             const event = e.e;
             if (event.which === 1) handleLeftClickDown(event, e);
@@ -4068,9 +4076,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.canvas.on('mouse:dblclick', function (o) {
             if (_this.module.disabledInteraction) return;
             // A double-click while manually drawing a polygon/polyline commits
-            // it (the constituent single clicks drop duplicate end vertices that
-            // simplify() collapses); skip the selection-cycling below.
+            // it. Its first click placed the end vertex; the second press never
+            // reached the mode (see `_isRepeatedPress`), so there is no duplicate.
             if (_this.module.mode.finishCurrentCreation?.()) return;
+            // The first click created or advanced something: the double-click was
+            // a "confirm" habit, not a request to dig through what lies beneath.
+            if (_this._lastReleaseConsumed) return;
             const pointer = o.pointer || _this.canvas.getPointer(o.e);
             const active = _this.canvas.getActiveObject();
             const next = _this.canvas.findNextObjectUnderMousePrecise?.(pointer, active);
@@ -4684,6 +4695,52 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!fabricEvent || fabricEvent.isClick === false) return null;
         const hit = this.canvas.findBlockedObjectUnderMouse?.(fabricEvent.pointer);
         return (hit && this.isAnnotation(hit) && hit.visible) ? hit : null;
+    }
+
+    /**
+     * Longest gap between two presses on one spot that still makes them a double-click,
+     * for presses that carry no click count of their own (see {@link _isRepeatedPress}).
+     * The Windows default.
+     * @type {number}
+     */
+    static DOUBLE_PRESS_MS = 500;
+
+    /**
+     * Whether a press is the second (or later) half of a multi-click.
+     *
+     * Such a press is not a new gesture and must not reach the active mode. Users
+     * double-click to "confirm" out of desktop habit, and every press used to be
+     * handed on as its own: a point tool left two points stacked on one spot, a text
+     * tool two labels, the angle tool burnt two of its three steps, and closing a
+     * polygon on its start point began a second polygon. What a double-click is
+     * *meant* to do lives in the `mouse:dblclick` handler, which still fires.
+     *
+     * Presses reach the canvas as two different events. In a drawing mode it is a
+     * `mousedown`, whose `detail` is the browser's own click count: the speed and
+     * distance that make two presses a double-click are then the ones the user
+     * configured in their OS. While navigating it is a `pointerdown`, whose `detail`
+     * is always 0, so the same question is answered here from the previous press:
+     * same button, same spot, within the default double-click interval. A press
+     * somewhere else is a new gesture either way, so placing vertices quickly is
+     * unaffected.
+     *
+     * Stateful — call it once per press. The `mouse:down` listener does, and keeps
+     * the answer in `_lastPressRepeated` for whoever handles the release.
+     *
+     * @param {MouseEvent|PointerEvent} event the original DOM event
+     * @return {boolean}
+     * @private
+     */
+    _isRepeatedPress(event) {
+        if (!event) return false;
+        const previous = this._lastPress;
+        const press = this._lastPress = {
+            time: Date.now(), x: event.clientX, y: event.clientY, button: event.button,
+        };
+        if (event.detail > 0) return event.detail > 1;
+        return !!previous && previous.button === press.button
+            && press.time - previous.time < this.constructor.DOUBLE_PRESS_MS
+            && Math.hypot(press.x - previous.x, press.y - previous.y) < 5;
     }
 
     _isFabricControlInteraction(fabricEvent) {

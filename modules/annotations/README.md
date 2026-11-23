@@ -349,6 +349,18 @@ The `objectFactory` argument is the module's active drawing tool (`getActiveFact
 `undefined` when no preset is bound to the button. It is not the preset's own factory: a preset
 is a class, and selecting one never changes the tool.
 
+**A mode never sees the second press of a double-click.** Users double-click to "confirm" out
+of desktop habit, and a point tool that received both presses left two points stacked on one
+spot. The canvas drops a repeated press before `handleClickDown`, for both buttons
+(`FabricWrapper#_isRepeatedPress`): a `mousedown` is judged by `MouseEvent.detail`, the
+browser's own click count, so the double-click speed is the one configured in the OS; a
+`pointerdown`, which carries no count, by same button, same spot, within 500 ms. The toolbar
+pill ignores the matching release, so a double-clicked padlock toggles once. What a double-click *means* is decided in one place, the
+canvas's `mouse:dblclick` handler: commit the multi-point shape in progress
+(`finishCurrentCreation()`), otherwise — only when the first click did nothing — cycle the
+selection through stacked annotations. A mode wanting its own double-click behaviour
+implements `finishCurrentCreation()`; it does not count presses.
+
 `OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
 implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied
 to a plugin-owned mode. Modes whose short click does real work (the free-form-tool brushes, the

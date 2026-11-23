@@ -994,6 +994,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 wrapper.module.cursor.mouseTime = Infinity;
             }
 
+            // The release of a double-click's second press: the first one already
+            // acted. Dispatching again would undo it — a double-clicked padlock
+            // locked and unlocked in one gesture. Asked of the wrapper, which noted
+            // it on the press: this release is a pointer event and carries no count.
+            if (wrapper?._lastPressRepeated) return true;
+
             const zones = control._zones;
             if (!zones || !zones.length || control._lastLeft == null) return true;
 
