@@ -317,20 +317,30 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
     }
 
     destroyViewerState(viewer) {
-        const state = this.getState(viewer);
-        if (!state) return;
+        if (!viewer) return;
 
-        this.flushActiveVisit(viewer, Date.now());
+        // Match by viewer instance, not by key: `viewer.uniqueId` is derived from the
+        // opened background, so by the time a reset/destroy is handled the key may
+        // already resolve to a different (or brand new) state.
+        for (const key of Object.keys(this._states)) {
+            const state = this._states[key];
+            if (state.viewer !== viewer) continue;
 
-        try {
-            if (state.overlayAdded) {
-                viewer.navigator?.removeOverlay?.(state.canvas);
+            if (state.activeVisit) {
+                state.data.push(this.finalizeVisit(state.activeVisit));
+                state.activeVisit = null;
             }
-        } catch (e) {
-            console.warn("nav-tracker: failed to remove navigator overlay", e);
-        }
 
-        delete this._states[state.key];
+            try {
+                if (state.overlayAdded) {
+                    viewer.navigator?.removeOverlay?.(state.canvas);
+                }
+            } catch (e) {
+                console.warn("nav-tracker: failed to remove navigator overlay", e);
+            }
+
+            delete this._states[key];
+        }
     }
 
     exportToFile() {
@@ -367,6 +377,12 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
 
         VIEWER_MANAGER.broadcastHandler("destroy", (e) => {
             this.destroyViewerState(e.eventSource);
+        });
+
+        // Slide switch keeps the viewer (and its navigator overlays) alive but changes
+        // its uniqueId: drop the old slide's trail, the next `open` starts a fresh one.
+        VIEWER_MANAGER.addHandler("viewer-reset", (e) => {
+            this.destroyViewerState(e.viewer);
         });
 
         VIEWER_MANAGER.broadcastHandler("update-viewport", (e) => {
