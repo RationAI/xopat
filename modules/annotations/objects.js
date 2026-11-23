@@ -1872,12 +1872,19 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, highestQuality = true) {
+    /**
+     * @param {Array} points
+     * @param {number} imagePixelOnScreen size of one image pixel on screen in the
+     *   viewer the points were drawn in (`viewer.scalebar.imagePixelSizeOnScreen()`);
+     *   the tolerance is a screen distance, so it has no meaning without it
+     * @param {boolean} [highestQuality=true]
+     */
+    simplify: function (points, imagePixelOnScreen, highestQuality = true) {
         if (points.length <= 2) return points;
 
         // desired visual tolerance in screen pixels
         const desiredScreenTol = 15;
-        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+        let pxSize = imagePixelOnScreen || 1;
 
         // convert to image coords
         let tolerance = desiredScreenTol / pxSize;

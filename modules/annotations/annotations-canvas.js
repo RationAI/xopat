@@ -3871,6 +3871,27 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return this.viewer.scalebar.getReferencedTiledImage()?.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
         }.bind(this);
 
+        // The mode, the cursor and the factories are shared by every viewport and
+        // act on `module.viewer` — the viewer that owns the current gesture, which
+        // a mode may pin (`locksViewer`: a held press, an unfinished polygon).
+        // Whatever reaches the mode from this wrapper must therefore be expressed
+        // in that viewer's image space, or it lands on another viewport's canvas.
+
+        // A release ends the gesture of the owning viewer even when the pointer
+        // was let go over a different viewport.
+        let gestureToPixelCoords = function (x, y) {
+            return this.module.viewer.scalebar.getReferencedTiledImage()?.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+        }.bind(this);
+
+        // Input arriving here means the pointer is over this viewport, so this
+        // viewer asks for the gesture — from the event's own source, not from
+        // whichever viewer the manager currently calls active (this listener can
+        // run before that activation, e.g. on touch). A mode that keeps another
+        // viewer pinned refuses, and the input is then not ours to handle.
+        function inputBelongsElsewhere() {
+            return !_this.module.claimGestureViewer(_this.viewer);
+        }
+
         //prevents event bubling if the up event was handled by annotations
         function handleRightClickUp(event, fabricEvent) {
             if (_this.module.disabledInteraction) return;
@@ -3901,7 +3922,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
-            let point = screenToPixelCoords(event.x, event.y);
+            let point = gestureToPixelCoords(event.x, event.y);
             // Record whether a mode consumed this right-release so the canvas
             // context-menu provider can open only when the event was NOT handled
             // (parity with the legacy nonprimary-release-not-handled gating).
@@ -3924,6 +3945,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
             // Reset per-interaction so a stale value never suppresses a later menu.
             _this.module.cursor.rightClickHandled = false;
+            if (inputBelongsElsewhere()) return;
 
             if (_this._isFabricControlInteraction(fabricEvent)) {
                 _this._abortForControlInteraction(event, true);
@@ -3965,7 +3987,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             let factory = _this.module.presets.left ? _this.module.getActiveFactory(true) : undefined;
-            let point = screenToPixelCoords(event.x, event.y);
+            let point = gestureToPixelCoords(event.x, event.y);
             // Read by the `mouse:dblclick` handler: a double-click whose first click
             // already did something must not go on to cycle the selection.
             _this._lastReleaseConsumed = !!_this.module.mode.handleClickUp(event, point, true, factory);
@@ -3995,6 +4017,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         function handleLeftClickDown(event, fabricEvent) {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
+            if (inputBelongsElsewhere()) return;
 
             if (_this._isFabricControlInteraction(fabricEvent)) {
                 _this._abortForControlInteraction(event, true);
@@ -4063,6 +4086,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 if (_this.viewer !== _this.module.viewer) return;
                 _this.module.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
             } else {
+                // Same rule without a held press: an unfinished multi-click shape
+                // pins its viewer, and its preview must not follow this viewport.
+                if (inputBelongsElsewhere()) return;
                 _this.module.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
             }
         });

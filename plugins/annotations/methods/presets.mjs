@@ -711,8 +711,13 @@ export const presetMethods = {
         return false;
     },
 
-    _getMousePosition(e, checkBounds = true) {
-        const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+    // `fabric` in the helpers below is the wrapper of the viewer the context menu
+    // was opened for, and is required. `this.context.fabric` is the ACTIVE viewer's
+    // wrapper — a different canvas whenever the menu comes from another viewport's
+    // board, since side-menu clicks do not change the active viewer.
+    _getMousePosition(e, fabric, checkBounds = true) {
+        const viewer = fabric.viewer;
+        const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
         if (!image) return { x: 0, y: 0 };
         const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
         const { x, y } = image.windowToImageCoordinates(screen);
@@ -732,26 +737,26 @@ export const presetMethods = {
         this._copiedIsCopy = true;
     },
 
-    _cutAnnotation(mousePos, annotation) {
+    _cutAnnotation(mousePos, annotation, fabric) {
         this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = false;
-        this._deleteAnnotation(annotation);
+        this._deleteAnnotation(annotation, fabric);
     },
 
-    _deleteAnnotation(annotation) {
-        this.context.fabric.deleteObject(annotation);
+    _deleteAnnotation(annotation, fabric) {
+        fabric.deleteObject(annotation);
     },
 
-    _canPasteAnnotation(e, getMouseValue = false) {
+    _canPasteAnnotation(e, fabric, getMouseValue = false) {
         if (!this._copiedAnnotation) return null;
-        const mousePos = this._getMousePosition(e);
+        const mousePos = this._getMousePosition(e, fabric);
         if (getMouseValue) return mousePos;
         return !!mousePos;
     },
 
-    _pasteAnnotation(e) {
-        const mousePos = this._canPasteAnnotation(e, true);
+    _pasteAnnotation(e, fabric) {
+        const mousePos = this._canPasteAnnotation(e, fabric, true);
         if (!mousePos) {
             if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
             return;
@@ -764,25 +769,25 @@ export const presetMethods = {
         const targetTop = mousePos.y + this._copiedPos.y;
         factory.move(copy, targetLeft - copy.left, targetTop - copy.top);
         if (this._copiedIsCopy) delete copy.internalID;
-        this.context.fabric.addAnnotation(copy);
+        fabric.addAnnotation(copy);
         factory.renderAllControls(copy);
     },
 
-    _clickAnnotationChangePreset(annotation) {
+    _clickAnnotationChangePreset(annotation, fabric) {
         if (this._presetSelection === undefined) {
             Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
             return false;
         }
         setTimeout(() => {
             this._closePresetDialog();
-            this.context.fabric.changeAnnotationPreset(annotation, this._presetSelection);
+            fabric.changeAnnotationPreset(annotation, this._presetSelection);
         }, 150);
         return false;
     },
 
-    _clickAnnotationMarkPrivate(annotation) {
+    _clickAnnotationMarkPrivate(annotation, fabric) {
         const newValue = !this._getAnnotationProps(annotation).private;
-        this.context.fabric.setAnnotationPrivate(annotation, newValue);
+        fabric.setAnnotationPrivate(annotation, newValue);
     },
 
     _getAnnotationProps(annotation) {

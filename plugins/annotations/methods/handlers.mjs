@@ -41,7 +41,7 @@ export function createErrorHandlers(plugin) {
 
 export const handlerMethods = {
     initHandlers() {
-        VIEWER.addHandler('background-image-swap', () => this.setupActiveTissue());
+        VIEWER_MANAGER.broadcastHandler('background-image-swap', () => this.setupActiveTissue());
         VIEWER_MANAGER.broadcastHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
 
         this.context.addHandler('import', () => {
@@ -94,15 +94,16 @@ export const handlerMethods = {
             this._refreshAllPresetLists?.();
         });
 
-        this.context.addFabricHandler('annotation-set-private', () => {
-            this.context.fabric.rerender();
+        // Broadcast from every viewer's canvas: repaint the one that raised it.
+        this.context.addFabricHandler('annotation-set-private', (e) => {
+            e.eventSource.rerender();
             this._refreshAllBoardPanels?.();
         });
 
         // The padlock icon and the row badge both read the resolved lock state, and
         // interactivity was already re-derived by the setter — this is the repaint.
-        this.context.addFabricHandler('annotation-lock-change', () => {
-            this.context.fabric.rerender();
+        this.context.addFabricHandler('annotation-lock-change', (e) => {
+            e.eventSource.rerender();
             this._refreshAllBoardPanels?.();
         });
 

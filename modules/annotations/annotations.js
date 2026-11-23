@@ -66,7 +66,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.version = "0.0.1";
         this.session = this.version + "_" + Date.now();
 
-        this._activeViewer = VIEWER;
+        // The gesture owner: the one viewport the shared mode, cursor and factories
+        // act on (see `get viewer`). It changes only through `claimGestureViewer`,
+        // driven by the manager's activation events here and by the fabric wrapper
+        // that actually receives the pointer — never by reading the global VIEWER.
+        this._gestureViewer = VIEWER_MANAGER.get();
+        this._pendingGestureViewer = undefined;
+        this._resolvingGestureViewer = false;
+        VIEWER_MANAGER.addHandler('active-viewer-changed', (e) => this.claimGestureViewer(e.viewer));
+        VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
+            if (this._pendingGestureViewer === e.viewer) this._pendingGestureViewer = undefined;
+            if (this._gestureViewer !== e.viewer) return;
+            // A lock cannot outlive its viewer: hand over without consulting the mode.
+            const next = VIEWER_MANAGER.get();
+            this._gestureViewer = next && next !== e.viewer ? next : undefined;
+        });
         this.commentsEnabled = true;
 
         // Always-on measurement label overlay. Off by default; toggled per
@@ -112,7 +126,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this.addFabricHandler('annotation-selection-changed', (e) => {
             if (this._editSelectionSyncDepth > 0) return;
-            this._syncEditModeToSelection(e?.viewer, e?.selected || [], e?.deselected || []);
+            this._syncEditModeToSelection(e.eventSource.viewer, e?.selected || [], e?.deselected || []);
         });
 
         // TODO: necessary? kinda overkill...
@@ -163,9 +177,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // The fabric canvas itself is still per-viewer (one wrapper per
             // OSD viewer); only the IO state-keying axis is per-slide.
             bundleScope: "per-viewer-background",
+            // Two viewports showing one slide are two canvases over one stored
+            // document: each must be hydrated.
+            perViewport: true,
+            // The canvas is per VIEWPORT, so it is resolved from `ctx.viewerSlotId`.
+            // `ctx.viewerId` names the document and is shared by every viewport
+            // showing the slide; resolving by it reaches whichever comes first.
             exportBundle: async (ctx) => {
                 if (!ctx.viewerId) return undefined;
-                const fabric = this.getFabric(ctx.viewerId);
+                const fabric = this.getFabric(ctx.viewerSlotId ?? ctx.viewerId);
                 if (!fabric) return undefined;
                 // The binding's `formatOptions` (only those it sets; they win over
                 // the user's values) and the dispatch itself go to the format: a format
@@ -174,7 +194,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
-                const fabric = this.getFabric(ctx.viewerId);
+                const fabric = this.getFabric(ctx.viewerSlotId ?? ctx.viewerId);
                 if (!fabric) return;
                 // Slide-change restore semantics. The fabric canvas is a
                 // per-viewer overlay that survives OSD world resets, so when
@@ -433,8 +453,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
-     * Get fabric wrapper that is bound to a target viewer instance.
-     * The output of this method must not be cached and always accessed for accurate reference.
+     * Fabric wrapper of the gesture owner (see `viewer`). This answers "where does
+     * the drawing in progress go", and nothing else: code acting on a particular
+     * annotation, menu, board or event must use the wrapper it was given
+     * (`getFabric(viewer)`, the event's `eventSource`), not this.
+     * The output must not be cached and always accessed for accurate reference.
      * @return {OSDAnnotations.FabricWrapper|undefined} undefined if the viewer is gone
      */
     get fabric() {
@@ -471,18 +494,73 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
-     * Get actual active viewer instance the user interacts with.
-     * @return {OpenSeadragon.Viewer}
+     * The gesture owner: the viewport the shared mode, cursor and factories act on.
+     * There is exactly one, because there is one mode and one cursor. It is NOT
+     * "the viewer the user means" for an action on existing data — see `fabric`.
+     *
+     * A switch the current mode refused (`locksViewer`) stays pending and is
+     * retried here, so it takes effect as soon as the lock is released.
+     * @return {OpenSeadragon.Viewer|undefined}
      */
     get viewer() {
-        if (this.__calledViewerGetter) return this._activeViewer;
-        this.__calledViewerGetter = true;
-        const newRef = VIEWER;
-        if (newRef !== this._activeViewer && !this.mode.locksViewer(this._activeViewer, newRef)) {
-            this._activeViewer = VIEWER;
+        if (this._pendingGestureViewer && !this._resolvingGestureViewer) {
+            this.claimGestureViewer(this._pendingGestureViewer);
         }
-        this.__calledViewerGetter = false;
-        return this._activeViewer;
+        return this._gestureViewer;
+    }
+
+    /**
+     * Compatibility shim for an API whose `viewer` argument is required but was
+     * historically optional. Reports the offending method once and answers with
+     * the gesture owner, which is what the old fallback amounted to. New code
+     * must pass the viewer; this goes away with the deprecation.
+     * @param {string} method name of the API called without a viewer
+     * @return {OpenSeadragon.Viewer|undefined}
+     */
+    resolveImplicitViewer(method) {
+        const reported = this._implicitViewerReported || (this._implicitViewerReported = new Set());
+        if (!reported.has(method)) {
+            reported.add(method);
+            APPLICATION_CONTEXT.log("module.annotations").warn(
+                `${method}() called without a viewer; falling back to the gesture owner is deprecated. ` +
+                `Pass the viewer the action belongs to.`
+            );
+        }
+        return this.viewer;
+    }
+
+    /**
+     * Ask for the gesture to move to a viewer. Called with the viewer an input
+     * event came from (the fabric wrapper) or the manager activated.
+     * The current mode may refuse while it holds work bound to the present owner.
+     * @param {OpenSeadragon.Viewer} viewer
+     * @return {boolean} true if `viewer` owns the gesture after the call
+     */
+    claimGestureViewer(viewer) {
+        if (!viewer) return false;
+        if (viewer === this._gestureViewer) {
+            this._pendingGestureViewer = undefined;
+            return true;
+        }
+        // `locksViewer` implementations read `this.viewer`; do not re-enter.
+        if (this._resolvingGestureViewer) return false;
+
+        let locked = false;
+        if (this._gestureViewer) {
+            this._resolvingGestureViewer = true;
+            try {
+                locked = !!this.mode.locksViewer(this._gestureViewer, viewer);
+            } finally {
+                this._resolvingGestureViewer = false;
+            }
+        }
+        if (locked) {
+            this._pendingGestureViewer = viewer;
+            return false;
+        }
+        this._gestureViewer = viewer;
+        this._pendingGestureViewer = undefined;
+        return true;
     }
 
 
@@ -1071,22 +1149,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     _generateInternalId() {
         const MULTIPLIER = 100;
         const now = Date.now();
-        const objects = this.fabric.canvas._objects;
-        let lastIdTime = null;
-
-        if (objects.length > 0) {
-            const lastObj = objects.at(-1);
-            const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
-
-            if (idSource?.internalID) {
-                lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
-            }
-        }
-
-        if (now === lastIdTime) {
+        // Uniqueness is tracked here, not read off a canvas: ids are handed out to
+        // every viewport from this one generator, and a canvas says nothing about
+        // an id issued a moment ago for an object on another one.
+        if (now === this._lastIdTime) {
             this._idCounter++;
         } else {
             this._idCounter = 0;
+            this._lastIdTime = now;
         }
 
         return now * MULTIPLIER + this._idCounter;
@@ -2527,8 +2597,11 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         return undefined;
     }
 
-    getSelectedEditableObject(viewer = undefined) {
-        const fabric = viewer !== undefined ? this.getFabric(viewer) : this.fabric;
+    /**
+     * @param {ViewerLikeItem} viewer the viewer whose selection is asked about (required)
+     */
+    getSelectedEditableObject(viewer) {
+        const fabric = this.getFabric(viewer ?? this.resolveImplicitViewer('getSelectedEditableObject'));
         const selected = fabric?.getSelectedAnnotations?.() || [];
         if (selected.length !== 1) return undefined;
 
@@ -2539,12 +2612,16 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         return object;
     }
 
-    startEditModeForObject(object, viewer = undefined) {
+    /**
+     * @param {fabric.Object} object
+     * @param {ViewerLikeItem} viewer the viewer the object lives in (required)
+     */
+    startEditModeForObject(object, viewer) {
         if (!object) return false;
 
         this._ensureEditSelectionMode();
 
-        const targetViewer = viewer || this.viewer;
+        const targetViewer = viewer ?? this.resolveImplicitViewer('startEditModeForObject');
         const fabric = this.getFabric(targetViewer);
         if (!fabric) return false;
 
@@ -2578,6 +2655,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         this._ensureEditSelectionMode();
 
         const preferred = this._preferredEditTarget;
+        // Entered from the mode switch (toolbar, shortcut) there is no object and
+        // no viewer to point at: editing is then a gesture, and starts on its owner.
         const targetViewer = viewer || preferred?.viewer || this.viewer;
         const fabric = this.getFabric(targetViewer);
         this._preferredEditTarget = undefined;
@@ -2611,7 +2690,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         if (this.mode !== this.Modes.EDIT_SELECTION) return;
         if (this._isEditSelectionSyncSuspended?.()) return;
 
-        const fabric = viewer ? this.getFabric(viewer) : this.fabric;
+        // Always the viewer the selection changed in (the event's source).
+        const fabric = viewer && this.getFabric(viewer);
         if (!fabric) return;
 
         const edited =

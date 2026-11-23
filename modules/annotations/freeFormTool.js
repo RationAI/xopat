@@ -751,7 +751,8 @@ OSDAnnotations.FreeFormTool = class {
                     point.x += bbox.x + 0.3;
                     point.y += bbox.y + 0.1;
                     return this._convert(point);
-                })
+                }),
+                this._context.viewer.scalebar.imagePixelSizeOnScreen()
             );
 
             if (contour.points.length > MAX_POINTS) {

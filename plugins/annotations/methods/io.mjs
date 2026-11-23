@@ -60,9 +60,11 @@ export const ioMethods = {
 
         // Caller-supplied hint (e.g. the settings panel's "Into slide:" select)
         // bypasses auto-resolution and the user prompt entirely.
+        // Matched on the slot id (`viewer.id`): `uniqueId` is derived from the
+        // slide, so two viewports showing the same one cannot be told apart by it.
         if (hintViewerOrId !== undefined && hintViewerOrId !== null) {
-            const hintId = String(hintViewerOrId?.uniqueId ?? hintViewerOrId);
-            const match = targets.find(t => String(t.uniqueId) === hintId);
+            const hintId = String(hintViewerOrId?.id ?? hintViewerOrId);
+            const match = targets.find(t => String(t.viewer?.id) === hintId);
             if (match) return match;
         }
 
@@ -160,17 +162,23 @@ export const ioMethods = {
         });
     },
 
+    /**
+     * @param {OSDAnnotations.FabricWrapper} fabric the canvas to export (required)
+     */
     async getExportData(options = null, withObjects = true, withPresets = true, fabric = null) {
         options.scopeSelected = this.exportOptions.scope === 'selected' || false;
-        return (fabric || this.context.fabric).export(options, withObjects, withPresets);
+        fabric = fabric || this.context.getFabric(this.context.resolveImplicitViewer('getExportData'));
+        return fabric.export(options, withObjects, withPresets);
     },
 
+    /**
+     * @param {ViewerLikeItem} viewerOrId the viewer whose annotations to export (required)
+     */
     async exportToFile(withObjects = true, withPresets = true, viewerOrId = undefined) {
         const toFormat = this.exportOptions.format;
-        const fabric = (viewerOrId !== undefined && viewerOrId !== null)
-            ? this.context.getFabric(viewerOrId)
-            : this.context.fabric;
-        const activeViewer = fabric?.viewer || this.context.viewer;
+        const fabric = this.context.getFabric(viewerOrId ?? this.context.resolveImplicitViewer('exportToFile'));
+        if (!fabric) return;
+        const activeViewer = fabric.viewer;
         let scope = 'all';
         let selectedItems = [];
         if (withObjects) {

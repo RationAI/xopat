@@ -19,13 +19,14 @@ export const viewerMenuMethods = {
         this._updateViewerControls();
     },
 
-    _resolveViewerId(viewerOrId = undefined) {
+    _resolveViewerId(viewerOrId) {
         // Per-viewer UI/runtime state is keyed by the collision-free slot id
         // (viewer.id, e.g. "osd-0"), NOT the data-derived viewer.uniqueId. Two
         // viewports sharing the same background id share a uniqueId, so keying
         // UI by it collapses them onto one context store and duplicates DOM ids.
-        // IO/persistence keeps using uniqueId (see io.mjs) — that is intentional.
-        if (!viewerOrId) return VIEWER?.id;
+        // There is no "current viewer" to fall back to: per-viewer UI is always
+        // addressed by the viewer it belongs to, and no viewer means no UI.
+        if (!viewerOrId) return undefined;
         return typeof viewerOrId === 'object' ? viewerOrId.id : viewerOrId;
     },
 
@@ -326,7 +327,7 @@ export const viewerMenuMethods = {
         let presetTitle = null;
         if (includePresetSelection) {
             const handler = active
-                ? this._clickAnnotationChangePreset.bind(this, active)
+                ? this._clickAnnotationChangePreset.bind(this, active, fabric)
                 : this._clickPresetSelect.bind(this, true);
             presetTitle = this.t(active
                 ? 'annotations.contextMenu.changePreset'
@@ -351,16 +352,18 @@ export const viewerMenuMethods = {
             if (!presetItems.length) presetItems = null;
         }
 
-        const mousePos = this._getMousePosition(wrapped);
+        // Every action targets `fabric` — the canvas this menu was opened for —
+        // never the active viewer's canvas, which may be another viewport.
+        const mousePos = this._getMousePosition(wrapped, fabric);
         const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
-        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+        const handlerCut = this._cutAnnotation.bind(this, mousePos, active, fabric);
         // From the board panel there is no real cursor position over the
         // slide, so Paste-at-mouse cannot anchor sensibly — force-disable it.
         // _canPasteAnnotation's bounds check would also reject most board
         // origins, but the explicit gate makes the intent unambiguous.
-        const canPaste = !fromBoard && this._canPasteAnnotation(wrapped);
-        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
-        const handlerDelete = this._deleteAnnotation.bind(this, active);
+        const canPaste = !fromBoard && this._canPasteAnnotation(wrapped, fabric);
+        const handlerPaste = this._pasteAnnotation.bind(this, wrapped, fabric);
+        const handlerDelete = this._deleteAnnotation.bind(this, active, fabric);
         const cudActions = [
             { title: this.t('annotations.contextMenu.copy'),   icon: 'ph-copy',           containerCss: !active && 'opacity-50',  action: () => active && handlerCopy() },
             { title: this.t('annotations.contextMenu.cut'),    icon: 'ph-scissors',       containerCss: !active && 'opacity-50',  action: () => active && handlerCut() },
@@ -425,7 +428,7 @@ export const viewerMenuMethods = {
         let privateItem = null;
         if (active && includeMarkAsPrivate && this.context.isPrivacySupported()) {
             const props = this._getAnnotationProps(active);
-            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active, fabric);
             privateItem = {
                 title: this.t(props.private ? 'annotations.privacy.unmark' : 'annotations.privacy.mark'),
                 icon: props.private ? 'ph-eye-slash' : 'ph-eye',

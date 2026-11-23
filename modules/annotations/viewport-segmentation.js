@@ -181,7 +181,9 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this._lastViewportKey = null;
             this._resetPassCache();
             this._invalidData = Date.now();
-            if (newViewerRef) this._bindFrameWatchers(this.context.viewer);
+            // The owner switches only after this returns, so `context.viewer` is
+            // still the viewer being left.
+            if (newViewerRef) this._bindFrameWatchers(newViewerRef);
         }
         return willKeepViewer;
     }

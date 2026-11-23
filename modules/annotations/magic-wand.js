@@ -231,10 +231,10 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.StateFreeFormTool {
 
     /********************* SNAPSHOT *********************/
 
-    _refreshLayers() {
+    _refreshLayers(viewer = this.context.viewer) {
         // Re-read the layer stack every time: the constructor runs before the first slide
         // is open, so a snapshot of the order taken there says "nothing to annotate" forever.
-        const order = this.context.viewer?.drawer?.renderer?.getShaderLayerOrder?.() || [];
+        const order = viewer?.drawer?.renderer?.getShaderLayerOrder?.() || [];
         this.disabled = !order.length;
         if (!order.includes(this._selectedShader)) this._selectedShader = order[0];
     }
@@ -599,8 +599,10 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.StateFreeFormTool {
             this._invalidate();
             this._unbindWatchers();
             if (newViewerRef) {
-                this._refreshLayers();
-                this._bindWatchers(this.context.viewer);
+                this._refreshLayers(newViewerRef);
+                // The owner switches only after this returns, so `context.viewer`
+                // is still the viewer being left.
+                this._bindWatchers(newViewerRef);
             }
         }
         return willKeepViewer;

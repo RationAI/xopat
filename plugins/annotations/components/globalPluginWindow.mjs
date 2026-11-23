@@ -172,7 +172,9 @@ export const globalPluginWindowMethods = {
         this.context.addHandler('import', globalSideRefresh);
 
         this.context.addHandler('save-annotations', async (e) => {
-            await this.exportToFile();
+            // The request names no viewer ("save" from the module); the file
+            // fallback then covers the viewport being worked in.
+            await this.exportToFile(true, true, this.context.viewer);
             e.setHandled(this.t('annotations.export.downloadFallbackHandled'));
         }, null, -Infinity);
 
