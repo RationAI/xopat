@@ -132,6 +132,15 @@ await this.initIO({
 - Just before `_resetViewer(viewerIndex)` (i.e. before the world is cleared for the new content), the pipeline dispatches `flushBundleExport({ viewerId, backgroundId: previousBackgroundId })`. Slide-aware owners receive `exportBundle(ctx)` with both ids set and the **previous** slide as `ctx.backgroundId`, so they can snapshot whatever state they want keyed by the leaving slide.
 - After the new content finishes opening (post `applyRendererConfiguration`), the pipeline dispatches `tryRestoreImport({ viewerId, backgroundId: nextBackgroundId })`. Owners receive `importBundle(ctx, data)` with the **new** slide as `ctx.backgroundId` and either the stored payload or `undefined` when nothing is saved for this slide.
 
+**`ctx.viewerId` names a document, `ctx.viewerSlotId` names a viewport.** `viewerId` is the viewer's `uniqueId`, which is derived from the slide: two viewports showing the same slide share it, and therefore share `ctx.key`. An owner holding per-viewport state (a canvas, an overlay) must resolve it from `ctx.viewerSlotId` (`viewer.id`, e.g. `osd-2`) — resolving by `viewerId` reaches whichever viewport comes first. The pipeline treats the shared key as one document:
+
+- **export** is written once per key, from the document's *primary* viewport (the first one showing it, in viewer-manager order), named in `ctx.viewerSlotId`.
+- **restore** depends on where the owner keeps its state, which it declares with `initIO({ perViewport })`:
+  - *unset (default)* — state is keyed by `ctx.key` / `ctx.viewerId`, one copy for every viewport. The document is imported **once**; a second viewport opening the same slide triggers nothing, because importing again would overwrite what the user changed since. The hydration mark is released only when the *last* viewport showing the document leaves it.
+  - *`perViewport: true`* — state lives in the viewport (the annotations canvas). The document is imported once for **every** viewport showing it, each call naming its viewport in `ctx.viewerSlotId`; a viewport leaving re-arms only itself.
+
+Viewports sharing a document are not mirrored live: an edit made in a non-primary viewport of a `perViewport` owner is not what gets written. The slot id is never part of the key — it does not survive a reload. Callers of `tryRestoreImport` / `flushBundleExport` that act for one viewport pass `viewerSlotId`.
+
 Owners that opt OUT (everything other than `per-viewer-background` / `all`) are NOT touched on slide change — their state stays loaded for the viewer's lifetime. This is the default; declaring `per-viewer-background` is the explicit opt-in.
 
 **`ctx.key`** is composed by the pipeline so sinks that key blob storage by it get a deterministic slot:

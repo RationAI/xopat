@@ -1794,6 +1794,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   owner's domain in `IO_PIPELINE.formats`) a sink that takes any
          *   format stores when neither the binding nor the sink's own config
          *   pins one. Must be deployment-derived — never a user preference.
+         * @param options.perViewport   the bundle state is held per viewport
+         *   (a canvas), not per document: a restore is delivered to every
+         *   viewport showing the slide, `ctx.viewerSlotId` naming which.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -1802,6 +1805,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+            perViewport?: boolean;
             defaultFormat?: () => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
@@ -1813,6 +1817,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 ownerId: this.__id,
                 xoType: this.__xoContext,
                 bundleScope: options.bundleScope,
+                perViewport: options.perViewport,
                 exportBundle: options.exportBundle,
                 importBundle: options.importBundle,
                 defaultFormat: options.defaultFormat,
@@ -2436,17 +2441,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         destroy() {
             const state = (this.constructor as any).__getBroadcastState?.();
             if (state) {
+                // Broadcast handlers are attached as-is (see broadcastHandler /
+                // __attachAllHandlersToInstance), and `record.instances` is the
+                // set cancelBroadcast walks — drop this instance from both.
                 for (const [eventName, perHandler] of state.entries()) {
-                    for (const [, record] of perHandler.entries()) {
-                        const wrappers = record?.wrappers;
-                        if (!wrappers?.get || !wrappers?.delete) {
-                            continue;
-                        }
-                        const wrapper = wrappers.get(this);
-                        if (wrapper) {
-                            try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
-                        }
-                        wrappers.delete(this);
+                    for (const [handler, record] of perHandler.entries()) {
+                        if (!record.instances.delete(this as any)) continue;
+                        try { this.removeHandler(eventName, handler); } catch (_) { /* ignore */ }
                     }
                 }
             }
@@ -2638,6 +2639,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             for (const [eventName, perHandler] of state.entries()) {
                 for (const [origHandler, record] of perHandler.entries()) {
+                    // Recorded so cancelBroadcast reaches instances created
+                    // after the handler was registered, not only earlier ones.
+                    record.instances.add(inst as any);
                     inst.addHandler(eventName, origHandler, record.userData, record.priority);
                 }
             }
@@ -5686,7 +5690,9 @@ form.submit();
                     // `trigger: "system"` — the boot hydration pass. It runs
                     // once per viewer before the user has done anything, so a
                     // refusal here is logged rather than dialogged.
-                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, trigger: "system" });
+                    // The slot id names THIS viewport: `contextID` is shared by
+                    // every viewport showing the same slide.
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, viewerSlotId: viewer.id, trigger: "system" });
                 } catch (e) {
                     console.error('IO Failure:', e);
                 }
@@ -5777,9 +5783,10 @@ form.submit();
 
             // Re-arm bundle hydration for this viewer id: uniqueIds are
             // data-derived, so a future viewer opening the same slide gets
-            // the SAME id and must restore from sinks again.
+            // the SAME id and must restore from sinks again. Only this
+            // viewport's mark: another one may still be showing the slide.
             if (destroyedUniqueId) {
-                IO_PIPELINE.clearHydratedFor(destroyedUniqueId);
+                IO_PIPELINE.clearHydratedFor(destroyedUniqueId, viewer.id);
             }
 
             const menu = this.viewerMenus[viewer.id];

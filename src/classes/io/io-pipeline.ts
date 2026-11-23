@@ -433,6 +433,14 @@ interface OwnerRecord {
      *  `both`                    — global + per-viewer (legacy).
      *  `all`                     — global + per-viewer + per-viewer-background. */
     bundleScope: BundleScope;
+    /**
+     * The owner keeps its bundle state per VIEWPORT (a canvas, an overlay)
+     * rather than per document. A restore is then delivered to every viewport
+     * showing the document, each hydrated once. Off by default: an owner whose
+     * state is keyed by `ctx.key` holds one copy however many viewports show
+     * it, and a second delivery would overwrite what the user changed since.
+     */
+    perViewport: boolean;
     /** See `IOOwnerBundleHooks.defaultFormat`. */
     defaultFormat?: (ctx?: IOContext) => string | undefined;
     capabilities: Map<string, IOCapability>;
@@ -527,8 +535,14 @@ export class IOPipeline implements IOPipelineLike {
      * would wipe anything the user changed in between. Cleared on the
      * slide-leave flush and on viewer removal (`clearHydratedFor`) so
      * genuine re-opens re-hydrate.
+     *
+     * The key names a DOCUMENT; the value lists the viewports (`viewer.id`
+     * slot ids, `""` when the caller named none) it was delivered to. A
+     * `viewerId` is derived from the slide, so two viewports showing the same
+     * slide share the key — each still needs its own delivery, and one of them
+     * leaving must not re-arm the other.
      */
-    private hydratedKeys = new Set<string>();
+    private hydratedKeys = new Map<string, Set<string>>();
     /**
      * Same keys, for slots whose restore was ATTEMPTED and came back with
      * nothing but failures. What is stored there is unknown, so nothing is
@@ -986,6 +1000,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: string;
             xoType: "core" | "plugin" | "module";
             bundleScope?: BundleScope;
+            perViewport?: boolean;
         } & IOOwnerBundleHooks,
     ): IODisposer {
         const existing = this.owners.get(ownerUid);
@@ -994,6 +1009,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: info.ownerId,
             xoType: info.xoType,
             bundleScope: "global",
+            perViewport: false,
             capabilities: new Map(),
             defaultBindings: {},
             disabled: false,
@@ -1001,6 +1017,7 @@ export class IOPipeline implements IOPipelineLike {
         record.ownerId = info.ownerId;
         record.xoType = info.xoType;
         if (info.bundleScope) record.bundleScope = info.bundleScope;
+        if (typeof info.perViewport === "boolean") record.perViewport = info.perViewport;
         if (info.exportBundle) record.exportBundle = info.exportBundle;
         if (info.importBundle) record.importBundle = info.importBundle;
         if (info.defaultFormat) record.defaultFormat = info.defaultFormat;
@@ -1681,13 +1698,16 @@ export class IOPipeline implements IOPipelineLike {
      * skipped as "already hydrated". Called by the viewer manager on
      * viewer removal.
      */
-    clearHydratedFor(viewerId: string) {
+    clearHydratedFor(viewerId: string, viewerSlotId?: string) {
         // Keys are `${uid}|${viewerId}::${bgId}` (or `${uid}|${viewerId}`);
         // element uids contain no `|`, so the first `|` is the separator.
-        for (const k of Array.from(this.hydratedKeys)) {
-            const bundleKey = k.substring(k.indexOf("|") + 1);
+        const viewers = this.getViewers();
+        for (const k of Array.from(this.hydratedKeys.keys())) {
+            const at = k.indexOf("|");
+            const bundleKey = k.substring(at + 1);
             if (bundleKey === viewerId || bundleKey.startsWith(`${viewerId}::`)) {
-                this.hydratedKeys.delete(k);
+                const backgroundId = bundleKey === viewerId ? undefined : bundleKey.substring(viewerId.length + 2);
+                this.rearmHydration(k, this.owners.get(k.substring(0, at)), viewerId, backgroundId, viewerSlotId, viewers);
             }
         }
         for (const k of Array.from(this.restoreFailedKeys)) {
@@ -1698,9 +1718,65 @@ export class IOPipeline implements IOPipelineLike {
         }
     }
 
+    /**
+     * Which hydration mark a restore sets and checks: the viewport's for a
+     * per-viewport owner, the single document-wide one (`""`) for any other.
+     */
+    private hydrationSlot(owner: OwnerRecord, viewerSlotId: string | undefined): string {
+        return owner.perViewport ? (viewerSlotId ?? "") : "";
+    }
+
+    /**
+     * Drop the hydration mark of one viewport for a document, or of every
+     * viewport when no slot is named.
+     */
+    private forgetHydration(guardKey: string, viewerSlotId?: string) {
+        if (viewerSlotId === undefined) { this.hydratedKeys.delete(guardKey); return; }
+        const slots = this.hydratedKeys.get(guardKey);
+        if (!slots) return;
+        slots.delete(viewerSlotId);
+        if (slots.size === 0) this.hydratedKeys.delete(guardKey);
+    }
+
+    /**
+     * A viewport stopped showing a document (it navigated away, or was closed):
+     * make its next visit restore again.
+     *
+     * A per-viewport owner forgets that viewport's mark only. A per-document
+     * owner holds ONE copy for everyone, so its mark goes only once nobody else
+     * is showing the document — otherwise the leaver's return would re-import
+     * over the state the remaining viewport is still working on. A caller that
+     * names no viewport gets the unconditional re-arm it always did.
+     */
+    private rearmHydration(
+        guardKey: string,
+        owner: OwnerRecord | undefined,
+        viewerId: string,
+        backgroundId: string | undefined,
+        leavingSlotId: string | undefined,
+        viewers: Array<{ uniqueId: string; viewer?: any }>,
+    ) {
+        if (owner?.perViewport) { this.forgetHydration(guardKey, leavingSlotId); return; }
+        const stillShown = leavingSlotId !== undefined
+            && this.slotsShowing(viewerId, viewers).some(s => s.slotId !== leavingSlotId
+                && (backgroundId === undefined || this.resolveCurrentBackgroundId(s.viewer) === backgroundId));
+        if (!stillShown) this.forgetHydration(guardKey);
+    }
+
+    /**
+     * The viewports currently showing `viewerId`, in manager order. Several can:
+     * the id is derived from the slide, not from the viewport.
+     */
+    private slotsShowing(
+        viewerId: string, viewers: Array<{ uniqueId: string; viewer?: any }>,
+    ): Array<{ slotId: string | undefined; viewer: any }> {
+        return viewers.filter(v => v.uniqueId === viewerId)
+            .map(v => ({ slotId: v.viewer?.id as string | undefined, viewer: v.viewer }));
+    }
+
     // ── orchestration: bundle export ───────────────────────────────────
 
-    async flushBundleExport(scope?: { ownerUid?: string; capabilityId?: string; viewerId?: string; backgroundId?: string; skipFileFallback?: boolean; trigger?: "user" | "system" }): Promise<IOResult[]> {
+    async flushBundleExport(scope?: { ownerUid?: string; capabilityId?: string; viewerId?: string; viewerSlotId?: string; backgroundId?: string; skipFileFallback?: boolean; trigger?: "user" | "system" }): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
         const skipFileFallback = !!scope?.skipFileFallback;
@@ -1764,13 +1840,28 @@ export class IOPipeline implements IOPipelineLike {
                 // when it flushes a vacated slide just before re-opening with new
                 // content. Only fires for owners that opted INTO slide-aware
                 // scoping; the explicit `backgroundId` is the previous slide id.
+                // One key is ONE document, however many viewports show it (a
+                // `viewerId` is derived from the slide). It is written once, from
+                // its primary viewport — the first one showing it, in manager
+                // order — and the owner is told which (`ctx.viewerSlotId`).
+                // Writing it once per viewport would let whichever came last
+                // replace the others' under the same key.
+                // With a background named, only a viewport showing THAT
+                // background qualifies: virtual children share a `viewerId`
+                // without sharing a slide.
+                const primarySlot = (viewerId: string, backgroundId?: string) =>
+                    this.slotsShowing(viewerId, viewers).find(s => backgroundId === undefined
+                        || this.resolveCurrentBackgroundId(s.viewer) === backgroundId)?.slotId;
+
                 if (scope?.viewerId && scope.backgroundId !== undefined) {
                     if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger,
+                        primarySlot(scope.viewerId, scope.backgroundId) ?? scope.viewerSlotId);
                     // Slide-leave: re-arm hydration for this (viewer, background)
-                    // so returning to the slide restores from sinks again.
+                    // so returning to the slide restores from sinks again — see
+                    // `rearmHydration` for what "this" means with two viewports.
                     const left = `${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`;
-                    this.hydratedKeys.delete(left);
+                    this.rearmHydration(left, owner, scope.viewerId, scope.backgroundId, scope.viewerSlotId, viewers);
                     // ...and forget a failed read: the next visit reads again.
                     this.restoreFailedKeys.delete(left);
                     continue;
@@ -1778,7 +1869,8 @@ export class IOPipeline implements IOPipelineLike {
 
                 // Explicit viewerId only — viewer-scoped flush (legacy path).
                 if (scope?.viewerId) {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results, skipFileFallback, trigger);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results, skipFileFallback, trigger,
+                        primarySlot(scope.viewerId) ?? scope.viewerSlotId);
                     continue;
                 }
 
@@ -1786,15 +1878,22 @@ export class IOPipeline implements IOPipelineLike {
                     await this.runOneBundleExport(uid, owner, cap, sinks, undefined, undefined, results, skipFileFallback, trigger);
                 }
                 if (isViewerScoped(owner.bundleScope)) {
+                    const written = new Set<string>();
                     for (const v of viewers) {
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results, skipFileFallback, trigger);
+                        if (written.has(v.uniqueId)) continue;
+                        written.add(v.uniqueId);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results, skipFileFallback, trigger, v.viewer?.id);
                     }
                 }
                 if (isViewerBackgroundScoped(owner.bundleScope)) {
+                    const written = new Set<string>();
                     for (const v of viewers) {
                         const bgId = this.resolveCurrentBackgroundId(v.viewer);
                         if (!bgId) continue; // no current slide → nothing to key by
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results, skipFileFallback, trigger);
+                        const key = this.composeBundleKey(v.uniqueId, bgId);
+                        if (written.has(key)) continue;
+                        written.add(key);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results, skipFileFallback, trigger, v.viewer?.id);
                     }
                 }
             }
@@ -1873,6 +1972,7 @@ export class IOPipeline implements IOPipelineLike {
         viewerId: string | undefined,
         backgroundId: string | undefined,
         trigger: "user" | "system" = "user",
+        viewerSlotId?: string,
     ): IOContext {
         return {
             direction: "export",
@@ -1882,6 +1982,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: owner.ownerId,
             key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            viewerSlotId,
             backgroundId,
             trigger,
             meta: {},
@@ -1898,8 +1999,9 @@ export class IOPipeline implements IOPipelineLike {
         results: IOResult[],
         skipFileFallback: boolean = false,
         trigger: "user" | "system" = "user",
+        viewerSlotId?: string,
     ): Promise<void> {
-        const ctx: IOContext = this.bundleCtx(uid, owner, cap, viewerId, backgroundId, trigger);
+        const ctx: IOContext = this.bundleCtx(uid, owner, cap, viewerId, backgroundId, trigger, viewerSlotId);
         // Veto phase, asked once per route (see IOContext.route). Both run
         // before `exportBundle`, so a fully denied export never materializes a
         // payload at all.
@@ -2087,9 +2189,24 @@ export class IOPipeline implements IOPipelineLike {
      * and feed it to the owner's `importBundle` hook. Used at boot for
      * global state and on each viewer open for per-viewer state.
      */
-    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string; backgroundId?: string; trigger?: "user" | "system" } = {}): Promise<IOResult[]> {
+    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string; viewerSlotId?: string; backgroundId?: string; trigger?: "user" | "system" } = {}): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
+        // Who a restore of `viewerId` is delivered to. The caller names the
+        // viewport when it acts for one. Without a name, a per-viewport owner
+        // (`OwnerRecord.perViewport`) gets every viewport showing the document,
+        // each hydrated at most once; any other owner holds one copy and gets
+        // one delivery. A viewer the manager does not list (yet) still gets one
+        // unslotted pass.
+        const targetsOf = (viewerId: string, owner: OwnerRecord): Array<{ slotId: string | undefined; viewer: any }> => {
+            const showing = this.slotsShowing(viewerId, viewers);
+            if (scope.viewerSlotId !== undefined) {
+                return [showing.find(s => s.slotId === scope.viewerSlotId)
+                    ?? { slotId: scope.viewerSlotId, viewer: undefined }];
+            }
+            if (!showing.length) return [{ slotId: undefined, viewer: undefined }];
+            return owner.perViewport ? showing : [showing[0]!];
+        };
         // Loud unless the caller says this is the pipeline's own bookkeeping.
         // Every shipped caller IS bookkeeping (boot, slide-open) and says so;
         // the default stays "user" so a future one has to think about it.
@@ -2125,20 +2242,26 @@ export class IOPipeline implements IOPipelineLike {
             // slide-aware scoping; their state lives across slide swaps.
             if (scope.viewerId !== undefined && scope.backgroundId !== undefined) {
                 if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
-                await this.runOneRestore(uid, owner, sinks, scope.viewerId, scope.backgroundId, results, trigger);
+                for (const t of targetsOf(scope.viewerId, owner)) {
+                    await this.runOneRestore(uid, owner, sinks, scope.viewerId, scope.backgroundId, results, trigger, t.slotId);
+                }
                 continue;
             }
             // Explicit viewer scope only — boot-time `forceDataImportInitialization`
             // path. Dispatches per-viewer (legacy semantics); per-viewer-background
             // owners get their boot restore here too, with the current bg id.
             if (scope.viewerId !== undefined) {
+                const targets = targetsOf(scope.viewerId, owner);
                 if (isViewerBackgroundScoped(owner.bundleScope)) {
-                    const v = viewers.find(x => x.uniqueId === scope.viewerId);
-                    const bgId = this.resolveCurrentBackgroundId(v?.viewer);
-                    if (bgId) await this.runOneRestore(uid, owner, sinks, scope.viewerId, bgId, results, trigger);
+                    for (const t of targets) {
+                        const bgId = this.resolveCurrentBackgroundId(t.viewer);
+                        if (bgId) await this.runOneRestore(uid, owner, sinks, scope.viewerId, bgId, results, trigger, t.slotId);
+                    }
                 }
                 if (isViewerScoped(owner.bundleScope)) {
-                    await this.runOneRestore(uid, owner, sinks, scope.viewerId, undefined, results, trigger);
+                    for (const t of targets) {
+                        await this.runOneRestore(uid, owner, sinks, scope.viewerId, undefined, results, trigger, t.slotId);
+                    }
                 }
                 continue;
             }
@@ -2157,14 +2280,14 @@ export class IOPipeline implements IOPipelineLike {
             // their own viewer-create handler (out of scope here).
             if (!this.bootRestorePending && isViewerScoped(owner.bundleScope)) {
                 for (const v of viewers) {
-                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, undefined, results, trigger);
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, undefined, results, trigger, v.viewer?.id);
                 }
             }
             if (!this.bootRestorePending && isViewerBackgroundScoped(owner.bundleScope)) {
                 for (const v of viewers) {
                     const bgId = this.resolveCurrentBackgroundId(v.viewer);
                     if (!bgId) continue;
-                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, bgId, results, trigger);
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, bgId, results, trigger, v.viewer?.id);
                 }
             }
         }
@@ -2219,25 +2342,29 @@ export class IOPipeline implements IOPipelineLike {
         backgroundId: string | undefined,
         results: IOResult[],
         trigger: "user" | "system" = "user",
+        viewerSlotId?: string,
     ): Promise<void> {
         // Background-scoped restores hydrate at most once per
-        // (owner, viewer, background) — see `hydratedKeys`. Viewer-only and
-        // global restores keep their existing semantics.
+        // (owner, viewer, background, viewport) — see `hydratedKeys`.
+        // Viewer-only and global restores keep their existing semantics.
         const guardKey = `${uid}|${this.composeBundleKey(viewerId, backgroundId)}`;
         if (backgroundId === undefined) {
-            return this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+            return this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey, viewerSlotId);
         }
-        if (this.hydratedKeys.has(guardKey)) return;
+        const slot = this.hydrationSlot(owner, viewerSlotId);
+        if (this.hydratedKeys.get(guardKey)?.has(slot)) return;
         // `hydratedKeys` is only written after the reads settle, so two callers
         // arriving in the same tick (boot pass + viewer-open pass) both got past
         // the check above and both ran `importBundle` — the double hydration the
         // set exists to prevent. The second caller waits for the first instead.
-        const inFlight = this.hydrating.get(guardKey);
+        // NUL cannot occur in an id, so the pair cannot collide with another key.
+        const flightKey = `${guardKey}\u0000${slot}`;
+        const inFlight = this.hydrating.get(flightKey);
         if (inFlight) { await inFlight; return; }
-        const run = this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+        const run = this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey, viewerSlotId);
         const settled = run.then(() => {}, () => {});
-        this.hydrating.set(guardKey, settled);
-        try { await run; } finally { this.hydrating.delete(guardKey); }
+        this.hydrating.set(flightKey, settled);
+        try { await run; } finally { this.hydrating.delete(flightKey); }
     }
 
     private async runOneRestoreUnguarded(
@@ -2249,6 +2376,7 @@ export class IOPipeline implements IOPipelineLike {
         results: IOResult[],
         trigger: "user" | "system",
         guardKey: string,
+        viewerSlotId?: string,
     ): Promise<void> {
         const ctxBase: Omit<IOContext, "meta" | "capabilityId"> = {
             direction: "import",
@@ -2257,6 +2385,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: owner.ownerId,
             key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            viewerSlotId,
             backgroundId,
             trigger,
         };
@@ -2438,7 +2567,9 @@ export class IOPipeline implements IOPipelineLike {
         // that is merely *not registered yet* is already safe: it resolves to no
         // sinks at all, nothing is attempted, and the slot stays free.
         if (backgroundId !== undefined && succeeded > 0) {
-            this.hydratedKeys.add(guardKey);
+            let slots = this.hydratedKeys.get(guardKey);
+            if (!slots) this.hydratedKeys.set(guardKey, slots = new Set());
+            slots.add(this.hydrationSlot(owner, viewerSlotId));
             this.restoreFailedKeys.delete(guardKey);
         }
         // Read attempted, nothing but failures (a cancelled file pick is not
@@ -2491,7 +2622,7 @@ export class IOPipeline implements IOPipelineLike {
      */
     async importBundle(
         rawData: unknown,
-        scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string; format?: string; fileName?: string },
+        scope?: { ownerUid?: string; viewerId?: string; viewerSlotId?: string; backgroundId?: string; format?: string; fileName?: string },
     ): Promise<IOResult[]> {
         const results: IOResult[] = [];
         for (const [uid, owner] of this.owners) {
@@ -2508,6 +2639,7 @@ export class IOPipeline implements IOPipelineLike {
                 ownerId: owner.ownerId,
                 key: this.composeBundleKey(scope?.viewerId, scope?.backgroundId),
                 viewerId: scope?.viewerId,
+                viewerSlotId: scope?.viewerSlotId,
                 backgroundId: scope?.backgroundId,
                 meta: scope?.fileName ? { fileName: scope.fileName } : {},
             };

@@ -118,8 +118,27 @@ interface IOContext {
      * blob storage by `ctx.key` get a deterministic slot per slide.
      */
     key: string;
-    /** Set for viewer-scoped exports/imports. */
+    /**
+     * Set for viewer-scoped exports/imports. This is the viewer's `uniqueId`:
+     * it is derived from the slide, names the DOCUMENT, and is what `key` is
+     * built from — it does not name a viewport. Two viewports showing the same
+     * slide share it.
+     */
     viewerId?: string;
+    /**
+     * The viewport (`viewer.id`, e.g. `"osd-2"`) this dispatch addresses. An
+     * owner holding per-viewport state (a canvas) resolves it from THIS, never
+     * from `viewerId`, which may match several viewports.
+     *  - import: an owner that declares `perViewport` gets the document once
+     *    for every viewport showing it, each call naming its viewport. Any
+     *    other owner gets one delivery per document; the field then names the
+     *    viewport the restore was triggered for, as information only.
+     *  - export: a document is written once, from its primary viewport (the
+     *    first one showing it); this names that viewport.
+     * Unset only when the viewer is not known to the viewer manager. Never part
+     * of `key`: slot ids do not survive a reload.
+     */
+    viewerSlotId?: string;
     /**
      * Set for slide-scoped exports/imports (`bundleScope: "per-viewer-background"`
      * or `"all"`). Resolved via `UTILITIES.currentBackgroundIdFor(viewer)`
@@ -1124,7 +1143,11 @@ interface IOPipelineLike {
     // ── owner registry (for bundle hooks + ownerId↔uid mapping) ─────────
     registerOwner(
         ownerUid: string,
-        info: { ownerId: string; xoType: "core" | "plugin" | "module" } & IOOwnerBundleHooks,
+        info: {
+            ownerId: string; xoType: "core" | "plugin" | "module";
+            /** Bundle state is held per viewport — see `initIO`'s `perViewport`. */
+            perViewport?: boolean;
+        } & IOOwnerBundleHooks,
     ): IODisposer;
 
     // ── binding resolution ──────────────────────────────────────────────
@@ -1195,6 +1218,12 @@ interface IOPipelineLike {
         ownerUid?: string;
         capabilityId?: string;
         viewerId?: string;
+        /**
+         * The viewport leaving the slide (`viewer.id`), for a slide-leave flush:
+         * only its hydration is re-armed. The document itself is still written
+         * from its primary viewport — see {@link IOContext.viewerSlotId}.
+         */
+        viewerSlotId?: string;
         backgroundId?: string;
         skipFileFallback?: boolean;
         /**
@@ -1213,6 +1242,8 @@ interface IOPipelineLike {
         rawData: unknown,
         scope?: {
             ownerUid?: string; viewerId?: string; backgroundId?: string;
+            /** The viewport to import into (`viewer.id`) — see {@link IOContext.viewerSlotId}. */
+            viewerSlotId?: string;
             /** Format id of `rawData`; detected (from `fileName` and content) when omitted. */
             format?: string;
             fileName?: string;
@@ -1367,6 +1398,12 @@ interface IOPipelineLike {
     tryRestoreImport(scope?: {
         ownerUid?: string;
         viewerId?: string;
+        /**
+         * The viewport this restore is for (`viewer.id`). Omitted, a
+         * `perViewport` owner gets the document for every viewport showing
+         * `viewerId`, each at most once; any other owner gets it once.
+         */
+        viewerSlotId?: string;
         backgroundId?: string;
         /**
          * `"system"` for boot hydration and the restore after a slide opens —
@@ -1382,7 +1419,7 @@ interface IOPipelineLike {
     /** @internal Boot restore finished; late owners may now catch up per-viewer. */
     markBootRestoreComplete(): void;
     /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
-    clearHydratedFor(viewerId: string): void;
+    clearHydratedFor(viewerId: string, viewerSlotId?: string): void;
     /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
     surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
     /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */
