@@ -528,9 +528,8 @@ OSD.Scalebar.prototype = {
             this._active = true;
             // One dock holds the magnification panel and the metric bar, so
             // their relative layout is flexbox instead of per-frame absolute
-            // math: collapsed = one row (bar right of the controls, wrapping
-            // below it when the cell is too narrow), expanded = panel above
-            // the bar. Only the dock is positioned per frame.
+            // math: the panel always sits above the bar, collapsed or not.
+            // Only the dock is positioned per frame.
             if (!this.dock) {
                 this.dock = document.createElement("div");
                 this.dock.id = this.id + "-dock";
@@ -1612,19 +1611,14 @@ OSD.Scalebar.prototype = {
     },
 
     /**
-     * Arrange the dock for the current collapse state. Collapsed the panel
-     * is a single control row and the metric bar sits to its right, wrapping
-     * onto the next line (i.e. below) when the viewer cell is too narrow.
-     * Expanded the panel is a tall slider board stacked above the bar.
+     * Arrange the dock. Two rows in both collapse states: the panel (a single
+     * control strip collapsed, the slider board plus that strip expanded)
+     * stacked above the metric bar, so the bar never jumps beside the
+     * controls when the panel closes.
      */
     _applyDockLayout: function () {
         if (!this.dock) return;
-        const collapsed = !!this._ui?.collapsed;
-        this.dock.classList.toggle("flex-row", collapsed);
-        this.dock.classList.toggle("flex-wrap", collapsed);
-        this.dock.classList.toggle("items-center", collapsed);
-        this.dock.classList.toggle("flex-col", !collapsed);
-        this.dock.classList.toggle("items-start", !collapsed);
+        this.dock.classList.add("flex-col", "items-start");
         // The bar's absolute left offset already carries xOffset; inside the
         // dock the row must not push it further right than the panel edge.
         this.dock.style.maxWidth = "calc(100% - " + ((this.xOffset || 5) * 2) + "px)";

@@ -51,6 +51,48 @@ function initXOpatUI() {
             APPLICATION_CONTEXT.setOption("notificationsPosition", pos);
         },
 
+        /**
+         * Notifications shown inside one viewport instead of the window: for
+         * a message about that viewport (an instruction for a tool running on
+         * it, its failure), so it appears where the user is looking and never
+         * covers another viewport's controls. Each viewport has its own
+         * queue; the global toast cannot preempt it, nor the other way round.
+         *
+         * @param {OpenSeadragon.Viewer} viewer
+         * @param {object} [options]
+         * @param {"top"|"bottom"} [options.position] defaults to the global
+         *   `notificationsPosition`
+         * @return {{show: function(string, number=, object=, object=): void,
+         *   hide: function(boolean=): void}} same contract as `Dialogs.show` /
+         *   `Dialogs.hide`; the global toast itself for a viewer with no container
+         */
+        forViewer(viewer, options = {}) {
+            const host = viewer?.container;
+            if (!host || !this._scheduler) return this;
+
+            this._viewerToasts ||= new WeakMap();
+            let entry = this._viewerToasts.get(viewer);
+            // The container is rebuilt with the viewer; a detached toast is dead.
+            if (!entry || !entry.view.root?.isConnected) {
+                const view = new UI.Toast({ anchored: true });
+                const scheduler = new UI.Toast.Scheduler(view);
+                host.appendChild(view.create());
+                entry = {
+                    view,
+                    handle: {
+                        show: (text, delayMS = 5000, importance = this.MSG_INFO, props = {}) => {
+                            scheduler.show(text, delayMS, importance, props);
+                        },
+                        hide: (withCallback = true) => scheduler.hide(withCallback),
+                    },
+                };
+                this._viewerToasts.set(viewer, entry);
+            }
+            entry.view.setPosition(
+                options.position || APPLICATION_CONTEXT.getOption("notificationsPosition"));
+            return entry.handle;
+        },
+
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();

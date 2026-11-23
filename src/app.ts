@@ -909,6 +909,25 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             handler: () => (window as any).LAYOUT?.toggleGlobalMenu(),
         });
 
+        // Viewport sync, on the viewport the keyboard is on (focus-derived, else
+        // the active one). Both go through the SYNC button's own logic
+        // (`viewer.__syncRun`, see scalebar/chrome.ts), so a key press and a
+        // click can never disagree about what a state means:
+        //  - toggle: link / unlink; cancels a calibration that is running and
+        //    resumes a viewport that is paused for adjustment;
+        //  - adjust: pause to nudge the viewport on its own, press again to
+        //    resume with that position kept.
+        // Session-wide actions stay in the Tools menu — they are rare.
+        const registerSync = (name: string, combo: string, icon: string, mode: string | null) => shortcuts.register({
+            id: `core.sync.${name.toLowerCase()}`, titleKey: `keymap.core.sync${name}`,
+            descriptionKey: `keymap.core.sync${name}Desc`,
+            categoryPath: VIEW_PATH, defaultCombos: [combo], type: "press", trigger: "down",
+            icon, quickAction: true,
+            handler: ({ viewer }) => ((viewer || VIEWER_MANAGER.get?.()) as any)?.__syncRun?.(mode),
+        });
+        registerSync("Toggle", "Alt+KeyL", "ph-link", null);
+        registerSync("Adjust", "Alt+KeyP", "ph-pause", "adjust");
+
         // ── Peek at background: hold "h" to momentarily hide the visualization
         // overlay in the FOCUSED viewer (only the background image shows); release
         // to restore. Momentary opacity toggle on the flex-renderer's

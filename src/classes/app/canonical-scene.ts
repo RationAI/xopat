@@ -85,7 +85,11 @@ export interface CanonicalViewerOverlay {
  */
 export interface CanonicalSyncSession {
     leaderId: string;
-    transforms: Record<string, { A: number[]; b: { x: number; y: number }; scale?: number; rotDeg?: number }>;
+    transforms: Record<string, {
+        A: number[]; b: { x: number; y: number }; scale?: number; rotDeg?: number;
+        /** How the transform was made: "reference" | "auto" | "manual" | "adjusted". */
+        source?: string;
+    }>;
     flipParity?: Record<string, boolean>;
     /**
      * The reference viewer's three hand-picked calibration points (image
@@ -93,6 +97,11 @@ export interface CanonicalSyncSession {
      * what a viewer joining later is shown, so it can pick the same three.
      */
     leaderPts?: Array<{ x: number; y: number }>;
+    /**
+     * Followers' own three points, per viewer (image pixels). Display only:
+     * they are shown as a guide when that viewer is re-calibrated or adjusted.
+     */
+    points?: Record<string, Array<{ x: number; y: number }>>;
     /** Viewers that were actively following the session (not just calibrated). */
     enabled?: string[];
 }
@@ -534,16 +543,21 @@ function snapshotSyncSession(viewers: any[]): CanonicalSyncSession | undefined {
     const transforms: CanonicalSyncSession["transforms"] = {};
     for (const [id, t] of Object.entries<any>(session.transforms)) {
         if (!Array.isArray(t?.A) || !t?.b) continue;
-        transforms[id] = { A: [...t.A], b: { x: t.b.x, y: t.b.y }, scale: t.scale, rotDeg: t.rotDeg };
+        transforms[id] = {
+            A: [...t.A], b: { x: t.b.x, y: t.b.y }, scale: t.scale, rotDeg: t.rotDeg,
+            ...(typeof t.source === "string" ? { source: t.source } : {}),
+        };
     }
     if (!Object.keys(transforms).length) return undefined;
 
     const leaderPts = sanitizeLeaderPoints(session.leaderPts);
+    const points = sanitizeViewerPoints(session.points, transforms);
     return {
         leaderId: session.leaderId,
         transforms,
         flipParity: { ...(session.flipParity || {}) },
         ...(leaderPts ? { leaderPts } : {}),
+        ...(points ? { points } : {}),
         enabled: viewers.filter(v => v?.scalebar?.ViewportSyncAPI?.isEnabled?.()).map(v => v.uniqueId),
     };
 }
@@ -560,9 +574,37 @@ function sanitizeLeaderPoints(pts: unknown): Array<{ x: number; y: number }> | n
     return out;
 }
 
+/** Points only for viewers the session actually holds a transform for. */
+function sanitizeViewerPoints(
+    points: unknown, transforms: Record<string, unknown>
+): Record<string, Array<{ x: number; y: number }>> | null {
+    if (!points || typeof points !== "object") return null;
+    const out: Record<string, Array<{ x: number; y: number }>> = {};
+    for (const id of Object.keys(transforms)) {
+        const pts = sanitizeLeaderPoints((points as any)[id]);
+        if (pts) out[id] = pts;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+const SYNC_SOURCES = ["reference", "auto", "manual", "adjusted"];
+
 function restoreSyncSession(sync: CanonicalSyncSession, viewers: any[]): void {
     const api = anySyncApi(viewers);
     if (!api || !sync?.leaderId || !sync.transforms) return;
+
+    // Replace, never merge: whoever follows the current session is unlinked
+    // and every calibration in flight is aborted, so nothing of the old
+    // session leaks into the restored one. Its pose is NOT released — the
+    // viewports were just set from the scene, which already holds the true
+    // rotation. The reset arms a manual re-align everywhere, which is not
+    // what restoring a session means.
+    for (const viewer of viewers) {
+        const viewerApi = viewer?.scalebar?.ViewportSyncAPI;
+        if (viewerApi) viewerApi._poseApplied = false;
+    }
+    api.resetSession();
+    api.constructor._manualPending = {};
 
     // Registrations are keyed by viewer uniqueId, which is data-derived — a
     // restored session that reopens the same slides gets the same ids back.
@@ -572,10 +614,13 @@ function restoreSyncSession(sync: CanonicalSyncSession, viewers: any[]): void {
         leaderPts: sanitizeLeaderPoints(sync.leaderPts),
         transforms: {},
         flipParity: { ...(sync.flipParity || {}) },
+        points: sanitizeViewerPoints(sync.points, sync.transforms) || {},
     };
     for (const [id, t] of Object.entries(sync.transforms)) {
         try {
-            api._storeViewerTransform(id, t);
+            // A scene is untrusted input: only a known provenance survives.
+            const source = SYNC_SOURCES.includes(t?.source as string) ? t.source : undefined;
+            api._storeViewerTransform(id, { ...t, source });
         } catch (e) {
             console.warn("[canonical-scene] dropping invalid sync transform", id, e);
         }

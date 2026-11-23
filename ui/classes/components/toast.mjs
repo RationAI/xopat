@@ -61,9 +61,26 @@ function setToastMessage(el, html) {
     return false;
 }
 
+/**
+ * Notification toast.
+ *
+ * By default the one global toast, fixed to the window. With
+ * `{ anchored: true }` it is a local one instead: positioned inside whatever
+ * element it is appended to (which must be a positioning context), so a
+ * message can sit on the thing it is about — see `Dialogs.forViewer()`.
+ *
+ * Either way only the card takes pointer events; the box around it never
+ * blocks the controls underneath.
+ */
 export class Toast extends BaseComponent {
-    constructor() {
-        super({ id: "dialogs-container" });
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.anchored=false] position inside the parent
+     *   element instead of the window
+     */
+    constructor(options = {}) {
+        super(options.anchored ? {} : { id: "dialogs-container" });
+        this._anchored = !!options.anchored;
         this._durationMs = 5000;
         this._importance = { key: "info", icon: ICONS.info };
         this._buttons = [];
@@ -74,7 +91,8 @@ export class Toast extends BaseComponent {
     }
 
     /**
-     * Place the toast container at the top or the bottom of the viewport.
+     * Place the toast container at the top or the bottom of the viewport
+     * (of its parent element when anchored).
      * Safe to call before or after {@link create}.
      * @param {"top"|"bottom"} position
      */
@@ -82,6 +100,13 @@ export class Toast extends BaseComponent {
         const pos = position === "top" ? "top" : "bottom";
         this._position = pos;
         if (!this.root) return;
+        if (this._anchored) {
+            // A viewport may reserve space at its bottom edge (depth ruler).
+            this.root.style.top = pos === "top" ? "0.5rem" : "";
+            this.root.style.bottom = pos === "top"
+                ? "" : "calc(0.5rem + var(--xo-viewer-bottom-inset, 0px))";
+            return;
+        }
         this.root.classList.remove("toast-top", "toast-bottom");
         this.root.classList.add(pos === "top" ? "toast-top" : "toast-bottom");
         // Inline offsets sidestep Tailwind purge issues with `top-4` / `bottom-4`.
@@ -133,7 +158,8 @@ export class Toast extends BaseComponent {
             "relative isolate flex items-center gap-2 " +
             "rounded-md border border-base-300 bg-base-200/95 text-base-content shadow-sm " +
             "px-3 py-2 " +
-            "min-w-[320px] w-[min(520px,calc(100vw-2rem))]";
+            // An anchored toast is sized by its host (see `create`).
+            (this._anchored ? "" : "min-w-[320px] w-[min(520px,calc(100vw-2rem))]");
 
         const skin = SKINS[this._importance.key] || SKINS.info;
         accent.className = `absolute left-0 top-0 h-full w-[3px] rounded-l-xl ${skin.accent}`;
@@ -144,6 +170,8 @@ export class Toast extends BaseComponent {
         progress.style.animation = null;
         progress.className = `pointer-events-none absolute left-0 right-0 bottom-0 h-0.5 ${skin.progress} animate-toastbar`;
         progress.style.animationDuration = `${this._durationMs}ms`;
+        // A sticky toast (< 1000 ms, see the scheduler) counts nothing down.
+        progress.style.display = this._durationMs >= 1000 ? "" : "none";
 
         iconEl.innerHTML = this._importance.icon || ICONS.info;
 
@@ -260,16 +288,26 @@ export class Toast extends BaseComponent {
     create() {
         const verticalClass = this._position === "top" ? "toast-top" : "toast-bottom";
         this.root = div(
-            {
+            this._anchored ? {
+                // Spans the host's width and centres the card in it. Not a
+                // DaisyUI `.toast`: that one is `position: fixed`.
+                class: "hidden opacity-0 transition-opacity duration-150 absolute flex justify-center",
+                style: "left:0.5rem;right:0.5rem;z-index:10;pointer-events:none"
+            } : {
                 id: this.id,
                 class:
                     "hidden opacity-0 transition-opacity duration-150 " +
                     "fixed left-1/2 -translate-x-1/2 z-[1000000] " +
                     `toast ${verticalClass} toast-center`,
-                style: this._position === "top" ? "top:1rem" : "bottom:1rem"
+                // Only the card is interactive: the padded box around it must
+                // not swallow clicks meant for whatever lies underneath.
+                style: (this._position === "top" ? "top:1rem" : "bottom:1rem") + ";pointer-events:none"
             },
             div(
-                { "data-toast-card": "", class: "relative" },
+                {
+                    "data-toast-card": "", class: "relative",
+                    style: "pointer-events:auto" + (this._anchored ? ";width:min(520px,100%)" : "")
+                },
                 div({ "data-accent": "", class: "absolute left-0 top-0 h-full w-[3px] rounded-l-md bg-info" }),
 
                 div(
@@ -318,6 +356,7 @@ export class Toast extends BaseComponent {
 
         this.root.addEventListener("mouseenter", () => this._onHover?.(true));
         this.root.addEventListener("mouseleave", () => this._onHover?.(false));
+        if (this._anchored) this.setPosition(this._position);
         return this.root;
     }
 }

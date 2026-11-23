@@ -10,7 +10,12 @@
  *  - the session outlives the viewers it was built with. When the reference
  *    viewer is no longer open, an open calibrated viewer is promoted and the
  *    relative alignment of the others is unchanged; with none open the session
- *    is dropped instead of pointing at a viewer that does not exist.
+ *    is dropped instead of pointing at a viewer that does not exist;
+ *  - a viewer has one alignment, made by one mode. Replacing it is
+ *    transactional — a cancelled re-calibration changes nothing — and a result
+ *    computed against state that was cleared meanwhile is never stored;
+ *  - pausing a viewer to nudge it and resuming keeps exactly the pose it was
+ *    left in as the synced one.
  */
 import { test, expect } from "@xopat/test-harness";
 
@@ -19,8 +24,16 @@ globalThis.window = globalThis.window ?? globalThis;
 const linkContexts = {};
 globalThis.OpenSeadragon = {
     Tools: { _linkContexts: linkContexts },
+    Point: class { constructor(x, y) { this.x = x; this.y = y; } },
+    Rect: class { constructor(x, y, width, height) { Object.assign(this, { x, y, width, height }); } },
+    Placement: { CENTER: "center" },
 };
 globalThis.VIEWER_MANAGER = { viewers: [] };
+// What the picker and its markers touch outside the viewer.
+globalThis.$ = { t: (key) => key };
+globalThis.addEventListener ??= () => {};
+globalThis.removeEventListener ??= () => {};
+globalThis.document ??= { createElement: () => ({ style: {}, appendChild() {} }) };
 
 const { ViewportSyncAPI } = await import("../../../src/classes/osd/scalebar/viewport-sync-api.ts");
 
@@ -54,6 +67,76 @@ function makeViewer(uniqueId, rotation = 0, flip = false) {
     return viewer;
 }
 
+/**
+ * A viewer with a world: one image `imageWidth` pixels wide spanning viewport
+ * width 1, real viewport state, and OSD-style event handlers — enough for the
+ * mapper, the three-point picker and the adjust path to run for real.
+ */
+function makeLiveViewer(uniqueId, imageWidth = 1000) {
+    const state = { zoom: 1, center: { x: 0.5, y: 0.5 }, rotation: 0, flip: false };
+    const handlers = {};
+    const viewer = makeViewer(uniqueId);
+    Object.assign(viewer, {
+        state,
+        handlers,
+        world: {
+            getItemAt: () => ({
+                imageToViewportCoordinates: (p) => ({ x: p.x / imageWidth, y: p.y / imageWidth }),
+                viewportToImageCoordinates: (p) => ({ x: p.x * imageWidth, y: p.y * imageWidth }),
+            }),
+        },
+        viewport: {
+            getRotation: () => state.rotation,
+            setRotation: (deg) => { state.rotation = deg; },
+            getFlip: () => state.flip,
+            setFlip: (value) => { state.flip = !!value; },
+            getContainerSize: () => ({ x: 800, y: 600 }),
+            pointFromPixel: (position) => ({ x: position.x, y: position.y }),
+            fitBounds() {},
+            panTo() {},
+        },
+        addHandler(name, fn) { (handlers[name] ||= []).push(fn); },
+        removeHandler(name, fn) { handlers[name] = (handlers[name] || []).filter(h => h !== fn); },
+        addOverlay() {},
+        removeOverlay() {},
+        /** A stationary click at an IMAGE-space point. */
+        clickImage(point) {
+            const position = { x: point.x / imageWidth, y: point.y / imageWidth };
+            for (const name of ["canvas-press", "canvas-click"]) {
+                for (const fn of [...(handlers[name] || [])]) fn({ position });
+            }
+        },
+        /**
+         * A double-click as OSD delivers it: two clicks, then
+         * `canvas-double-click` synchronously after the second one.
+         */
+        doubleClickImage(point) {
+            const position = { x: point.x / imageWidth, y: point.y / imageWidth };
+            this.clickImage(point);
+            this.clickImage(point);
+            const event = { position, preventDefaultAction: false };
+            for (const fn of [...(handlers["canvas-double-click"] || [])]) fn(event);
+            return event;
+        },
+    });
+    viewer.tools.readViewportState = () => ({ ...state, center: { ...state.center } });
+    viewer.tools.applyViewportState = (next) => Object.assign(state, {
+        zoom: next.zoom, center: { ...next.center }, rotation: next.rotation, flip: !!next.flip,
+    });
+    return viewer;
+}
+
+/** A registration provider chain that answers whatever the test hands it. */
+function stubRegistration(estimate) {
+    const calls = { estimate: [], evicted: [] };
+    globalThis.OpenSeadragon.ViewportRegistration = {
+        estimate: (ref, target, opts) => { calls.estimate.push(opts); return estimate(ref, target, opts); },
+        clearCacheFor: (viewer) => { calls.evicted.push(viewer.uniqueId); },
+        clearCache() {},
+    };
+    return calls;
+}
+
 function rotationTransform(deg, b = { x: 0, y: 0 }, scale = 1) {
     const r = deg * Math.PI / 180;
     return {
@@ -71,6 +154,8 @@ function seedSession(leaderId, transforms, flipParity = {}) {
 function open(...viewers) {
     for (const key of Object.keys(linkContexts)) delete linkContexts[key];
     ViewportSyncAPI._manualPending = {};
+    ViewportSyncAPI._session = null;
+    delete globalThis.OpenSeadragon.ViewportRegistration;
     globalThis.VIEWER_MANAGER.viewers = viewers;
 }
 
@@ -203,4 +288,216 @@ test("sync: with no open calibrated viewer the stale session is dropped @unit", 
     const S = ViewportSyncAPI._session;
     expect(S.leaderId).toBe("fresh");
     expect(Object.keys(S.transforms)).toEqual(["fresh"]);
+});
+
+const REF_POINTS = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 0, y: 1000 }];
+/** REF_POINTS turned by 90 degrees and shifted by (100, 200). */
+const MATCHING_POINTS = [{ x: 100, y: 200 }, { x: 100, y: 1200 }, { x: -900, y: 200 }];
+
+async function manuallyAlignedPair() {
+    const ref = makeLiveViewer("ref"), a = makeLiveViewer("a", 2000);
+    open(ref, a);
+    seedSession("ref", {
+        ref: rotationTransform(0),
+        a: { ...rotationTransform(30, { x: 5, y: 7 }), source: "manual" },
+    });
+    ViewportSyncAPI._session.leaderPts = REF_POINTS;
+    await api(ref).enable({ allowManual: false });
+    await api(a).enable({ allowManual: false });
+    return { ref, a };
+}
+
+test("sync: cancelling a manual re-calibration changes nothing @unit", async () => {
+    const { a } = await manuallyAlignedPair();
+    const before = JSON.stringify(ViewportSyncAPI._session.transforms.a);
+    const rotation = a.viewport.getRotation();
+
+    const pending = api(a).enable({ mode: "manual", replace: true });
+    expect(api(a).isBusy()).toBe(true);
+    // Suspended while picking, so navigating to a landmark cannot drag peers.
+    expect(api(a).isEnabled()).toBe(false);
+    a.clickImage(MATCHING_POINTS[0]);
+    expect(api(a).getProgress()).toBe("1/3");
+
+    expect(api(a).cancelCalibration()).toBe(true);
+    await expect(pending).rejects.toThrow(/cancel/i);
+
+    expect(JSON.stringify(ViewportSyncAPI._session.transforms.a)).toBe(before);
+    expect(api(a).isEnabled()).toBe(true);
+    expect(api(a).isBusy()).toBe(false);
+    expect(linkContexts[0].subscribed).toContain(a);
+    expect(a.viewport.getRotation()).toBe(rotation);
+    expect(a.handlers["canvas-click"]).toEqual([]);
+});
+
+test("sync: a finished manual re-calibration replaces the alignment and evicts the memoized one @unit", async () => {
+    const { a } = await manuallyAlignedPair();
+    const registration = stubRegistration(async () => null);
+
+    const pending = api(a).enable({ mode: "manual", replace: true });
+    for (const point of MATCHING_POINTS) a.clickImage(point);
+    const result = await pending;
+
+    const t = ViewportSyncAPI._session.transforms.a;
+    expect(result.mode).toBe("manual");
+    expect(result.poorFit).toBe(false);
+    expect(t.source).toBe("manual");
+    expect(t.rotDeg).toBeCloseTo(90, 6);
+    expect(t.b.x).toBeCloseTo(100, 6);
+    expect(t.b.y).toBeCloseTo(200, 6);
+    expect(ViewportSyncAPI._session.points.a).toEqual(MATCHING_POINTS);
+    expect(registration.evicted).toContain("a");
+    expect(api(a).isEnabled()).toBe(true);
+});
+
+test("sync: an explicit automatic run replaces a hand-made alignment @unit", async () => {
+    const { a } = await manuallyAlignedPair();
+    ViewportSyncAPI._session.points.a = MATCHING_POINTS;
+    const registration = stubRegistration(async () => ({
+        A: [1, 0, 0, 1], b: { x: 9, y: -4 }, flip: false, confidence: 1,
+    }));
+
+    const result = await api(a).autoCalibrate();
+
+    const t = ViewportSyncAPI._session.transforms.a;
+    expect(result.mode).toBe("auto");
+    expect(registration.estimate[0].force).toBe(true);
+    expect(t.source).toBe("auto");
+    expect(t.b).toEqual({ x: 9, y: -4 });
+    expect(t.rotDeg).toBe(0);
+    // The points described the manual alignment, not this one.
+    expect(ViewportSyncAPI._session.points.a).toBe(undefined);
+    expect(api(a).isEnabled()).toBe(true);
+});
+
+test("sync: a registration that lands after the session was cleared is not stored @unit", async () => {
+    const ref = makeLiveViewer("ref"), a = makeLiveViewer("a");
+    open(ref, a);
+    let land;
+    stubRegistration(() => new Promise((resolve) => { land = resolve; }));
+    await api(ref).enable({ allowManual: false });
+
+    const pending = api(a).enable({ mode: "auto", allowManual: false });
+    api(ref).resetSession();
+    land({ A: [1, 0, 0, 1], b: { x: 0, y: 0 }, confidence: 1 });
+
+    await expect(pending).rejects.toThrow(/cancel/i);
+    expect(ViewportSyncAPI._session).toBe(null);
+    expect(api(a).isEnabled()).toBe(false);
+    expect(linkContexts[0].subscribed).toEqual([]);
+});
+
+test("sync: a second request during a pick joins it instead of opening another picker @unit", async () => {
+    const ref = makeLiveViewer("ref"), a = makeLiveViewer("a");
+    open(ref, a);
+
+    const first = api(a).enable({ mode: "manual" });
+    const second = api(a).enable({ mode: "manual" });
+    expect(second).toBe(first);
+    expect(a.handlers["canvas-click"].length).toBe(1);
+
+    api(a).cancelCalibration();
+    await expect(first).rejects.toThrow(/cancel/i);
+    expect(ViewportSyncAPI._session.leaderId).toBe(null);
+});
+
+test("sync: resuming an adjustment keeps the pose the viewer was left in @unit", async () => {
+    const ref = makeLiveViewer("ref"), a = makeLiveViewer("a", 2000);
+    open(ref, a);
+    seedSession("ref", { ref: rotationTransform(0), a: rotationTransform(30, { x: 50, y: -20 }, 2) });
+    await api(ref).enable({ allowManual: false });
+    await api(a).enable({ allowManual: false });
+    Object.assign(ref.state, { zoom: 2, center: { x: 0.4, y: 0.3 }, rotation: 10 });
+
+    expect(api(a).beginAdjust()).toBe(true);
+    expect(api(a).isAdjusting()).toBe(true);
+    expect(api(a).isEnabled()).toBe(false);
+    // The nudge: somewhere the old transform would never have put it.
+    Object.assign(a.state, { zoom: 3.3, center: { x: 0.7, y: 0.1 }, rotation: -35 });
+
+    expect(api(a).commitAdjust()).toBe(true);
+
+    expect(api(a).isAdjusting()).toBe(false);
+    expect(api(a).isEnabled()).toBe(true);
+    expect(ViewportSyncAPI._session.transforms.a.source).toBe("adjusted");
+    const mapped = api(a)._mapStateBetweenViewers(ref, a, ref.tools.readViewportState());
+    expect(mapped.center.x).toBeCloseTo(0.7, 9);
+    expect(mapped.center.y).toBeCloseTo(0.1, 9);
+    expect(mapped.zoom).toBeCloseTo(3.3, 9);
+    expect(mapped.rotation).toBeCloseTo(-35, 9);
+    // ... and it still follows: a different reference pose maps elsewhere.
+    Object.assign(ref.state, { center: { x: 0.5, y: 0.3 } });
+    expect(api(a)._mapStateBetweenViewers(ref, a, ref.tools.readViewportState()).center.x)
+        .not.toBeCloseTo(0.7, 3);
+});
+
+test("sync: discarding an adjustment restores the alignment and snaps back @unit", async () => {
+    const ref = makeLiveViewer("ref"), a = makeLiveViewer("a");
+    open(ref, a);
+    seedSession("ref", { ref: rotationTransform(0), a: rotationTransform(30, { x: 50, y: -20 }) });
+    await api(ref).enable({ allowManual: false });
+    await api(a).enable({ allowManual: false });
+    const before = JSON.stringify(ViewportSyncAPI._session.transforms.a);
+    const synced = a.tools.readViewportState();
+
+    api(a).beginAdjust();
+    Object.assign(a.state, { zoom: 7, center: { x: 0.9, y: 0.9 }, rotation: 80 });
+    expect(api(a).cancelAdjust()).toBe(true);
+
+    expect(JSON.stringify(ViewportSyncAPI._session.transforms.a)).toBe(before);
+    expect(api(a).isEnabled()).toBe(true);
+    expect(a.state.zoom).toBeCloseTo(synced.zoom, 9);
+    expect(a.state.rotation).toBeCloseTo(synced.rotation, 9);
+    expect(a.state.center.x).toBeCloseTo(synced.center.x, 9);
+});
+
+test("sync: a viewer that opens another slide leaves the link @unit", async () => {
+    const { ref, a } = await manuallyAlignedPair();
+
+    a.uniqueId = "another-slide";
+    api(a)._onSlideOpened();
+
+    expect(api(a).isEnabled()).toBe(false);
+    expect(linkContexts[0].subscribed).toEqual([ref]);
+    expect(api(a).getRotationOffset()).toBe(0);
+    // The alignment of the slide that left is remembered for when it returns.
+    expect(ViewportSyncAPI._session.transforms.a).toBeTruthy();
+});
+
+test("sync: a double-click places one point, also when it would have been the last @unit", async () => {
+    const { a } = await manuallyAlignedPair();
+
+    const pending = api(a).enable({ mode: "manual", replace: true });
+    const first = a.doubleClickImage(MATCHING_POINTS[0]);
+    expect(api(a).getProgress()).toBe("1/3");
+    expect(first.preventDefaultAction).toBe(true); // no zoom while placing landmarks
+
+    a.clickImage(MATCHING_POINTS[1]);
+    // Both clicks of this pair land before OSD reports the double: the pick
+    // must not have finished on the duplicate.
+    a.doubleClickImage(MATCHING_POINTS[2]);
+    const result = await pending;
+
+    expect(ViewportSyncAPI._session.points.a).toEqual(MATCHING_POINTS);
+    expect(ViewportSyncAPI._session.transforms.a.rotDeg).toBeCloseTo(90, 6);
+    expect(result.poorFit).toBe(false);
+    expect(a.handlers["canvas-double-click"]).toEqual([]);
+});
+
+test("sync: points that do not agree are reported as a poor fit, and still link @unit", async () => {
+    const { a } = await manuallyAlignedPair();
+
+    const pending = api(a).enable({ mode: "manual", replace: true });
+    // Second and third landmark swapped: no similarity fits that.
+    for (const point of [MATCHING_POINTS[0], MATCHING_POINTS[2], MATCHING_POINTS[1]]) a.clickImage(point);
+    const result = await pending;
+
+    expect(result.poorFit).toBe(true);
+    expect(api(a).isEnabled()).toBe(true);
+
+    // A click a little off is ordinary and stays quiet.
+    const again = api(a).enable({ mode: "manual", replace: true });
+    const nearby = { x: MATCHING_POINTS[2].x + 15, y: MATCHING_POINTS[2].y - 10 };
+    for (const point of [MATCHING_POINTS[0], MATCHING_POINTS[1], nearby]) a.clickImage(point);
+    expect((await again).poorFit).toBe(false);
 });

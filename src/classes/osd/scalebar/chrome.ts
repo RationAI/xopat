@@ -26,41 +26,48 @@ function openViewerCount() {
     return _viewerCountState;
 }
 
-function SyncToggleButton(viewer, tool) {
-    const enabled = van.state(!!tool?.isEnabled?.());
+/** A sync message belongs on the viewport it is about, at its top. */
+function syncNotify(viewer, key, delayMS, importance) {
+    const dialogs = window.Dialogs;
+    const target = dialogs?.forViewer?.(viewer, { position: "top" }) || dialogs;
+    target?.show?.(window.$.t(key), delayMS, importance);
+}
 
-    // NEW: calibration UI state
+function SyncToggleButton(viewer, tool) {
+    // Mirrors of the tool's own state. The tool owns it: this chrome is
+    // rebuilt on every open-pipeline pass, also in the middle of a
+    // calibration, and a fresh button must not come up looking idle.
+    const enabled = van.state(false);
     const busy = van.state(false);
-    const progressText = van.state(""); // e.g. "Pick points 1/3"
+    const adjusting = van.state(false);
+    const progress = van.state("");
     const isRef = van.state(false);
 
     const updateFromTool = () => {
         enabled.val = !!tool?.isEnabled?.();
+        busy.val = !!tool?.isBusy?.();
+        adjusting.val = !!tool?.isAdjusting?.();
+        progress.val = tool?.getProgress?.() || "";
 
         const S = tool?.constructor?._session;
         isRef.val = !!enabled.val && !!S?.leaderId && viewer.uniqueId === S.leaderId;
     };
-
-    const setProgress = (txt) => { progressText.val = txt || ""; };
-    const setBusy = (b) => { busy.val = !!b; };
-
-    // Expose hooks so tool can update the button
-    tool.__ui = { setProgress, setBusy };
+    updateFromTool();
 
     const count = openViewerCount();
     const canSync = () => count.val > 1;
 
     /**
-     * @param {"auto"|"manual"|null} mode  explicit link mode; `null` toggles
-     *        (enabled → disable, otherwise link automatically).
+     * @param {"auto"|"manual"|"adjust"|"discard"|null} mode  explicit action;
+     *        `null` is the button itself: cancel while busy, resume while
+     *        paused for adjustment, otherwise toggle the link.
      */
     const run = async (mode) => {
         if (!tool) return;
 
-        if (busy.val) {
-            // Mid-calibration click: abort the point picker and fall back to
-            // LINK as if nothing happened. The rejected `enable()` promise is
-            // handled by the catch below, which resets `enabled`/progress.
+        if (tool.isBusy()) {
+            // Mid-calibration click: abort it. The pending `enable()` rejects
+            // and puts the previous alignment back by itself.
             tool.cancelCalibration?.();
             return;
         }
@@ -68,46 +75,51 @@ function SyncToggleButton(viewer, tool) {
         if (!canSync()) {
             // The button is `disabled`, but the menu and the keyboard can
             // still reach this — say why rather than doing nothing.
-            Dialogs?.show?.(window.$.t('sync.needsTwoSlides'));
+            syncNotify(viewer, 'sync.needsTwoSlides', 3000, Dialogs.MSG_INFO);
             return;
         }
-        setBusy(true);
 
         try {
-            if (!mode && enabled.val) {
+            if (tool.isAdjusting()) {
+                if (mode === "discard") { tool.cancelAdjust(); return; }
+                if (!mode || mode === "adjust") { tool.commitAdjust(); return; }
+                // Any other action ends the pause first, without keeping it.
+                tool.cancelAdjust();
+            }
+
+            if (mode === "discard") return;
+            if (mode === "adjust") {
+                if (!tool.beginAdjust()) syncNotify(viewer, 'sync.adjustUnavailable', 3000, Dialogs.MSG_INFO);
+                return;
+            }
+            if (!mode && tool.isEnabled()) {
                 tool.disable();
-                enabled.val = false;
-                setProgress("");
-                Dialogs?.show?.(window.$.t('sync.disabled'), 1200, Dialogs.MSG_INFO);
-            } else {
-                // Default is automatic registration; the caret menu (and the
-                // legacy Alt/Shift-click) force the three-point picker for
-                // slides the estimator cannot match. `enable()` may upgrade
-                // auto to manual on its own (a viewer the user just cleared),
-                // so it owns the progress label.
-                setProgress("");
-                if (mode === "manual") tool.resetViewer?.();
-                const res = await tool.enable({ mode: mode === "manual" ? "manual" : "auto" });
-                enabled.val = true;
-                setProgress("");
-                if (res?.approximate) {
-                    Dialogs?.show?.(window.$.t('sync.enabledApproximate'), 3000, Dialogs.MSG_WARN);
-                } else {
-                    Dialogs?.show?.(window.$.t('sync.enabled'), 1200, Dialogs.MSG_SUCCESS);
-                }
+                return;
+            }
+
+            // The plain button links (automatically, or by hand for a viewer
+            // the user just cleared). The menu entries are explicit requests
+            // to recompute in that mode, whatever alignment exists: the two
+            // are never mixed, and a cancelled recompute changes nothing.
+            const res = mode === "manual"
+                ? await tool.enable({ mode: "manual", replace: true })
+                : (mode === "auto" ? await tool.autoCalibrate() : await tool.enable({ mode: "auto" }));
+            if (res?.approximate) {
+                syncNotify(viewer, 'sync.enabledApproximate', 5000, Dialogs.MSG_WARN);
+            } else if (res?.poorFit) {
+                // Linked anyway: the user can see how far off it is, and
+                // either redo it or nudge it into place.
+                syncNotify(viewer, 'sync.poorFit', 7000, Dialogs.MSG_WARN);
             }
         } catch (e) {
-            tool.disable?.();
-            enabled.val = false;
-            setProgress("");
             if (e && /cancel/i.test(e.message || "")) {
-                Dialogs?.show?.(window.$.t('sync.cancelled'), 1200, Dialogs.MSG_INFO);
+                syncNotify(viewer, 'sync.cancelled', 1200, Dialogs.MSG_INFO);
             } else {
                 console.error(e);
-                Dialogs?.show?.(window.$.t('sync.failed'), 1600, Dialogs.MSG_WARN);
+                syncNotify(viewer, 'sync.failed', 2500, Dialogs.MSG_WARN);
             }
         } finally {
-            setBusy(false);
+            updateFromTool();
         }
     };
 
@@ -115,10 +127,9 @@ function SyncToggleButton(viewer, tool) {
     // caret menu next to the button is the discoverable route to the same thing.
     const onClick = (ev) => run((ev?.shiftKey || ev?.altKey) ? "manual" : null);
 
+    // The tool repaints the button through this, and the caret menu beside it
+    // drives the same logic with an explicit mode.
     viewer.__syncToolChanged = updateFromTool;
-    // The caret menu beside this button drives the same logic with an explicit
-    // mode. Exposed on the viewer alongside `__syncToolChanged`, which is how
-    // the rest of this chrome already reaches back into the button's closure.
     viewer.__syncRun = run;
 
     return van.tags.button(
@@ -131,26 +142,30 @@ function SyncToggleButton(viewer, tool) {
             class: () => [
                 "btn btn-xs join-item border-none px-1 xo-btn-inert",
                 !canSync() ? "" :
-                    (enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "")
+                    (adjusting.val ? "btn-warning" :
+                        (enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : ""))
             ].join(" "),
             // Presented as inert rather than hidden: a control that disappears
             // is worse than one that explains itself (see UPSTREAM_UI.md §0.8).
             disabled: () => !canSync(),
             onclick: onClick,
-            title: () => (!canSync()
-                ? window.$.t('sync.needsTwoSlides')
-                : (busy.val
-                    ? window.$.t('sync.cancelCalibration')
-                    : (enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle'))))
+            title: () => {
+                if (!canSync()) return window.$.t('sync.needsTwoSlides');
+                if (busy.val) return window.$.t('sync.cancelCalibration');
+                if (adjusting.val) return window.$.t('sync.adjustResumeTitle');
+                return enabled.val ? window.$.t('sync.disableTitle') : window.$.t('sync.enableTitle');
+            }
         },
-        // A text abbreviation rather than an icon: three states have to be told
+        // A text abbreviation rather than an icon: the states have to be told
         // apart at a glance. Resolved through `$.t` at render time, not as
         // literals — note that `sync.*` prose elsewhere quotes these tokens
         // ("Shift-click SYNC to calibrate by hand"), so a locale that renames
         // the button must rename them there too; they sit in the same block.
         van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
             () => {
-                if (busy.val) return window.$.t('sync.labelBusy');
+                // While busy the label is the progress ("1/3", "auto…").
+                if (busy.val) return progress.val || window.$.t('sync.labelBusy');
+                if (adjusting.val) return window.$.t('sync.labelAdjust');
                 if (!enabled.val) return window.$.t('sync.labelLink');
                 return isRef.val ? window.$.t('sync.labelRef') : window.$.t('sync.labelSync');
             }
@@ -364,8 +379,7 @@ function addQuickZoomChrome(scalebar, viewer, header, insertAfter) {
     // at or below the current zoom is filled, the next one fills by the log2
     // progress toward it — "past 10x, ~40% of the way to 20x". Sitting on a
     // stop also lights it (`btn-active`). Costs no width and no extra nodes,
-    // which is the whole point: the row must not push the metric bar onto a
-    // second line.
+    // so the strip stays one line above the metric bar.
     //
     // A theme token rather than `currentColor`: digital-zoom stops carry a
     // muted text colour, and their fill must not fade with it.
@@ -493,7 +507,10 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
 
     const resetCol = document.createElement("div");
     resetCol.className = "flex flex-col items-center";
-    resetCol.style.paddingLeft = `${ZOOM_READOUT_SHIFT_PX / 2}px`;
+    // A transform, not padding: padding widens the column, which leaves the
+    // button half a shift from the rotation readout but a whole shift from the
+    // zoom one. Shifted in place it sits in the middle of the gap.
+    resetCol.style.transform = `translateX(${ZOOM_READOUT_SHIFT_PX / 2}px)`;
     const reset = document.createElement("button");
     reset.type = "button";
     reset.className = "btn btn-xs btn-ghost border-none px-1";
@@ -511,7 +528,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._ui.resetCol = resetCol;
 
     // Single inline strip under the slider panel:
-    // [▾] [SYNC|menu] [viewer controls] [LABEL]. A flow child in both panel
+    // [▾] [LABEL] [quick zoom] [SYNC|menu] [viewer controls]. A flow child in both panel
     // states, so the controls stay put when the panel collapses onto them.
     const header = document.createElement("div");
     header.className = "relative flex flex-row items-center gap-2 pointer-events-auto";
@@ -523,8 +540,8 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     const toggle = document.createElement("button");
     toggle.type = "button";
     // btn-xxs (custom.css dense-chrome tier): the chevron is a pure affordance,
-    // every pixel it gives back is one the quick-zoom row can use before the
-    // metric bar has to wrap onto a second line.
+    // every pixel it gives back is one the quick-zoom row can use before it
+    // has to scroll.
     toggle.className = "btn btn-xxs border-none";
     toggle.style.paddingLeft = "0.25rem";
     toggle.style.paddingRight = "0.25rem";
@@ -556,10 +573,10 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
             // session survives — if this was the reference viewer, a peer is
             // promoted instead. Session-wide reset lives in the Tools menu.
             tool.resetViewer();
-            Dialogs?.show?.(window.$.t('sync.cleared'), 1600, Dialogs.MSG_INFO);
+            syncNotify(viewer, 'sync.cleared', 2500, Dialogs.MSG_INFO);
         } catch (err) {
             console.error(err);
-            Dialogs?.show?.(window.$.t('sync.resetFailed'), 1400, Dialogs.MSG_WARN);
+            syncNotify(viewer, 'sync.resetFailed', 2500, Dialogs.MSG_WARN);
         }
     };
 
@@ -594,6 +611,28 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
                 action: () => viewer.__syncRun?.("manual"),
             },
             { title: "" },
+            // Pause to nudge this viewport on its own; resuming keeps where
+            // it was left as the new alignment.
+            ...(tool?.isAdjusting?.() ? [
+                {
+                    title: window.$.t('sync.menuAdjustResume'),
+                    icon: "ph-play",
+                    action: () => viewer.__syncRun?.("adjust"),
+                },
+                {
+                    title: window.$.t('sync.menuAdjustDiscard'),
+                    icon: "ph-arrow-counter-clockwise",
+                    action: () => viewer.__syncRun?.("discard"),
+                },
+            ] : [
+                {
+                    title: window.$.t('sync.menuAdjust'),
+                    icon: "ph-pause",
+                    disabled: !linkable || !hasAlignment(),
+                    action: () => viewer.__syncRun?.("adjust"),
+                },
+            ]),
+            { title: "" },
             {
                 title: window.$.t('sync.menuClear'),
                 icon: "ph-eraser",
@@ -612,7 +651,7 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     // and the SYNC button's `join` rounding needs its right-hand sibling.
     syncGroup.appendChild(syncMenu);
 
-    // 4) Label thumbnail — pushed to the right with margin-left:auto.
+    // 4) Label thumbnail — first item of the strip, right behind the chevron.
     const LABEL_BOX = { width: "56px", height: "26px" };
     const LABEL_SCALE_HOVER = 4.5;
     const LABEL_SCALE_HOVER_COLLAPSED = 6;
@@ -631,14 +670,15 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     labelEl.style.transition = "transform 0.18s ease";
     labelEl.style.display = "none";
     labelEl.title = window.$.t('main.scalebar.slideLabel');
-    header.appendChild(labelEl);
+    // Strip order: [toggle] [label] [quick zoom] [SYNC|menu] [viewer controls].
+    header.insertBefore(labelEl, syncGroup);
     scalebar._ui.labelEl = labelEl;
 
     /**
-     * Always its own element at the end of the strip — welded onto the SYNC
-     * button it read as part of that button. Collapsed the strip is a single
-     * row and a 56px label pushes the quick-zoom stops off the edge, so there
-     * it shrinks to a square; the full label is one hover or click away.
+     * Always its own element, leading the strip — welded onto the SYNC
+     * button it read as part of that button. Collapsed, a 56px label pushes
+     * the quick-zoom stops off the edge of a narrow cell, so there it shrinks
+     * to a square; the full label is one hover or click away.
      */
     const placeLabel = () => {
         const c = !!scalebar._ui.collapsed;
@@ -767,14 +807,15 @@ function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
     scalebar._ui.collapsed = !!scalebar._ui.collapsed;
 
     // Quick-zoom row: the collapsed panel's reason to exist. Built after the
-    // chrome above so it lands between the SYNC group and the slide label.
-    const quickZoom = addQuickZoomChrome(scalebar, viewer, header, syncGroup);
+    // chrome above so it lands between the slide label and the SYNC group.
+    addQuickZoomChrome(scalebar, viewer, header, labelEl);
 
     // Slot for `USER_INTERFACE.ViewerControls` (e.g. slide-info's prev/next
     // arrows); the service owns its content. In neither collapsibles nor
-    // collapsedOnly: the controls stay visible in both panel states.
+    // collapsedOnly: the controls stay visible in both panel states. Last in
+    // the strip, behind the SYNC group.
     const controlsSlot = document.createElement("div");
-    header.insertBefore(controlsSlot, quickZoom.nextSibling);
+    header.appendChild(controlsSlot);
     scalebar._ui.unmountControls = window.USER_INTERFACE?.ViewerControls?.mount(controlsSlot, viewer);
 
     scalebar._applyCollapsed = () => {
