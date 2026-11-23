@@ -678,6 +678,9 @@
         "bugs": "Nahlásit problém"
       }
     },
+    "explorer": {
+      "loadFailed": "Seznam se nepodařilo načíst"
+    },
     "common": {
       "Load": "Načíst",
       "Loaded": "Načteno",

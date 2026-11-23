@@ -682,6 +682,9 @@
         "bugs": "Report an issue"
       }
     },
+    "explorer": {
+      "loadFailed": "Could not load this list"
+    },
     "common": {
       "Load": "Load",
       "Loaded": "Loaded",

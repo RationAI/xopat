@@ -92,16 +92,9 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                         };
                     };
 
-                    try {
-                        items.push(...await listCasesAt(contextPath));
-                    } catch (err) {
-                        console.error("File Browser failed to list cases!", err);
-                        Dialogs.show(`Could not list cases for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
-                        return {
-                            items: [],
-                            total: 0,
-                        };
-                    }
+                    // Not caught: a failed listing is not an empty folder. The
+                    // Explorer shows the error with a Retry button.
+                    items.push(...await listCasesAt(contextPath));
 
                     if (!parent) {
                         try {

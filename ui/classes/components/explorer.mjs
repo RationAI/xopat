@@ -467,6 +467,47 @@ export class Explorer extends BaseComponent {
 
         const bucket = this._ensureBucket(levelIndex, parent, this._search);
 
+        try {
+            await this._loadBucket(levelIndex, lvl, parent, bucket);
+        } catch (e) {
+            // A provider that throws used to reject this promise and leave the
+            // host blank. Un-latch the bucket so Retry really fetches again, and
+            // show what happened in place of the list.
+            bucket._init = false;
+            console.error("Explorer: failed to load level", e);
+            host.innerHTML = "";
+            host.appendChild(this._renderLoadError(levelIndex, e));
+            return;
+        }
+
+        const view = this._renderLevelView(levelIndex, parent, bucket);
+        if (replace) {
+            host.innerHTML = "";
+            host.appendChild(view);
+        } else {
+            host.appendChild(view);
+        }
+    }
+
+    /** Header (so the user can still navigate away) + the error and a Retry button. */
+    _renderLoadError(levelIndex, error) {
+        const detail = error?.message ? String(error.message) : "";
+        return div({ class: this.classMap.base, id: this.id },
+            this._renderHeader(levelIndex),
+            div({ class: "flex-1 min-h-0 flex flex-col items-center justify-center gap-2 p-4 text-center", role: "alert" },
+                span({ class: "ph-light ph-warning text-error text-3xl" }),
+                div({ class: "font-medium" }, $.t('explorer.loadFailed')),
+                detail ? div({ class: "text-sm text-base-content/60 break-all" }, detail) : null,
+                van.tags.button({
+                    type: "button",
+                    class: "btn btn-sm btn-outline mt-2",
+                    onclick: () => this._loadAndRender(levelIndex, { replace: true }).then(() => this._emitStateChange()),
+                }, span({ class: "ph-light ph-arrow-clockwise" }), $.t('common.retry')),
+            ),
+            this.loader.create());
+    }
+
+    async _loadBucket(levelIndex, lvl, parent, bucket) {
         // ⬅️ On first init for this bucket, pick the starting page.
         if (!bucket._init) {
             bucket._init = true;
@@ -489,14 +530,6 @@ export class Explorer extends BaseComponent {
                     await this._fetchPage(levelIndex, parent, bucket, bucket.currentPage);
                 }
             }
-        }
-
-        const view = this._renderLevelView(levelIndex, parent, bucket);
-        if (replace) {
-            host.innerHTML = "";
-            host.appendChild(view);
-        } else {
-            host.appendChild(view);
         }
     }
 
