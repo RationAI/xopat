@@ -372,37 +372,6 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const viewer = this.context.viewer;
         if (!viewer || !viewer.drawer || !viewer.drawer.renderer) return;
 
-        // for some reason change in drawer completely wrongs the logics
-        // of reading the texture, so the drawer must be recreated
-
-        if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
-            // Dev-only render capture; no-op unless the debug window is open.
-            APPLICATION_CONTEXT.renderDebug?.unregisterDrawer?.(this.drawer);
-            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer, {
-                // The segmentation mask IS the alpha channel, so this pass has to
-                // composite onto transparency instead of the viewer's backdrop.
-                // Without it a deployment with an opaque `setup.backgroundColor`
-                // (white, the common case) returns alpha 255 for every pixel, the
-                // mask becomes the whole viewport and the coverage guard rejects
-                // it - "the detected region fills the whole viewport" on a heatmap
-                // that plainly does not.
-                //
-                // Both are construction-time only: presentationClearColor has no
-                // setter, and backgroundColor (the shader-stack seed) is inert
-                // until the next shader compile.
-                presentationClearColor: [0, 0, 0, 0],
-                backgroundColor: "#00000000",
-                // Pin a private WebGL context: in shared-context mode the default
-                // framebuffer behind `renderer.gl` is the shared scratch canvas,
-                // not this drawer's output, and prepareViewportScreenshot's
-                // readPixels would sample a blank surface.
-                sharedContextKey: null,
-            });
-            APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(this.drawer, {
-                label: "viewport-segmentation", viewer: this.context.viewer, kind: "offscreen"
-            });
-        }
-
         // Re-read the layer stack every time. `disabled` is seeded in the
         // constructor, which runs before the first slide is open, so without this
         // it would report "nothing to segment" for the whole session - the same
@@ -415,11 +384,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         }
     }
 
-    // Build the shader config map handed to drawWithConfiguration from the
-    // live renderer state. Each entry is a shallow top-level copy of the live
-    // config; cache (opacity, threshold, color, inverse, use_channelX, …) is
-    // preserved on cfg.cache and read by the standalone shader's controls via
-    // loadProperty() during construct().
+    // Which visualization layers a snapshot would contain, keyed by shader id. Only its
+    // emptiness matters here ("is there anything to segment from?"); the render itself and
+    // its per-layer overrides belong to the core (visualization.renderCurrentLayersPixels
+    // with layers: "visualization"), which applies the same visible / not-errored filter.
     _buildEffectiveConfig() {
         const renderer = this.context.viewer.drawer.renderer;
         const order = renderer.getShaderLayerOrder() || [];
@@ -428,29 +396,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             const cfg = renderer.getShaderLayerConfig(id);
             if (!cfg || cfg.error) continue;
             if (cfg.visible === 0 || cfg.visible === false) continue;
-            // Pass the live config through. User-edited values live on cfg.cache;
-            // the standalone shader's controls read them via loadProperty() during
-            // construct(). Do not spread cache into params — slider controls need
-            // their full {default, min, max, step, …} definition from the shader
-            // type's defaultControls, which a scalar in params would collapse.
-            //
-            // ...but force compositing to "show". Every other use_mode blends
-            // against the layer UNDERNEATH: the 'mask' blend function is
-            // literally `if (fg.a == 0) return vec4(0); return bg;`. This pass
-            // deliberately omits the background layers, so "underneath" is the
-            // transparent seed colour and a heatmap configured as a mask
-            // composites to fully transparent — the readback comes back empty
-            // and the tool detects nothing at all. We only care where each layer
-            // paints, not what it looks like over the slide.
-            //
-            // The cache is COPIED, never mutated: it is the same object the live
-            // renderer reads, and use_mode is resolved from it whenever the
-            // config value is not forced (flex-renderer loadProperty).
-            out[id] = {
-                ...cfg,
-                use_mode: "show",
-                cache: { ...(cfg.cache || {}), use_mode: "show" }
-            };
+            out[id] = true;
         }
         return out;
     }
@@ -499,75 +445,41 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return this._snapshotPromise;
     }
 
-    async prepareViewportScreenshot(x, y, w, h) {
-        // Refresh from the live renderer every snapshot — picks up control
-        // edits (cache mutations) and any wholesale config.cache reassignments
-        // from session-import paths.
-        const effective = this._buildEffectiveConfig();
-        this._renderConfig = effective;
-        if (Object.keys(effective).length === 0) {
+    /**
+     * Read the visualization layers of the current viewport, without the slide and on a
+     * transparent backdrop, so the alpha channel IS the mask. The render itself - layer
+     * selection, forcing `use_mode: "show"`, the transparent drawer, the serialized queue -
+     * is the core's (visualization.renderCurrentLayersPixels); this mode used to keep a
+     * private drawer and `gl.readPixels` for it.
+     */
+    async prepareViewportScreenshot() {
+        // Refresh from the live renderer every snapshot: the emptiness check below is what
+        // the click handlers explain to the user.
+        this._renderConfig = this._buildEffectiveConfig();
+        if (Object.keys(this._renderConfig).length === 0) {
             this.data = null;
             this._invalidData = false;
             return null;
         }
         const viewer = this.context.viewer;
-        x = x || 0;
-        y = y || 0;
-        w = w || Math.round(viewer.drawer.canvas.width);
-        h = h || Math.round(viewer.drawer.canvas.height);
+        const w = Math.round(viewer.drawer.canvas.width);
+        const h = Math.round(viewer.drawer.canvas.height);
 
-        this.contentSize = {x, y, w, h};
         this._invalidData = true;
+        const out = await this.readViewportLayers({
+            layers: "visualization",
+            transparent: true,
+            maxPixels: w * h,
+        });
 
-        // Drop the cached first-pass refs so flex-renderer re-steals the
-        // main viewer's current first-pass textures (handles texture
-        // reallocations after resize/layer-count changes).
-        if (this.drawer && this.drawer.renderer) {
-            this.drawer.renderer.__firstPassResult = null;
-        }
-
-        // The standalone offscreen WebGL canvas does not auto-clear between
-        // draws. Without this clear, transparent areas of the new frame would
-        // leak the previous frame's pixels — making it impossible for the
-        // traced polygon to shrink when the heatmap shrinks. Mirrors the same
-        // pattern in modules/annotations/magic-wand.js:100.
-        // clearColor is sticky GL state, so a bare clear() would inherit whatever
-        // the previous pass left bound. State it explicitly: this surface must
-        // start fully transparent for the alpha mask to mean anything.
-        const gl = this.drawer.renderer.gl;
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        await this.drawer.drawWithConfiguration(
-            viewer.world._items,
-            effective,
-            viewer.drawer,
-            { x: w, y: h }
-        );
-
-        const data = new Uint8Array(w * h * 4); // RGBA8
-        gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
-        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
-
-        // todo make this available on ALL events! viewer relative position
-        this.offset = viewer.drawer.canvas.getBoundingClientRect();
-
-        // vertical flip
-        const row = w * 4;
-        const tmp = new Uint8Array(row);
-        for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
-            tmp.set(data.subarray(t, t + row));
-            data.copyWithin(t, b, b + row);
-            data.set(tmp, b);
-        }
-
+        this.contentSize = {x: 0, y: 0, w: out.width, h: out.height};
         this.data = {
-            width:  w,
-            height: h,
-            data:   data,
+            width:  out.width,
+            height: out.height,
+            data:   out.data,
             bytes:  4,
-            rawData: data,
-            binaryMask: new Uint8ClampedArray(w * h)
+            rawData: out.data,
+            binaryMask: new Uint8ClampedArray(out.width * out.height)
         };
         this._invalidData = false;
         return this.data;

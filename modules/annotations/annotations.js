@@ -1438,9 +1438,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * Resolve what "locked" currently means for one annotation.
      *
      * Two flags feed it. `object.locked` is the **user's** lock, behind the padlock in
-     * the annotation's toolbar: by default the annotation stops responding to the canvas
-     * entirely — it is not hit-tested and not selectable, so the user can draw straight
-     * over it — every mutation is refused, and the user may release it again.
+     * the annotation's toolbar: by default the annotation leaves the press path — it is
+     * not hit-tested, so the user can draw straight over it, though a plain click still
+     * selects it — every mutation is refused, and the user may release it again.
      * `object.readOnly` is a lock the user did not place and cannot lift (an analysis
      * job's output, a record another scope owns): it stays selectable, readable and
      * commentable but refuses every mutation.
@@ -2925,6 +2925,38 @@ OSDAnnotations.AnnotationState = class {
     }
 
 	/**
+	 * Read the pixels of selected shader layers as the current viewport of this mode's
+	 * viewer shows them. Goes through the core `visualization` scripting namespace - the one
+	 * render path, with its per-viewer queue, scheduler gate and capture announcement - so
+	 * modes never keep a private offscreen drawer.
+	 *
+	 * The pixels stay inside the tool and the user's own gesture is the request, hence no
+	 * pixel-read prompt (see src/classes/scripting/README.md).
+	 * @param {object} options VisualizationLayersRenderOptions: `layers`, `transparent`,
+	 *   `width`, `height`, `maxPixels`...; `pixelFormat` is forced to "typed"
+	 * @return {Promise<{width: number, height: number, data: Uint8ClampedArray, isComplete: boolean}>}
+	 *   RGBA rows from the top-left; `isComplete` false if tiles were still loading
+	 */
+	async readViewportLayers(options) {
+		const viewer = this.context.viewer;
+		const base = APPLICATION_CONTEXT.Scripting?.getApi?.("visualization");
+		if (!viewer || !base?.bindInvocationContext) {
+			throw new Error("The visualization API is not available.");
+		}
+		const uid = viewer.uniqueId;
+		const api = base.bindInvocationContext({
+			scriptingContext: {
+				id: `__annotations_${this._id}_${uid}__`,
+				getActiveViewerContextId: () => uid,
+				activeViewerContextId: uid,
+				isConsentDialogBypassed: () => false,
+				pixelReadPreapproved: true,
+			},
+		});
+		return api.renderCurrentLayersPixels({ ...options, pixelFormat: "typed" });
+	}
+
+	/**
 	 * Discard action: default deletes active object
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
@@ -3132,7 +3164,8 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	//find either array of points (intersection) or nested array of points /targets/
-	fftFindTarget(point, ffTool, brushPolygon, offset=0) {
+	// radius: half-size of the searched area in image pixels, the brush radius by default
+	fftFindTarget(point, ffTool, brushPolygon, offset=0, radius=ffTool.radius) {
 		function getObjectAsCandidateForIntersectionTest(o) {
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
@@ -3153,10 +3186,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		// Instead, loop only through near polygons in the nice order -> this will process
 		// first top annotations -> potentially selected
 		const candidates = this.context.fabric.findIntersectingObjectsByBBox({
-			x: point.x - ffTool.radius - offset,
-			y: point.y - ffTool.radius - offset,
-			width: ffTool.radius * 2 + offset,
-			height: ffTool.radius * 2 + offset
+			x: point.x - radius - offset,
+			y: point.y - radius - offset,
+			width: radius * 2 + offset,
+			height: radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
 
 		const polygonUtils = OSDAnnotations.PolygonUtilities;

@@ -2758,9 +2758,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * Lock an annotation, or release it.
      *
      * This is the **user's** lock, behind the padlock in the annotation's toolbar. By
-     * default it means "stop responding to the canvas": the annotation is no longer
-     * hit-tested or selectable — so the user can draw straight over it — and every
-     * mutation is refused by the module's lock guard. What it means is overridable per
+     * default it means "get out of the way": the annotation is no longer hit-tested, so
+     * the user can draw straight over it, a plain click still selects it (see
+     * {@link _resolveLockedReleaseTarget}), and every mutation is refused by the
+     * module's lock guard. What it means is overridable per
      * deployment, see {@link OSDAnnotations#registerLockPolicy}.
      *
      * Routed through `annotationResource.update` rather than written directly, because
@@ -3970,7 +3971,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 // left click up handles selection for all modes if mode did not handle the event
                 // (a creation mode that discarded its gesture reports CLICK_NOT_CONSUMED, so a
                 // too-short click on an existing annotation selects it instead of doing nothing)
-                const releaseTarget = _this._resolveReleaseTarget(fabricEvent);
+                const releaseTarget = _this._resolveReleaseTarget(fabricEvent)
+                    || _this._resolveLockedReleaseTarget(fabricEvent);
                 if (releaseTarget) {
                     _this._objectClicked(fabricEvent, point, releaseTarget);
                 } else {
@@ -4661,6 +4663,27 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!cached.isHelperAnnotation && !cached.isHighlight) return cached;
         const fresh = this.canvas.findTarget?.(fabricEvent.e, false) || null;
         return (fresh && !fresh.isHelperAnnotation && !fresh.isHighlight) ? fresh : null;
+    }
+
+    /**
+     * The locked annotation a plain click landed on, when it landed on nothing else.
+     *
+     * A non-interactive lock is out of fabric's hit-test so a press over it draws
+     * instead of grabbing it. Left at that, clicking a locked annotation does nothing
+     * at all, which reads as a broken canvas: the user cannot tell a lock from a bug,
+     * and cannot reach the padlock that would release it. So a release that no mode
+     * consumed and that was a click rather than a drag selects it — the toolbar comes
+     * up with its closed padlock, and the lock explains itself. The annotation stays
+     * out of the press path, so drawing over it is unaffected.
+     *
+     * @param {object} fabricEvent the fabric `mouse:up` options object
+     * @return {fabric.Object|null}
+     * @private
+     */
+    _resolveLockedReleaseTarget(fabricEvent) {
+        if (!fabricEvent || fabricEvent.isClick === false) return null;
+        const hit = this.canvas.findBlockedObjectUnderMouse?.(fabricEvent.pointer);
+        return (hit && this.isAnnotation(hit) && hit.visible) ? hit : null;
     }
 
     _isFabricControlInteraction(fabricEvent) {

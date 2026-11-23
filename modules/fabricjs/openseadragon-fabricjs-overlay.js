@@ -803,11 +803,39 @@
         // fabric discards the active object whenever the pointer sits on a non-evented
         // target, so the owner of this flag could not keep a selection (and its
         // controls) alive on an object it wanted the mouse to pass through.
-        if (obj?.__hitTestBlocked) return false;
+        if (obj?.__hitTestBlocked && !this.__hitTestIncludesBlocked) return false;
         const passedBbox = _origCheckTarget.call(this, pointer, obj);
         if (!passedBbox) return passedBbox;
         if (!this.__spatialIndex) return passedBbox;
         return this.__preciseContains(obj, pointer);
+    };
+
+    /**
+     * The topmost `__hitTestBlocked` object under the pointer, tested exactly as an
+     * unblocked one would be. Blocked objects are invisible to `findTarget` on purpose,
+     * which also means the owner of the flag cannot tell "the user clicked empty slide"
+     * from "the user clicked the thing I blocked" — this answers the second question
+     * without putting the object back into fabric's own targeting.
+     * @memberOf fabric.Canvas
+     * @param {fabric.Point} pointer viewport-space pointer, as in the fabric event's `pointer`
+     * @return {fabric.Object|null}
+     */
+    fabric.Canvas.prototype.findBlockedObjectUnderMouse = function (pointer) {
+        if (!pointer) return null;
+        const idx = this.__spatialIndex;
+        const pool = idx ? idx.realCandidates(this.vptCoords, this) : this._objects;
+        this.__hitTestIncludesBlocked = true;
+        try {
+            for (let i = pool.length - 1; i >= 0; i--) {
+                const obj = pool[i];
+                if (!obj.__hitTestBlocked) continue;
+                idx?.ensureFresh(obj);
+                if (this._checkTarget(pointer, obj)) return obj;
+            }
+        } finally {
+            this.__hitTestIncludesBlocked = false;
+        }
+        return null;
     };
 
     const _origSearchPossibleTargets = fabric.Canvas.prototype._searchPossibleTargets;

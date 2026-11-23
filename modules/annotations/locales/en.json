@@ -26,8 +26,9 @@
   },
   "modeOptions": {
     "magicWand": {
-      "growth": "Growth",
-      "growthHint": "How far the selection spreads from the clicked point (scroll to change).",
+      "hint": "Drag over the image to add what the wand detects. Right-drag or Alt-drag to remove it.",
+      "tolerance": "Tolerance",
+      "toleranceHint": "How different a colour may be and still be selected (hold Shift and scroll to change).",
       "layer": "Detect from layer"
     }
   },

@@ -297,6 +297,37 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     /**
+     * Apply an arbitrary screen-space region to the object being modified, instead of the
+     * round brush of {@link update}. Used by tools that detect a region themselves (magic wand)
+     * and only need it merged into / cut out of an annotation - holes, multipolygons, parts of
+     * the annotation outside the viewport, the live preview and the history step on
+     * {@link finish} all behave exactly like a brush stroke.
+     *
+     * The mode set by {@link setModeAdd} is ignored: the colors of the mask decide.
+     * @param {HTMLCanvasElement} maskCanvas image covering the whole viewer element (any
+     *   resolution, it is stretched to it): opaque white adds, opaque black removes,
+     *   transparent leaves the object as it is
+     * @return {boolean} true if the object changed
+     */
+    applyMask(maskCanvas) {
+        if (!this.polygon) return false;
+
+        try {
+            this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
+            this._ctxWindow.drawImage(maskCanvas,
+                this._offset.x, this._offset.y, this._windowSize.width, this._windowSize.height);
+
+            const changed = !!this._commitRaster();
+            this._updatePerformed = changed || this._updatePerformed;
+            this._context.fabric.rerender();
+            return changed;
+        } catch (e) {
+            console.warn("FreeFormTool: could not apply the mask, ignoring...", e);
+            return false;
+        }
+    }
+
+    /**
      * Check if free form tool is in active mode
      * @return {boolean}
      */
@@ -640,6 +671,15 @@ OSDAnnotations.FreeFormTool = class {
         this.mousePos = nextMousePos;
         this._ctxWindow.fillStyle = fillColor;
         this._rasterizePolygons(this._ctxWindow, this.getCircleShape(this.mousePos), true);
+        return this._commitRaster();
+    }
+
+    /**
+     * Turn the current content of the window raster back into the modified object.
+     * @return {boolean|object} truthy if the object changed
+     */
+    _commitRaster() {
+        this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
 
         let bbox = {x: 0, y: 0, width: this._ctxWindow.canvas.width, height: this._ctxWindow.canvas.height};
         let ctx = this._ctxWindow;

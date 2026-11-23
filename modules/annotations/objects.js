@@ -752,6 +752,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
             slots.push({
                 id: 'lock',
                 icon: lock.locked ? 'ph-lock' : 'ph-lock-open',
+                // A closed padlock is the answer to "why does this not respond",
+                // so it must not read as one more neutral glyph in the row.
+                color: lock.locked ? '#dc2626' : undefined,
                 countText: '',
                 onClick: (lock.locked && !lock.releasable) ? null : () => {
                     const wrapper = self._context.fabric;
@@ -960,8 +963,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
+                    ctx.fillStyle = s.color || 'black';
                     ctx.fillText(self._resolveControlGlyph(s.icon), s._start + ICON_SIZE / 2, 1);
+                    ctx.fillStyle = 'black';
                     if (s.countText) {
                         ctx.font = `600 ${METRIC_FONT}px Arial`;
                         ctx.textAlign = 'left';

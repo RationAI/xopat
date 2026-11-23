@@ -968,6 +968,24 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         this.factoryID = "point";
     }
 
+    /**
+     * Largest radius the marker may take on screen, in screen pixels. Without a
+     * cap the marker grows as 14*sqrt(zoom) px and hides the very structure
+     * (often 5-10 px) the user is labelling at close zoom.
+     */
+    static MAX_SCREEN_RADIUS = 5;
+
+    /**
+     * Marker radius in image space: the zoom-softened size while zoomed out,
+     * clamped to MAX_SCREEN_RADIUS screen pixels once zoomed in.
+     * @param {number} graphicZoom see fabric.Canvas.computeGraphicZoom: sqrt(realZoom) / 2
+     * @param {number} [realZoom] screen pixels per image pixel, derived from graphicZoom if omitted
+     * @return {number}
+     */
+    _radius(graphicZoom, realZoom = 4 * graphicZoom * graphicZoom) {
+        return Math.min(7 / graphicZoom, this.constructor.MAX_SCREEN_RADIUS / realZoom);
+    }
+
     getIcon() {
         return "ph-map-pin";
     }
@@ -1016,14 +1034,15 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      */
     configure(object, options) {
         const graphicZoom = this.canvasOf(object)?.computeGraphicZoom() || 1;
-        const zoom = 7 / graphicZoom;
+        const zoom = this._radius(graphicZoom);
         OpenSeadragon.extend(object, options, {
             angle: 0,
             rx: zoom,
             ry: zoom,
             width: zoom*1.5,
             height: zoom*1.5,
-            strokeWidth: 2 / graphicZoom,
+            // same as onZoom: originalStrokeWidth / realZoom
+            strokeWidth: 2 / (4 * graphicZoom * graphicZoom),
             stroke: options.color,
             originalStrokeWidth: 2,
             originX: 'center',
@@ -1042,7 +1061,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
-        const zoom = 7 / graphicZoom;
+        const zoom = this._radius(graphicZoom, realZoom);
         ofObject.rx = ofObject.ry = zoom;
         ofObject.width = ofObject.height = zoom*1.5;
         ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;

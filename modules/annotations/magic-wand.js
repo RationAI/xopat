@@ -1,173 +1,297 @@
-OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
+/**
+ * Magic wand: press and drag over the image to add what the wand detects to an annotation,
+ * right-drag (or Alt + drag) to remove it.
+ *
+ * Nothing is detected while merely hovering. Detection used to re-run on every pointer move
+ * from the single raw pixel under the cursor, which made the result jump with each pixel of
+ * mouse travel and left a "growth" threshold as the only control. Now:
+ *
+ *  - the viewport is read ONCE per viewport state (core `visualization` API), at CSS-pixel
+ *    resolution, and a stroke works on that frozen frame;
+ *  - every seed compares against the AVERAGE colour of its 5x5 neighbourhood, not one pixel;
+ *  - a stroke only ever grows its region: seeds along the drag are flood-filled and unioned;
+ *  - the region is merged into / cut out of the annotation by the brush engine
+ *    (`FreeFormTool.applyMask`), so holes, multipolygons, undo and annotations reaching
+ *    outside the viewport behave exactly like the brush tools.
+ */
+OSDAnnotations.MagicWand = class extends OSDAnnotations.StateFreeFormTool {
     constructor(context) {
         super(context, "magic-wand", "ph-magic-wand", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
-        this.threshold = 10;
-        this.minThreshold = 0;
+        // Per-channel tolerance on the 0-255 scale.
+        this.threshold = 24;
+        this.minThreshold = 1;
         this.maxThreshold = 100;
         // single mouse scroll is +- 100 value
         this.thStep = 3 / 100;
 
-        this.addMode = false; //todo not tested yet
-        this.oldMask = null;
-        this.mask = null;
-        //this._buttonActive = false;
-        this._lastViewportKey = null;
-        this._scrollZoom = this.scrollZooming.bind(this);
+        this._selectedShader = null;
+        this.disabled = true;
 
-        const shaders = this.context.viewer.drawer.renderer.getShaderLayerOrder();
-        this._selectedShader = shaders[0];
-        this.disabled = !shaders.length;
+        this._snapshot = null;
+        this._snapshotPromise = null;
+        this._invalid = true;
+        // Bumped by every invalidation, so a read that was in flight when the pixels changed
+        // cannot mark itself valid on arrival.
+        this._invalidSeq = 0;
+        this._stroke = null;
+        this._pumping = false;
+        this._pumpAgain = false;
 
-        VIEWER_MANAGER.broadcastHandler('visualization-used', () => {
-            this.prepareShaderConfig();
-            this._invalidData = Date.now();
-        });
+        this._watchedViewer = null;
+        this._watchedRenderer = null;
+        this._onViewChanged = () => {
+            this._invalidate();
+            // Re-read eagerly, so the next press usually finds the frame ready.
+            if (!this._stroke && this._watchedViewer) this._requestSnapshot();
+        };
+
+        VIEWER_MANAGER.broadcastHandler('visualization-used', () => this._invalidate());
     }
 
-    prepareShaderConfig() {
-        // for some reason change in drawer completely wrongs the logics
-        // of reading the texture, so the drawer must be recreated
-
-        if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
-            // Dev-only render capture; no-op unless the debug window is open.
-            APPLICATION_CONTEXT.renderDebug?.unregisterDrawer?.(this.drawer);
-            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
-            APPLICATION_CONTEXT.renderDebug?.registerDrawer?.(this.drawer, {
-                label: "magic-wand", viewer: this.context.viewer, kind: "offscreen"
-            });
-        }
-
-        // Re-read the layer stack every time: the constructor runs before the
-        // first slide is open, so its snapshot of the shader order says
-        // "nothing to annotate" for the whole session otherwise.
-        const order = this.context.viewer.drawer.renderer.getShaderLayerOrder();
-        this.disabled = !order.length;
-        if (!order.includes(this._selectedShader)) this._selectedShader = order[0];
-
-        const shaders = this.context.viewer.drawer.renderer.getAllShaders();
-        const result = {};
-
-        const selectedShader = shaders[this._selectedShader];
-        for (let id in shaders) {
-            // If selection, keep the same amount of shaders, but except the target one make them vanish
-            // todo masks are not accounted for! make some flex drawer utility that solves this
-            result[id] = !selectedShader || id === this._selectedShader ? shaders[id].getConfig() : { type: 'identity', visible: 0, dataReferences: [0]};
-        }
-        this._renderConfig = result;
+    _invalidate() {
+        this._invalid = true;
+        this._invalidSeq++;
     }
 
-    setLayer(index, key) {
-        this._readingIndex = index;
-        this._readingKey = key;
+    get log() {
+        if (!this._log) this._log = APPLICATION_CONTEXT.log("module.annotations:magic-wand");
+        return this._log;
     }
 
-    handleClickUp(o, point, isLeftClick, objectFactory) {
-        // A click with nothing detected is a no-op: the tool stays active so
-        // the user can keep hovering. Leaving is done through the toolbar,
-        // another mode shortcut, or Escape.
-        if (this._allowCreation && this.result) {
-            delete this.result.strokeDashArray;
-            this.context.fabric.deleteHelperAnnotation(this.result);
-            this.context.fabric.addAnnotation(this.result);
-            this.result = null;
-            this._allowCreation = false;
-        }
-        return true;
-    }
+    /********************* PURE HELPERS (unit tested) *********************/
 
-    handleClickDown(o, point, isLeftClick, objectFactory) {
-        if (!objectFactory || this.disabled) {
-            this.abortClick(isLeftClick);
-            Dialogs.show($.t(this.disabled ? 'autoSelect.noData' : 'autoSelect.noPreset', { ns: 'annotations' }));
-            return;
-        }
+    /**
+     * Mean colour of the (2r+1)^2 neighbourhood of a pixel, ignoring fully transparent pixels.
+     * @param {{data: ArrayLike<number>, width: number, height: number}} image RGBA
+     * @param {number} px
+     * @param {number} py
+     * @param {number} [radius=2]
+     * @return {number[]|null} [R, G, B, A], null if the pixel itself is outside or transparent
+     */
+    static averageColor(image, px, py, radius = 2) {
+        const { data, width: w, height: h } = image;
+        if (!(px >= 0 && py >= 0 && px < w && py < h)) return null;
+        if (data[(py * w + px) * 4 + 3] === 0) return null;
 
-        // Hovering stays silent - a tool that detects on every pointer move
-        // cannot talk. The click is where the user asks for a result, so it is
-        // the only place a refusal is worth explaining.
-        if (!this.result && this._droppedCovering) {
-            Dialogs.show($.t('autoSelect.coversViewport', { ns: 'annotations' }), 4000, Dialogs.MSG_INFO);
-        }
-
-        this._allowCreation = true;
-        this.context.fabric.clearAnnotationSelection(true);
-        this._isLeft = isLeftClick;
-    }
-
-    locksViewer(oldViewerRef, newViewerRef) {
-        const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
-        if (!willKeepViewer) {
-            this.oldMask = null;
-            if (this.result) {
-                this.context.fabric.deleteHelperAnnotation(this.result);
+        let r = 0, g = 0, b = 0, a = 0, n = 0;
+        const y1 = Math.min(h - 1, py + radius), x1 = Math.min(w - 1, px + radius);
+        for (let y = Math.max(0, py - radius); y <= y1; y++) {
+            for (let x = Math.max(0, px - radius); x <= x1; x++) {
+                const i = (y * w + x) * 4;
+                if (data[i + 3] === 0) continue;
+                r += data[i]; g += data[i + 1]; b += data[i + 2]; a += data[i + 3];
+                n++;
             }
         }
-        return willKeepViewer;
-    }
-
-    async prepareViewportScreenshot(x, y, w, h) {
-        const viewer = this.context.viewer;
-        x = x || 0;
-        y = y || 0;
-        w = w || Math.round(viewer.drawer.canvas.width);
-        h = h || Math.round(viewer.drawer.canvas.height);
-
-        this._invalidData = true;
-
-        // todo this call needs to go to the renderer
-        this.drawer.renderer.gl.clear(this.drawer.renderer.gl.COLOR_BUFFER_BIT);
-        await this.drawer.drawWithConfiguration(
-            viewer.world._items,
-            this._renderConfig,
-            viewer.drawer,
-            { x: w, y: h }
-        );
-
-        const data = new Uint8Array(w * h * 4); // RGBA8
-        const gl   = this.drawer.renderer.gl;
-        gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
-        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
-
-        // vertical flip
-        const row = w * 4;
-        const tmp = new Uint8Array(row);
-        for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
-            tmp.set(data.subarray(t, t + row));
-            data.copyWithin(t, b, b + row);
-            data.set(tmp, b);
-        }
-
-        // todo make this available on ALL events! viewer relative position
-        this.offset = viewer.drawer.canvas.getBoundingClientRect();
-
-        this.data = {
-            width:  w,
-            height: h,
-            data:   data,
-            bytes:  4,
-            rawData: data,
-            binaryMask: new Uint8ClampedArray(w * h)
-        };
-        this._invalidData = false;
-        return this.data;
+        return [r / n, g / n, b / n, a / n];
     }
 
     /**
-     * Serialized, failure-tolerant entry point to prepareViewportScreenshot.
-     * The offscreen drawer clears and re-reads a single GL surface, so two
-     * overlapping passes corrupt each other's pixels; and a rejection here
-     * (e.g. the standalone extraction finding no tiles) must not escape as an
-     * unhandled rejection - the mode has to stay usable and retry on the next
-     * hover, which _invalidData already arranges.
+     * Points every `step` pixels on the segment from -> to, `from` excluded and `to` included.
+     * @return {{x: number, y: number}[]}
+     */
+    static seedsAlong(from, to, step) {
+        const dx = to.x - from.x, dy = to.y - from.y;
+        const count = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
+        const out = [];
+        for (let i = 1; i <= count; i++) {
+            out.push({ x: Math.round(from.x + dx * i / count), y: Math.round(from.y + dy * i / count) });
+        }
+        return out;
+    }
+
+    /**
+     * Fill enclosed holes of at most `maxArea` pixels, in place. Tissue texture leaves a
+     * colour-based fill full of specks; each would otherwise become a hole of a multipolygon.
+     * @param {{data: Uint8Array, width: number, bounds: object}} mask
+     * @param {number} maxArea
+     */
+    static fillSmallHoles(mask, maxArea) {
+        const { data, width: w, bounds: b } = mask;
+        const bw = b.maxX - b.minX + 1, bh = b.maxY - b.minY + 1;
+        if (bw < 3 || bh < 3) return;
+
+        const seen = new Uint8Array(bw * bh);
+        const stack = new Int32Array(bw * bh);
+        for (let sy = 0; sy < bh; sy++) {
+            for (let sx = 0; sx < bw; sx++) {
+                const start = sy * bw + sx;
+                if (seen[start] || data[(sy + b.minY) * w + sx + b.minX]) continue;
+
+                // Collect one 4-connected component of empty pixels. It is a hole only if it
+                // never reaches the edge of the bounds - beyond them everything is empty.
+                let top = 0, size = 0, open = false;
+                stack[top++] = start;
+                seen[start] = 1;
+                while (top > 0) {
+                    const k = stack[--top];
+                    stack[bw * bh - 1 - size] = k; // members are kept from the other end
+                    size++;
+                    const x = k % bw, y = (k - x) / bw;
+                    if (x === 0 || y === 0 || x === bw - 1 || y === bh - 1) open = true;
+                    for (let d = 0; d < 4; d++) {
+                        const nx = x + (d === 0 ? 1 : d === 1 ? -1 : 0);
+                        const ny = y + (d === 2 ? 1 : d === 3 ? -1 : 0);
+                        if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+                        const nk = ny * bw + nx;
+                        if (seen[nk] || data[(ny + b.minY) * w + nx + b.minX]) continue;
+                        seen[nk] = 1;
+                        stack[top++] = nk;
+                    }
+                }
+                if (open || size > maxArea) continue;
+                for (let m = 0; m < size; m++) {
+                    const k = stack[bw * bh - 1 - m];
+                    const x = k % bw;
+                    data[((k - x) / bw + b.minY) * w + x + b.minX] = 1;
+                }
+            }
+        }
+    }
+
+    /**
+     * Nearest pixel around (px, py), itself first, that is within tolerance of the sample
+     * and not selected yet.
+     * @return {{x: number, y: number}|null}
+     */
+    static _matchingStart(image, selected, px, py, sample, tolerance, radius = 2) {
+        const { data, width: w, height: h } = image;
+        let best = null, bestDistance = Infinity;
+        for (let y = Math.max(0, py - radius), y1 = Math.min(h - 1, py + radius); y <= y1; y++) {
+            for (let x = Math.max(0, px - radius), x1 = Math.min(w - 1, px + radius); x <= x1; x++) {
+                const distance = (x - px) * (x - px) + (y - py) * (y - py);
+                if (distance >= bestDistance || selected[y * w + x]) continue;
+                const i = (y * w + x) * 4;
+                if (data[i + 3] === 0
+                    || Math.abs(data[i] - sample[0]) > tolerance
+                    || Math.abs(data[i + 1] - sample[1]) > tolerance
+                    || Math.abs(data[i + 2] - sample[2]) > tolerance
+                    || Math.abs(data[i + 3] - sample[3]) > tolerance) continue;
+                best = { x, y };
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Flood-fill from one seed against the averaged colour around it and union the result
+     * into the accumulated mask.
+     * @param {object} lib magic wand library (OSDAnnotations.makeMagicWand())
+     * @param {{data: ArrayLike<number>, width: number, height: number, bytes: number}} image
+     * @param {{data: Uint8Array, bounds: object|null}} region accumulated mask, modified
+     * @param {number} px
+     * @param {number} py
+     * @param {number} tolerance
+     * @param {number} maxArea a fill larger than this is a leak and is discarded
+     * @return {"added"|"none"|"leak"}
+     */
+    static growRegion(lib, image, region, px, py, tolerance, maxArea) {
+        const w = image.width;
+        if (!(px >= 0 && py >= 0 && px < w && py < image.height)) return "none";
+        if (region.data[py * w + px]) return "none";
+
+        const sample = OSDAnnotations.MagicWand.averageColor(image, px, py);
+        if (!sample) return "none";
+
+        // The fill starts by testing its own start pixel, and an outlier under the cursor fails
+        // the test against the mean of its surroundings. Start from the nearest pixel of the
+        // sampled window that does belong to that mean instead.
+        const start = OSDAnnotations.MagicWand._matchingStart(image, region.data, px, py, sample, tolerance);
+        if (!start) return "none";
+        px = start.x;
+        py = start.y;
+
+        const fill = lib.floodFill(image, px, py, tolerance, tolerance, region.data, false, sample);
+        if (!fill || fill.bounds.maxX < fill.bounds.minX || fill.bounds.maxY < fill.bounds.minY) return "none";
+
+        const f = fill.bounds, src = fill.data;
+        let area = 0;
+        for (let y = f.minY; y <= f.maxY; y++) {
+            for (let k = y * w + f.minX, end = y * w + f.maxX; k <= end; k++) area += src[k];
+        }
+        if (area === 0) return "none";
+        if (area > maxArea) return "leak";
+
+        const dst = region.data;
+        for (let y = f.minY; y <= f.maxY; y++) {
+            for (let k = y * w + f.minX, end = y * w + f.maxX; k <= end; k++) {
+                if (src[k]) dst[k] = 1;
+            }
+        }
+        const b = region.bounds;
+        region.bounds = b ? {
+            minX: Math.min(b.minX, f.minX), minY: Math.min(b.minY, f.minY),
+            maxX: Math.max(b.maxX, f.maxX), maxY: Math.max(b.maxY, f.maxY)
+        } : { ...f };
+        return "added";
+    }
+
+    /********************* SNAPSHOT *********************/
+
+    _refreshLayers() {
+        // Re-read the layer stack every time: the constructor runs before the first slide
+        // is open, so a snapshot of the order taken there says "nothing to annotate" forever.
+        const order = this.context.viewer?.drawer?.renderer?.getShaderLayerOrder?.() || [];
+        this.disabled = !order.length;
+        if (!order.includes(this._selectedShader)) this._selectedShader = order[0];
+    }
+
+    _viewportKey() {
+        const viewport = this.context.viewer.viewport;
+        const b = viewport.getBoundsNoRotateWithMargins(true);
+        const size = viewport.getContainerSize();
+        return [
+            b.x, b.y, b.width, b.height, size.x, size.y,
+            viewport.getRotation(true), viewport.getFlip(), this._selectedShader
+        ].join(",");
+    }
+
+    async _takeSnapshot() {
+        const viewer = this.context.viewer;
+        // One frame, so the live first pass this read re-uses is the one for the current view.
+        await new Promise(r => requestAnimationFrame(r));
+
+        const key = this._viewportKey();
+        const size = viewer.viewport.getContainerSize();
+        // CSS-pixel resolution, capped: averages out per-pixel noise, makes the result
+        // independent of the device pixel ratio and bounds the cost of a fill.
+        const scale = Math.min(1, OSDAnnotations.MagicWand.MAX_SIDE / Math.max(size.x, size.y));
+        const width = Math.max(1, Math.round(size.x * scale));
+        const height = Math.max(1, Math.round(size.y * scale));
+
+        const out = await this.readViewportLayers({
+            layers: { shaderIds: [this._selectedShader] },
+            transparent: true,
+            width, height,
+            maxPixels: width * height,
+        });
+        return {
+            data: out.data, width: out.width, height: out.height, bytes: 4,
+            cssWidth: size.x, cssHeight: size.y,
+            key, viewer, isComplete: out.isComplete !== false,
+        };
+    }
+
+    /**
+     * Single-flight: the read is serialized per viewer in core anyway, and two passes for
+     * the same view would only race each other for `this._snapshot`.
      * @return {Promise<object|null>} the snapshot, or null when it failed
      */
     _requestSnapshot() {
         if (!this._snapshotPromise) {
-            this._snapshotPromise = this.prepareViewportScreenshot().catch(e => {
-                console.warn("Magic wand: viewport snapshot failed.", e);
-                this.data = null;
+            const seq = this._invalidSeq;
+            this._snapshotPromise = this._takeSnapshot().then(snapshot => {
+                this._snapshot = snapshot;
+                // A frame read while tiles were streaming is usable, not trustworthy: keep
+                // it for the stroke that asked, read again for the next one.
+                this._invalid = !snapshot.isComplete || seq !== this._invalidSeq;
+                return snapshot;
+            }).catch(e => {
+                this.log.warn("viewport snapshot failed", e);
+                this._snapshot = null;
                 return null;
             }).finally(() => {
                 this._snapshotPromise = null;
@@ -176,158 +300,310 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return this._snapshotPromise;
     }
 
-    async _process(o) {
+    async _ensureSnapshot() {
         const viewer = this.context.viewer;
-
-        // Build a simple key from current viewport
-        const b = viewer.viewport.getBoundsNoRotateWithMargins(true);
-        const key = [
-            b.x, b.y, b.width, b.height,
-            viewer.viewport.getRotation(true),
-            viewer.viewport.getZoom(true)
-        ].join(",");
-
-        const needsNewScreenshot =
-            !this.data ||
-            this._invalidData ||
-            this._lastViewportKey !== key;
-
-        if (needsNewScreenshot || this._snapshotPromise) {
-            await this._requestSnapshot();
-            this._lastViewportKey = key;
-        }
-
-        if (!this.data) return; // still nothing? bail out
-
-        if (this.addMode && !this.oldMask) {
-            this.oldMask = this.mask;
-        }
-        const ref    = viewer.scalebar.getReferencedTiledImage();
-        const oldMask = this.oldMask && this.oldMask.data;
-        const ratio  = OpenSeadragon.pixelDensityRatio;
-
-        this.mask = this.MagicWand.floodFill(
-            this.data,
-            Math.round((o.x - this.offset.x) * ratio),
-            Math.round((o.y - this.offset.y) * ratio),
-            this.threshold,
-            this.threshold,
-            oldMask,
-            true
-        );
-
-        if (this.mask) this.mask = this.MagicWand.gaussBlurOnlyBorder(this.mask, 5, oldMask);
-        if (this.addMode && oldMask) {
-            this.mask = this.mask ? this._concatMasks(this.mask, oldMask) : oldMask;
-        }
-        if (!this.mask || !this.mask.bounds) {
-            // floodFill returns null when the seed pixel is already part of the
-            // previous mask - nothing new was selected.
-            if (this.result) {
-                this.context.fabric.deleteHelperAnnotation(this.result);
-                this.result = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const snapshot = this._snapshot;
+            if (snapshot && !this._invalid && !this._snapshotPromise
+                && snapshot.viewer === viewer && snapshot.key === this._viewportKey()) {
+                return snapshot;
             }
-            return;
+            const fresh = await this._requestSnapshot();
+            // Joined a read started for another view (or viewer): go once more.
+            if (fresh && fresh.viewer === viewer && fresh.key === this._viewportKey()) return fresh;
         }
-        this.mask.bounds.minX = this.mask.bounds.minY = 0;
-        let cs = this.MagicWand.traceContours(this.mask);
-        cs = this.MagicWand.simplifyContours(cs, 0, 30);
+        return null;
+    }
 
-        let largest, count = 0;
-        for (let line of cs) {
-            if (!line.inner && line.points.length > count) {
-                largest = line.points;
-                count = largest.length;
-            }
-        }
-
-        // A fill that saturates the viewport is a misdetection, not a
-        // selection: it hides the image behind an opaque near-rectangle and
-        // nobody would ever commit it. Drop it silently - the user reacts by
-        // lowering the growth threshold or zooming in.
-        if (largest && OSDAnnotations.PolygonUtilities.coversViewport(
-            largest, this.data.width, this.data.height)) {
-            largest = null;
-            // Remembered so a click can explain the refusal. On screen this is
-            // indistinguishable from "found nothing", which is what made the
-            // drop feel like a broken tool rather than a deliberate one.
-            this._droppedCovering = true;
-        } else {
-            this._droppedCovering = false;
-        }
-
-        const factory = this.context.getAnnotationObjectFactory("polygon");
-        if (this.result) {
-            this.context.fabric.deleteHelperAnnotation(this.result);
-        }
-
-        if (largest && factory) {
-            largest = largest.map(pt =>
-                // we must call viewerElementToImageCoordinates since we don't want to strip the offset of the viewer
-                ref.viewerElementToImageCoordinates(
-                    new OpenSeadragon.Point((pt.x) / ratio, (pt.y) / ratio)
-                )
-            );
-            const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
-            visualProps.strokeDashArray = [15, 15];
-            this.result = factory.create(largest, visualProps);
-            this.context.fabric.addHelperAnnotation(this.result);
-        } else {
-            this.result = null;
+    _bindWatchers(viewer) {
+        if (!viewer || this._watchedViewer === viewer) return;
+        this._unbindWatchers();
+        viewer.addHandler('animation-finish', this._onViewChanged);
+        this._watchedViewer = viewer;
+        // Control edits (slider, colour, channel mapping) change the pixels without moving
+        // the view.
+        const renderer = viewer.drawer && viewer.drawer.renderer;
+        if (renderer && typeof renderer.addHandler === 'function') {
+            renderer.addHandler('visualization-change', this._onViewChanged);
+            this._watchedRenderer = renderer;
         }
     }
 
-    _concatMasks(mask, old) {
-        let
-            data1 = old.data,
-            data2 = mask.data,
-            w1 = old.width,
-            w2 = mask.width,
-            b1 = old.bounds,
-            b2 = mask.bounds,
-            b = { // bounds for new mask
-                minX: Math.min(b1.minX, b2.minX),
-                minY: Math.min(b1.minY, b2.minY),
-                maxX: Math.max(b1.maxX, b2.maxX),
-                maxY: Math.max(b1.maxY, b2.maxY)
-            },
-            w = old.width, // size for new mask
-            h = old.height,
-            i, j, k, k1, k2, len;
+    _unbindWatchers() {
+        if (this._watchedViewer) {
+            this._watchedViewer.removeHandler('animation-finish', this._onViewChanged);
+            this._watchedViewer = null;
+        }
+        if (this._watchedRenderer && typeof this._watchedRenderer.removeHandler === 'function') {
+            this._watchedRenderer.removeHandler('visualization-change', this._onViewChanged);
+        }
+        this._watchedRenderer = null;
+    }
 
-        let result = new Uint8Array(w * h);
+    /********************* STROKE *********************/
 
-        // copy all old mask
-        len = b1.maxX - b1.minX + 1;
-        i = b1.minY * w + b1.minX;
-        k1 = b1.minY * w1 + b1.minX;
-        k2 = b1.maxY * w1 + b1.minX + 1;
-        // walk through rows (Y)
-        for (k = k1; k < k2; k += w1) {
-            result.set(data1.subarray(k, k + len), i); // copy row
-            i += w;
+    handleClickDown(o, point, isLeftClick, objectFactory) {
+        this._refreshLayers();
+        const add = isLeftClick && !o.altKey;
+        // Removing needs no preset: it only ever edits what is already there.
+        if (this.disabled || (add && !objectFactory)) {
+            this.abortClick(isLeftClick);
+            Dialogs.show($.t(this.disabled ? 'autoSelect.noData' : 'autoSelect.noPreset', { ns: 'annotations' }));
+            return;
         }
 
-        // copy new mask (only "black" pixels)
-        len = b2.maxX - b2.minX + 1;
-        i = b2.minY * w + b2.minX;
-        k1 = b2.minY * w2 + b2.minX;
-        k2 = b2.maxY * w2 + b2.minX + 1;
-        // walk through rows (Y)
-        for (k = k1; k < k2; k += w2) {
-            // walk through cols (X)
-            for (j = 0; j < len; j++) {
-                if (data2[k + j] === 1) result[i + j] = 1;
-            }
-            i += w;
-        }
+        // A press that lands before the previous stroke was flushed (its snapshot was still
+        // being read) closes that one with whatever it has.
+        if (this._stroke) this._endStroke(this._stroke);
+        this.context.fabric.clearAnnotationSelection(true);
 
-        return {
-            data: result,
-            width: w,
-            height: h,
-            bounds: b
+        this._stroke = {
+            add,
+            viewer: this.context.viewer,
+            points: [point],
+            seeds: [],
+            last: null,
+            target: this._findTarget(point),
+            region: null,
+            started: false,
+            released: false,
+            leaked: false,
+            grown: false,
+            canvas: null, ctx: null, image: null,
         };
+        this._schedule();
+    }
+
+    handleMouseMove(e, point) {
+        const stroke = this._stroke;
+        if (!stroke || stroke.released) return;
+        stroke.points.push(point);
+        this._schedule();
+    }
+
+    handleClickUp(o, point, isLeftClick, objectFactory) {
+        const stroke = this._stroke;
+        if (stroke && !stroke.released) {
+            stroke.released = true;
+            this._schedule();
+        }
+        // Always consumed, right button included: a wand release is never a selection
+        // click, nor a request for the context menu.
+        return true;
+    }
+
+    handleMouseHover(event, point) {
+        // Deliberately nothing: the wand acts on a press, never on a hover.
+    }
+
+    /**
+     * The editable annotation under an image point, if any.
+     */
+    _findTarget(point) {
+        const ffTool = this.context.freeFormTool;
+        // About two screen pixels around the point, in image pixels.
+        const r = 2 / (this.context.viewer.scalebar.imagePixelSizeOnScreen() || 1);
+        const probe = [
+            { x: point.x - r, y: point.y - r }, { x: point.x + r, y: point.y - r },
+            { x: point.x + r, y: point.y + r }, { x: point.x - r, y: point.y + r },
+        ];
+        const found = this.fftFindTarget(point, ffTool, probe, 0, r);
+        return this.fftFoundIntersection(found) ? found : null;
+    }
+
+    _schedule() {
+        if (this._pumping) {
+            this._pumpAgain = true;
+            return;
+        }
+        this._pumping = true;
+        requestAnimationFrame(() => {
+            this._pump().catch(e => {
+                this.log.warn("magic wand stroke failed", e);
+                if (this._stroke) this._endStroke(this._stroke);
+            }).finally(() => {
+                this._pumping = false;
+                if (this._pumpAgain) {
+                    this._pumpAgain = false;
+                    this._schedule();
+                }
+            });
+        });
+    }
+
+    async _pump() {
+        const stroke = this._stroke;
+        if (!stroke) return;
+
+        // The frame is frozen for the whole stroke: OSD navigation is off in this mode.
+        const snapshot = stroke.snapshot || await this._ensureSnapshot();
+        if (stroke !== this._stroke) return;
+        if (!snapshot || stroke.viewer !== this.context.viewer) {
+            this._endStroke(stroke);
+            return;
+        }
+        stroke.snapshot = snapshot;
+
+        const moved = stroke.points.length > 0;
+        const grown = this._grow(stroke, snapshot);
+        // A removing stroke that began on empty space has a region but no annotation yet:
+        // keep looking for one as the pointer travels, even when nothing new was detected.
+        const seeking = !stroke.started && !stroke.add && moved && !!stroke.region.bounds;
+        if (grown || seeking) this._apply(stroke, snapshot);
+
+        if (stroke.seeds.length || stroke.points.length) this._pumpAgain = true;
+        else if (stroke.released) this._endStroke(stroke);
+    }
+
+    /**
+     * Turn the queued pointer positions into seeds and fill from a bounded number of them.
+     * @return {boolean} true if the stroke region grew
+     */
+    _grow(stroke, snapshot) {
+        const Wand = OSDAnnotations.MagicWand;
+        const w = snapshot.width, h = snapshot.height;
+        const ref = stroke.viewer.scalebar.getReferencedTiledImage();
+        const sx = w / snapshot.cssWidth, sy = h / snapshot.cssHeight;
+
+        for (const point of stroke.points) {
+            const el = ref.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
+            const next = { x: Math.floor(el.x * sx), y: Math.floor(el.y * sy) };
+            if (stroke.last) stroke.seeds.push(...Wand.seedsAlong(stroke.last, next, Wand.SEED_STEP));
+            else stroke.seeds.push(next);
+            stroke.last = next;
+            stroke.lastPoint = point;
+        }
+        stroke.points.length = 0;
+
+        if (!stroke.region) stroke.region = { data: new Uint8Array(w * h), bounds: null };
+
+        const maxArea = w * h * Wand.LEAK_RATIO;
+        let fills = 0, grown = false;
+        while (stroke.seeds.length && fills < Wand.MAX_FILLS_PER_FRAME) {
+            const seed = stroke.seeds.shift();
+            const outcome = Wand.growRegion(this.MagicWand, snapshot, stroke.region,
+                seed.x, seed.y, this.threshold, maxArea);
+            if (outcome === "none") continue;
+            fills++;
+            if (outcome === "leak") stroke.leaked = true;
+            else grown = true;
+        }
+        return grown;
+    }
+
+    /**
+     * Hand the accumulated region to the brush engine.
+     */
+    _apply(stroke, snapshot) {
+        const Wand = OSDAnnotations.MagicWand;
+        const ffTool = this.context.freeFormTool;
+        const w = snapshot.width, h = snapshot.height;
+
+        let mask = { data: stroke.region.data, width: w, height: h, bounds: { ...stroke.region.bounds } };
+        // Returns a copy: the raw region stays the "visited" set of the fills to come.
+        mask = this.MagicWand.gaussBlurOnlyBorder(mask, Wand.BLUR_RADIUS);
+        Wand.fillSmallHoles(mask, Wand.MAX_HOLE_AREA);
+
+        if (!stroke.started && !this._start(stroke, snapshot, mask)) return;
+        if (!ffTool.isRunning()) return;
+
+        if (!stroke.canvas) {
+            stroke.canvas = document.createElement('canvas');
+            stroke.canvas.width = w;
+            stroke.canvas.height = h;
+            stroke.ctx = stroke.canvas.getContext('2d');
+            stroke.image = stroke.ctx.createImageData(w, h);
+        }
+        // White adds, black removes, transparent leaves alone (FreeFormTool.applyMask).
+        const b = mask.bounds, px = stroke.image.data, src = mask.data, color = stroke.add ? 255 : 0;
+        for (let y = b.minY; y <= b.maxY; y++) {
+            for (let x = b.minX; x <= b.maxX; x++) {
+                const k = y * w + x, i = k * 4;
+                if (src[k]) {
+                    px[i] = px[i + 1] = px[i + 2] = color;
+                    px[i + 3] = 255;
+                } else {
+                    px[i + 3] = 0;
+                }
+            }
+        }
+        stroke.ctx.putImageData(stroke.image, 0, 0, b.minX, b.minY, b.maxX - b.minX + 1, b.maxY - b.minY + 1);
+
+        if (ffTool.applyMask(stroke.canvas)) stroke.grown = true;
+    }
+
+    /**
+     * Bind the stroke to the annotation it edits: the one found under the press, the first
+     * one a removing stroke reaches, or a new polygon made from the detected region.
+     * @return {boolean} true once the brush engine holds an object
+     */
+    _start(stroke, snapshot, mask) {
+        const ffTool = this.context.freeFormTool;
+        ffTool.zoom = this.context.fabric.canvas.getZoom();
+
+        if (!stroke.target && !stroke.add && stroke.lastPoint) {
+            stroke.target = this._findTarget(stroke.lastPoint);
+        }
+
+        if (stroke.target) {
+            ffTool.init(stroke.target, false);
+        } else if (stroke.add) {
+            const polygon = this._polygonFromMask(stroke, snapshot, mask);
+            if (!polygon) return false;
+            ffTool.init(polygon, true);
+        } else {
+            return false;
+        }
+
+        // init() refuses objects that cannot be turned into a polygon (and says so).
+        stroke.started = true;
+        return ffTool.isRunning();
+    }
+
+    _polygonFromMask(stroke, snapshot, mask) {
+        let outer = null;
+        for (const contour of this.MagicWand.traceContours(mask)) {
+            if (!contour.inner && (!outer || contour.points.length > outer.length)) outer = contour.points;
+        }
+        if (!outer || outer.length < 3) return null;
+
+        const ref = stroke.viewer.scalebar.getReferencedTiledImage();
+        const sx = snapshot.cssWidth / snapshot.width, sy = snapshot.cssHeight / snapshot.height;
+        const points = outer.map(p => ref.viewerElementToImageCoordinates(
+            new OpenSeadragon.Point((p.x + 0.5) * sx, (p.y + 0.5) * sy)));
+        return this.context.polygonFactory.create(points, this.context.presets.getAnnotationOptions(true));
+    }
+
+    _endStroke(stroke) {
+        if (this._stroke === stroke) this._stroke = null;
+
+        const ffTool = this.context.freeFormTool;
+        if (stroke.started && ffTool.isRunning()) {
+            ffTool.finish();
+            this.context.fabric.rerender();
+        }
+        // The only refusal worth a message: every fill of the stroke ran away, so from the
+        // user's side the press did nothing at all.
+        if (stroke.leaked && !stroke.grown) {
+            Dialogs.show($.t('autoSelect.coversViewport', { ns: 'annotations' }), 4000, Dialogs.MSG_INFO);
+        }
+    }
+
+    /********************* MODE *********************/
+
+    locksViewer(oldViewerRef, newViewerRef) {
+        const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
+        if (!willKeepViewer) {
+            if (this._stroke) this._endStroke(this._stroke);
+            this._snapshot = null;
+            this._invalidate();
+            this._unbindWatchers();
+            if (newViewerRef) {
+                this._refreshLayers();
+                this._bindWatchers(this.context.viewer);
+            }
+        }
+        return willKeepViewer;
     }
 
     scroll(event, delta) {
@@ -335,57 +611,37 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
         const thresholdInput = document.getElementById("a-magic-wand-threshold");
         if (thresholdInput) thresholdInput.value = this.threshold;
-        this._process(event).catch(e => console.warn("Magic wand: detection failed.", e));
     }
 
     scrollZooming(event, delta) {
-        this._invalidData = Date.now();
-    }
-
-    handleMouseHover(event, point) {
-        // Bind a preset on hover, not only on click-down: this mode detects
-        // while hovering, so waiting for annotations-canvas' click-down
-        // fallback left the very first activation of the tool completely dead.
-        if (!this.context.presets.ensureActivePreset(true)) return;
-        this._isLeft = true;
-        this._process(event, true).catch(e => console.warn("Magic wand: detection failed.", e));
+        this._invalidate();
     }
 
     setFromAuto() {
-        // Detection is hover-driven, so a mode that cannot detect anything is
-        // simply dead: refuse to enter it and say why, instead of waiting for
-        // a click to surface the same message.
-        this.prepareShaderConfig();
+        this._refreshLayers();
         if (this.disabled) {
             Dialogs.show($.t('autoSelect.noData', { ns: 'annotations' }));
             return false;
         }
-        if (!this.context.presets.ensureActivePreset(true)) {
-            Dialogs.show($.t('autoSelect.noPreset', { ns: 'annotations' }));
-            return false;
-        }
 
+        this._bindWatchers(this.context.viewer);
+        this._invalidate();
         this._requestSnapshot();
 
-        this.context.viewer.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
         this.context.setCursors("crosshair");
         return true;
     }
 
     setToAuto(temporary) {
-        if (this.result) {
-            this.context.fabric.deleteHelperAnnotation(this.result);
-            this.result = null;
-        }
-        this.data = null;
-        // Any snapshot still in flight belongs to the session we are leaving.
-        this._lastViewportKey = null;
-        this._invalidData = Date.now();
+        if (this._stroke) this._endStroke(this._stroke);
+        this._unbindWatchers();
+        this._snapshot = null;
+        this._invalidate();
 
-        this.context.viewer.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
+        this.context.fabric.rerender();
         return true;
     }
 
@@ -393,10 +649,16 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return "KeyT";
     }
 
+    setThreshold(value) {
+        const parsed = Number.parseInt(value);
+        if (!Number.isFinite(parsed)) return;
+        this.threshold = Math.min(this.maxThreshold, Math.max(this.minThreshold, parsed));
+    }
+
     setShaderToDetectFrom(value) {
         this._selectedShader = value;
-        this.prepareShaderConfig();
-        this._invalidData = Date.now();
+        this._refreshLayers();
+        this._invalidate();
     }
 
     /**
@@ -410,27 +672,28 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
      */
     customHtml() {
         const escape = OSDAnnotations.MagicWand._escapeHtml;
+        this._refreshLayers();
+        const renderer = this.context.viewer.drawer.renderer;
         let options = "";
-        for (let shaderId of this.context.viewer.drawer.renderer.getShaderLayerOrder()) {
-            const config = this.context.viewer.drawer.renderer.getShaderLayerConfig(shaderId);
+        for (let shaderId of renderer.getShaderLayerOrder()) {
+            const config = renderer.getShaderLayerConfig(shaderId);
             const selected = this._selectedShader === shaderId ? " selected" : "";
             options += `<option value="${escape(shaderId)}"${selected}>${escape(config.name)}</option>`;
         }
 
-        const growthLabel = escape($.t('modeOptions.magicWand.growth', { ns: 'annotations' }));
-        const growthHint = escape($.t('modeOptions.magicWand.growthHint', { ns: 'annotations' }));
-        const layerLabel = escape($.t('modeOptions.magicWand.layer', { ns: 'annotations' }));
+        const t = key => escape($.t(`modeOptions.magicWand.${key}`, { ns: 'annotations' }));
 
         return `
 <div style="display:flex;flex-direction:column;gap:0.75rem;width:14rem;max-width:100%;padding:0.25rem;">
+    <div class="text-xs opacity-70">${t('hint')}</div>
     <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="a-magic-wand-threshold">${growthLabel}</label>
-        <input type="range" id="a-magic-wand-threshold" title="${growthHint}" style="width:100%;"
+        <label class="text-xs font-medium opacity-70" for="a-magic-wand-threshold">${t('tolerance')}</label>
+        <input type="range" id="a-magic-wand-threshold" title="${t('toleranceHint')}" style="width:100%;"
             max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}"
-            onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
+            oninput="OSDAnnotations.instance().Modes['MAGIC_WAND'].setThreshold(this.value);"/>
     </div>
     <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="a-magic-wand-layer">${layerLabel}</label>
+        <label class="text-xs font-medium opacity-70" for="a-magic-wand-layer">${t('layer')}</label>
         <select id="a-magic-wand-layer" class="select select-sm select-bordered" style="width:100%;"
             onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setShaderToDetectFrom(this.value);">${options}</select>
     </div>
@@ -443,3 +706,16 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         })[c]);
     }
 };
+
+/** Longest side of the analysed frame, in pixels. */
+OSDAnnotations.MagicWand.MAX_SIDE = 1400;
+/** Distance between two seeds along a drag, in analysed pixels. */
+OSDAnnotations.MagicWand.SEED_STEP = 4;
+/** Fills per animation frame; the rest of a fast drag is caught up on the next frames. */
+OSDAnnotations.MagicWand.MAX_FILLS_PER_FRAME = 8;
+/** A single fill covering more of the frame than this ran away and is dropped. */
+OSDAnnotations.MagicWand.LEAK_RATIO = 0.6;
+/** Border smoothing of the region, in analysed pixels. */
+OSDAnnotations.MagicWand.BLUR_RADIUS = 3;
+/** Enclosed specks up to this many analysed pixels are filled instead of becoming holes. */
+OSDAnnotations.MagicWand.MAX_HOLE_AREA = 400;

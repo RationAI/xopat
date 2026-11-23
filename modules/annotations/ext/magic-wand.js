@@ -37,15 +37,21 @@ OSDAnnotations.makeMagicWand = function () {
      * @param {number} alphaThreshold
      * @param {Uint8Array} mask of visited points (optional)
      * @param {boolean} [includeBorders=false] indicate whether to include borders pixels
-     * @return {Object} mask: {Uint8Array} data, {int} width, {int} height, {Object} bounds
+     * @param {number[]} [sample] reference color [R, G, B, A] to compare against instead of the
+     *   color of the start point, e.g. an average of its neighborhood (xOpat extension)
+     * @return {Object|null} mask: {Uint8Array} data, {int} width, {int} height, {Object} bounds;
+     *   null if the start point lies outside the image or has been visited already
      */
-    lib.floodFill = function(image, px, py, colorThreshold, alphaThreshold, mask, includeBorders) {
+    lib.floodFill = function(image, px, py, colorThreshold, alphaThreshold, mask, includeBorders, sample) {
+        // xOpat: an out-of-range start point would index a neighboring row (or read undefined
+        // and make every comparison NaN, which passes all of them and floods the image).
+        if (!(px >= 0 && py >= 0 && px < image.width && py < image.height)) return null;
         return includeBorders
-            ? floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask)
-            : floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask);
+            ? floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask, sample)
+            : floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask, sample);
     };
 
-    function floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask) {
+    function floodFillWithoutBorders(image, px, py, colorThreshold, alphaThreshold, mask, sample) {
 
         var c, x, newY, el, xr, xl, dy, dyl, dyr, checkY,
             data = image.data,
@@ -61,6 +67,7 @@ OSDAnnotations.makeMagicWand = function () {
 
         i = i * bytes; // start point index in the image data
         var R = data[i], G = data[i + 1], B = data[i + 2], A = data[i + 3]; // start point color (sample)
+        if (sample) { R = sample[0]; G = sample[1]; B = sample[2]; A = sample[3]; }
 
         var stack = [{ y: py, left: px - 1, right: px + 1, dir: 1 }]; // first scanning line
         do {
@@ -175,7 +182,7 @@ OSDAnnotations.makeMagicWand = function () {
         };
     };
 
-    function floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask) {
+    function floodFillWithBorders(image, px, py, colorThreshold, alphaThreshold, mask, sample) {
 
         var c, x, newY, el, xr, xl, dy, dyl, dyr, checkY,
             data = image.data,
@@ -191,6 +198,7 @@ OSDAnnotations.makeMagicWand = function () {
 
         i = i * bytes; // start point index in the image data
         var R = data[i], G = data[i + 1], B = data[i + 2], A = data[i + 3]; // start point color (sample)
+        if (sample) { R = sample[0]; G = sample[1]; B = sample[2]; A = sample[3]; }
 
         var stack = [{ y: py, left: px - 1, right: px + 1, dir: 1 }]; // first scanning line
         do {

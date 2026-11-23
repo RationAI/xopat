@@ -157,8 +157,8 @@ Cancelable event raised before changing an annotation preset.
 
 ##### `annotation-lock-change` | `{ object: fabric.Object, locked: boolean, state: AnnotationLockState }`
 The **user's** lock was placed or released from the padlock in the annotation's toolbar (or from
-the board row's menu). By default a locked annotation stops responding to the canvas entirely —
-not hit-tested, not selectable, so the user can draw over it — and every `pre-update` /
+the board row's menu). By default a locked annotation leaves the press path — not hit-tested, so
+the user can draw over it, though a plain click still selects it — and every `pre-update` /
 `pre-delete` is refused by the module's IO guard (`W_ANNOTATION_LOCKED`), except the lock toggle
 itself. `state` is the resolved descriptor from `getAnnotationLockState`, so it already reflects
 any `registerLockPolicy` override; read it rather than the raw flag. Set it with
