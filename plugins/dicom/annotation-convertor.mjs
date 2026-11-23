@@ -49,7 +49,10 @@ function slideMetaFor(fctx) {
     const given = fctx.options?.meta;
     if (given?.frameOfReferenceUID) return given;
     const viewer = fctx.context?.viewer
-        ?? (fctx.io?.viewerId ? VIEWER_MANAGER.getViewer(fctx.io.viewerId, false) : undefined);
+        ?? (fctx.io?.viewerId
+            // The slot names the viewport; `viewerId` alone may match several.
+            ? VIEWER_MANAGER.getViewer(fctx.io.viewerSlotId ?? fctx.io.viewerId, false)
+            : undefined);
     return viewer ? slideMetaResolver?.(viewer) : undefined;
 }
 

@@ -126,7 +126,12 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         try {
             VIEWER_MANAGER.addHandler?.("viewer-destroy", (e: any) => {
                 const id = e?.uniqueId || e?.viewer?.uniqueId || e?.eventSource?.uniqueId;
-                if (id) this._stopViewer(id);
+                if (!id) return;
+                // The collection is keyed by `uniqueId`, which is derived from the
+                // slide: another viewport showing the same slide still uses it.
+                const stillShown = (VIEWER_MANAGER.viewers ?? [])
+                    .some((v: any) => v && v !== e?.viewer && v.uniqueId === id);
+                if (!stillShown) this._stopViewer(id);
             });
         } catch (e) {
             console.warn("[recorder] could not wire viewer-destroy handler:", e);
