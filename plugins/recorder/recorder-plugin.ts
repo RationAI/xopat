@@ -718,7 +718,9 @@ class RecorderPlugin extends XOpatPlugin{
     async export():Promise<void>{
         const io=(window as any).IO_PIPELINE;
         if(!io?.flushBundleExport){console.error("[recorder] IO pipeline not available."); return;}
-        await io.flushBundleExport({ownerUid:"recorder"});
+        // The scope matches the owner UID (`module.recorder`), not its id: the
+        // bare id matched no owner and this exported nothing, silently.
+        await io.flushBundleExport({ownerUid:(this.recorder as any).uid});
     }
 
     private _highlight(step:RecorderSnapshotStep|undefined,index:number,viewerId?:UniqueViewerId):void{

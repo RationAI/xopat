@@ -1053,7 +1053,7 @@ export class IOPipeline implements IOPipelineLike {
         for (const c of caps) {
             const cap: IOCapability =
                 typeof c === "string"
-                    ? { id: c, kind: c.startsWith("crud:") ? "crud" : "bundle" }
+                    ? { id: c, kind: c.startsWith("crud:") ? "crud" : c.startsWith("kv:") ? "kv" : "bundle" }
                     : c;
             owner.capabilities.set(cap.id, cap);
         }
@@ -1216,8 +1216,12 @@ export class IOPipeline implements IOPipelineLike {
         // `W_IO_SINK_NOT_READY`, i.e. hold data for a destination that is switched
         // off on purpose. An UNREGISTERED sink must keep going through
         // `filterRegistered` — that one may still be on its way.
-        const route = (list: IOBindingTarget[]): IOResolvedBinding[] | undefined => {
-            const live = (list ?? []).filter((raw) => {
+        const route = (given: IOBindingTarget[] | IOBindingTarget): IOResolvedBinding[] | undefined => {
+            // `"bundle-export": "github"` is the obvious thing to write and it
+            // used to throw here (no `.filter` on a string), taking every
+            // dispatch for the owner with it. One target is a list of one.
+            const list: IOBindingTarget[] = Array.isArray(given) ? given : (given == null ? [] : [given]);
+            const live = list.filter((raw) => {
                 const sink = normalizeBindingTarget(raw)?.sink;
                 return !sink || this.isSinkEnabled(sink);
             });
@@ -2410,7 +2414,11 @@ export class IOPipeline implements IOPipelineLike {
         // `route: "sink"` — this is a restore FROM bound sinks (post-data at
         // boot, a remote store, …), so it is the owner's own capability that
         // decides. The user-picked-file route is `importBundle` below.
-        const importCapability = sinks.values().next().value ?? "bundle-import";
+        // An import capability if any sink was reached through one — the map's
+        // first entry may be a sink known only from an export binding, and the
+        // guards would then judge a restore by the export capability.
+        const boundCaps = Array.from(sinks.values());
+        const importCapability = boundCaps.find(c => c.includes("import")) ?? boundCaps[0] ?? "bundle-import";
         const guardCtx = {
             ...ctxBase, direction: "pre-import", route: "sink",
             capabilityId: importCapability, meta: {},
@@ -2664,7 +2672,11 @@ export class IOPipeline implements IOPipelineLike {
             // route: the payload came from the user's own machine, so it is
             // `core.io.local-file` that decides whether hand-loading is
             // available at all — not the owner's sink capability.
-            const verdict = this.runGuards({ ...ctx, direction: "pre-import", route: "local" });
+            // The route is part of the ctx the owner receives too — the restore
+            // path stamps it, and an owner must be able to tell a hand-loaded
+            // file from a bound destination the same way on both.
+            ctx.route = "local";
+            const verdict = this.runGuards({ ...ctx, direction: "pre-import" });
             if (!verdict.ok) { results.push({ ...verdict, ...ownerOf(ctx) }); continue; }
             try {
                 if (owner.importBundle) {
@@ -2718,7 +2730,15 @@ export class IOPipeline implements IOPipelineLike {
             // already carries a `userMessage`, so an unsurfaced-but-message-
             // bearing refusal would be swallowed by exactly the check meant to
             // prevent double-toasting.
-            if (!method) return this.unsupported(sink.id, ctx.direction);
+            if (!method) {
+                // A sink may implement only the bulk form; a lone op is then a
+                // batch of one, not an unsupported operation.
+                const many = bulkMethodName(ctx.direction);
+                if (many && typeof sink[many] === "function") {
+                    return this.callBulk(sink, many, [ctx], [payload]).then(r => r[0]);
+                }
+                return this.unsupported(sink.id, ctx.direction);
+            }
             return Promise.resolve(method.call(sink, ctx, payload));
         }, {
             policy: "until-refusal",
@@ -2737,6 +2757,133 @@ export class IOPipeline implements IOPipelineLike {
             if (pass.last.ok) return refusal;
         }
         return pass.last;
+    }
+
+    /**
+     * Largest run of same-direction ops a resource outbox may hand to
+     * {@link dispatchMany}: the smallest `maxBatch` among the bound sinks that
+     * implement the bulk method, or 1 when none does — in which case the outbox
+     * keeps its one-op-at-a-time path and nothing changes for that binding.
+     */
+    batchLimit(ownerUid: string, capabilityId: string, direction: IODirection): number {
+        const many = bulkMethodName(direction);
+        if (!many) return 1;
+        let limit = 0;
+        for (const id of this.bindingsFor(ownerUid, capabilityId)) {
+            const sink = this.sinks.get(id);
+            if (!sink || typeof sink[many] !== "function") continue;
+            const max = Math.max(1, Math.floor(Number(sink.maxBatch) || 200));
+            limit = limit ? Math.min(limit, max) : max;
+        }
+        return limit || 1;
+    }
+
+    /**
+     * {@link dispatch} for a run of ops sharing owner, capability and direction.
+     *
+     * Same rules, applied per item: each ctx is gated on its own (a batch may
+     * span viewers, and `accepts` is allowed to care), sinks run in binding
+     * order, an item one sink refused is not offered to the next, and an item
+     * no sink stored is a refusal. What changes is the number of sink calls —
+     * and the number of dialogs: one per distinct refusal, not one per item.
+     * `io:refused` / `io:fully-refused` still fire for every item.
+     */
+    async dispatchMany(ctxs: IOContext[], payloads: unknown[]): Promise<IOResult[]> {
+        const head = ctxs[0];
+        if (!head) return [];
+        const many = bulkMethodName(head.direction);
+        const sinkIds = this.bindingsFor(head.ownerUid, head.capabilityId);
+        if (!many || !sinkIds.length) {
+            const out: IOResult[] = [];
+            for (let i = 0; i < ctxs.length; i++) out.push(await this.dispatch(ctxs[i]!, payloads[i]));
+            return out;
+        }
+
+        type Refusal = Extract<IOResult, { ok: false }>;
+        const perItem = ctxs.map(() => ({
+            results: [] as IOResult[], declines: [] as string[],
+            succeeded: 0, last: { ok: true } as IOResult, refused: undefined as IOResult | undefined,
+        }));
+        const takers = new Map<string, { sink: IOSink; items: Array<{ i: number; ctx: IOContext }> }>();
+        ctxs.forEach((ctx, i) => {
+            const gated = this.selectGatedSinks(sinkIds, () => ctx);
+            perItem[i]!.declines = gated.declines;
+            for (const p of gated.picked) {
+                let group = takers.get(p.sink.id);
+                if (!group) takers.set(p.sink.id, group = { sink: p.sink, items: [] });
+                group.items.push({ i, ctx: p.ctx });
+            }
+        });
+
+        const toasted = new Set<string>();
+        const thrown = new WeakSet<object>();
+        // A system-triggered refusal is logged, never shown — so it must not use
+        // up the one dialog a user-triggered sibling in the same batch is owed.
+        const markToasted = (ctx: IOContext, key: string) => {
+            if (ctx.trigger !== "system") toasted.add(key);
+        };
+        const surfaceOnce = (ctx: IOContext, r: Refusal) => {
+            const key = `${r.code ?? ""}|${r.userMessage ?? r.reason ?? ""}`;
+            this.surfaceRefusal(ctx, r, !toasted.has(key));
+            markToasted(ctx, key);
+        };
+
+        for (const sinkId of sinkIds) {
+            const group = takers.get(sinkId);
+            const live = group?.items.filter(x => !perItem[x.i]!.refused) ?? [];
+            if (!group || !live.length) continue;
+            const sink = group.sink;
+            const single = pickMethod(sink, head.direction);
+            // A throw is recorded but, as in `runSinkPass`, never stops the
+            // remaining sinks from being offered the item.
+            const threw = (ctx: IOContext, e: any): IOResult => {
+                const r: Refusal = {
+                    ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_SINK_THREW",
+                    ...(e?.userMessage ? { userMessage: e.userMessage } : {}), ...ownerOf(ctx),
+                };
+                surfaceOnce(ctx, r);
+                thrown.add(r);
+                return r;
+            };
+
+            let batch: Array<IOResult | undefined>;
+            if (typeof sink[many] === "function") {
+                try {
+                    batch = await this.callBulk(sink, many, live.map(x => x.ctx), live.map(x => payloads[x.i]));
+                } catch (e: any) {
+                    batch = live.map(x => threw(x.ctx, e));
+                }
+            } else {
+                batch = [];
+                for (const x of live) {
+                    if (!single) { batch.push(this.unsupported(sink.id, head.direction)); continue; }
+                    try { batch.push(await single.call(sink, x.ctx, payloads[x.i])); }
+                    catch (e: any) { batch.push(threw(x.ctx, e)); }
+                }
+            }
+
+            live.forEach((x, k) => {
+                const state = perItem[x.i]!;
+                const r: IOResult = batch[k] ?? { ok: true };
+                state.results.push(r);
+                state.last = r;
+                if (r.ok) { state.succeeded++; return; }
+                if (thrown.has(r) || !(r as Refusal).refused) return; // a throw is already surfaced
+                surfaceOnce(x.ctx, r as Refusal);
+                if ((r as Refusal).code !== "W_IO_UNSUPPORTED") state.refused = r;
+            });
+        }
+
+        return ctxs.map((ctx, i) => {
+            const state = perItem[i]!;
+            const last = state.last;
+            if (state.succeeded > 0) return state.refused ?? last;
+            const key = `fully|${state.declines[0] ?? ""}`;
+            const refusal = this.emitFullyRefused(ctx, state.results, state.declines, !toasted.has(key));
+            markToasted(ctx, key);
+            if (state.refused) return state.refused;
+            return last.ok ? refusal : last;
+        });
     }
 
     // ── orchestration: streamed query (on-the-fly hydration) ───────────
@@ -2821,8 +2968,8 @@ export class IOPipeline implements IOPipelineLike {
      * queued dispatch path. Plugins should NOT call this directly — return
      * a refusal IOResult from a sink/guard instead.
      */
-    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>) {
-        this.surfaceRefusal(ctx, r);
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast = true) {
+        this.surfaceRefusal(ctx, r, toast);
     }
 
     /**
@@ -2837,7 +2984,12 @@ export class IOPipeline implements IOPipelineLike {
         } catch { /* viewer manager may not yet exist */ }
     }
 
-    private surfaceRefusal(ctx: IOContext, r: Extract<IOResult, { ok: false }>) {
+    /**
+     * @param toast `false` when the caller has already shown this same refusal
+     *   for a sibling op (a batch, a full outbox): the event still fires per op,
+     *   the dialog does not repeat.
+     */
+    private surfaceRefusal(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast = true) {
         // Unconditional: the event is how features react and how the roles UI
         // learns what is restricted. Only the DIALOG is a judgement call.
         this.bus.raiseEvent("io:refused", { ctx, result: r });
@@ -2853,7 +3005,7 @@ export class IOPipeline implements IOPipelineLike {
                 // not cause and cannot act on. Four of them at once is what
                 // this branch exists to stop. Logged, not shown.
                 this.logRefusal(ctx, r, msg);
-            } else if (this.shouldToastRefusal(ctx, r)) {
+            } else if (toast && this.shouldToastRefusal(ctx, r)) {
                 // A `userMessage` is the sink author's signal that this refusal
                 // is meant to be shown to the user (e.g. "GitHub rejected the
                 // access token"). Treat that as an error; bare refusals without
@@ -3123,7 +3275,7 @@ export class IOPipeline implements IOPipelineLike {
      *  declined). Signal of a misconfigured binding that would otherwise
      *  silently drop data. Emitted at most once per dispatch, and surfaced
      *  to the user — a write nobody accepted is data loss, not a log line. */
-    private emitFullyRefused(ctx: IOContext, results: IOResult[], declines: string[] = []) {
+    private emitFullyRefused(ctx: IOContext, results: IOResult[], declines: string[] = [], toast = true) {
         const refusal = this.noSinkAccepted(ctx, declines, results);
         console.warn(`[IO] ${refusal.reason} — data not written. Check ENV.client.io.bindings.`);
         const payload = { ctx, results, declines, result: refusal };
@@ -3136,7 +3288,7 @@ export class IOPipeline implements IOPipelineLike {
         // user-facing refusal (e.g. "GitHub rejected the access token") has
         // said the useful thing already. Only speak up when nothing did.
         const alreadySurfaced = results.some(r => !r.ok && (r as any).userMessage);
-        if (!alreadySurfaced) this.surfaceRefusal(ctx, refusal);
+        if (!alreadySurfaced) this.surfaceRefusal(ctx, refusal, toast);
         return refusal;
     }
 
@@ -3152,6 +3304,37 @@ export class IOPipeline implements IOPipelineLike {
             : { ok: false as const, refused: true as const, reason, code, ...ownerOf(ctx) };
         this.surfaceRefusal(ctx, r);
         return r;
+    }
+
+    /**
+     * Call a sink's bulk method and hold it to its contract: exactly one result
+     * object per input, in input order. Anything else — no array, a short one, a
+     * hole, a bare `true` — is NOT read as success: the item was never
+     * confirmed stored, so it is refused (and reverted by the resource) instead
+     * of being dropped from the outbox as done. A throw propagates.
+     */
+    private async callBulk(
+        sink: IOSink, many: "createMany" | "deleteMany", ctxs: IOContext[], payloads: unknown[],
+    ): Promise<IOResult[]> {
+        const raw: unknown = many === "createMany"
+            ? await sink.createMany!(ctxs, payloads)
+            : await sink.deleteMany!(ctxs);
+        const usable = Array.isArray(raw);
+        const list = usable ? raw as unknown[] : [];
+        if (!usable || list.length !== ctxs.length) {
+            console.error(`[IO] sink "${sink.id}" ${many}() broke its contract: expected ${ctxs.length} `
+                + `results, got ${usable ? list.length : typeof raw}. Unanswered items are refused.`);
+        }
+        return ctxs.map((ctx, k) => {
+            const r = list[k];
+            if (r && typeof r === "object" && typeof (r as any).ok === "boolean") return r as IOResult;
+            return {
+                ok: false as const, refused: true as const,
+                reason: `sink "${sink.id}" ${many}() returned no result for item ${k + 1} of ${ctxs.length}`,
+                code: "W_IO_BULK_RESULT",
+                ...ownerOf(ctx),
+            };
+        });
     }
 
     private unsupported(sinkId: string, op: string): IOResult {
@@ -3190,6 +3373,10 @@ function mergeByPriority(a: IOGuardSpec[], b: IOGuardSpec[]): IOGuardSpec[] {
     while (i < a.length) out.push(a[i++]!);
     while (j < b.length) out.push(b[j++]!);
     return out;
+}
+
+function bulkMethodName(direction: IODirection): "createMany" | "deleteMany" | undefined {
+    return direction === "create" ? "createMany" : direction === "delete" ? "deleteMany" : undefined;
 }
 
 function pickMethod(t: IOSink, direction: IODirection):

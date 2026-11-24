@@ -225,6 +225,14 @@ function classifyHttpError(e: any, op: "read" | "write"): IOResult {
         return fail(reason, "W_GITHUB_CONFLICT",
             "GitHub rejected the change due to a conflict. Reload to pick up the latest version.");
     }
+    // Same vocabulary as the built-in `http-rest` sink, because it is what
+    // `withRetry` and the outbox stall detector key on: no answer at all is
+    // `W_IO_HTTP_NETWORK`, a 5xx / 429 answer is the bare status. `HTTPError`
+    // DEFAULTS `statusCode` to 500 when nothing answered, so a timeout or an
+    // abort used to be reported as an HTTP 500 the upstream never sent.
+    const answered = !!e?.response || (!!e?.statusCode && e.statusCode !== 500);
+    if (!answered) return fail(reason, "W_IO_HTTP_NETWORK");
+    if (status >= 500 || status === 429) return fail(reason, String(status));
     return fail(reason, `W_GITHUB_HTTP_${status || "UNKNOWN"}`);
 }
 

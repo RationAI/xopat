@@ -506,7 +506,9 @@ never built from strings — so no `eval`/`Function` is involved.
 | `W_MLFLOW_TARGET_UNBOUNDED` | `sessionTarget` is `"required"` but `experimentAllow` is unset — session targets are never honoured without an allowlist. Nothing was written. Also: `strictSessionTarget` is on and the session named a run without `runAllow`, or an artifact without `artifactPathPrefix`. |
 | `W_MLFLOW_MAPPER_INVALID`   | The template name does not exist, the mapper threw, or it returned a mapping without an experiment / run identifier tag. |
 | `W_MLFLOW_NO_ARTIFACTS`     | The mapper emitted artifacts but no `artifacts` block is configured. |
-| `W_MLFLOW_HTTP_<status>`    | Other non-2xx (including 502/504 from a misconfigured proxy alias). |
+| `W_MLFLOW_HTTP_<status>`    | Other 4xx. |
+| `<status>` (`"502"`, `"429"`) | A 5xx or 429 answer — the bare status the outbox stall detector expects (502/504 often mean a misconfigured proxy alias). |
+| `W_IO_HTTP_NETWORK`         | No answer at all (timeout, abort, host down). |
 
 All refusals fan out to the standard `io:refused` event + toast.
 

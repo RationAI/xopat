@@ -188,6 +188,8 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
          * See src/IO_PIPELINE.md.
          */
         perViewport?: boolean;
+        /** See `IOOwnerBundleHooks.defaultFormat`. */
+        defaultFormat?: (ctx?: IOContext) => string | undefined;
         ignore?: boolean;
     }): Promise<void>;
 

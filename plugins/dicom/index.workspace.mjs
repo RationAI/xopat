@@ -1442,7 +1442,11 @@ addPlugin('dicom', class extends XOpatPlugin {
             // nothing new.
             writeBundle: async (ctx, payload) => {
                 const slide = resolveSlide(ctx);
-                if (!slide) return { ok: true }; // no DICOM slide for this viewer — silently skip
+                // No DICOM slide for this viewer: answer ok WITHOUT storing. Deliberately
+                // not an `accepts` decline — the vacated-slide flush runs without
+                // `skipFileFallback`, so a decline here would download a local copy
+                // every time a non-DICOM slide with annotations is left.
+                if (!slide) return { ok: true };
                 try {
                     const state = plugin._srStateFor(slide.meta.seriesUID);
                     // Present for files this session encoded; absent for bytes
@@ -1471,7 +1475,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                 } catch (e) {
                     return { ok: false, refused: true,
                         reason: e?.message ?? String(e),
-                        userMessage: 'DICOM STOW-RS failed.',
+                        userMessage: plugin.t('sr.stowFailed'),
                         code: 'W_DICOM_STOW' };
                 }
             },
@@ -1502,7 +1506,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                 } catch (e) {
                     return { ok: false, refused: true,
                         reason: `WADO-RS ${e?.statusCode ?? ''} ${e?.message ?? ''}`.trim(),
-                        userMessage: 'Failed to load annotations from DICOM server.',
+                        userMessage: plugin.t('sr.loadFailed'),
                         code: 'W_DICOM_WADO' };
                 }
             },

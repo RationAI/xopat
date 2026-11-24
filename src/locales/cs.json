@@ -83,6 +83,7 @@
       "ioUnsupported": "Úložiště je chybně nakonfigurováno: „{{sink}}“ nepodporuje operaci „{{operation}}“.",
       "ioNoDestination": "Úložiště pro {{what}} je chybně nakonfigurováno – žádné z nastavených cílových úložišť neexistuje, takže data se zahazují.",
       "ioSinkNotReady": "Čekající změny: {{count}}. Cílové úložiště zatím není připojeno. Nic se neztratilo – změny budou odeslány, jakmile bude dostupné.",
+      "ioBulkStalled": "Přidáno pouze {{added}} z {{total}} položek: cílové úložiště je nyní nedostupné a další změny už nemohou čekat na odeslání. Zbytek zopakujte po obnovení připojení.",
       "ioOffline": "Čekající změny k odeslání: {{count}}. Zdá se, že jste offline. Nic se neztratilo.",
       "ioRefusedNoReason": "Vaše změna ({{what}}) byla odmítnuta a nebyla uložena.",
       "ioRestoreUnreadable": "{{owner}}: data uložená pro tento snímek se nepodařilo načíst. Změny provedené zde se neuloží, dokud se nenačtou. Opakované načtení nahradí obsah na obrazovce uloženými daty – novou práci si nejprve exportujte do souboru.",

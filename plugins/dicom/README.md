@@ -1109,7 +1109,10 @@ Four further losses, independent of shape:
   itself. A content item's value attribute follows its value type, so another viewer will not show
   the label at all — it belongs on a child TEXT item.
 - **Non-geometric properties are dropped**: `author`, `created`, `comments`, `locked`, `readOnly`,
-  `private`, `meta`, `layerID`, `id`, `zoomAtCreation`. Only points, factory, preset and text are encoded.
+  `private`, `meta`, `id`, `zoomAtCreation`. Only points, factory, preset, layer and text are encoded.
+- **The layer survives through a private extension too** — a `XOPAT.LAYER` TEXT child (scheme
+  `99XOPAT`) on each annotation, holding the layer's id, name and position as JSON. A layer with no
+  annotation in it is not written.
 - **Class and colour survive only through a private extension** — two codes in scheme `99XOPAT`
   (`XOPAT.PRESETS` holding the preset definitions, `XOPAT.PRESETID` pointing each annotation at
   one). Standards-conformant and inert for other readers, but invisible to them. The preset pointer

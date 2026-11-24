@@ -127,6 +127,16 @@ class DicomSrCodec {
         CodeMeaning: "xOpat Per-Annotation Preset Id"
     };
 
+    // Same mechanism for the annotation's layer: a CONTAINS/TEXT child holding
+    // the JSON descriptor `{id, name, position}` the annotations module writes on
+    // every exported object. Layers have no record of their own anywhere, so
+    // this child is the whole of what an SR keeps of them.
+    static _LAYER_CONCEPT = {
+        CodeValue: "XOPAT.LAYER",
+        CodingSchemeDesignator: "99XOPAT",
+        CodeMeaning: "xOpat Per-Annotation Layer"
+    };
+
     // --- EXPORT: OSD -> DICOM ---
     /**
      * The SR ContentSequence items for a native model `{objects, presets}`.
@@ -177,6 +187,14 @@ class DicomSrCodec {
                         ValueType: "TEXT",
                         ConceptNameCodeSequence: [this.constructor._PRESETID_CONCEPT],
                         TextValue: presetIdValue,
+                    });
+                }
+                if (obj.layer && typeof obj.layer === "object") {
+                    dicomItem.ContentSequence = (dicomItem.ContentSequence || []).concat({
+                        RelationshipType: "CONTAINS",
+                        ValueType: "TEXT",
+                        ConceptNameCodeSequence: [this.constructor._LAYER_CONCEPT],
+                        TextValue: JSON.stringify(obj.layer),
                     });
                 }
 
@@ -268,6 +286,15 @@ class DicomSrCodec {
             );
 
             if (fabricObj) {
+                const layerText = childContent.find(c =>
+                    c?.ValueType === "TEXT"
+                    && c?.ConceptNameCodeSequence?.[0]?.CodeValue === this.constructor._LAYER_CONCEPT.CodeValue
+                )?.TextValue;
+                if (typeof layerText === "string") {
+                    // Parsed only; the annotations module validates the
+                    // descriptor where every import ends up.
+                    try { fabricObj.layer = JSON.parse(layerText); } catch (e) { /* no layer */ }
+                }
                 objects.push(fabricObj);
             }
         }

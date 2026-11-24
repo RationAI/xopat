@@ -204,8 +204,23 @@ These are preserved so existing listeners and integrations keep working:
 - The **Convertor** layer (`modules/annotations/convert/*`) — pure format encode/decode.
 - The **HistoryProvider** registered via `APPLICATION_CONTEXT.history.registerProvider` — its delegate-based `canUndo / canRedo` gating still works exactly as before.
 - The plugin's user-facing **export/import** buttons (`plugins/annotations/methods/io.mjs`) — they use `fabric.export()` / `fabric.import()`, both of which sit on top of the Convertor layer.
-- **Bulk-import path** (`addAnnotationsBulk`, `_loadObjects`, the `importBundle` IO hook) — bulk import does NOT fire per-item CRUD, for annotations *or* presets. The owner's `importBundle` hook applies the whole set in one call, and `PresetManager.import` writes `_presets` directly rather than going through the CRUD-routed mutators. This avoids "bulk-fetched data immediately syncs back to the server" loops — which is exactly what the old event-mirror did, replaying every hydrated preset at the bound sink on each slide open.
+- **Bulk-import path** (`addAnnotationsBulk`, `_loadObjects`, the `importBundle` IO hook) — hydration through `importBundle` does NOT fire per-item CRUD, for annotations *or* presets. (A caller that *introduces* annotations — a user file import, scripting — passes `addAnnotationsBulk(..., { persist: true })`, which does send each item to the bound CRUD sink, paced by the outbox.) The owner's `importBundle` hook applies the whole set in one call, and `PresetManager.import` writes `_presets` directly rather than going through the CRUD-routed mutators. This avoids "bulk-fetched data immediately syncs back to the server" loops — which is exactly what the old event-mirror did, replaying every hydrated preset at the bound sink on each slide open.
 - The private `_deleteAnnotation`, `_promoteHelperAnnotation`, `_replaceAnnotation`, `_addAnnotation` — unchanged shape, used by undo callbacks, edit-cancel paths, and bulk delete (`deleteObject`). They bypass the resource pipeline by design.
+
+---
+
+## Layers on the record: `layerID` → `layer`
+
+Layers are persisted by riding on their annotations (`convert/README.md` → *Layers*). What changes for
+code outside the module:
+
+- A **serialized** annotation — `toModel()` / `export()` output, a `crud:annotation` payload — has
+  `layer: {id, name, position}` and no `layerID`. Read `record.layer?.id` where you read `record.layerID`.
+- A **live** object is unchanged: `object.layerID`, and no `layer` property.
+- Importing a record with a bare `layerID` still works.
+- A sink bound to `crud:annotation` now receives `{layer}` update patches (`meta.kind: 'layer-change'`)
+  when an annotation changes layer, or its layer is renamed or reordered. The lock guard lets them through.
+- The export model gained `layers` and `activeLayerId`; a format may ignore them.
 
 ---
 

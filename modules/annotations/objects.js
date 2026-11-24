@@ -136,6 +136,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Properties copied with 'necessary' (+exports()), subset of copiedProperties
+     * — except `layer`, which exists on serialized records only: it is what
+     * `layerID` becomes when a record leaves the module (see
+     * OSDAnnotations#externalizeLayer), and must survive a trim of such a record.
      * @type {string[]}
      */
     static necessaryProperties = [
@@ -146,6 +149,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
+        "layer",
         "color",
         "author",
         "created",

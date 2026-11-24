@@ -400,6 +400,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             handler: (ctx) => {
                 if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
                 if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
+                // Which layer an annotation is filed under is organisation, not
+                // content: the board never asked the lock before moving one, and
+                // this patch only reports that move to the destination.
+                if (ctx.meta?.kind === 'layer-change') return { ok: true };
                 const target = ctx.meta?.object ?? ctx.meta?.previous;
                 const state = this.getAnnotationLockState(target);
                 if (state.mutable) return { ok: true };
@@ -874,7 +878,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @private
 	 */
 	_importSerializationProps() {
-		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps]));
+		// `layer`: a decoder that hands over live objects (DICOM SR) sets the
+		// inbound layer descriptor on them, and it has to reach _loadObjects.
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps, "layer"]));
 	}
 
 	/**
@@ -889,9 +895,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	serializeAnnotation(item) {
 		if (item instanceof fabric.Object) {
-			return item.toObject(this._importSerializationProps());
+			let owner;
+			if (item.canvas) {
+				for (const instance of OSDAnnotations.FabricWrapper.instances()) {
+					if (instance.canvas === item.canvas) { owner = instance; break; }
+				}
+			}
+			return this.externalizeLayer(item.toObject(this._importSerializationProps()), owner);
 		}
 		return OpenSeadragon.extend(true, Array.isArray(item) ? [] : {}, item);
+	}
+
+	/**
+	 * Layers have no IO resource of their own: a layer travels on the annotations
+	 * it holds. In memory an annotation points at its layer with `layerID`; every
+	 * record that LEAVES the module (bundle export, CRUD payload) carries the one
+	 * property `layer: {id, name, position}` instead, so a destination that keeps
+	 * the record keeps the layer. This is the outbound half of that swap, the
+	 * inbound half is in `FabricWrapper._loadObjects`.
+	 *
+	 * @param {object} plain serialized annotation, modified in place
+	 * @param {OSDAnnotations.FabricWrapper} [wrapper] owner of the layer; without it
+	 *   only the id can be written
+	 * @return {object} plain
+	 */
+	externalizeLayer(plain, wrapper = undefined) {
+		if (!plain || typeof plain !== "object") return plain;
+		const id = plain.layerID;
+		delete plain.layerID;
+		if (id === undefined || id === null || String(id) === "") {
+			delete plain.layer;
+		} else {
+			plain.layer = wrapper?.describeLayer(id) || { id: String(id) };
+		}
+		return plain;
+	}
+
+	/**
+	 * Read a layer descriptor that came from outside (a file, a sink, a peer) —
+	 * only the known fields, each type-checked and bounded.
+	 * @param {*} raw
+	 * @return {{id: string, name?: string, position?: number, visible?: boolean}|undefined}
+	 *   undefined when it does not identify a layer
+	 */
+	sanitizeLayerDescriptor(raw) {
+		if (!raw || typeof raw !== "object") return undefined;
+		if (typeof raw.id !== "string" && typeof raw.id !== "number") return undefined;
+		const id = String(raw.id);
+		if (!id || id.length > 128) return undefined;
+
+		const result = { id };
+		const name = typeof raw.name === "string" ? raw.name.trim().slice(0, 200) : "";
+		if (name) result.name = name;
+		if (typeof raw.position === "number" && Number.isFinite(raw.position)) result.position = raw.position;
+		if (typeof raw.visible === "boolean") result.visible = raw.visible;
+		return result;
 	}
 
 	/******************* SETTERS, GETTERS **********************/

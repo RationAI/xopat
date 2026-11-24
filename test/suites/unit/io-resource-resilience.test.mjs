@@ -155,3 +155,40 @@ test("canCreate stays silent — it is a question, not an operation", { tag: ["@
     // would fire an error dialog per frame.
     expect(pipeline.surfaced.length).toBe(0);
 });
+
+test("a validate() that throws answers a can* probe with a refusal, not an exception",
+    { tag: ["@unit"] }, () => {
+        const resource = makeResource(makePipeline(), {
+            validate: () => { throw new Error("validator exploded"); },
+        });
+        const verdict = resource.canCreate({ id: "x" });
+        expect(verdict.ok).toBe(false);
+        expect(verdict.code).toBe("W_IO_VALIDATE_THREW");
+        expect(resource.canUpdate("x", { a: 1 }).code).toBe("W_IO_VALIDATE_THREW");
+    });
+
+test("a merge whose result cannot be serialized leaves the pending create untouched",
+    { tag: ["@unit"] }, async () => {
+        // The patch used to be folded into the create BEFORE serialize ran; the
+        // throw then also queued it as its own update — applied twice.
+        const pipeline = makePipeline();
+        const resource = makeResource(pipeline, {
+            coalesce: true,
+            persistOutbox: true,
+            merge: (prev, next) => ({ ...prev, ...next, merged: true }),
+            serialize: (item) => {
+                if (item.merged) throw new Error("cannot serialize the merge");
+                return { ...item };
+            },
+        });
+        await new Promise(r => setTimeout(r, 0));
+
+        const created = resource.create({ id: "a", v: 1 }, { apply: () => {} });
+        const updated = resource.update("a", { v: 2 }, { apply: () => {} });
+        await Promise.all([created.settled, updated.settled]);
+
+        expect(pipeline.dispatched).toEqual([
+            { direction: "create", itemId: undefined, payload: { id: "a", v: 1 } },
+            { direction: "update", itemId: "a", payload: { v: 2 } },
+        ]);
+    });

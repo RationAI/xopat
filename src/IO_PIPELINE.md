@@ -182,9 +182,25 @@ Resources stay inert at the *sink* layer until an admin binds `crud:<name>` to a
 
 ### Operation ordering & coalescing (per-resource outbox)
 
-Each `IOResource` owns a **per-resource FIFO outbox queue**. Every sink dispatch enqueues at the tail; the worker pulls one entry at a time and only starts op N+1 after op N has settled (success, refusal, or coalesced-out). This guarantees the server sees ops in the order the user issued them, even when individual sink calls have variable latency.
+Each `IOResource` owns a **per-resource FIFO outbox queue**. Every sink dispatch enqueues at the tail; the worker pulls from the head and only starts the next op after the previous one has settled (success, refusal, or coalesced-out) — one entry at a time, or a run of them where a bound sink takes batches (*Batched drain* below). This guarantees the server sees ops in the order the user issued them, even when individual sink calls have variable latency.
 
 The sync core (validate → guards → apply → history push) still runs in the caller's frame; only the sink dispatch goes through the queue.
+
+#### Batched drain
+
+One call per op is the limit on throughput: a scripted batch of 10 000 creates is produced in a second and stored at the destination's per-request rate. When a bound sink implements `createMany` / `deleteMany`, the worker takes the head entry **plus the consecutive unstarted entries of the same direction behind it** (up to the smallest `maxBatch` among those sinks, default 200) and dispatches them through `IO_PIPELINE.dispatchMany` — one sink call for the run. Updates never batch.
+
+The bulk contract is **enforced**: a slot the sink left unanswered (no array, a short one, a hole, a bare `true`) is refused with `W_IO_BULK_RESULT` and reverted, never recorded as stored. A sink may implement the bulk form alone — a lone op reaches it as a batch of one. Two things differ from the one-op path and are worth knowing: every entry of a batch is *started* together, so a later op on the same identity can no longer coalesce with any of them; and with several sinks bound, a batch goes sink by sink (sink A receives the whole run, then sink B) rather than op by op.
+
+- Order is unchanged: a batch is a contiguous prefix of the queue, so nothing overtakes anything.
+- Each op keeps its own outcome: its own `settled` result, its own revert on refusal. One refused item does not touch its neighbours.
+- Gating is per item (`accepts(ctx)` may depend on the viewer), and a sink without the bulk method is still called per item inside the same pass — a mixed binding works.
+- `io:refused` fires per item; the **dialog** appears once per distinct refusal in a batch.
+- With no bulk-capable sink bound, the limit is 1 and the worker runs exactly the one-op path above.
+
+#### Backpressure for bulk producers
+
+`resource.headroom()` is how many more ops the outbox takes before the cap (below); `await resource.whenHeadroom(n)` resolves `true` once `n` fit, or `false` when they do not and the queue cannot drain right now (offline, sink not registered) — it never hangs. A producer that can wait (an import, a scripted batch — see `addAnnotationsBulk`) paces itself with `whenHeadroom`; a synchronous gesture (delete a selection) checks `headroom()` once and aborts whole rather than have its tail refused item by item.
 
 #### Coalescing
 
@@ -268,7 +284,7 @@ this.annotationResource = this.defineResource({
 
 Three layers prevent runaway storage:
 
-1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.**
+1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.** The event and the revert are per op; the dialog is shown once per full episode. The cap applies only while a destination is bound (or awaited) — with nothing bound nothing is owed, and a large local gesture is not a backlog. Bulk producers avoid the cap altogether with `whenHeadroom` (see *Backpressure* above).
 2. **Age-based eviction** (`persistMaxAgeMs`, default 7 days). Sweep runs on boot. Stale ops are unlikely to be acceptable to the server anyway; emits `io:outbox-pruned` with the count.
 3. **Quota awareness** via `navigator.storage.estimate()`. At 80% of available storage, emit `io:outbox-quota-warn` so the UI can surface a "your sync queue is filling up" banner.
 
@@ -1102,6 +1118,8 @@ An owner needs no declaration to take part: its domain is its owner id, and with
 One flush, two exports: DICOM SR for the archive, GeoJSON for the repository. What the user picks in the annotations download dialog affects neither.
 
 Per-item CRUD is not converted by the pipeline: a sink that speaks another model calls `formats.encodeItem(...)` itself, because an update usually needs the native patch as well (which fields changed) and not only its wire form.
+
+Not everything an owner groups its items by needs a resource. Annotation layers have none: each annotation record carries `layer: {id, name, position}`, so a layer survives wherever the record does and a sink has nothing to implement. Prefer that to a second resource when the grouping has no life apart from its members (`modules/annotations/convert/README.md` → *Layers*).
 
 ## Built-in sinks
 

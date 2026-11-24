@@ -180,8 +180,33 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (selectedIds) objects = objects.filter(o => selectedIds.has(String(o.id)));
         }
 
+        // Every object names its layer in full (`layer: {id, name, position}`), so
+        // any format that keeps object properties keeps the layers. `layers` adds
+        // what objects cannot say — a layer nobody is in — for a format with room
+        // for it (native).
+        let layers, activeLayerId;
+        if (objects) {
+            const used = options.scopeSelected && new Set(
+                (this.getSelectedLayers?.() || []).filter(Boolean).map(l => String(l.id)));
+            for (const object of objects) {
+                if (!object) continue;
+                this.module.externalizeLayer(object, this);
+                if (used && object.layer) used.add(object.layer.id);
+            }
+            layers = this.getAllLayers()
+                .map(layer => this.describeLayer(layer.id))
+                .filter(layer => layer && (!used || used.has(layer.id)))
+                .sort((a, b) => a.position - b.position);
+            const active = this.getActiveLayer()?.id;
+            if (active !== undefined && layers.some(layer => layer.id === String(active))) {
+                activeLayerId = String(active);
+            }
+        }
+
         return {
             objects,
+            layers,
+            activeLayerId,
             // Always present: a format that does not write presets may still
             // read them (a class name comes from the object's preset).
             presets: this.module.presets.toObject(),
@@ -484,7 +509,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             nextState = this._normalizeImportState({ objects: toImport });
         } else {
             affectsPresets = Array.isArray(toImport?.presets) && toImport.presets.length > 0;
-            if (affectsPresets || (Array.isArray(toImport?.objects) && toImport.objects.length > 0)) {
+            if (affectsPresets
+                || (Array.isArray(toImport?.objects) && toImport.objects.length > 0)
+                // A file may hold nothing but (empty) layers.
+                || (Array.isArray(toImport?.layers) && toImport.layers.length > 0)) {
                 imported = true;
                 nextState = this._normalizeImportState({
                     objects: Array.isArray(toImport?.objects) ? toImport.objects : [],
@@ -935,6 +963,56 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
+     * What a layer is to the outside: the descriptor written on every annotation
+     * in it (see {@link OSDAnnotations#externalizeLayer}). Visibility is view
+     * state and is left out.
+     * @param {number|string} layerId
+     * @return {{id: string, name: string, position: number}|undefined} undefined for an unknown layer
+     */
+    describeLayer(layerId) {
+        const layer = this.getLayer(String(layerId));
+        if (!layer) return undefined;
+        const id = String(layer.id);
+        return { id, name: layer.name, position: this.getBoardItemIndex('layer', id) };
+    }
+
+    /**
+     * Tell a bound `crud:annotation` destination which layer the given annotations
+     * are in now. Layers have no resource of their own, so a move, a rename or a
+     * reorder is a `{layer}` patch on each annotation concerned (`{layer: null}`
+     * for "in no layer") — the comments precedent, see {@link addComment}.
+     *
+     * Report only: the change is already made and already has its history entry,
+     * so there is nothing to apply and a refusal reverts nothing.
+     * @param {Iterable<fabric.Object>} annotations
+     * @private
+     */
+    _reportLayerOf(annotations) {
+        const resource = this.module.annotationResource;
+        if (!resource) return;
+        const list = [];
+        for (const object of annotations || []) {
+            if (object && object.incrementId !== undefined && object.incrementId !== null) list.push(object);
+        }
+        if (!list.length) return;
+        const room = resource.headroom?.() ?? Infinity;
+        if (list.length > room) {
+            // Never a reason to refuse a board gesture. Each record catches up the
+            // next time it is written in full.
+            APPLICATION_CONTEXT.log?.("module.annotations")?.warn?.(
+                "layer change not reported: outbox has no room", { count: list.length, room });
+            return;
+        }
+        const viewerId = this.viewer?.uniqueId;
+        for (const object of list) {
+            const hasLayer = object.layerID !== undefined && object.layerID !== null && String(object.layerID) !== '';
+            resource.update(object.incrementId, {
+                layer: hasLayer ? (this.describeLayer(object.layerID) || { id: String(object.layerID) }) : null,
+            }, { meta: { kind: 'layer-change', object, viewerId } });
+        }
+    }
+
+    /**
      * Create new layer. The new layer becomes the active one (new annotations
      * land in it); undo restores the previously active layer.
      * @event layer-added
@@ -979,6 +1057,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             const target = this.getLayer(String(id));
             if (!target) return false;
             target.name = value;
+            this._reportLayerOf(target.getObjects());
             this.raiseEvent('layer-objects-changed', { layerId: String(id) });
             return true;
         };
@@ -1102,6 +1181,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             while (target >= 0 && target < order.length && order[target].type !== 'layer') target += step;
             if (target < 0 || target >= order.length) return false;
             [order[idx], order[target]] = [order[target], order[idx]];
+            // Both layers changed position, and position is on their members' records.
+            for (const moved of [order[idx], order[target]]) {
+                this._reportLayerOf(this.getLayer(moved.id)?.getObjects());
+            }
             return true;
         };
         const reverseDir = direction === 'up' ? 'down' : 'up';
@@ -1318,6 +1401,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 annotation.layerID = undefined;
                 this.upsertBoardItem('annotation', annotation.incrementId, toIndex);
             }
+            this._reportLayerOf([annotation]);
             this.canvas.requestRenderAll();
             try {
                 this.raiseEvent('layer-objects-changed', { layerId: toLayerId ?? oldLayerId ?? null });
@@ -1419,6 +1503,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         };
 
         const notify = (layerId) => {
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             try {
                 this.raiseEvent('layer-objects-changed', { layerId });
@@ -1771,6 +1856,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     this.upsertBoardItem('annotation', obj.incrementId);
                 }
             }
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             // Tell the panel its row data is stale. addObject/removeObject on
             // a Layer otherwise emits no events, so a panel that re-rendered
@@ -1801,6 +1887,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         oldBoardIndex >= 0 ? oldBoardIndex : undefined);
                 }
             }
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             try {
                 this.raiseEvent('layer-objects-changed', { layerId: null });
@@ -1905,6 +1992,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // passing skipGuards inside the closures) keeps guards from re-firing
         // on every undo/redo replay, and prevents a mid-loop refusal from
         // leaving a half-applied grouped entry.
+        if (!this._outboxTakes(targetAnnots.length)) return false;
         for (const annot of targetAnnots) {
             // `surface: true`: this aborts a user gesture, so the refusal is the
             // only feedback the user gets. Probes are silent by default so that
@@ -2999,32 +3087,20 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     /**
      * Build the per-item CRUD dispatcher for {@link addAnnotationsBulk}.
      *
-     * Returns a no-op unless the caller asked to persist AND the batch fits the
-     * resource's outbox. A batch that does not fit would enqueue thousands of ops
-     * only for the tail to be refused with `W_IO_OUTBOX_FULL` and rolled back —
-     * a partially-stored import is worse than a clearly-unstored one, and the
-     * bundle path (`exportBundle`, one payload) is the right primitive at that size.
+     * Returns a no-op unless the caller asked to persist. Batch size is not this
+     * function's concern: {@link addAnnotationsBulk} paces itself against the
+     * outbox (`whenHeadroom`), so a batch of any size is dispatched in full
+     * instead of overflowing and having its tail refused.
      *
-     * @param {number} count batch size
      * @param {boolean} wanted caller's `persist` flag
      * @return {(item: fabric.Object) => void}
      * @private
      */
-    _bulkPersister(count, wanted) {
+    _bulkPersister(wanted) {
         const noop = () => {};
         if (!wanted) return noop;
         const resource = this.module.annotationResource;
         if (!resource) return noop;
-
-        const capacity = this.module.getStaticMeta?.("crudOutboxMaxEntries", 5000) ?? 5000;
-        if (count > capacity) {
-            console.warn(
-                `[annotations] bulk add of ${count} exceeds the CRUD outbox capacity (${capacity}); ` +
-                `items were added to the canvas but NOT dispatched per-item. They are still covered ` +
-                `by the bundle export.`,
-            );
-            return noop;
-        }
 
         return (item) => {
             if (!item) return;
@@ -3042,6 +3118,30 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             // stayed unaddressable — no delete, no update — until a reload.
             this._settleAnnotationSync(item, result);
         };
+    }
+
+    /**
+     * All-or-nothing capacity check for a bulk gesture that dispatches `count`
+     * ops through `annotationResource` in one synchronous frame.
+     *
+     * Such a gesture cannot wait for the outbox to drain, and letting it run
+     * into the cap refuses and reverts its tail item by item — half a delete.
+     * Says why, once, and returns `false` so the caller aborts before touching
+     * anything. Always `true` when no destination is bound (nothing is owed).
+     *
+     * @param {number} count
+     * @return {boolean}
+     * @private
+     */
+    _outboxTakes(count) {
+        const room = this.module.annotationResource?.headroom?.() ?? Infinity;
+        if (count <= room) return true;
+        const cap = this.module.getStaticMeta?.("crudOutboxMaxEntries", 5000) ?? 5000;
+        Dialogs.show(count > cap
+            ? $.t('error.ioOutboxBatchTooLarge', { count, cap })
+            : $.t('error.ioOutboxFull', { pending: Math.max(0, cap - room), cap }),
+        8000, Dialogs.MSG_WARN);
+        return false;
     }
 
     /**
@@ -3081,9 +3181,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   FROM a sink, and persisting those would post the whole slide straight back.
      *   User-driven adds (file import, scripting) pass `true` — otherwise they are
      *   canvas-only and vanish on reload against a CRUD-bound deployment.
-     *   Ignored (with a warning) above the resource's outbox capacity; use the
-     *   bundle path for batches that large.
-     * @returns {Promise<{added:number, cancelled:boolean, annotations:fabric.Object[]}>}
+     *   Any batch size: the loop waits for outbox room (`whenHeadroom`) between
+     *   chunks. If that room cannot come (offline, destination not connected)
+     *   the add stops there and the result reports `cancelled: true`.
+     * @returns {Promise<{added:number, cancelled:boolean, stalled:boolean, annotations:fabric.Object[]}>}
+     *   `stalled` (which also sets `cancelled`) means the batch stopped early
+     *   because the bound destination could take no more ops and cannot drain
+     *   right now (offline / sink not registered); the user has been told.
      */
     async addAnnotationsBulk(annotations, options = {}) {
         const items = Array.isArray(annotations) ? annotations.filter(Boolean) : [];
@@ -3104,7 +3208,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // The batch's own history entry covers undo, so each item skips its own
         // push — but still supplies an inverse, so a per-item refusal reverts
         // exactly that item instead of the whole import.
-        const persistOne = this._bulkPersister(items.length, opts.persist === true);
+        const resource = opts.persist === true ? this.module.annotationResource : undefined;
+        const persistOne = this._bulkPersister(!!resource);
+        // Backpressure. A scripted or imported batch produces ops far faster than
+        // any destination stores them; without pacing, the outbox hit its cap and
+        // the rest of the batch was refused and removed again. `false` means the
+        // room will not come (offline, destination not connected): stop there.
+        const roomFor = async (count) =>
+            !resource?.whenHeadroom || await resource.whenHeadroom(count);
 
         const pushHistory = (added) => {
             if (!recordHistory || !added.length) return;
@@ -3123,8 +3234,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             catch (e) { /* non-fatal */ }
         };
 
-        // Sync fast path
-        if (items.length < threshold) {
+        // Sync fast path — only when the whole batch fits the outbox right now;
+        // otherwise the chunked path below paces it.
+        if (items.length < threshold && items.length <= (resource?.headroom?.() ?? Infinity)) {
             const added = [];
             for (let i = 0; i < items.length; i++) {
                 const a = items[i];
@@ -3132,7 +3244,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
             pushHistory(added);
             raiseLoaded(added);
-            return { added: added.length, cancelled: false, annotations: added };
+            return { added: added.length, cancelled: false, stalled: false, annotations: added };
         }
 
         // Async chunked path with progress + cancel
@@ -3165,10 +3277,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         };
 
         const added = [];
+        let stalled = false;
         try {
             for (let i = 0; i < items.length; i += chunkSize) {
                 if (ctrl.signal.aborted) break;
                 const end = Math.min(i + chunkSize, items.length);
+                if (!(await roomFor(end - i))) { stalled = true; break; }
+                if (ctrl.signal.aborted) break;
                 for (let j = i; j < end; j++) {
                     const a = items[j];
                     if (addOne(a, j) !== false) { added.push(a); persistOne(a); }
@@ -3186,7 +3301,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (dialog && !dialog.isError) dialog.done();
 
-        return { added: added.length, cancelled: ctrl.signal.aborted, annotations: added };
+        // The batch was cut short by the destination, not by the user: say how
+        // far it got. A generic "outbox full" left a file import looking
+        // complete with part of the file silently missing from the canvas.
+        if (stalled) {
+            Dialogs.show($.t('error.ioBulkStalled', { added: added.length, total: items.length }),
+                10000, Dialogs.MSG_WARN);
+        }
+
+        return {
+            added: added.length, cancelled: ctrl.signal.aborted || stalled, stalled, annotations: added,
+        };
     }
 
     /**
@@ -3840,6 +3965,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // All-or-nothing pre-delete guard checkpoint for the annotation items
         // (layers have no CRUD resource). Abort the whole gesture on any veto
         // so no partial state is committed.
+        if (!this._outboxTakes(annToDelete.length)) return;
         for (const obj of annToDelete) {
             const veto = this.module.annotationResource.canDelete(obj.incrementId, {
                 kind: 'delete', object: obj, viewerId: this.viewer?.uniqueId,
@@ -4664,8 +4790,39 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // wrapper). fabric.util.enlivenObjects can't recover any of that on
         // its own — initializeBeforeImport is the factory's chance to
         // rebuild the blueprint so the enlivened object is renderable.
-        for (const raw of input.objects) {
+        // Layers to bring in, id -> descriptor. Two sources, the explicit list first
+        // so it wins: `input.layers` (a native file, a history state) and the
+        // `layer` descriptor each object carries (every other format and sink —
+        // layers have no IO resource of their own, see OSDAnnotations#externalizeLayer).
+        // Both are outside data: only sanitized fields reach a Layer.
+        const layerPlan = new Map();
+        const rawObjects = [...input.objects];
+        for (const layerData of Array.isArray(input.layers) ? input.layers : []) {
+            const descriptor = this.module.sanitizeLayerDescriptor(layerData);
+            if (!descriptor || layerPlan.has(descriptor.id)) continue;
+            layerPlan.set(descriptor.id, descriptor);
+            // A history state (`_captureImportState`) files a layer's members
+            // under the layer instead of in `objects`. They used to be left
+            // there, so undoing an import lost every annotation that had a layer.
+            for (const member of Array.isArray(layerData._objects) ? layerData._objects : []) {
+                if (member && typeof member === 'object') rawObjects.push({ ...member, layerID: descriptor.id });
+            }
+        }
+
+        for (const raw of rawObjects) {
             if (!raw || typeof raw !== 'object') continue;
+            if ("layer" in raw) {
+                // Inbound half of the `layerID` <-> `layer` swap. A record with a
+                // bare `layerID` (written before layers were persisted) keeps it.
+                // The key goes either way — the whitelist trim leaves it behind
+                // as `undefined`, and a live object must not carry it.
+                const descriptor = this.module.sanitizeLayerDescriptor(raw.layer);
+                delete raw.layer;
+                if (descriptor) {
+                    raw.layerID = descriptor.id;
+                    if (!layerPlan.has(descriptor.id)) layerPlan.set(descriptor.id, descriptor);
+                }
+            }
             this._migrateRetiredFactory(raw);
             const factory = this.module.getAnnotationObjectFactory(raw.factoryID || raw.type);
             if (factory && typeof factory.initializeBeforeImport === 'function') {
@@ -4675,7 +4832,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         return new Promise((resolve, reject) => {
-            fabric.util.enlivenObjects(input.objects, async (objects) => {
+            fabric.util.enlivenObjects(rawObjects, async (objects) => {
                 try {
                     if (clear) {
                         this.canvas.clear();
@@ -4694,19 +4851,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         this.clearLayerSelection(true);
                     }
 
-                    const explicitLayers = Array.isArray(input?.layers) ? [...input.layers] : [];
-                    explicitLayers
-                        .sort((a, b) => (a?.position ?? 0) - (b?.position ?? 0))
-                        .forEach(layerData => {
-                            if (!layerData?.id) return;
-                            const id = String(layerData.id);
-                            if (self.getLayer(id)) return;
-
-                            self._createLayer({
-                                ...OpenSeadragon.extend(true, {}, layerData),
-                                id,
-                                _objects: []
-                            });
+                    [...layerPlan.values()]
+                        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                        .forEach(descriptor => {
+                            // Merging into a canvas that has this layer: its own state stands.
+                            if (self.getLayer(descriptor.id)) return;
+                            self._createLayer({ ...descriptor, _objects: [] });
                         });
 
                     let insertion = 0;

@@ -1057,7 +1057,8 @@ OSDAnnotations.PresetManager = class {
 };
 
 /**
- * A bit new feature, not really used (still)
+ * A named group of annotations on the board. Not stored on its own: it is
+ * persisted on the annotations it holds, see OSDAnnotations#externalizeLayer.
  * @type {OSDAnnotations.Layer}
  */
 OSDAnnotations.Layer = class {

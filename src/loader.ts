@@ -1806,7 +1806,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
             perViewport?: boolean;
-            defaultFormat?: () => string | undefined;
+            defaultFormat?: (ctx?: IOContext) => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {

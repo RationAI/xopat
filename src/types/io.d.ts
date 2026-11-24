@@ -518,6 +518,29 @@ interface IOSink {
     update?(ctx: IOContext, patch: unknown): Promise<IOResult> | IOResult;
     delete?(ctx: IOContext): Promise<IOResult> | IOResult;
     /**
+     * Optional bulk forms of `create` / `delete`. When a bound sink implements
+     * one, the resource outbox hands it a run of consecutive same-direction ops
+     * (at most `maxBatch`) in ONE call instead of one call per op — the
+     * difference between a 10 000-annotation import draining in seconds and
+     * overflowing the outbox.
+     *
+     * Contract: return exactly one result per input, in input order. Each item
+     * succeeds or is refused on its own (a refused item is reverted locally, the
+     * rest stay). `ctxs[i]` is that item's own context (`itemId`,
+     * `meta.localId`, `meta.clientOpId`, viewer scope) — a batch may span
+     * viewers. A throw refuses the whole batch. Sinks without these methods are
+     * called per item as before; there is no `updateMany`.
+     *
+     * The contract is enforced: a slot with no result object (no array, a
+     * short one, a hole) is refused with `W_IO_BULK_RESULT` and reverted — it
+     * is never read as success. A sink may implement the bulk form alone; a
+     * lone op then arrives as a batch of one.
+     */
+    createMany?(ctxs: IOContext[], items: unknown[]): Promise<IOResult[]> | IOResult[];
+    deleteMany?(ctxs: IOContext[]): Promise<IOResult[]> | IOResult[];
+    /** Largest batch `createMany` / `deleteMany` accept. Default 200. */
+    maxBatch?: number;
+    /**
      * Streamed parameterised read. The owner sends `params` (free-form,
      * domain-specific — bbox + zoom, page tokens, anything) and the
      * sink yields raw items as they arrive. The pipeline routes
@@ -665,12 +688,15 @@ interface IOResourceDef<T = unknown> {
     persistOutbox?: boolean;
     /**
      * Maximum entries kept in the persistent outbox before refusing new
-     * enqueues with `code: "W_IO_OUTBOX_FULL"`. Default 5000.
+     * enqueues with `code: "W_IO_OUTBOX_FULL"`. Default 5000. Counted as ops
+     * still owed to a destination, so it applies only while one is bound (or
+     * bound and not registered yet): with nothing bound nothing is owed and
+     * local editing is not limited.
      */
     persistMaxEntries?: number;
     /**
-     * Drop persisted entries older than this (ms) on boot and during
-     * periodic sweeps. Default 7 days. Stale ops are unlikely to be
+     * Drop persisted entries older than this (ms) on boot. Default 7 days.
+     * Stale ops are unlikely to be
      * acceptable to the server anyway.
      */
     persistMaxAgeMs?: number;
@@ -806,6 +832,21 @@ interface IOResource<T = unknown> {
      * the page, wait for sync to finish" workflows.
      */
     flush(): Promise<IOResult[]>;
+    /**
+     * How many more ops the outbox takes before refusing with
+     * `W_IO_OUTBOX_FULL`. `Infinity` for a resource without `persistOutbox`,
+     * and while no destination is bound (the cap counts ops owed to one).
+     * A synchronous bulk gesture checks this once up front instead of letting
+     * the tail of the batch be refused and rolled back item by item.
+     */
+    headroom(): number;
+    /**
+     * Backpressure for bulk producers: resolves `true` once `count` more ops
+     * fit (immediately when they already do; `count` is clamped to the cap).
+     * Resolves `false` when they do not fit and the queue cannot drain right
+     * now (offline, or the bound sink has not registered) — never hangs.
+     */
+    whenHeadroom(count?: number): Promise<boolean>;
     /**
      * Abandon any pending (unstarted) ops in the outbox queue. Their
      * `.settled` Promises resolve to a refusal with `code: "W_IO_QUEUE_DROPPED"`.
@@ -1147,6 +1188,8 @@ interface IOPipelineLike {
         ownerUid: string,
         info: {
             ownerId: string; xoType: "core" | "plugin" | "module";
+            /** See `initIO`'s `bundleScope`. Default `"global"`. */
+            bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
             /** Bundle state is held per viewport — see `initIO`'s `perViewport`. */
             perViewport?: boolean;
         } & IOOwnerBundleHooks,
@@ -1252,6 +1295,14 @@ interface IOPipelineLike {
         },
     ): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
+    /**
+     * `dispatch` for a run of same-owner, same-capability, same-direction ops.
+     * One result per input, in order. Uses a sink's `createMany` / `deleteMany`
+     * where present and falls back to its per-item method otherwise.
+     */
+    dispatchMany(ctxs: IOContext[], payloads: unknown[]): Promise<IOResult[]>;
+    /** Largest run the outbox may hand to `dispatchMany` (1 = no bound sink batches). */
+    batchLimit(ownerUid: string, capabilityId: string, direction: IODirection): number;
 
     /**
      * Drain every registered CRUD resource's outbox. Awaits each
@@ -1429,7 +1480,7 @@ interface IOPipelineLike {
     /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
     clearHydratedFor(viewerId: string, viewportId?: string): void;
     /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
-    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast?: boolean): void;
     /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */
     emitQueueEvent_(name: string, payload: Record<string, unknown>): void;
     /** @internal The shared POST_DATA dictionary the `post-data` sink writes into. */

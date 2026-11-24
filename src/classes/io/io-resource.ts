@@ -13,7 +13,9 @@
 // The outbox queue serializes all sink dispatches for one resource:
 // op N+1's sink call doesn't begin until op N has settled. This
 // guarantees the server sees ops in the order the user issued them, even
-// when individual sink calls have variable latency.
+// when individual sink calls have variable latency. Where a bound sink
+// takes batches (`createMany` / `deleteMany`), a run of consecutive
+// same-direction ops counts as one such step — see `_takeBatch`.
 //
 // Coalescing (when `def.coalesce: true` AND `def.identityOf` provided):
 // before pushing a new entry, the queue checks the latest unstarted
@@ -150,6 +152,10 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _replayDone = true;
     /** Set by the pipeline when offline; worker pauses dispatch. */
     private _offline = false;
+    /** The "outbox full" dialog was shown for the current full episode. */
+    private _fullSurfaced = false;
+    /** `whenHeadroom()` callers waiting for the queue to drain. */
+    private _headroomWaiters: Array<{ need: number; resolve: (ok: boolean) => void }> = [];
 
     constructor(opts: IOResourceCreateOptions) {
         this.name = opts.def.name;
@@ -234,7 +240,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                     // Named: one event per persisted resource fires, and a bare
                     // `{reason}` left a listener unable to tell which — or how many
                     // — resources had lost durability.
-                    this.pipeline.emitQueueEvent_("io:outbox-unavailable", {
+                    this._emitQueueEvent("io:outbox-unavailable", {
                         ownerUid: this.ownerUid, resourceName: this.name,
                         reason: "IndexedDB unavailable (private mode, blocked, or opaque origin)",
                     });
@@ -261,7 +267,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         try {
             const pruned = await store.pruneOlderThan(now - maxAge);
             if (pruned > 0) {
-                this.pipeline.emitQueueEvent_("io:outbox-pruned", {
+                this._emitQueueEvent("io:outbox-pruned", {
                     ownerUid: this.ownerUid, resourceName: this.name, count: pruned,
                 });
             }
@@ -292,7 +298,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         // Quota warning (post-prune so the figure reflects current state).
         const q = await store.quotaSnapshot();
         if (q && q.quota > 0 && q.usage / q.quota > 0.8) {
-            this.pipeline.emitQueueEvent_("io:outbox-quota-warn", {
+            this._emitQueueEvent("io:outbox-quota-warn", {
                 usage: q.usage, quota: q.quota, ratio: q.usage / q.quota,
             });
         }
@@ -312,7 +318,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     private _markReplayDone(replayed: number): void {
         if (this._replayDone) return;
         this._replayDone = true;
-        this.pipeline.emitQueueEvent_("io:outbox-replayed", {
+        this._emitQueueEvent("io:outbox-replayed", {
             ownerUid: this.ownerUid, resourceName: this.name, count: replayed,
         });
         if (this._outbox.length > 0) void this._run();
@@ -517,6 +523,20 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     }
 
     /**
+     * `def.validate`, with a throw turned into a refusal. It is owner code: a
+     * throw used to escape `create/update/delete` (and still escaped the `can*`
+     * probes and `query`) synchronously, into callers that expect a result.
+     */
+    private _validate(itemOrPatch: any, ctx: IOContext): IOResult | undefined {
+        try {
+            return this.def.validate?.(itemOrPatch as T, ctx);
+        } catch (e: any) {
+            console.error(`[IO] resource "${this.name}" ${ctx.direction}: validate() threw.`, e);
+            return { ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_VALIDATE_THREW" };
+        }
+    }
+
+    /**
      * Sync core: validate → guards → apply. Returns sync IOResult or
      * refusal. Does NOT push history or enqueue dispatch.
      */
@@ -526,15 +546,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         ctx: IOContext,
         options: IOResourceMutateOptions,
     ): IOResult {
-        // `validate` is owner code. A throw used to escape `create/update/delete`
-        // synchronously, into a caller that only ever expected a result.
-        let v: IOResult | undefined;
-        try {
-            v = this.def.validate?.(itemOrPatch as T, ctx);
-        } catch (e: any) {
-            console.error(`[IO] resource "${this.name}" ${direction}: validate() threw; nothing was sent.`, e);
-            v = { ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_VALIDATE_THREW" };
-        }
+        const v = this._validate(itemOrPatch, ctx);
         if (v && !v.ok) {
             // Surface it, exactly as a guard refusal is surfaced (IO_PIPELINE.md,
             // "Refusal surfacing"). This used to return silently: the caller got
@@ -678,23 +690,23 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         // Rule: create + update → merge into create
         if (prev.direction === "create" && newEntry.direction === "update" && this.def.merge) {
             try {
-                prev.rawPayload = this.def.merge(prev.rawPayload, newEntry.rawPayload);
+                // Everything that can throw (`merge`, `serialize` — owner code)
+                // runs BEFORE `prev` is touched. Mutating first meant a throwing
+                // `serialize` left the patch folded into the create AND, through
+                // the catch below, queued as its own update: applied twice.
+                const merged = this.def.merge(prev.rawPayload, newEntry.rawPayload);
+                const replayed = prev.replayPayload !== undefined;
+                const wire = !(replayed || this.def.persistOutbox) ? undefined
+                    : (this.def.serialize ? this.def.serialize(merged as T, prev.ctx) : merged);
+                prev.rawPayload = merged;
                 // A replayed create dispatches `replayPayload`, not `rawPayload`
                 // — without this the merged update never reached the wire.
-                if (prev.replayPayload !== undefined) {
-                    prev.replayPayload = this.def.serialize
-                        ? this.def.serialize(prev.rawPayload as T, prev.ctx)
-                        : prev.rawPayload;
-                }
+                if (replayed) prev.replayPayload = wire;
                 // Phase 10: rewrite the persisted entry's payload.
                 if (this.def.persistOutbox) {
                     void this._whenStoreReady().then(store => {
                         if (!store) return;
-                        const pid = String(prev.ctx.meta.clientOpId);
-                        const newPayload = this.def.serialize
-                            ? this.def.serialize(prev.rawPayload as T, prev.ctx)
-                            : prev.rawPayload;
-                        return store.update(pid, { serializedPayload: newPayload });
+                        return store.update(String(prev.ctx.meta.clientOpId), { serializedPayload: wire });
                     }).catch(() => {});
                 }
                 return VERDICT_SKIP; // new is folded into prev
@@ -760,24 +772,33 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         // This is approximate (the persisted count updates async after IDB
         // writes), but conservative — better to refuse one extra than to
         // accept past the cap silently.
-        if (this.def.persistOutbox) {
-            const cap = this.def.persistMaxEntries ?? 5000;
-            const pending = this._outbox.length + this._persistedCount;
+        // Only where something is actually owed: with nothing bound the worker
+        // answers `{ok: true}` without dispatching, so a large synchronous
+        // gesture (delete 20 000 annotations) is not a backlog — refusing its
+        // tail was a limit on local editing that no destination asked for.
+        if (this._capped()) {
+            const cap = this._cap();
+            const pending = this._pending();
             if (pending >= cap) {
                 const refusal: IOResult = {
                     ok: false, refused: true,
                     reason: "persistent outbox cap reached",
                     code: "W_IO_OUTBOX_FULL",
-                    userMessage: `Cannot save: too many pending changes (${pending}/${cap}). Please wait for sync or check connectivity.`,
+                    userMessage: $.t("error.ioOutboxFull", { pending, cap }),
                 };
-                this.pipeline.emitQueueEvent_("io:outbox-full", {
+                this._emitQueueEvent("io:outbox-full", {
                     ownerUid: this.ownerUid, resourceName: this.name, pending,
                 });
-                this.pipeline.surfaceRefusal_(entry.ctx, refusal as any);
+                // The event and the rollback are per op; the dialog is per
+                // episode. A bulk gesture hitting the cap used to raise one
+                // identical dialog for every op it carried — tens of thousands.
+                this.pipeline.surfaceRefusal_(entry.ctx, refusal as any, !this._fullSurfaced);
+                this._fullSurfaced = true;
                 entry.settle(refusal);
                 if (wantsRollback(entry.options)) this._scheduleRollback(entry, refusal);
                 return entry.settled;
             }
+            this._fullSurfaced = false;
         }
 
         this._outbox.push(entry);
@@ -865,34 +886,44 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                         const held = this._heldResult();
                         for (const wake of this._holdWaiters.splice(0)) wake(held);
                     }
+                    this._wakeHeadroom();
                     break;
                 }
 
-                const entry = this._outbox[0]!;
-                entry.started = true;
-                // Record the attempt before making it: a crash mid-dispatch must
-                // leave evidence that this op was tried, otherwise `attemptCount`
-                // is 0 forever and a poison entry replayed on every boot is
-                // indistinguishable from a fresh one.
-                if (this.def.persistOutbox && !entry.attemptRecorded) {
-                    entry.attemptRecorded = true;
-                    void this._bumpAttempt(entry);
+                // A contiguous prefix, so strict FIFO holds: nothing overtakes.
+                // Every member is marked started before the first await, which
+                // also takes it out of coalescing — the prefix cannot change
+                // under us while the sink call is in flight.
+                const batch = this._takeBatch();
+                for (const entry of batch) {
+                    entry.started = true;
+                    // Record the attempt before making it: a crash mid-dispatch must
+                    // leave evidence that this op was tried, otherwise `attemptCount`
+                    // is 0 forever and a poison entry replayed on every boot is
+                    // indistinguishable from a fresh one.
+                    if (this.def.persistOutbox && !entry.attemptRecorded) {
+                        entry.attemptRecorded = true;
+                        void this._bumpAttempt(entry);
+                    }
                 }
 
-                const result = await this._executeEntry(entry);
-                entry.settle(result);
-                this._outbox.shift();
+                const results = batch.length === 1
+                    ? [await this._executeEntry(batch[0]!)]
+                    : await this._executeBatch(batch);
+                batch.forEach((entry, i) => entry.settle(results[i]!));
+                this._outbox.splice(0, batch.length);
+                this._wakeHeadroom();
 
                 // Stall / resume detection (network/5xx).
-                if (isStallSignal(result)) {
+                if (results.some(isStallSignal)) {
                     if (!this._stalled) {
                         this._stalled = true;
                         this._emitQueueEvent("io:queue-stalled", {
                             ownerUid: this.ownerUid, resourceName: this.name,
-                            pending: this._outbox.length + 1,
+                            pending: this._outbox.length + batch.length,
                         });
                     }
-                } else if (this._stalled && result.ok) {
+                } else if (this._stalled && results.some(r => r.ok)) {
                     this._stalled = false;
                     this._emitQueueEvent("io:queue-resumed", {
                         ownerUid: this.ownerUid, resourceName: this.name,
@@ -901,6 +932,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             }
         } finally {
             this._running = false;
+            this._wakeHeadroom();
             if (!this._stalled && this._outbox.length === 0) {
                 this._emitQueueEvent("io:queue-empty", {
                     ownerUid: this.ownerUid, resourceName: this.name,
@@ -934,7 +966,28 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             + `Dispatch is unaffected; crash-recovery is off for this resource. Reason:`, reason);
     }
 
-    private async _executeEntry(entry: QueueEntry): Promise<IOResult> {
+    /**
+     * The head entry plus the consecutive unstarted same-direction entries
+     * behind it, up to what the bound sinks take in one call. Updates never
+     * batch, and with no bulk-capable sink bound the limit is 1 — the worker
+     * then runs exactly the one-op path it always did.
+     */
+    private _takeBatch(): QueueEntry[] {
+        const head = this._outbox[0]!;
+        const batch = [head];
+        if (head.direction === "update") return batch;
+        // Tolerant of a pipeline that predates batching: it simply never batches.
+        const limit = (this.pipeline as any).batchLimit?.(this.ownerUid, this.capabilityId, head.direction) ?? 1;
+        for (let i = 1; i < this._outbox.length && batch.length < limit; i++) {
+            const e = this._outbox[i]!;
+            if (e.started || e.direction !== head.direction) break;
+            batch.push(e);
+        }
+        return batch;
+    }
+
+    /** Wait for the crash-recovery write; report (never fail on) a miss. */
+    private async _awaitPersisted(entry: QueueEntry): Promise<void> {
         // Phase 10: wait for IDB persist before dispatching (crash-safe).
         // Outbox persistence is a best-effort crash-recovery optimization, NOT
         // a gate on the real save. A write failure (quota / structured-clone /
@@ -946,76 +999,186 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             if (!pr.ok) {
                 // The EVENT stays per-operation: a listener may legitimately
                 // count how many ops lost their crash-recovery record.
-                this.pipeline.emitQueueEvent_("io:outbox-write-failed", {
+                this._emitQueueEvent("io:outbox-write-failed", {
                     ownerUid: this.ownerUid, resourceName: this.name,
                     code: (pr as any).code, reason: (pr as any).reason,
                 });
                 this._warnOutboxFailureOnce((pr as any).code, (pr as any).reason);
             }
         }
+    }
 
-        let result: IOResult;
-        if (!this.pipeline.isEnabled(this.ownerUid, this.capabilityId)) {
-            result = { ok: true };
-        } else {
-            const dispatchCtx: IOContext = {
-                ...entry.ctx,
-                meta: { ...entry.ctx.meta, phase: "post-commit" },
+    /**
+     * Build what goes on the wire for one entry — or the refusal that stops it
+     * from going there.
+     */
+    private _prepareDispatch(entry: QueueEntry, toast = true):
+        { ctx: IOContext; payload: unknown } | { result: IOResult } {
+        const dispatchCtx: IOContext = {
+            ...entry.ctx,
+            meta: { ...entry.ctx.meta, phase: "post-commit" },
+        };
+        // `serialize` is owner code and can throw (a live object with circular
+        // refs, a half-built patch). It used to sit outside any try, so a throw
+        // escaped the worker entirely: the entry was never settled, never
+        // shifted off `_outbox`, and the worker left through its `finally` with
+        // `_running = false` — every later write for that resource then queued
+        // behind an op that could never complete. A silent, permanent stall.
+        // Its own code, not `W_IO_DISPATCH_THREW`: this is a local defect, and
+        // `isStallSignal` must not read it as the network being down.
+        try {
+            const payload = entry.replayPayload !== undefined
+                ? entry.replayPayload
+                : (entry.direction === "delete"
+                    ? undefined
+                    : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, dispatchCtx) : entry.rawPayload));
+            return { ctx: dispatchCtx, payload };
+        } catch (e: any) {
+            const result: IOResult = {
+                ok: false, refused: true,
+                reason: `serialize() threw for ${this.name}: ${e?.message ?? e}`,
+                code: "W_IO_SERIALIZE_THREW",
             };
-            // `serialize` is owner code and can throw (a live object with circular
-            // refs, a half-built patch). It used to sit OUTSIDE the try below, so
-            // a throw escaped `_executeEntry` entirely: the entry was never
-            // settled, never shifted off `_outbox`, and the worker left through
-            // its `finally` with `_running = false` — every later write for that
-            // resource then queued behind an op that could never complete. A
-            // silent, permanent stall. Its own code, not `W_IO_DISPATCH_THREW`:
-            // this is a local defect, and `isStallSignal` must not read it as the
-            // network being down.
-            let payload: unknown;
-            let serializeError: any;
-            try {
-                payload = entry.replayPayload !== undefined
-                    ? entry.replayPayload
-                    : (entry.direction === "delete"
-                        ? undefined
-                        : (this.def.serialize ? this.def.serialize(entry.rawPayload as T, dispatchCtx) : entry.rawPayload));
-            } catch (e: any) {
-                serializeError = e;
-            }
-
-            if (serializeError !== undefined) {
-                result = {
-                    ok: false, refused: true,
-                    reason: `serialize() threw for ${this.name}: ${serializeError?.message ?? serializeError}`,
-                    code: "W_IO_SERIALIZE_THREW",
-                };
-                console.error(`[IO] resource "${this.name}" serialize() threw; the ${entry.direction} `
-                    + "was rolled back and nothing was sent.", serializeError);
-                this.pipeline.surfaceRefusal_(dispatchCtx, result as any);
-            } else {
-                try {
-                    result = await this.pipeline.dispatch(dispatchCtx, payload);
-                } catch (e: any) {
-                    result = {
-                        ok: false, refused: true,
-                        reason: e?.message ?? String(e),
-                        code: "W_IO_DISPATCH_THREW",
-                    };
-                    this.pipeline.surfaceRefusal_(dispatchCtx, result as any);
-                }
-            }
+            console.error(`[IO] resource "${this.name}" serialize() threw; the ${entry.direction} `
+                + "was rolled back and nothing was sent.", e);
+            this.pipeline.surfaceRefusal_(dispatchCtx, result as any, toast);
+            return { result };
         }
+    }
 
+    /** Drop the crash-recovery record and revert the local commit of a refused op. */
+    private async _finishEntry(entry: QueueEntry, result: IOResult): Promise<void> {
         // Phase 10: remove from IDB once dispatch settled (success OR
         // terminal refusal — we don't infinitely re-attempt).
         if (this.def.persistOutbox) {
             await this._unpersist(entry).catch(() => {});
         }
-
         if (!result.ok && wantsRollback(entry.options)) {
             await this._revertEntry(entry, result);
         }
+    }
+
+    private _dispatchThrew(ctx: IOContext, e: any, toast = true): IOResult {
+        const result: IOResult = {
+            ok: false, refused: true,
+            reason: e?.message ?? String(e),
+            code: "W_IO_DISPATCH_THREW",
+        };
+        this.pipeline.surfaceRefusal_(ctx, result as any, toast);
         return result;
+    }
+
+    private async _executeEntry(entry: QueueEntry): Promise<IOResult> {
+        await this._awaitPersisted(entry);
+
+        let result: IOResult;
+        if (!this.pipeline.isEnabled(this.ownerUid, this.capabilityId)) {
+            result = { ok: true };
+        } else {
+            const prepared = this._prepareDispatch(entry);
+            if ("result" in prepared) {
+                result = prepared.result;
+            } else {
+                try {
+                    result = await this.pipeline.dispatch(prepared.ctx, prepared.payload);
+                } catch (e: any) {
+                    result = this._dispatchThrew(prepared.ctx, e);
+                }
+            }
+        }
+
+        await this._finishEntry(entry, result);
+        return result;
+    }
+
+    /**
+     * {@link _executeEntry} for a run of same-direction entries: one sink call
+     * for the lot, then each entry is finished on its own result — an item the
+     * destination refused is reverted, its neighbours are not.
+     */
+    private async _executeBatch(batch: QueueEntry[]): Promise<IOResult[]> {
+        await Promise.all(batch.map(e => this._awaitPersisted(e)));
+
+        const results: IOResult[] = new Array(batch.length);
+        const ctxs: IOContext[] = [];
+        const payloads: unknown[] = [];
+        const slots: number[] = [];
+        let serializeToasted = false;
+        batch.forEach((entry, i) => {
+            const prepared = this._prepareDispatch(entry, !serializeToasted);
+            if ("result" in prepared) { results[i] = prepared.result; serializeToasted = true; return; }
+            ctxs.push(prepared.ctx); payloads.push(prepared.payload); slots.push(i);
+        });
+
+        if (ctxs.length) {
+            let out: IOResult[];
+            try {
+                out = await this.pipeline.dispatchMany(ctxs, payloads);
+            } catch (e: any) {
+                out = ctxs.map((ctx, k) => this._dispatchThrew(ctx, e, k === 0));
+            }
+            // No answer is not a success: an op nobody confirmed stays owed, so
+            // it is refused (and reverted) rather than dropped as done.
+            slots.forEach((i, k) => {
+                results[i] = out[k] ?? {
+                    ok: false, refused: true, code: "W_IO_BULK_RESULT",
+                    reason: `${this.name}: no result for a batched ${batch[i]!.direction}`,
+                };
+            });
+        }
+
+        for (let i = 0; i < batch.length; i++) await this._finishEntry(batch[i]!, results[i]!);
+        return results;
+    }
+
+    private _cap(): number {
+        return this.def.persistMaxEntries ?? 5000;
+    }
+
+    /**
+     * Ops this resource still owes its destination. Every persisted entry is
+     * also in `_outbox`, so the two counts overlap — summing them (as the cap
+     * pre-flight used to) reported the outbox full at half its capacity.
+     * `_persistedCount` can only exceed the queue transiently, while a removal
+     * of a coalesced-out record is still in flight.
+     */
+    private _pending(): number {
+        return Math.max(this._outbox.length, this._persistedCount);
+    }
+
+    /** The cap applies: ops are persisted, and a destination (bound or awaited) will receive them. */
+    private _capped(): boolean {
+        return !!this.def.persistOutbox
+            && (this.pipeline.isEnabled(this.ownerUid, this.capabilityId) || this._bindingsPending());
+    }
+
+    headroom(): number {
+        if (!this._capped()) return Infinity;
+        return Math.max(0, this._cap() - this._pending());
+    }
+
+    whenHeadroom(count = 1): Promise<boolean> {
+        const need = Math.min(Math.max(1, Math.floor(count) || 1), this._cap());
+        if (this.headroom() >= need) return Promise.resolve(true);
+        if (this._held()) return Promise.resolve(false);
+        return new Promise<boolean>(resolve => this._headroomWaiters.push({ need, resolve }));
+    }
+
+    /** The queue cannot move right now: offline, or the bound sink is not registered. */
+    private _held(): boolean {
+        return this._offline || this._bindingsPending();
+    }
+
+    /** Release `whenHeadroom()` callers whose room arrived — or who would wait on a held queue. */
+    private _wakeHeadroom(): void {
+        if (!this._headroomWaiters.length) return;
+        const room = this.headroom();
+        const held = this._held();
+        this._headroomWaiters = this._headroomWaiters.filter(w => {
+            if (room >= w.need) { w.resolve(true); return false; }
+            if (held) { w.resolve(false); return false; }
+            return true;
+        });
     }
 
     private _emitQueueEvent(name: string, payload: Record<string, unknown>) {
@@ -1213,7 +1376,14 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         const remain: QueueEntry[] = [];
         for (const e of this._outbox) (e.started ? remain : dropped).push(e);
         this._outbox = remain;
-        for (const e of dropped) e.settle(DROPPED_RESULT);
+        for (const e of dropped) {
+            e.settle(DROPPED_RESULT);
+            // Otherwise the crash-recovery record outlives the drop and the op
+            // the caller discarded is replayed on the next boot. The local
+            // commit is deliberately left alone: dropping is the caller's
+            // decision about what is owed, not a refusal to revert.
+            if (this.def.persistOutbox) void this._unpersist(e);
+        }
     }
 
     // ── read (still async — fetches from a sink) ──────────────────
@@ -1242,7 +1412,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     // `{ surface: true }`, which is the one place the user should hear about it.
     canCreate(item: T, meta?: Record<string, unknown>, options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("create", undefined, meta);
-        const v = this.def.validate?.(item, ctx);
+        const v = this._validate(item, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-create" as IODirection };
         return this.pipeline.runGuards(ctxPre, item, { surface: options.surface === true });
@@ -1251,7 +1421,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
     canUpdate(itemId: string, patch: Partial<T>, meta?: Record<string, unknown>,
               options: IOGuardProbeOptions = {}): IOResult {
         const ctx = this.buildCtx("update", itemId, meta);
-        const v = this.def.validate?.(patch as T, ctx);
+        const v = this._validate(patch, ctx);
         if (v && !v.ok) return v;
         const ctxPre = { ...ctx, direction: "pre-update" as IODirection };
         return this.pipeline.runGuards(ctxPre, patch, { surface: options.surface === true });
@@ -1271,6 +1441,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
         }
         const ctx = this.buildCtx("query", undefined, meta);
         const def = this.def;
+        const validate = (item: T, c: IOContext) => this._validate(item, c);
         const stream = this.pipeline.queryStream(ctx, params);
         return (async function* () {
             for await (const raw of stream) {
@@ -1282,7 +1453,7 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
                     continue;
                 }
                 if (def.validate) {
-                    const v = def.validate(item, ctx);
+                    const v = validate(item, ctx);
                     if (v && !v.ok) {
                         console.warn(`[IO] resource "${def.name}" validate refused one queried item:`, v.reason);
                         continue;
