@@ -127,7 +127,7 @@ export class Toast extends BaseComponent {
      * html:string,
      * importance?:{key:string,icon?:string},
      * durationMs?:number,
-     * buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>,
+     * buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string,title?:string}>,
      * actions?:Record<string,Function>, // <-- NEW: JS references for inline text
      * count?:number,
      * pending?:number
@@ -239,8 +239,13 @@ export class Toast extends BaseComponent {
         for (const b of this._buttons) {
             const el = document.createElement("button");
             el.type = "button";
-            el.className = `btn btn-ghost btn-xs h-6 min-h-0 ${b.class || ""}`;
+            // A long label wraps inside the card rather than widening the row
+            // (`.toast` sets `white-space: nowrap`, `.btn` a fixed height).
+            el.className = `btn btn-ghost btn-xs whitespace-normal text-left max-w-full ${b.class || ""}`;
+            el.style.height = "auto";
+            el.style.minHeight = "1.5rem";
             el.textContent = b.label;
+            if (b.title) el.title = b.title;
             el.addEventListener("click", (ev) => b.onClick?.(ev, window.Dialogs));
             btnBar.appendChild(el);
         }
@@ -311,7 +316,7 @@ export class Toast extends BaseComponent {
                 div({ "data-accent": "", class: "absolute left-0 top-0 h-full w-[3px] rounded-l-md bg-info" }),
 
                 div(
-                    { class: "flex items-center gap-2 pl-[10px] w-full" },
+                    { class: "flex items-center gap-2 pl-[10px] w-full min-w-0" },
 
                     div({ class: "shrink-0 flex items-center gap-1 pl-2 text-base-content/80" },
                         div({ "data-icon": "", class: "shrink-0" }),
@@ -319,8 +324,23 @@ export class Toast extends BaseComponent {
                         span({ "data-count": "", class: "hidden" })
                     ),
 
-                    // message expands, keeps layout stable
-                    span({ "data-msg": "", class: "flex-1 text-[13px] leading-snug whitespace-normal break-words" }),
+                    // Message and buttons share one wrapping box: the message
+                    // keeps a readable width and the buttons drop below it when
+                    // they do not fit, instead of squeezing it to a few words
+                    // per line and pushing the close button out of the card.
+                    div({ class: "flex-1 min-w-0 flex flex-wrap items-center gap-2" },
+                        span({
+                            "data-msg": "",
+                            class: "text-[13px] leading-snug whitespace-normal break-words",
+                            // Inline: arbitrary `basis-*` utilities are purged.
+                            style: "flex:1 1 14rem;min-width:0"
+                        }),
+                        div({
+                            "data-buttons": "",
+                            class: "flex flex-wrap justify-end gap-1 max-w-full",
+                            style: "margin-left:auto"
+                        })
+                    ),
 
                     // pending indicator (click to cycle next)
                     button(
@@ -334,12 +354,10 @@ export class Toast extends BaseComponent {
                         ""
                     ),
 
-                    div({ "data-buttons": "", class: "ml-1 inline-flex gap-1" }),
-
                     button(
                         {
                             type: "button",
-                            class: "btn btn-ghost btn-xs h-6 w-6 min-h-0 p-0 ml-1 text-base-content/70 hover:text-base-content",
+                            class: "btn btn-ghost btn-xs shrink-0 h-6 w-6 min-h-0 p-0 ml-1 text-base-content/70 hover:text-base-content",
                             onclick: () => {
                                 this.hide();
                                 this._onClosed && this._onClosed();
@@ -679,7 +697,8 @@ function normalizeButtons(buttons) {
         return buttons.filter(Boolean).map(b => ({
             label: String(b.label ?? ""),
             onClick: b.onClick,
-            class: b.class
+            class: b.class,
+            title: b.title ? String(b.title) : undefined
         })).filter(b => b.label);
     }
     if (buttons && typeof buttons === "object") {

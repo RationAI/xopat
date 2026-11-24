@@ -77,8 +77,7 @@
       "rendererUnavailable": "xOpat's renderer could not start in this browser. It needs WebGL2 with capabilities this device or browser did not provide. Try an updated or different browser, or open the viewer on a desktop.",
       "back": "Go back",
       "noDetails": "No details provided",
-      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
-      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
+      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a data-action=\"export\">exported</a> file.",
       "ioNothingStored": "{{owner}}: data was not stored — no storage destination accepted it.",
       "ioNothingStoredWhy": "{{owner}}: data was not stored — {{reason}}",
       "ioNothingLoaded": "{{owner}}: data could not be loaded — no storage source answered.",
@@ -143,7 +142,7 @@
     "user": {
       "notConfigured": "User menu is not available.",
       "anonymous": "Not logged in.",
-      "loggedOut": "You have been logged out. Please, <a onclick=\"UTILITIES.refreshPage()\">log-in</a> again.",
+      "loggedOut": "You have been logged out. Please, <a data-action=\"login\">log-in</a> again.",
       "roles": {
         "title": "Role",
         "titlePlural": "Roles",
@@ -284,10 +283,6 @@
         "cacheSaved": "Parameter values saved with this session override the layer defaults. Clear them if the layer looks wrong.",
         "noVisualization": "[no overlays]",
         "select": "Select shader",
-        "cache": {
-          "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
-          "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
-        },
         "controls": {
           "image": {
             "hint": "The atlas starts empty. Upload an image to create a new atlas entry.",
@@ -375,9 +370,8 @@
       "clipboardBlocked": "Clipboard access is blocked by the browser.",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualization setup is not parse-able.",
-      "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
       "paramConfSaved": "Modifications in parameters saved.",
-      "bgReferenceMissing": "JSON parametrization of the visualizer requires valid <i>dataReference</i> for each background layer.",
+      "bgReferenceMissing": "JSON parametrization of the visualizer requires valid dataReference for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualization layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
@@ -398,9 +392,9 @@
       "scrollRequiresClick": "Click the viewer first to zoom with the mouse wheel.",
       "joystickOn": "Joystick navigation on — press and hold the mouse button, then move to pan.",
       "joystickOff": "Joystick navigation off.",
-      "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
+      "warnPageReload": "It seems you've made some work already. It might be wise to <a data-action=\"export\">export</a> your setup first. <a data-action=\"refresh\">Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
-      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
+      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a data-action=\"open\">Click here to open.</a>",
       "windowBlocked": "An application modal window '{{title}}' was blocked by your browser.",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
@@ -413,8 +407,8 @@
       "cyclicDeps": "Found cyclic dependency in {{context}}: {{dependency}}",
       "removedInvalidDeps": "Removed due to invalid dependency, one of: {{dependencies}}",
       "pluginUnknownDeps": "The plugin requires unknown module.",
-      "pluginInvalidDeps": "Failure: plugin relies on dependencies with errors. <code>{{error}}</code>",
-      "pluginInvalid": "Invalid plugin! <code>{{error}}</code>"
+      "pluginInvalidDeps": "Failure: plugin relies on dependencies with errors. {{error}}",
+      "pluginInvalid": "Invalid plugin! {{error}}"
     },
     "monaco": {
       "saveError": "Could not save the code."

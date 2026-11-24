@@ -362,9 +362,21 @@ addPlugin("nav-tracker", class extends XOpatPlugin {
 
         const animate = this.getOption("animate", this.animates);
         if (!animate) {
-            USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "navigator-export", "Export/Import",
-                `<h3 class="f2-light">Navigator tracking IO </h3>
-        <button id="downloadAnnotation" onclick="${this.THIS}.exportToFile();return false;" class="btn">Download as a file.</button>`);
+            // Nodes, not an HTML string: the menu sanitizes strings, which
+            // strips both the button and its inline handler. Labels are read
+            // only once the plugin's locale bundle is registered.
+            this.loadLocale().catch(() => this.loadLocale('en')).catch(() => {}).then(() => {
+                const { div, h3, button } = globalThis.van.tags;
+                USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "navigator-export", this.t("io.menuTitle"),
+                    div(
+                        h3({ class: "text-lg font-light mb-2" }, this.t("io.heading")),
+                        button({
+                            type: "button",
+                            class: "btn",
+                            onclick: () => this.exportToFile(),
+                        }, this.t("io.download")),
+                    ));
+            });
         } else {
             VIEWER_MANAGER.broadcastHandler("animation-finish", (e) => {
                 this.handleViewportUpdate(e.eventSource);

@@ -74,8 +74,7 @@
       "rendererUnavailable": "Vykreslovací jádro xOpat se v tomto prohlížeči nepodařilo spustit. Vyžaduje WebGL2 s funkcemi, které toto zařízení nebo prohlížeč neposkytuje. Zkuste aktualizovaný či jiný webový prohlížeč, nebo otevřete prohlížeč na počítači.",
       "back": "Zpět",
       "noDetails": "Podrobnosti nejsou k dispozici",
-      "pluginImportFail": "Plugin {{plugin}} nedokázal načíst data. Dejte nám prosím o problému vědět a přiložte <a onclick=\"{{action}}\" class=\"btn-pointer\">exportovaný</a> soubor.",
-      "cacheImportFail": "Plugin {{plugin}} nedokázal načíst data z mezipaměti. Dejte nám prosím o problému vědět a přiložte <a onclick=\"{{action}}\" class=\"btn-pointer\">exportovaný</a> soubor.",
+      "pluginImportFail": "Plugin {{plugin}} nedokázal načíst data. Dejte nám prosím o problému vědět a přiložte <a data-action=\"export\">exportovaný</a> soubor.",
       "ioNothingStored": "{{owner}}: data nebyla uložena – žádné úložiště je nepřijalo.",
       "ioNothingStoredWhy": "{{owner}}: data nebyla uložena – {{reason}}",
       "ioNothingLoaded": "{{owner}}: data se nepodařilo načíst – žádný zdroj neodpověděl.",
@@ -137,7 +136,7 @@
     "user": {
       "notConfigured": "Uživatelská nabídka není dostupná.",
       "anonymous": "Nepřihlášen(a).",
-      "loggedOut": "Byli jste odhlášeni. Prosím, <a onclick=\"UTILITIES.refreshPage()\">přihlaste se</a> znovu.",
+      "loggedOut": "Byli jste odhlášeni. Prosím, <a data-action=\"login\">přihlaste se</a> znovu.",
       "roles": {
         "title": "Role",
         "titlePlural": "Role",
@@ -278,10 +277,6 @@
         "cacheSaved": "Hodnoty parametrů uložené s touto relací přepisují výchozí hodnoty vrstvy. Pokud vrstva vypadá chybně, vymažte je.",
         "noVisualization": "[žádné překryvné vrstvy]",
         "select": "Vybrat shader",
-        "cache": {
-          "name": "Parametry nastaveny z mezipaměti (název). <a onclick=\"{{action}}\" class=\"btn-pointer\">Obnovit</a>.",
-          "order": "Parametry nastaveny z mezipaměti (pozice vrstvy). <a onclick=\"{{action}}\" class=\"btn-pointer\">Obnovit</a>."
-        },
         "controls": {
           "image": {
             "hint": "Atlas je zpočátku prázdný. Nahrajte obrázek a vytvořte tak novou položku atlasu.",
@@ -369,9 +364,8 @@
       "clipboardBlocked": "Přístup ke schránce je blokován prohlížečem.",
       "invalidPostData": "Požadavek neobsahuje konfigurační data. Viz data POST:",
       "postDataSyntaxErr": "Konfiguraci vizualizace nelze zpracovat.",
-      "cookiesDisabled": "Pokus o načtení dat z cookies selhal. Cookies jsou zakázány. Můžete je povolit v <a onclick=\"{{action}}\" class='btn-pointer'>Nastavení</a>.",
       "paramConfSaved": "Změny parametrů byly uloženy.",
-      "bgReferenceMissing": "Parametrizace vizualizace v JSON vyžaduje platnou <i>dataReference</i> pro každou vrstvu pozadí.",
+      "bgReferenceMissing": "Parametrizace vizualizace v JSON vyžaduje platnou dataReference pro každou vrstvu pozadí.",
       "shaderTypeMissing": "Pro každou vrstvu vizualizace musíte zadat parametr <b>type</b>.",
       "pluginRemoved": "Tento plugin byl automaticky\nodebrán: došlo k chybě.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> byl odebrán: došlo k chybě.",
@@ -392,9 +386,9 @@
       "scrollRequiresClick": "Pro přibližování kolečkem nejprve klikněte do prohlížeče.",
       "joystickOn": "Navigace joystickem zapnuta – stiskněte a podržte tlačítko myši a pohybem posouvejte obraz.",
       "joystickOff": "Navigace joystickem vypnuta.",
-      "warnPageReload": "Zdá se, že už máte nějakou práci hotovou. Bylo by vhodné nejprve <a onclick=\"{{onExport}}\" class='btn-pointer'>exportovat</a> vaše nastavení. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Načíst znovu nyní.</a>",
+      "warnPageReload": "Zdá se, že už máte nějakou práci hotovou. Bylo by vhodné nejprve <a data-action=\"export\">exportovat</a> vaše nastavení. <a data-action=\"refresh\">Načíst znovu nyní.</a>",
       "warnPageReloadFailed": "Při ukládání pracovního prostoru prohlížeče došlo k chybě. Prohlížeč se znovu načte, ale informujte prosím správce.",
-      "modalWindowBlocked": "Modální okno aplikace '{{title}}' bylo zablokováno vaším prohlížečem. <a onclick=\"{{action}}\" class='btn-pointer'>Klikněte sem pro otevření.</a>",
+      "modalWindowBlocked": "Modální okno aplikace '{{title}}' bylo zablokováno vaším prohlížečem. <a data-action=\"open\">Klikněte sem pro otevření.</a>",
       "windowBlocked": "Modální okno aplikace '{{title}}' bylo zablokováno vaším prohlížečem.",
       "failedToSetMask": "Cílová vrstva nebyla nalezena!",
       "swapImagesFail": "Vybraný obrázek se nepodařilo načíst!",
@@ -407,8 +401,8 @@
       "cyclicDeps": "Nalezena cyklická závislost v {{context}}: {{dependency}}",
       "removedInvalidDeps": "Odstraněno kvůli neplatné závislosti, jedné z: {{dependencies}}",
       "pluginUnknownDeps": "Plugin vyžaduje neznámý modul.",
-      "pluginInvalidDeps": "Chyba: plugin závisí na závislostech s chybami. <code>{{error}}</code>",
-      "pluginInvalid": "Neplatný plugin! <code>{{error}}</code>"
+      "pluginInvalidDeps": "Chyba: plugin závisí na závislostech s chybami. {{error}}",
+      "pluginInvalid": "Neplatný plugin! {{error}}"
     },
     "monaco": {
       "saveError": "Kód se nepodařilo uložit."

@@ -478,19 +478,26 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const containers = document.querySelectorAll(`#load-plugin-${CSS.escape(id)}`);
         if (!containers.length) return;
 
-        let markup: string;
-        if (status === "idle") {
-            markup = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
-        } else if (status === "loading") {
-            markup = `<button disabled class="btn btn-sm">` +
-                `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
-                `</button>`;
-        } else if (status === "loaded") {
-            markup = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
-        } else {
-            markup = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
-        }
-        containers.forEach(node => { node.innerHTML = markup; });
+        // Built as nodes: the plugin id must never be spliced into markup or
+        // into an inline handler string.
+        const labelKey = { idle: 'common.Load', loading: 'common.Loading', loaded: 'common.Loaded', failed: 'common.Failed' }[status];
+        containers.forEach(node => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-sm";
+            if (status === "idle") {
+                button.addEventListener("click", () => { UTILITIES.loadPlugin(id); });
+            } else {
+                button.disabled = true;
+            }
+            if (status === "loading") {
+                const spinner = document.createElement("span");
+                spinner.className = "loading loading-spinner loading-xs";
+                button.append(spinner);
+            }
+            button.append($.t(labelKey));
+            node.replaceChildren(button);
+        });
     }
 
     /** Append a stylesheet <link> to <head>. Paths come from element metadata (deployment-controlled). */
@@ -1838,8 +1845,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     console.error("IO Failure (initIO restore):", this.constructor.name, e);
                     this.error({
                         error: e, code: "W_IO_INIT_ERROR",
-                        message: $.t("error.pluginImportFail",
-                            { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" }),
+                        message: $.t("error.pluginImportFail", { plugin: this.id }),
+                        actions: { export: () => USER_INTERFACE.highlightElementId('global-export') },
                     });
                 }
             }
@@ -3654,10 +3661,9 @@ ${form}
                 }
             });
             if (!result?.context) {
-                Dialogs.show($.t('messages.modalWindowBlocked', {
-                    title: "Loading...",
-                    action: "UTILITIES.clone(); Dialogs.hide();"
-                }), 15000, Dialogs.MSG_WARN);
+                Dialogs.show($.t('messages.modalWindowBlocked', { title: "Loading..." }),
+                    15000, Dialogs.MSG_WARN,
+                    { actions: { open: () => { UTILITIES.clone(); Dialogs.hide(); } } });
             }
         },
 
@@ -3670,10 +3676,17 @@ ${form}
          */
         refreshPage: async function (includedPluginsList: string[] | undefined = undefined) {
             if (APPLICATION_CONTEXT.__cache.dirty) {
-                Dialogs.show($.t('messages.warnPageReload', {
-                    onExport: "UTILITIES.export();",
-                    onRefresh: "APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();"
-                }), 15000, Dialogs.MSG_WARN);
+                // Links are `data-action` keys: the toast sanitizer strips inline
+                // handlers, so behaviour is bound here, not in the translation.
+                Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN, {
+                    actions: {
+                        export: () => UTILITIES.export(),
+                        refresh: () => {
+                            APPLICATION_CONTEXT.__cache.dirty = false;
+                            UTILITIES.refreshPage(includedPluginsList);
+                        },
+                    },
+                });
                 return;
             }
 

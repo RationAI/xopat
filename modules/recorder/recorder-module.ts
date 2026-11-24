@@ -940,6 +940,17 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         if (!this._suppressDispatch) this.stepResource?.delete(`${viewerId}:${recording.id}:${step.id}`);
     }
 
+    /**
+     * CRUD update for one step. `update` takes the item id first and the
+     * envelope second; called with the envelope alone, the envelope became the
+     * id, the patch was `undefined`, and `validate` refused every step edit —
+     * so no update ever reached a sink. The id is the one `delete` uses, which
+     * is also what `identityOf` derives for the create it may coalesce into.
+     */
+    private _dispatchStepUpdate(viewerId: UniqueViewerId, recordingId: string, step: RecorderSnapshotStep): void {
+        this.stepResource?.update(`${viewerId}:${recordingId}:${step.id}`, { viewerId, recordingId, step });
+    }
+
     private _removeStepById(viewerId: UniqueViewerId, recording: RecorderRecording, id: string): void {
         const idx = recording.steps.findIndex(s => s.id === id);
         if (idx >= 0) this._removeAt(viewerId, recording, idx);
@@ -1237,7 +1248,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const apply = (target: RecorderSnapshotStep) => {
             mutate(target);
             this.raiseEvent("update", { viewerId, recordingId: recording.id, index, step: target });
-            if (!this._suppressDispatch) this.stepResource?.update({ viewerId, recordingId: recording.id, step: target });
+            if (!this._suppressDispatch) this._dispatchStepUpdate(viewerId, recording.id, target);
         };
 
         APPLICATION_CONTEXT.history.push(
@@ -1246,7 +1257,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                 Object.keys(step).forEach(k => delete (step as any)[k]);
                 Object.assign(step, before);
                 this.raiseEvent("update", { viewerId, recordingId: recording.id, index, step });
-                if (!this._suppressDispatch) this.stepResource?.update({ viewerId, recordingId: recording.id, step });
+                if (!this._suppressDispatch) this._dispatchStepUpdate(viewerId, recording.id, step);
             }),
             { name: "Recorder: update step", type: "recorder.updateStep" } as any,
         );
@@ -1293,7 +1304,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
                     .filter(o => o.kind === "text" || o.kind === "composite"
                         || (o as RecorderImageOverlay | RecorderAudioOverlay).assetId !== id);
                 const after = step.overlays.map(o => JSON.stringify(o)).join("|");
-                if (after !== before && !this._suppressDispatch) this.stepResource?.update({ viewerId: col.viewerId, recordingId: recording.id, step });
+                if (after !== before && !this._suppressDispatch) this._dispatchStepUpdate(col.viewerId, recording.id, step);
             }
         }
         if (!this._suppressDispatch) this.assetResource?.delete(`${col.viewerId}:${id}`);

@@ -39,7 +39,8 @@ export function wireViewerErrorHandlers(viewerManager: any): void {
      */
     viewerManager.broadcastHandler('error-user', (e: ErrorUserEvent) => {
         if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
+        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR,
+            e.actions ? { actions: e.actions } : false);
     }, null, -Infinity);
     // `plugin-failed` / `module-failed` are raised on the manager itself, so they must
     // be subscribed there: `broadcastHandler` only attaches to viewer instances, which

@@ -3,9 +3,6 @@ export function createErrorHandlers(plugin) {
     // sanitizer. Wire behaviour through the toast `actions` map instead: the
     // message markup uses `data-action="<key>"` and the handler binds the key
     // to a function. Keeps the links working without any executable HTML.
-    const highlight = (...args) => window.USER_INTERFACE?.highlight?.(...args);
-    const highlightAutoOutline = () => highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline');
-
     return {
         W_NO_PRESET: (e) => {
             Dialogs.show(
@@ -24,16 +21,14 @@ export function createErrorHandlers(plugin) {
         W_AUTO_CREATION_FAIL: () => {
             Dialogs.show(
                 plugin.t('annotations.errors.autoCreateFail'),
-                5000, Dialogs.MSG_WARN,
-                { actions: { highlightAutoOutline } }
+                5000, Dialogs.MSG_WARN
             );
             return false;
         },
         E_AUTO_OUTLINE_INVISIBLE_LAYER: () => {
             Dialogs.show(
                 plugin.t('annotations.errors.autoOutlineInvisibleLayer'),
-                5000, Dialogs.MSG_WARN,
-                { actions: { highlightAutoOutline } }
+                5000, Dialogs.MSG_WARN
             );
             return false;
         }

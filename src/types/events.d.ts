@@ -141,6 +141,8 @@ interface ErrorUserEvent {
     message: string;
     preventDefault: boolean;
     trace?: unknown;
+    /** Handlers for `<a data-action="key">` links in `message`. */
+    actions?: Record<string, (ev: Event, dialogs: unknown) => void>;
 }
 ;
 // ── Viewer loading / open events ──────────────────────────────────────────────

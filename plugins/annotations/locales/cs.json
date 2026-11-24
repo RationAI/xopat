@@ -71,8 +71,8 @@
     },
     "errors": {
       "noPresetSelect": "Není vybrána žádná třída anotace. <a class='pointer' data-action='selectPreset'>Vyberte ji zde</a> a začněte anotovat.",
-      "autoCreateFail": "Automatickou anotaci se nepodařilo vytvořit. Ujistěte se, že <a class='pointer' data-action='highlightAutoOutline'>detekujete ve správné vrstvě</a> a vybíráte barevnou oblast. Pomoci může i úprava prahu.",
-      "autoOutlineInvisibleLayer": "<a class='pointer' data-action='highlightAutoOutline'>Zvolená vrstva</a> není viditelná: metoda automatického obrysu nebude fungovat.",
+      "autoCreateFail": "Automatickou anotaci se nepodařilo vytvořit. Ujistěte se, že detekujete ve správné vrstvě a vybíráte barevnou oblast. Pomoci může i úprava prahu.",
+      "autoOutlineInvisibleLayer": "Zvolená vrstva není viditelná: metoda automatického obrysu nebude fungovat.",
       "metaCreateFail": "Nepodařilo se vytvořit pole metadat „{{name}}“.",
       "metaDeleteFail": "Nepodařilo se smazat pole metadat.",
       "presetRemoveFail": "Nepodařilo se odebrat třídu.",

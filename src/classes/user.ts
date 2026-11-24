@@ -192,7 +192,9 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
             Dialogs.show($.t('user.loggedOut'),
                 50000,
                 // @ts-ignore: Legacy global Dialogs
-                Dialogs.MSG_ERR);
+                Dialogs.MSG_ERR,
+                // @ts-ignore: Legacy global UTILITIES
+                { actions: { login: () => UTILITIES.refreshPage() } });
         });
 
         // Recompute capabilities whenever a new one is declared (lazy plugin load).

@@ -46,6 +46,8 @@ type XOpatErrorEvent = {
     code: string;
     message: string;
     error?: any;
+    /** Handlers for `<a data-action="key">` links in `message` (user-facing events only). */
+    actions?: Record<string, (ev: Event, dialogs: unknown) => void>;
 };
 
 // ── Store options ─────────────────────────────────────────────────────────────
