@@ -1041,8 +1041,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             ry: zoom,
             width: zoom*1.5,
             height: zoom*1.5,
-            // same as onZoom: originalStrokeWidth / realZoom
-            strokeWidth: 2 / (4 * graphicZoom * graphicZoom),
+            strokeWidth: this.zoomedStrokeWidth(2, graphicZoom),
             stroke: options.color,
             originalStrokeWidth: 2,
             originX: 'center',
@@ -1060,11 +1059,20 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return 0;
     }
 
+    /**
+     * A point is a screen-sized marker, so its border is too: constant in
+     * screen pixels (linear in the real zoom), not zoom-softened like the
+     * outline of a region.
+     */
+    zoomedStrokeWidth(originalStrokeWidth, graphicZoom, realZoom = 4 * graphicZoom * graphicZoom) {
+        return originalStrokeWidth / realZoom;
+    }
+
     onZoom(ofObject, graphicZoom, realZoom) {
         const zoom = this._radius(graphicZoom, realZoom);
         ofObject.rx = ofObject.ry = zoom;
         ofObject.width = ofObject.height = zoom*1.5;
-        ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
+        ofObject.strokeWidth = this.zoomedStrokeWidth(ofObject.originalStrokeWidth, graphicZoom, realZoom);
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {

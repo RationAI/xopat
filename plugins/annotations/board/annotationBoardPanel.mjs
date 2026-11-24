@@ -691,9 +691,11 @@ export class AnnotationBoardPanel {
                 action: async () => {
                     const members = Number(layer.getAnnotationCount?.() ?? 0);
                     // Deleting a layer deletes its annotations: ask unless it is empty.
-                    if (members > 0 && !(await Dialogs.confirm(
-                        t('annotations.board.deleteLayerConfirm', { name: layer.name, count: members }),
-                        t('annotations.board.deleteLayer')))) return;
+                    if (members > 0 && !(await globalThis.UI.Modal.confirm({
+                        header: t('annotations.board.deleteLayer'),
+                        body: t('annotations.board.deleteLayerConfirm', { name: layer.name, count: members }),
+                        confirmLabel: t('annotations.board.deleteLayer'),
+                    }))) return;
                     fabric.deleteLayer?.(id);
                 },
             },

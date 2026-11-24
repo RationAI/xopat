@@ -82,3 +82,27 @@ test("a new point is sized like a zoomed one @unit", () => {
         expect(created.strokeWidth).toBeCloseTo(reference.strokeWidth, 9);
     }
 });
+
+test("a border-width change gives a point the width the next zoom would @unit", () => {
+    // The visuals pass (creation, the border slider) and the zoom pass used two
+    // formulas, so a point's border changed thickness on the first zoom after.
+    for (const realZoom of [0.01, 1, 16]) {
+        const graphicZoom = Math.sqrt(realZoom) / 2;
+        const factory = pointFactory();
+        const canvas = { computeGraphicZoom: () => graphicZoom, getZoom: () => realZoom };
+        const object = {
+            color: "#f00", originalStrokeWidth: 2,
+            set(props) { Object.assign(this, props); },
+            getCenterPoint: () => ({ x: 0, y: 0 }),
+            setPositionByOrigin() {}, setCoords() {},
+        };
+
+        factory.updateRendering(object, { color: "#f00" }, { originalStrokeWidth: 5 }, { stroke: "black" }, canvas);
+        const afterVisuals = object.strokeWidth;
+        factory.onZoom(object, graphicZoom, realZoom);
+
+        expect(object.originalStrokeWidth).toBe(5);
+        expect(afterVisuals).toBeCloseTo(object.strokeWidth, 12);
+        expect(object.strokeWidth * realZoom, "5 screen pixels at any zoom").toBeCloseTo(5, 9);
+    }
+});

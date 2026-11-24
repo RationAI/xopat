@@ -1405,6 +1405,20 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
      * @param {number} realZoom real zoom value of the viewer (real zoom, linearly keep scale consistent, for example text)
      */
+    /**
+     * Stroke width, in image space, that a base width takes at a zoom. The ONE
+     * definition per factory: {@link onZoom} and {@link updateRendering} both
+     * go through it, so a border changed in the UI looks the same before and
+     * after the next zoom. Override it rather than computing a width inline.
+     * @param {number} originalStrokeWidth base (zoom-independent) width
+     * @param {number} graphicZoom see fabric.Canvas.computeGraphicZoom: sqrt(realZoom) / 2
+     * @param {number} [realZoom] screen pixels per image pixel, derived from graphicZoom if omitted
+     * @return {number}
+     */
+    zoomedStrokeWidth(originalStrokeWidth, graphicZoom, realZoom = 4 * graphicZoom * graphicZoom) {
+        return originalStrokeWidth / graphicZoom;
+    }
+
     onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
@@ -1413,7 +1427,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         // otherwise walk toward bottom-right as strokeWidth is rescaled per zoom.
         const anchorCenter = ofObject.getCenterPoint();
         ofObject.set({
-            strokeWidth: ofObject.originalStrokeWidth/graphicZoom
+            strokeWidth: this.zoomedStrokeWidth(ofObject.originalStrokeWidth, graphicZoom, realZoom)
         });
         this._reanchorAfterStrokeChange(ofObject, anchorCenter);
         // // Update object properties to reflect zoom
@@ -1656,7 +1670,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // reverts the UI-chosen thickness to the stale per-object value.
             ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
             const canvas = targetCanvas || this.canvasOf(ofObject);
-            props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+            props.strokeWidth = this.zoomedStrokeWidth(
+                visualProperties.originalStrokeWidth, canvas.computeGraphicZoom(canvas.getZoom()));
         }
 
         // Apply opacity from the global visuals — drives the opacity slider
