@@ -1,3 +1,5 @@
+import { presetBindButton, paintPresetBindButton } from './presetBindList.mjs';
+
 const { div, span, input, button, i } = globalThis.van.tags;
 
 const ROW_BASE = "rounded-md border border-base-300/70 bg-base-100 hover:border-primary/50 transition-all";
@@ -27,9 +29,15 @@ function iconNode(icon, extraClass = "", style = "") {
  * @property {string} [reason] tooltip explaining why
  */
 export class PresetCard extends UI.BaseComponent {
-    constructor({ preset, isSelected, enableModify, t, callbacks, lock }) {
+    /**
+     * @param {object} opts
+     * @param {{left?: boolean, right?: boolean}} [opts.bound] which mouse buttons
+     *   paint with this class now; `callbacks.onBind(id, isLeft)` toggles one
+     */
+    constructor({ preset, isSelected, enableModify, t, callbacks, lock, bound }) {
         super({ extraClasses: {} });
         this.preset = preset;
+        this.bound = { left: !!bound?.left, right: !!bound?.right };
         this.enableModify = !!enableModify;
         this.t = typeof t === "function" ? t : (k) => k;
         this.cb = callbacks || {};
@@ -48,6 +56,13 @@ export class PresetCard extends UI.BaseComponent {
     setSelected(on) {
         this.toggleClass("base", on ? ROW_SELECTED : ROW_BASE, true);
         this.setExpanded(on);
+    }
+
+    /** Reflect a binding change made elsewhere (toolbar, shortcut, side panel). */
+    setBound(left, right) {
+        this.bound = { left: !!left, right: !!right };
+        if (this._bindLeft) paintPresetBindButton(this._bindLeft, true, this.bound.left);
+        if (this._bindRight) paintPresetBindButton(this._bindRight, false, this.bound.right);
     }
 
     setExpanded(on) {
@@ -118,10 +133,23 @@ export class PresetCard extends UI.BaseComponent {
             `text-[10px] opacity-50 shrink-0 transition-transform ${this._expanded ? "rotate-90" : ""}`
         );
 
+        // Same bind controls as the class pickers, so a class can be put on a
+        // mouse button right where it is edited.
+        this._bindLeft = presetBindButton({
+            isLeft: true, bound: this.bound.left,
+            title: this.t("annotations.viewerMenu.leftClickPreset"),
+            onclick: () => this.cb.onBind?.(preset.presetID, true),
+        });
+        this._bindRight = presetBindButton({
+            isLeft: false, bound: this.bound.right,
+            title: this.t("annotations.viewerMenu.rightClickPreset"),
+            onclick: () => this.cb.onBind?.(preset.presetID, false),
+        });
+
         return div({
             class: "group flex items-center gap-2 px-2 py-0.5 cursor-pointer",
             onclick: () => this.cb.onSelect?.(this.preset.presetID, this),
-        }, this._chevron, colorChip, titleNode, metaBadge, deleteBtn);
+        }, this._chevron, colorChip, titleNode, metaBadge, this._bindLeft, this._bindRight, deleteBtn);
     }
 
     _renderEditor() {

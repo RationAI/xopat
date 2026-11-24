@@ -11,8 +11,9 @@ export function createErrorHandlers(plugin) {
             Dialogs.show(
                 plugin.t('annotations.errors.noPresetSelect'),
                 3000, Dialogs.MSG_WARN,
-                { actions: { selectPreset: () => highlight('RightSideMenu', 'annotations-panel',
-                    e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click') } }
+                // Open the class picker itself: the link takes the user to
+                // the control, not to a spot they then have to decode.
+                { actions: { selectPreset: () => plugin._presetSwatchButton?.open?.() } }
             );
             return false;
         },
@@ -45,6 +46,7 @@ export const handlerMethods = {
         VIEWER_MANAGER.broadcastHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
 
         this.context.addHandler('import', () => {
+            this.updatePresetsHTML?.();
             this._refreshAllPresetLists?.();
             this._refreshAllAuthorLists?.();
             this._refreshAllAnnotationFilterBadges?.();
@@ -57,7 +59,7 @@ export const handlerMethods = {
         this.context.addHandler('enabled', this.annotationsEnabledHandler.bind(this));
         this.context.addHandler('preset-select', () => {
             this._refreshAllPresetLists?.();
-            this.updatePresetsMouseButtons?.();
+            this.updatePresetsHTML?.();
         });
 
         this.context.addHandler('preset-create', () => {

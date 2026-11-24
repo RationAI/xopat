@@ -257,10 +257,7 @@ export const globalPluginWindowMethods = {
             const syncShapeChoice = () => {
                 this._shapeChoice?.setSelected(this.context.getActiveFactory().factoryID, false);
             };
-            this.context.addHandler('active-factory-change', () => {
-                syncShapeChoice();
-                this.updatePresetsMouseButtons?.();
-            });
+            this.context.addHandler('active-factory-change', syncShapeChoice);
             // The first bound preset seeds the tool silently (no event): if the
             // toolbar was built before any class was bound, catch up here.
             this.context.addHandler('preset-select', syncShapeChoice);

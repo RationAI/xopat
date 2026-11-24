@@ -1080,13 +1080,12 @@ OSDAnnotations.Layer = class {
     }
 
     /**
-     * Set elements of this layer selectable/active
-     * not optimal if called for each layer
-     * @param {boolean} active
+     * @deprecated no-op. It used to flip `selectable` on every member, which
+     * made other layers unclickable and overrode the lock state. Interactivity
+     * is owned by `FabricWrapper._applyAnnotationVisibilityState`; the active
+     * layer is only the target for new annotations.
      */
-    setActive(active) {
-        this.iterate((self, object) => object.selectable = active);
-    }
+    setActive(active) {}
 
     /**
      * Iterate over all object of this layer
@@ -1148,6 +1147,50 @@ OSDAnnotations.Layer = class {
         object.visible = true;
         this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);
 
+        this._context.fabric.rerender();
+    }
+
+    /**
+     * Batch {@link addObject}: one membership pass and one re-render for the
+     * whole array, instead of an O(layer size) scan per object.
+     * @param {Array<fabric.Object|{object: fabric.Object, index: number}>} entries
+     *   objects to append, or `{object, index}` pairs to insert at a position
+     *   (pairs must be sorted by ascending index)
+     */
+    addObjects(entries) {
+        if (!Array.isArray(entries) || !entries.length) return;
+        const have = new Set(this._objects.map(obj => obj.internalID));
+        const fabricWrapper = this._context.fabric;
+        for (const entry of entries) {
+            const object = entry?.object ?? entry;
+            const index = entry?.object ? entry.index : undefined;
+            if (!object || object.internalID === undefined || object.internalID === null) continue;
+            if (have.has(object.internalID)) continue;
+            have.add(object.internalID);
+            if (Number.isInteger(index) && index >= 0 && index <= this._objects.length) {
+                this._objects.splice(index, 0, object);
+            } else {
+                this._objects.push(object);
+            }
+            object.layerID = this.id;
+            fabricWrapper._applyAnnotationVisibilityState?.(object);
+        }
+        fabricWrapper.rerender();
+    }
+
+    /**
+     * Batch {@link removeObject}: one filter pass and one re-render.
+     * @param {fabric.Object[]} objects
+     */
+    removeObjects(objects) {
+        if (!Array.isArray(objects) || !objects.length) return;
+        const drop = new Set();
+        for (const object of objects) {
+            if (!object || object.internalID === undefined || object.internalID === null) continue;
+            object.visible = true;
+            drop.add(object.internalID);
+        }
+        this._objects = this._objects.filter(obj => !drop.has(obj.internalID));
         this._context.fabric.rerender();
     }
 

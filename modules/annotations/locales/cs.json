@@ -17,7 +17,8 @@
     "classSlots": {
       "select": "Vybrat třídu {{n}}",
       "assign": "Přiřadit třídu {{n}} výběru"
-    }
+    },
+    "selectAll": "Vybrat všechny anotace"
   },
   "autoSelect": {
     "noData": "Nejsou k dispozici žádná data k anotování!",

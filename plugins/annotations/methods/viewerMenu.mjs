@@ -226,10 +226,10 @@ export const viewerMenuMethods = {
             });
             state.settingsButton.id = `${viewerId}-annotations-settings`;
 
-            // Classes: a compact, height-limited grid of preset chips (icon +
-            // name) that wraps so several fit per row. Always visible — no tab
-            // swapping — with the annotation board rendered directly below.
-            state.presetInner = div({ class: 'flex flex-wrap gap-1 content-start' });
+            // Classes: the shared class picker (PresetBindList), height-limited.
+            // Always visible — no tab swapping — with the annotation board
+            // rendered directly below.
+            state.presetInner = div();
             state.presetClasses = div({ class: 'px-2 mt-1' },
                 div({ class: 'flex items-center justify-between mb-1' },
                     span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.t('annotations.viewerMenu.tabs.classes')),
@@ -237,7 +237,7 @@ export const viewerMenuMethods = {
                         span({ class: 'ph-light ph-note-pencil text-xs' })
                     )
                 ),
-                div({ class: 'max-h-[120px] overflow-y-auto pr-1' }, state.presetInner)
+                state.presetInner
             );
 
             state.annotationList = div({ class: 'flex-1 min-h-0 mt-2' }, state.boardPanel.create());
@@ -334,8 +334,7 @@ export const viewerMenuMethods = {
                 : 'annotations.contextMenu.selectPresetLeft');
             presetItems = [];
             this.context.presets.foreach((preset) => {
-                const category = preset.getMetaValue('category')
-                    || this.t('annotations.viewerMenu.unknownPreset');
+                const category = this._presetDisplayName(preset);
                 const icon = 'ph-tag';
                 const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
                 presetItems.push({
@@ -371,22 +370,66 @@ export const viewerMenuMethods = {
             { title: this.t('annotations.contextMenu.delete'), icon: 'ph-trash',          containerCss: !active && 'opacity-50',  action: () => active && handlerDelete() },
         ];
 
+        // Selection helpers. Offered with or without a target, so "select all"
+        // is reachable from an empty spot on the slide too.
+        const selected = fabric.getSelectedAnnotations?.() || [];
+        const selectionItems = [];
+        if (typeof fabric?.selectAllAnnotations === 'function') {
+            selectionItems.push({
+                title: this.t('annotations.contextMenu.selectAll'),
+                icon: 'ph-selection-all',
+                action: () => fabric.selectAllAnnotations(),
+            });
+            if (active?.layerID) {
+                selectionItems.push({
+                    title: this.t('annotations.contextMenu.selectAllInLayer'),
+                    icon: 'ph-selection-all',
+                    action: () => fabric.selectAllAnnotations({ layerId: active.layerID }),
+                });
+            }
+            selectionItems.push({
+                title: this.t('annotations.contextMenu.deselect'),
+                icon: 'ph-selection-slash',
+                containerCss: !selected.length && 'opacity-50',
+                action: () => fabric.clearAnnotationSelection?.(),
+            });
+        }
+
+        // Move to layer acts on the whole selection when the target is part of
+        // it — the user selected several things and right-clicked one of them —
+        // and on the target alone otherwise.
         let layerItems = null;
-        if (active && includeMoveToLayer && typeof fabric?.setAnnotationLayer === 'function') {
-            const layers = fabric.getAllLayers?.() || [];
-            layerItems = [{
-                title: this.t('annotations.contextMenu.noLayer'),
-                icon: 'ph-stack',
-                action: () => fabric.setAnnotationLayer(active, null),
-            }];
-            for (const layer of layers) {
+        let layerTitle = this.t('annotations.contextMenu.moveToLayer');
+        if (active && includeMoveToLayer && typeof fabric?.setAnnotationsLayer === 'function') {
+            const targets = selected.length > 1 && selected.includes(active) ? selected : [active];
+            if (targets.length > 1) {
+                layerTitle = this.t('annotations.contextMenu.moveSelectionToLayer', { count: targets.length });
+            }
+            // A layer every target already sits in is not a destination.
+            const sharedLayer = targets.every(o => (o.layerID ?? '') === (targets[0].layerID ?? ''))
+                ? String(targets[0].layerID ?? '') : null;
+            layerItems = [];
+            if (sharedLayer !== '') {
+                layerItems.push({
+                    title: this.t('annotations.contextMenu.noLayer'),
+                    icon: 'ph-stack-minus',
+                    action: () => fabric.setAnnotationsLayer(targets, null),
+                });
+            }
+            for (const layer of (fabric.getAllLayers?.() || [])) {
+                if (String(layer.id) === sharedLayer) continue;
                 layerItems.push({
                     title: layer.name
                         || this.t('annotations.contextMenu.layerNamed', { id: layer.id }),
                     icon: 'ph-stack',
-                    action: () => fabric.setAnnotationLayer(active, layer.id),
+                    action: () => fabric.setAnnotationsLayer(targets, layer.id),
                 });
             }
+            layerItems.push({
+                title: this.t('annotations.contextMenu.newLayer'),
+                icon: 'ph-stack-plus',
+                action: () => fabric.groupAnnotationsIntoLayer?.(targets, { kind: 'new' }),
+            });
         }
 
         let zOrderItems = null;
@@ -527,8 +570,12 @@ export const viewerMenuMethods = {
                 children.push({ title: '' }); // visual separator
             }
             children.push(...cudActions);
+            if (selectionItems.length) {
+                children.push({ title: '' }); // visual separator
+                children.push(...selectionItems);
+            }
             if (layerItems) {
-                children.push({ title: this.t('annotations.contextMenu.moveToLayer'), icon: 'ph-stack', children: layerItems });
+                children.push({ title: layerTitle, icon: 'ph-stack', children: layerItems });
             }
             if (groupParent) children.push(groupParent);
             if (zOrderItems) children.push(...zOrderItems);
@@ -547,8 +594,9 @@ export const viewerMenuMethods = {
         }
         actions.push({ title: `${this.t('annotations.contextMenu.actions')}:` });
         actions.push(...cudActions);
+        actions.push(...selectionItems);
         if (layerItems) {
-            actions.push({ title: `${this.t('annotations.contextMenu.moveToLayer')}:` });
+            actions.push({ title: `${layerTitle}:` });
             actions.push(...layerItems);
         }
         if (groupItemsFlat) {
@@ -651,9 +699,12 @@ export const viewerMenuMethods = {
             // from a non-canvas surface, e.g. the annotation row's "..." button)
             // before falling back to hit-testing the right-click event.
             const active = ctx.active ?? fabric.canvas.findTarget(ctx.event);
-            if (active && fabric.canvas.getActiveObject?.() !== active) {
-                fabric.canvas.setActiveObject(active);
-                fabric.canvas.renderAll();
+            // Right-clicking an annotation outside the selection selects it,
+            // through the wrapper so its selection snapshot stays in step with
+            // fabric's active object. One that is already selected keeps the
+            // selection intact, so the menu can act on all of it.
+            if (active && fabric.isAnnotation?.(active) && !fabric.isAnnotationSelected?.(active)) {
+                fabric.selectAnnotation(active, true, true);
             }
             return this._buildAnnotationContextActions(active, fabric, {
                 originalEvent: ctx.event,
@@ -785,55 +836,16 @@ export const viewerMenuMethods = {
         const state = this._getViewerUI(viewerOrId);
         if (!state?.presetInner) return;
 
-        const leftId = this.context.getPreset(true)?.presetID;
-        const rightId = this.context.getPreset(false)?.presetID;
-
-        const nodes = [];
-        let pushed = false;
-        this.context.presets.foreach((preset) => {
-            const isLeft = preset.presetID === leftId;
-            const isRight = preset.presetID === rightId;
-            // Distinct, meaningful per-button indicators: a left/right mouse
-            // glyph (and matching ring colour) shows which mouse button paints
-            // with this class. Replaces the ambiguous, clipping "L"/"R" badges.
-            const activeStyle = (isLeft || isRight)
-                ? `bg-base-300 ${isLeft ? 'ring-1 ring-primary' : 'ring-1 ring-secondary'}`
-                : 'border-transparent';
-
-            const containerCss = this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
-            const category = preset.meta?.category?.value || this.t('annotations.viewerMenu.unknownPreset');
-
-            nodes.push(button({
-                    type: 'button',
-                    title: category,
-                    class: `btn btn-ghost btn-xs px-1 gap-1 flex-nowrap justify-start border max-w-[45%] overflow-hidden ${containerCss} ${activeStyle}`.trim(),
-                    onclick: () => this._clickPresetSelect(true, preset.presetID),
-                    oncontextmenu: (e) => {
-                        e.preventDefault();
-                        this._clickPresetSelect(false, preset.presetID);
-                        return false;
-                    }
-                },
-                span({
-                    class: 'shrink-0 ph-light ph-tag',
-                    style: `color:${preset.color};`
-                }),
-                span({ class: 'truncate min-w-0 text-left' }, category),
-                isLeft ? span({ class: 'ph-light ph-mouse-left-click shrink-0 text-primary text-sm', title: this.t('annotations.viewerMenu.leftClickPreset') }) : null,
-                isRight ? span({ class: 'ph-light ph-mouse-right-click shrink-0 text-secondary text-sm', title: this.t('annotations.viewerMenu.rightClickPreset') }) : null
-            ));
-            pushed = true;
-        });
-
-        if (!pushed) {
-            nodes.push(div({ class: 'text-sm opacity-70' },
+        // The same picker the annotation toolbar opens — one look, one set of
+        // click semantics for choosing a drawing class.
+        state.presetInner.replaceChildren(this._buildPresetBindList({
+            maxHeight: '132px',
+            empty: div({ class: 'text-sm opacity-70' },
                 this.t('annotations.viewerMenu.noPresetsPrefix'), ' ',
                 button({ type: 'button', class: 'link link-primary', onclick: () => this.showPresets() }, this.t('annotations.viewerMenu.createPresetLink')),
                 '.'
-            ));
-        }
-
-        state.presetInner.replaceChildren(...nodes);
+            ),
+        }));
     },
 
     _toggleEnabled(btnElement) {

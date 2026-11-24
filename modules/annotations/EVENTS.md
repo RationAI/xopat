@@ -110,6 +110,9 @@ Raised when the annotations were imported/loaded in a bigger chunk.
 ##### `annotation-board-save-request` | `{ viewer: OpenSeadragon.Viewer }`
 
 ##### `active-layer-changed` | `{ layer: OSDAnnotations.Layer | undefined }`
+The active layer is the one newly created annotations land in — nothing more. It does not
+restrict which annotations can be selected. `createLayer()` makes the new layer active;
+deleting or hiding the active layer releases it.
 
 ##### `layer-selection-changed` | `{ selected: OSDAnnotations.Layer[], deselected: OSDAnnotations.Layer[] }`
 
@@ -117,10 +120,15 @@ Raised when the annotations were imported/loaded in a bigger chunk.
 
 ##### `layer-removed` | `{ layer: OSDAnnotations.Layer }`
 
-##### `layer-objects-changed` | `{ layerId: string }`
-Raised after loading/import changes the object set of a layer.
+##### `layer-objects-changed` | `{ layerId: string | null }`
+Raised after the object set of a layer changes (loading/import, moving annotations between
+layers, `renameLayer()`). A batch move (`setAnnotationsLayer`) raises it once; `layerId` is
+`null` when several layers or the root level are affected.
 
 ##### `annotation-selection-changed` | `{ selected: fabric.Object[], deselected: fabric.Object[], fromCanvas: boolean }`
+`selected` is the whole resulting selection. Bulk changes — `selectAnnotations(objects)`,
+`selectAllAnnotations({layerId})` — raise it **once** for the whole batch; never call
+`selectAnnotation` in a loop, each call raises its own event.
 
 ##### `annotation-before-create` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
 Cancelable event raised before promoting/inserting an annotation.

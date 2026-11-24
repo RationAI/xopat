@@ -726,7 +726,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Set current active layer
+     * Set current active layer: the layer newly created annotations land in
+     * (see {@link _addAnnotationToLayer}). It is a drawing target only — it
+     * does not restrict which annotations can be selected or edited.
      * @param {OSDAnnotations.Layer|number} layer layer instance or id
      * @event active-layer-changed
      */
@@ -735,15 +737,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             ? layer
             : (this._layers[String(layer)] ?? this._layers[layer]);
 
-        if (!nextLayer) return;
-
-        const previousLayer = this._layer;
-        if (previousLayer && previousLayer.id !== nextLayer.id) {
-            previousLayer.setActive(false);
-        }
+        if (!nextLayer || this._layer === nextLayer) return;
 
         this._layer = nextLayer;
-        this._layer.setActive(true);
 
         this.raiseEvent('active-layer-changed', {
             layer: this._layer
@@ -756,7 +752,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     unsetActiveLayer() {
         if (!this._layer) return;
-        this._layer.setActive(false);
         this._layer = undefined;
 
         this.raiseEvent('active-layer-changed', {
@@ -778,7 +773,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (!this._selectedLayers.has(layer.id)) {
             this._selectedLayers.add(layer.id);
-            layer.setActive(true);
 
             if (!silent) this._emitLayerSelectionChanged([layer], []);
         }
@@ -797,7 +791,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!layer || !this._selectedLayers.has(layer.id)) return;
 
         this._selectedLayers.delete(layer.id);
-        layer.setActive(false);
 
         if (this._layer && this._layer.id === layer.id) {
             const last = Array.from(this._selectedLayers).at(-1);
@@ -817,11 +810,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (deselect.length === 0 && !hadActiveLayer) return;
 
-        deselect.forEach(layer => layer.setActive(false));
         this._selectedLayers.clear();
 
         if (this._layer) {
-            this._layer.setActive(false);
             this._layer = undefined;
 
             if (!silent) {
@@ -944,23 +935,59 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Create new layer
+     * Create new layer. The new layer becomes the active one (new annotations
+     * land in it); undo restores the previously active layer.
      * @event layer-added
+     * @event active-layer-changed
      * @param {number|string} id optional
      * @return {OSDAnnotations.Layer} new layer
      */
     createLayer(id=Date.now()) {
         id = String(id);
         let layerData = {id: id, _objects: []};
+        let previousActiveId;
 
         return APPLICATION_CONTEXT.history.push(
-            () => this._createLayer(layerData),
+            () => {
+                previousActiveId = this._layer?.id;
+                this._createLayer(layerData);
+                this.setActiveLayer(id);
+            },
             () => {
                 layerData = this._serializeLayer(id);
                 this._deleteLayer(id);
+                if (previousActiveId !== undefined) this.setActiveLayer(previousActiveId);
             },
             { name: 'Create layer' }
         );
+    }
+
+    /**
+     * Rename a layer. Single undoable history entry.
+     * @event layer-objects-changed
+     * @param {number|string} id layer id
+     * @param {string} name new name; blank is refused
+     * @returns {boolean} true if renamed
+     */
+    renameLayer(id, name) {
+        const layer = this.getLayer(String(id));
+        const next = typeof name === 'string' ? name.trim() : '';
+        if (!layer || !next || next === layer.name) return false;
+        const previous = layer.name;
+
+        const apply = (value) => {
+            const target = this.getLayer(String(id));
+            if (!target) return false;
+            target.name = value;
+            this.raiseEvent('layer-objects-changed', { layerId: String(id) });
+            return true;
+        };
+        APPLICATION_CONTEXT.history.push(
+            () => apply(next),
+            () => apply(previous),
+            { name: 'Rename layer' }
+        );
+        return true;
     }
 
     /**
@@ -1326,72 +1353,130 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             : null;
         if (target !== null && !this.getLayer(target)) return 0;
 
+        // Everything below works per affected layer / on the board order as a
+        // whole, never per object: a "select all → move" batch is thousands of
+        // objects, and a per-object index lookup made it quadratic.
+
+        // Position lookups, built once and only for the containers involved.
+        let boardIndexOf = null;
+        const layerIndexOf = new Map();
+        const indexInBoard = (obj) => {
+            if (!boardIndexOf) {
+                boardIndexOf = new Map();
+                this._boardOrder.forEach((item, i) => {
+                    if (item.type === 'annotation') boardIndexOf.set(String(item.id), i);
+                });
+            }
+            return boardIndexOf.get(String(obj.incrementId)) ?? -1;
+        };
+        const indexInLayer = (layerId, obj) => {
+            let map = layerIndexOf.get(layerId);
+            if (!map) {
+                map = new Map();
+                (this.getLayer(layerId)?._objects || []).forEach((o, i) => map.set(o.incrementId, i));
+                layerIndexOf.set(layerId, map);
+            }
+            return map.get(obj.incrementId) ?? -1;
+        };
+
         // Snapshot only the annotations whose layerID will actually change.
         // Each entry captures enough state to undo: oldLayerId, oldBoardIndex
         // (for root annotations), oldLayerIndex (for layered ones).
         const snapshot = [];
+        const seen = new Set();
         for (const obj of annotations) {
-            if (!obj) continue;
+            if (!obj || seen.has(obj)) continue;
+            seen.add(obj);
             const oldLayerId = obj.layerID ? String(obj.layerID) : null;
             if (oldLayerId === target) continue;
-            const oldBoardIndex = oldLayerId
-                ? -1
-                : this.getBoardItemIndex('annotation', obj.incrementId);
-            const oldLayerIndex = oldLayerId
-                ? (this.getLayer(oldLayerId)?.getAnnotationIndex?.(obj) ?? -1)
-                : -1;
-            snapshot.push({ obj, oldLayerId, oldBoardIndex, oldLayerIndex });
+            snapshot.push({
+                obj,
+                oldLayerId,
+                oldBoardIndex: oldLayerId ? -1 : indexInBoard(obj),
+                oldLayerIndex: oldLayerId ? indexInLayer(oldLayerId, obj) : -1,
+            });
         }
         if (snapshot.length === 0) return 0;
 
-        const moveTo = () => {
-            const targetLayer = target ? this.getLayer(target) : null;
+        /** Take every snapshot object out of wherever it currently lives. */
+        const detachAll = () => {
+            const byLayer = new Map();
+            const rootIds = new Set();
             for (const { obj } of snapshot) {
                 if (obj.layerID) {
-                    const old = this.getLayer(String(obj.layerID));
-                    if (old) old.removeObject(obj);
+                    const id = String(obj.layerID);
+                    if (!byLayer.has(id)) byLayer.set(id, []);
+                    byLayer.get(id).push(obj);
                 } else {
-                    this.removeBoardItem('annotation', obj.incrementId);
-                }
-                if (targetLayer) {
-                    obj.layerID = String(targetLayer.id);
-                    targetLayer.addObject(obj);
-                } else {
-                    obj.layerID = undefined;
-                    this.upsertBoardItem('annotation', obj.incrementId);
+                    rootIds.add(String(obj.incrementId));
                 }
             }
+            for (const [id, objs] of byLayer) this.getLayer(id)?.removeObjects(objs);
+            if (rootIds.size) {
+                this._boardOrder = this._boardOrder.filter(
+                    item => item.type !== 'annotation' || !rootIds.has(String(item.id)));
+            }
+        };
+
+        const notify = (layerId) => {
             this.canvas.requestRenderAll();
             try {
-                this.raiseEvent('layer-objects-changed', {
-                    layerId: target
-                });
+                this.raiseEvent('layer-objects-changed', { layerId });
             } catch (e) { /* non-fatal */ }
         };
 
-        const restore = () => {
-            for (const entry of snapshot) {
-                const { obj, oldLayerId, oldBoardIndex, oldLayerIndex } = entry;
-                if (obj.layerID) {
-                    const cur = this.getLayer(String(obj.layerID));
-                    if (cur) cur.removeObject(obj);
-                } else {
-                    this.removeBoardItem('annotation', obj.incrementId);
-                }
-                if (oldLayerId) {
-                    const old = this.getLayer(oldLayerId);
-                    obj.layerID = oldLayerId;
-                    if (old) old.addObject(obj, oldLayerIndex >= 0 ? oldLayerIndex : undefined);
-                } else {
+        const moveTo = () => {
+            const targetLayer = target ? this.getLayer(target) : null;
+            detachAll();
+            if (targetLayer) {
+                targetLayer.addObjects(snapshot.map(entry => entry.obj));
+            } else {
+                for (const { obj } of snapshot) {
                     obj.layerID = undefined;
-                    this.upsertBoardItem('annotation', obj.incrementId,
-                        oldBoardIndex >= 0 ? oldBoardIndex : undefined);
+                    this._boardOrder.push({ type: 'annotation', id: String(obj.incrementId) });
+                    // Leaving a hidden layer makes the object interactive again.
+                    this._applyAnnotationVisibilityState(obj);
                 }
             }
-            this.canvas.requestRenderAll();
-            try {
-                this.raiseEvent('layer-objects-changed', { layerId: null });
-            } catch (e) { /* non-fatal */ }
+            notify(target);
+        };
+
+        const restore = () => {
+            detachAll();
+            // Re-insert at the recorded positions, ascending, so each index is
+            // valid by the time it is used.
+            const byOldLayer = new Map();
+            const toRoot = [];
+            for (const entry of snapshot) {
+                if (entry.oldLayerId) {
+                    if (!byOldLayer.has(entry.oldLayerId)) byOldLayer.set(entry.oldLayerId, []);
+                    byOldLayer.get(entry.oldLayerId).push({
+                        object: entry.obj,
+                        index: entry.oldLayerIndex >= 0 ? entry.oldLayerIndex : Infinity,
+                    });
+                } else {
+                    toRoot.push(entry);
+                }
+            }
+            for (const [id, entries] of byOldLayer) {
+                entries.sort((a, b) => a.index - b.index);
+                const layer = this.getLayer(id);
+                if (layer) layer.addObjects(entries);
+                else for (const e of entries) e.object.layerID = undefined;
+            }
+            toRoot.sort((a, b) =>
+                (a.oldBoardIndex >= 0 ? a.oldBoardIndex : Infinity) - (b.oldBoardIndex >= 0 ? b.oldBoardIndex : Infinity));
+            for (const { obj, oldBoardIndex } of toRoot) {
+                obj.layerID = undefined;
+                const entry = { type: 'annotation', id: String(obj.incrementId) };
+                if (oldBoardIndex >= 0 && oldBoardIndex <= this._boardOrder.length) {
+                    this._boardOrder.splice(oldBoardIndex, 0, entry);
+                } else {
+                    this._boardOrder.push(entry);
+                }
+                this._applyAnnotationVisibilityState(obj);
+            }
+            notify(null);
         };
 
         APPLICATION_CONTEXT.history.push(
@@ -2451,10 +2536,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const affectedObjects = layer.getObjects?.() || [];
 
         if (!nextVisible) {
+            // One selection update for the whole layer (it may hold thousands
+            // of selected members after a "select all in layer").
             const selected = this.getSelectedAnnotations?.() || [];
-            for (const obj of affectedObjects) {
-                if (selected.some(sel => sel.internalID === obj.internalID)) {
-                    this.deselectAnnotation(obj, true);
+            if (selected.length) {
+                const hiding = new Set(affectedObjects.map(obj => obj.internalID));
+                const remaining = selected.filter(sel => !hiding.has(sel.internalID));
+                if (remaining.length !== selected.length) {
+                    this.selectAnnotations(remaining, { clearPrevious: true, fromCanvas: true });
                 }
             }
 
@@ -2565,14 +2654,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // import and edit paths already call this, the create path did not.
         this.module.getAnnotationObjectFactory(annotation.factoryID)?.renderAllControls?.(annotation);
         this._applyAnnotationVisibilityState(annotation);
-        // The other half of the helper freeze: a real annotation is mutated
-        // through fabric setters, so it may cache its render again. Paths that
-        // promote the very object they had added as a helper (free-form tool,
-        // magic wand, viewport segmentation) would otherwise keep caching off
-        // for the rest of its life.
-        annotation.objectCaching = true;
+        // The other half of the helper freeze: drop the helper's own
+        // `objectCaching` override so the object follows the prototype default
+        // again (off, see the fabric overlay). Do NOT force it on: a cached
+        // annotation is rasterised into a size-capped bitmap that fabric then
+        // stretches — large or rotated shapes come out blocky — and the cache
+        // buys nothing, since every zoom step rewrites strokeWidth and
+        // invalidates it.
+        delete annotation.objectCaching;
         if (Array.isArray(annotation._objects)) {
-            for (const child of annotation._objects) child.objectCaching = true;
+            for (const child of annotation._objects) delete child.objectCaching;
         }
 
         // todo needed?
@@ -2706,6 +2797,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             this._deleteAnnotation(obj, false);
         }
 
+        // A deleted layer must not stay the drawing target.
+        if (this._layer === layer) this.unsetActiveLayer();
         this.removeBoardItem('layer', layer.id);
         delete this._layers[layerId];
         this._selectedLayers.delete(layerId);
@@ -3512,6 +3605,75 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         canvas.requestRenderAll();
         this._emitAnnotationSelectionChanged(baseAnnotations, deselect, fromCanvas);
+    }
+
+    /**
+     * Select many annotations at once: one selection update and ONE
+     * `annotation-selection-changed`, however long the array. Use this for any
+     * bulk selection — calling {@link selectAnnotation} in a loop raises an
+     * event (and a full board rebuild) per object and freezes the viewer.
+     * The last object becomes fabric's active object.
+     * @param {fabric.Object[]} annotations
+     * @param {object} [options]
+     * @param {boolean} [options.clearPrevious=true] replace the selection, or extend it
+     * @param {boolean} [options.fromCanvas=false] if the selection event originates on canvas
+     * @returns {number} size of the resulting selection
+     * @event annotation-selection-changed
+     */
+    selectAnnotations(annotations, { clearPrevious = true, fromCanvas = false } = {}) {
+        if (!Array.isArray(annotations)) return 0;
+
+        const previous = [...this.getSelectionSnapshot()];
+        const next = clearPrevious ? [] : [...previous];
+        const members = new Set(next);
+        for (const obj of annotations) {
+            if (!obj || obj.isHelperAnnotation || members.has(obj)) continue;
+            members.add(obj);
+            next.push(obj);
+        }
+        const deselected = clearPrevious ? previous.filter(obj => !members.has(obj)) : [];
+        if (next.length === previous.length && !deselected.length) return next.length;
+
+        if (clearPrevious && previous.length) {
+            this.removeHighlight();
+            this.clearSelectionSnapshot();
+            this.__programmaticClear = true;
+            this.canvas.discardActiveObject();
+        }
+        this._applySelection(next);
+        this._emitAnnotationSelectionChanged(next, deselected, fromCanvas);
+        return next.length;
+    }
+
+    /**
+     * Select every annotation the user can currently see and touch: hidden,
+     * hidden-layer and filtered-out annotations are skipped.
+     * @param {object} [options]
+     * @param {string|null} [options.layerId] restrict to one layer; `null` = annotations in no layer
+     * @param {boolean} [options.clearPrevious=true]
+     * @returns {number} size of the resulting selection
+     */
+    selectAllAnnotations({ layerId = undefined, clearPrevious = true } = {}) {
+        const scoped = layerId !== undefined;
+        const wanted = scoped && layerId !== null ? String(layerId) : null;
+        const hiddenLayer = new Map();
+        const targets = [];
+        for (const obj of this.canvas.getObjects()) {
+            if (!this.isAnnotation(obj) || obj.isHelperAnnotation || obj.visible === false) continue;
+            const own = obj.layerID ? String(obj.layerID) : null;
+            if (scoped && own !== wanted) continue;
+            if (own) {
+                let hidden = hiddenLayer.get(own);
+                if (hidden === undefined) {
+                    hidden = this.getLayer(own)?.visible === false;
+                    hiddenLayer.set(own, hidden);
+                }
+                if (hidden) continue;
+            }
+            if (this.module.isAnnotationFilteredOut?.(obj)) continue;
+            targets.push(obj);
+        }
+        return this.selectAnnotations(targets, { clearPrevious });
     }
 
     /**

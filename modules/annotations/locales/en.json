@@ -17,7 +17,8 @@
     "classSlots": {
       "select": "Select class {{n}}",
       "assign": "Assign class {{n}} to selection"
-    }
+    },
+    "selectAll": "Select all annotations"
   },
   "autoSelect": {
     "noData": "There is no data to annotate!",

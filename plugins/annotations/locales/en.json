@@ -27,9 +27,8 @@
       "border": "Border",
       "opacity": "Opacity",
       "editPresets": "Edit",
-      "leftClickPreset": "Left mouse button paints this class",
-      "rightClickPreset": "Right mouse button paints this class",
-      "unknownPreset": "Unknown",
+      "leftClickPreset": "Draw this class with the left mouse button",
+      "rightClickPreset": "Draw this class with the right mouse button",
       "noPresetsPrefix": "No class presets available.",
       "createPresetLink": "Create a preset to annotate.",
       "tabs": {
@@ -58,7 +57,12 @@
       "sameAuthor": "Same author",
       "sameCategoryText": "Same category text",
       "actions": "Actions",
-      "modifyAnnotation": "Modify annotation"
+      "modifyAnnotation": "Modify annotation",
+      "selectAll": "Select all",
+      "selectAllInLayer": "Select all in this layer",
+      "deselect": "Deselect",
+      "moveSelectionToLayer": "Move {{count}} annotations to layer",
+      "newLayer": "New layer…"
     },
     "workspace": {
       "label": "Workspace",
@@ -72,7 +76,8 @@
       "metaCreateFail": "Failed to create the metadata field \"{{name}}\".",
       "metaDeleteFail": "Failed to delete the metadata field.",
       "presetRemoveFail": "Failed to remove the class.",
-      "metaNameRequired": "You must enter a name for the new field."
+      "metaNameRequired": "You must enter a name for the new field.",
+      "annotationsDisabled": "Annotations are disabled. Enable them first."
     },
     "tutorial": {
       "title": "Annotations",
@@ -95,8 +100,7 @@
       "presetSwatch": "Drawing classes (left / right mouse button)",
       "presetSwatchTitle": "Drawing classes",
       "editPresets": "Edit classes…",
-      "noPresets": "No classes yet",
-      "unnamedPreset": "Unnamed class"
+      "noPresets": "No classes yet"
     },
     "export": {
       "menuTitle": "Annotations",
@@ -184,8 +188,6 @@
       "vocabularyPick": "Add a class from the list...",
       "vocabularyExhausted": "Every available class already has a preset.",
       "vocabularyLocked": "This class comes from the connected service and cannot be renamed or changed here.",
-      "useLeft": "Use for Left Click",
-      "useRight": "Use for Right Click",
       "finishEditing": "Finish Editing"
     },
     "lock": {
@@ -209,6 +211,20 @@
       "search": "Search and filter",
       "area": "Area",
       "searchPlaceholder": "Search...",
+      "selectAll": "Select all annotations",
+      "selectedCount": "{{count}} selected",
+      "moveSelectionToLayer": "Move to layer",
+      "deselect": "Deselect",
+      "layerActions": "Layer actions",
+      "selectAllInLayer": "Select all in layer",
+      "moveSelectionHere": "Move selection here ({{count}})",
+      "renameLayer": "Rename",
+      "deleteLayer": "Delete layer",
+      "deleteLayerConfirm": "Delete layer \"{{name}}\" together with its {{count}} annotations?",
+      "activeLayerHint": "New annotations are added to this layer. Click to stop.",
+      "activateLayerHint": "Click to add new annotations to this layer",
+      "moveLayerUp": "Move layer up",
+      "moveLayerDown": "Move layer down",
       "metricColumn": {
         "label": "Metric",
         "off": "—",

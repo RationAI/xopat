@@ -74,6 +74,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
         this.setupQuickDrawShortcuts();
         this.setupClassSlotShortcuts();
+        this.setupSelectionShortcuts();
         this.setupActiveTissue();
         this.setupRightsGating();
         this.initHandlers();

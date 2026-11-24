@@ -259,13 +259,5 @@ export const ioMethods = {
         if (allRadio) allRadio.checked = this.exportOptions.scope === 'all';
         const selectedRadio = document.getElementById('export-scope-selected-radio');
         if (selectedRadio) selectedRadio.checked = this.exportOptions.scope === 'selected';
-    },
-
-    RightSideMenuVisibleControls() {
-        return `
-<div style="float: right; transform: translateY(-5px);">
-<span id="annotations-left-click" class="d-inline-block position-relative mt-1 ml-2 border-md rounded-3" style="cursor:pointer;border-width:3px!important;"></span>
-<span id="annotations-right-click" class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cursor:pointer;border-width:3px!important;"></span>
-</div>`;
     }
 };

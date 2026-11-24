@@ -55,6 +55,30 @@ export const classSlotMethods = {
     },
 
     /**
+     * Select every visible annotation of the viewer the stroke came from.
+     * Registered apart from the class slots: it is not theirs to opt out of.
+     */
+    setupSelectionShortcuts() {
+        const shortcuts = APPLICATION_CONTEXT?.shortcuts;
+        if (!shortcuts) return;
+        shortcuts.register({
+            id: 'annotations.selectAll',
+            titleKey: 'annotations:keymap.selectAll',
+            categoryPath: ['keymap.cat.annotations'],
+            owner: this.id,
+            type: 'press',
+            // "down": the combo must beat the browser's own select-all.
+            trigger: 'down',
+            scope: { requiresCanvasFocus: true, allowInInputs: false },
+            defaultCombos: ['Primary+KeyA'],
+            handler: (ctx) => {
+                if (!this.context || this.context.disabledInteraction || !ctx?.viewer) return;
+                this.context.getFabric(ctx.viewer)?.selectAllAnnotations?.();
+            },
+        });
+    },
+
+    /**
      * Preset occupying a slot, or null when the slot is empty.
      * @param {number} index zero-based slot
      */
