@@ -19,12 +19,6 @@
 const OSDAnnotationsRef: any = (window as any).OSDAnnotations;
 const OSDLib: any = (window as any).OpenSeadragon;
 
-function samEscapeHtml(value: string): string {
-    return String(value).replace(/[&<>"']/g, c => (
-        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string
-    ));
-}
-
 class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
     private sam: any;
     private _samProcessing: boolean;
@@ -94,45 +88,44 @@ class SegmentAnythingState extends OSDAnnotationsRef.AnnotationState {
 
     /**
      * Mode-options panel: model + computation-device pickers. Rendered by the
-     * gui_annotations toolbar when this mode is active.
+     * gui_annotations toolbar when this mode is active (the `customControls()`
+     * contract: real nodes, listeners bound to the plugin-owned engine).
      */
-    customHtml(): string {
+    customControls(): Node {
         const sam = this.sam;
-        const accessor = "plugin('sam-segment-tool-experimental').sam";
+        const { div, label, p } = (globalThis as any).van.tags;
+        const UIRef: any = (globalThis as any).UI;
+        const t = (key: string) =>
+            (window as any).plugin("sam-segment-tool-experimental").t(`modeOptions.${key}`);
 
-        const modelOptions = Object.entries(sam.ALLOWED_MODELS || {})
-            .map(([hfName, shortName]) => {
-                const selected = hfName === sam.selectedModel ? " selected" : "";
-                return `<option value="${samEscapeHtml(hfName)}"${selected}>${samEscapeHtml(String(shortName))}</option>`;
-            })
-            .join("");
+        const select = (id: string, selected: string, onPick: (value: string) => void, options: any[]) =>
+            new UIRef.Select({
+                id, selected,
+                onchange: function (this: HTMLSelectElement) { onPick(this.value); },
+                extraProperties: { style: "width:100%; margin:0;" },
+            }, ...options).create();
 
-        const devices = ["Client", ...Object.keys(sam.GPU_SERVERS || {})];
-        const deviceOptions = devices
-            .map(device => {
-                const selected = device === sam.selectedComputationDevice ? " selected" : "";
-                const label = device === "Client" ? "Client (in-browser)" : device;
-                return `<option value="${samEscapeHtml(device)}"${selected}>${samEscapeHtml(label)}</option>`;
-            })
-            .join("");
+        const models = Object.entries(sam.ALLOWED_MODELS || {})
+            .map(([hfName, shortName]) => ({ value: hfName, text: String(shortName) }));
+        const devices = ["Client", ...Object.keys(sam.GPU_SERVERS || {})]
+            .map(device => ({ value: device, text: device === "Client" ? t("deviceClient") : device }));
 
         // The shared mode-options panel sizes itself with `w-80`, which the
         // purged Tailwind build drops — so size this content explicitly with
         // inline styles (always applied) rather than relying on utility widths.
-        return `
-<div style="display:flex;flex-direction:column;gap:0.75rem;width:16rem;max-width:100%;padding:0.25rem;">
-    <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="sam-model-dropdown">Model</label>
-        <select id="sam-model-dropdown" class="select select-sm select-bordered" style="width:100%;"
-            onchange="${accessor}.setModel(this.value)">${modelOptions}</select>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="sam-computation-dropdown">Computation</label>
-        <select id="sam-computation-dropdown" class="select select-sm select-bordered" style="width:100%;"
-            onchange="${accessor}.setComputationDevice(this.value)">${deviceOptions}</select>
-    </div>
-    <p class="text-xs opacity-60" style="margin:0;">Pick a preset, then click a feature on the slide to segment it.</p>
-</div>`;
+        const row = "display:flex;flex-direction:column;gap:0.25rem;";
+        const caption = "text-xs font-medium opacity-70";
+        return div(
+            { style: "display:flex;flex-direction:column;gap:0.75rem;width:16rem;max-width:100%;padding:0.25rem;" },
+            div({ style: row },
+                label({ class: caption, for: "sam-model-dropdown" }, t("model")),
+                select("sam-model-dropdown", sam.selectedModel, v => sam.setModel(v), models)),
+            div({ style: row },
+                label({ class: caption, for: "sam-computation-dropdown" }, t("computation")),
+                select("sam-computation-dropdown", sam.selectedComputationDevice,
+                    v => sam.setComputationDevice(v), devices)),
+            p({ class: "text-xs opacity-60", style: "margin:0;" }, t("hint")),
+        );
     }
 
     handleClickUp(o: MouseEvent, point: any, isLeftClick: boolean): boolean {

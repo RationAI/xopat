@@ -384,6 +384,14 @@ to a new one), right-drag or Alt-drag to **remove** it. Nothing is detected whil
   viewport and the single undo step per stroke are the brush tools' behaviour, not a second copy.
   Like a brush stroke, one annotation stays one connected shape.
 
+#### Mode options
+
+A mode with settings overrides `customControls()` and returns a `Node` or a `UI` component (or
+`null`); the annotations toolbar shows it in the mode-options panel while the mode is active and
+calls it again on every activation. Build it with van.js / `UI` atoms and attach listeners that
+close over the mode — reference: `MagicWand#customControls`. The older `customHtml()` string is
+deprecated: the host sanitizes it, so inline `on*` handlers in it are removed and do nothing.
+
 Modes that analyse what is on screen read it with `AnnotationState.readViewportLayers(options)`,
 a thin wrapper over the core `visualization.renderCurrentLayersPixels` — never a private standalone
 drawer plus `gl.readPixels` (viewport segmentation uses the same call with `layers: "visualization"`).

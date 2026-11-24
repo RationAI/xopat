@@ -76,7 +76,8 @@ class MenuTabBanner extends MenuTab {
             if (header) {
                 // todo dirty, touching internal badge structure
                 header.children[2].title = title;
-                header.children[2].innerHTML = title;
+                // Text only: titles carry identity/session-provided values.
+                header.children[2].textContent = title;
             }
         }
     }

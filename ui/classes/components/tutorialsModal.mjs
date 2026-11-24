@@ -299,12 +299,12 @@ export class TutorialsModal extends BaseComponent {
      * `USER_INTERFACE.Tutorials.show()` to explain why no tutorials can be
      * launched at mobile widths instead of opening an empty / non-functional
      * launcher.
-     * @param {string} text plain-text or HTML notice copy.
+     * @param {string} text plain-text notice copy.
      */
     setMobileNotice(text) {
         this.create();
         if (!this._mobileNotice) return;
-        this._mobileNotice.innerHTML = String(text ?? "");
+        this._mobileNotice.textContent = String(text ?? "");
         this._mobileNotice.style.display = "block";
         if (this._grid) this._grid.style.display = "none";
     }

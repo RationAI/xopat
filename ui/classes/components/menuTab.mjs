@@ -105,7 +105,8 @@ class MenuTab extends BaseComponent {
             let header = document.getElementById(this.headerButton.id);
             if (header) {
                 header.children[1].title = title;
-                header.children[1].innerHTML = title;
+                // Text only: titles carry identity/session-provided values.
+                header.children[1].textContent = title;
             }
         }
     }

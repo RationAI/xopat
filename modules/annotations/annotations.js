@@ -2999,10 +2999,20 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
-	 * @private
-	 * Some modes have custom controls,
-	 * note that behaviour of this is still not very well designed, e.g. if used in one
-	 * plugin it should not be used in others
+	 * Controls shown in the host's mode-options panel while this mode is active.
+	 * Build them as DOM (van.js / UI components) with real listeners that close
+	 * over this mode — never as an HTML string with inline `on*` handlers.
+	 * Called each time the mode becomes active, so return fresh nodes reflecting
+	 * the current state.
+	 * @return {Node|UI.BaseComponent|null} controls, or null for none
+	 */
+	customControls() {
+		return null;
+	}
+
+	/**
+	 * @deprecated Override {@link customControls} instead. A string returned here
+	 *   is sanitized by the host before display, which strips inline handlers.
 	 * @return {string} HTML for custom controls
 	 */
 	customHtml() {
@@ -3252,10 +3262,6 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	//
 	// 	return true; //considered as handled
 	// }
-
-	customHtml() {
-		return "";
-	}
 
 	get defaultKeyCombo() {
 		return "KeyQ";

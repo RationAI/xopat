@@ -10,6 +10,20 @@ const SANITIZE_OPTS = {
 
 const cleanHtml = (s) => (typeof s === 'string' ? SanitizeHtml(s, SANITIZE_OPTS) : s);
 
+// The one place tutorial copy is inserted as HTML (README: "Allowed HTML in text
+// fields"). Sanitized HERE, at the sink, rather than relying on the load-time
+// pass having run on every path that reaches it; without the sanitizer the copy
+// is shown as plain text.
+const setCleanHtml = (node, html) => {
+    const text = String(html ?? '');
+    if (typeof globalThis.SanitizeHtml === 'function') {
+        node.innerHTML = globalThis.SanitizeHtml(text, SANITIZE_OPTS);
+    } else {
+        node.textContent = text;
+    }
+    return node;
+};
+
 // `image` is a URL, not HTML — reject javascript: schemes; allow http(s)/data/relative.
 const cleanImage = (s) => {
     if (typeof s !== 'string') return s;
@@ -194,11 +208,10 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
                 style: 'width: 2.5rem; height: 3px; border-radius: 9999px; margin-bottom: 1rem;'
                      + ' background: linear-gradient(90deg, oklch(var(--p)), oklch(var(--a)));',
             }),
-            (() => {
-                const node = p({ style: 'font-size: 0.95rem; line-height: 1.6; opacity: 0.82; flex: 1 1 auto;' });
-                node.innerHTML = message;
-                return node;
-            })(),
+            setCleanHtml(
+                p({ style: 'font-size: 0.95rem; line-height: 1.6; opacity: 0.82; flex: 1 1 auto;' }),
+                message
+            ),
         );
 
         const rightPane = div(

@@ -611,8 +611,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.StateFreeFormTool {
     scroll(event, delta) {
         this.threshold = Math.min(this.maxThreshold,
             Math.max(this.minThreshold, this.threshold - Math.round(delta * this.thStep)));
-        const thresholdInput = document.getElementById("a-magic-wand-threshold");
-        if (thresholdInput) thresholdInput.value = this.threshold;
+        if (this._thresholdInput) this._thresholdInput.value = this.threshold;
     }
 
     scrollZooming(event, delta) {
@@ -664,48 +663,53 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.StateFreeFormTool {
     }
 
     /**
-     * Mode-options panel content. Returned as a raw HTML string (the
-     * `customHtml()` contract) and injected via `UI.RawHtml` -> innerHTML, so
-     * every interpolated value must be escaped.
+     * Mode-options panel content (the `customControls()` contract): real nodes
+     * with listeners bound to this mode. Layer names come from the session
+     * visualization and are rendered as text.
      *
      * The panel is a narrow vertical column, not the old horizontal toolbar:
      * lay the controls out as label-over-control rows. Widths are inline
      * because the purged `tailwind.min.css` drops many utility classes.
      */
-    customHtml() {
-        const escape = OSDAnnotations.MagicWand._escapeHtml;
+    customControls() {
+        const { div, label, input } = globalThis.van.tags;
         this._refreshLayers();
         const renderer = this.context.viewer.drawer.renderer;
-        let options = "";
-        for (let shaderId of renderer.getShaderLayerOrder()) {
-            const config = renderer.getShaderLayerConfig(shaderId);
-            const selected = this._selectedShader === shaderId ? " selected" : "";
-            options += `<option value="${escape(shaderId)}"${selected}>${escape(config.name)}</option>`;
-        }
+        const layers = renderer.getShaderLayerOrder().map(shaderId => ({
+            value: shaderId,
+            text: renderer.getShaderLayerConfig(shaderId)?.name ?? shaderId,
+        }));
 
-        const t = key => escape($.t(`modeOptions.magicWand.${key}`, { ns: 'annotations' }));
+        const t = key => $.t(`modeOptions.magicWand.${key}`, { ns: 'annotations' });
+        const mode = this;
+        const row = "display:flex;flex-direction:column;gap:0.25rem;";
+        const caption = "text-xs font-medium opacity-70";
 
-        return `
-<div style="display:flex;flex-direction:column;gap:0.75rem;width:14rem;max-width:100%;padding:0.25rem;">
-    <div class="text-xs opacity-70">${t('hint')}</div>
-    <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="a-magic-wand-threshold">${t('tolerance')}</label>
-        <input type="range" id="a-magic-wand-threshold" title="${t('toleranceHint')}" style="width:100%;"
-            max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}"
-            oninput="OSDAnnotations.instance().Modes['MAGIC_WAND'].setThreshold(this.value);"/>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="text-xs font-medium opacity-70" for="a-magic-wand-layer">${t('layer')}</label>
-        <select id="a-magic-wand-layer" class="select select-sm select-bordered" style="width:100%;"
-            onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setShaderToDetectFrom(this.value);">${options}</select>
-    </div>
-</div>`;
-    }
+        // Kept so scroll() can mirror a wheel-driven change into the slider.
+        this._thresholdInput = input({
+            type: "range", id: "a-magic-wand-threshold", title: t('toleranceHint'),
+            class: "range range-xs range-primary", style: "width:100%;",
+            min: this.minThreshold, max: this.maxThreshold, value: this.threshold,
+            oninput: function () { mode.setThreshold(this.value); },
+        });
 
-    static _escapeHtml(value) {
-        return String(value ?? "").replace(/[&<>"']/g, c => ({
-            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-        })[c]);
+        const layerSelect = new UI.Select({
+            id: "a-magic-wand-layer",
+            selected: this._selectedShader,
+            onchange: function () { mode.setShaderToDetectFrom(this.value); },
+            extraProperties: { style: "width:100%; margin:0;" },
+        }, ...layers);
+
+        return div(
+            { style: "display:flex;flex-direction:column;gap:0.75rem;width:14rem;max-width:100%;padding:0.25rem;" },
+            div({ class: "text-xs opacity-70" }, t('hint')),
+            div({ style: row },
+                label({ class: caption, for: "a-magic-wand-threshold" }, t('tolerance')),
+                this._thresholdInput),
+            div({ style: row },
+                label({ class: caption, for: "a-magic-wand-layer" }, t('layer')),
+                layerSelect.create()),
+        );
     }
 };
 

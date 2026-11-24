@@ -161,29 +161,13 @@ function initXOpatUI() {
 
     /**
      * @namespace DropDown
-     * todo either use lib or ensure window constrrains do not affect it (too low, too right)
+     * @deprecated Thin facade over `UI.ContextMenu`, kept for the
+     *   `DropDown.open/bind/hide` call sites. Use `UI.ContextMenu.open(event, items)`
+     *   (or a `CanvasContextMenu` provider for the slide canvas) in new code.
+     *   Titles are rendered as TEXT: item fields come from layer/preset/slide
+     *   names, so this menu never parses a caller string as HTML.
      */
     window.DropDown = /**@lends DropDown*/ {
-
-        _calls: [],
-
-        /**
-         * @private
-         */
-        init: function() {
-            document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-
-            const menu = document.createElement("ul");
-            menu.id = "drop-down-menu";
-            menu.className = "menu menu-sm bg-base-100 rounded-box shadow";
-            menu.setAttribute("oncontextmenu", "return false;");
-            Object.assign(menu.style, {
-                display: "none", width: "auto", maxWidth: "300px",
-                zIndex: "999999999", position: "fixed",
-            });
-            document.body.appendChild(menu);
-            this._body = menu;
-        },
 
         /**
          * Open dialog from fired user input event
@@ -191,15 +175,16 @@ function initXOpatUI() {
          * @param {function|Array<DropDownItem>} optionsGetter
          */
         open: function(mouseEvent, optionsGetter) {
-            this._toggle(mouseEvent, optionsGetter);
-            mouseEvent.preventDefault();
+            const items = Array.isArray(optionsGetter) ? optionsGetter : optionsGetter?.();
+            this._menu = globalThis.ContextMenu?.open(mouseEvent, items || []);
+            mouseEvent?.preventDefault?.();
         },
 
         /**
          * @returns {boolean} true if opened
          */
         isOpened: function () {
-            return this._calls.length > 0;
+            return !!this._menu?._open;
         },
 
         /**
@@ -209,8 +194,7 @@ function initXOpatUI() {
          *   config object:
          *   config.title {string} title, required
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
-         *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
-         *      - you can also pass custom HTML and override the default styles and content, handler system etc...
+         *      - if undefined, the menu item is a section header; use '' title and undefined action for a separator
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
          *   config.containerCss {string} css for the container, optional
@@ -224,89 +208,13 @@ function initXOpatUI() {
                 console.error("Registered dropdown for non-existing or invalid element", context);
                 return;
             }
-            const _this = this;
-            context.addEventListener("contextmenu", (e) => {
-                _this._toggle(e, optionsGetter);
-                e.preventDefault();
-            });
+            context.addEventListener("contextmenu", (e) => this.open(e, optionsGetter));
         },
 
         hide: function() {
-            this._toggle(undefined);
+            globalThis.ContextMenu?.close();
         },
-
-        //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
-        // if too close to edges
-        _toggle: function(mouseEvent, optionsGetter) {
-            const opened = this.isOpened();
-
-            if (mouseEvent === undefined) {
-                if (opened) {
-                    this._calls = [];
-                    this._body.replaceChildren();
-                    Object.assign(this._body.style, {
-                        display: "none", top: "99999px", left: "99999px",
-                    });
-                }
-            } else {
-                if (opened) {
-                    this._calls = [];
-                    this._body.replaceChildren();
-                }
-                ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
-
-                let top = mouseEvent.pageY + 5;
-                let left = mouseEvent.pageX - 15;
-
-                // Measure only after the items are in — an empty menu has no size.
-                this._body.style.display = "block";
-                const menuRect = this._body.getBoundingClientRect();
-                if ((top + menuRect.height) > window.innerHeight) {
-                    top = mouseEvent.pageY - menuRect.height - 5;
-                }
-                if ((left + menuRect.width) > window.innerWidth) {
-                    left = mouseEvent.pageX - menuRect.width + 15;
-                }
-                this._body.style.top = top + "px";
-                this._body.style.left = left + "px";
-            }
-        },
-
-        _with(opts, i) {
-            const clbck = opts.action;
-            if (clbck) {
-                opts.selected = opts.selected || false;
-                this._calls.push(() => {
-                    clbck(opts.selected);
-                    window.DropDown._toggle(undefined, undefined);
-                });
-                const icon = opts.icon ? `<span class="ph-light ${opts.icon} pl-0"
-style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
-                    : "<span class='d-inline-block' style='width: 20px'></span>";
-                const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
-
-                const li = document.createElement("li");
-                if (opts.selected) li.style.background = "var(--color-state-focus-border)";
-                const a = document.createElement("a");
-                a.className = `pl-1 dropdown-item pointer ${opts.containerCss || ''}`;
-                a.addEventListener("click", () => window.DropDown._calls[i]());
-                // Item titles may carry markup (icons, <b>, ...) - the same
-                // contract the jQuery `.append(html)` had.
-                a.innerHTML = `${icon}${opts.title}`;
-                li.appendChild(a);
-                this._body.appendChild(li);
-            } else {
-                this._calls.push(null);
-                const li = document.createElement("li");
-                li.className = "px-2";
-                li.style.fontSize = "10px";
-                li.style.borderBottom = "1px solid var(--color-border-primary)";
-                li.innerHTML = opts.title;
-                this._body.appendChild(li);
-            }
-        }
     };
-    DropDown.init();
 
     let pluginsToolsBuilder, tissueMenuBuilder;
 

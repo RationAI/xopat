@@ -104,14 +104,13 @@ export const handlerMethods = {
             this._refreshAllBoardPanels?.();
         });
 
-        this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
-            this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
-                this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =
+        this.context.Modes.FREE_FORM_TOOL_ADD.customControls =
+            this.context.Modes.FREE_FORM_TOOL_REMOVE.customControls =
+                this.context.Modes.FREE_FORM_TOOL_CORRECT.customControls =
                     this.freeFormToolControls.bind(this);
 
         this.context.addHandler('free-form-tool-radius', (e) => {
-            const fftSize = document.getElementById('fft-size');
-            if (fftSize) fftSize.value = e.radius;
+            if (this._fftSizeInput) this._fftSizeInput.value = e.radius;
         });
     },
 
@@ -143,21 +142,30 @@ export const handlerMethods = {
     },
 
     /**
-     * Mode-options panel content for the three brush modes. Raw HTML string
-     * (the `customHtml()` contract), injected via `UI.RawHtml`; laid out as a
-     * label-over-control column because the panel is narrow and vertical.
+     * Mode-options panel content for the three brush modes (the mode
+     * `customControls()` contract): nodes with a real change listener, laid out
+     * as a label-over-control column because the panel is narrow and vertical.
      * Widths are inline — the purged `tailwind.min.css` drops many utilities.
      */
     freeFormToolControls() {
-        const label = this.t('annotations.modeOptions.brushRadius');
+        const { div, label } = globalThis.van.tags;
         const hint = this.t('annotations.modeOptions.brushRadiusHint');
-        return `
-<div style="display:flex;flex-direction:column;gap:0.25rem;width:14rem;max-width:100%;padding:0.25rem;">
-    <label class="text-xs font-medium opacity-70" for="fft-size" title="${hint}">${label}</label>
-    <input class="input input-sm input-bordered" style="width:100%;" title="${hint}"
-        type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off"
-        value="${this.context.freeFormTool.screenRadius}"
-        onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">
-</div>`;
+        const tool = this.context.freeFormTool;
+        // Kept so the 'free-form-tool-radius' handler can mirror wheel changes.
+        this._fftSizeInput = new UI.Input({
+            id: 'fft-size',
+            onChange: function () { tool.setSafeRadius(Number.parseInt(this.value)); },
+            extraProperties: {
+                type: 'number', min: 5, max: 100, step: 1, name: 'freeFormToolSize',
+                autocomplete: 'off', title: hint, style: 'width:100%;',
+                value: tool.screenRadius,
+            },
+        }).create();
+        return div(
+            { style: 'display:flex;flex-direction:column;gap:0.25rem;width:14rem;max-width:100%;padding:0.25rem;' },
+            label({ class: 'text-xs font-medium opacity-70', for: 'fft-size', title: hint },
+                this.t('annotations.modeOptions.brushRadius')),
+            this._fftSizeInput,
+        );
     }
 };

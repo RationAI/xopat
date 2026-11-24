@@ -231,12 +231,14 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     setTitle(title) {
-        if (this.headerButton) {
-            if (this.openButton) {
-                this.openButton.children[1].title = title;
-                this.openButton.children[1].innerHTML = title;
-            }
-        }
+        // This tab has no headerButton (see _createTab's return value); the
+        // title lives in the strip's open button: [icon, span(title)].
+        const label = this.openButton?.children?.[1];
+        if (!label) return;
+        this.title = title;
+        label.title = title;
+        // Text only: titles carry identity/session-provided values.
+        label.textContent = title;
     }
 
     removeTab() {
