@@ -3239,7 +3239,7 @@ class EmpaiaWorkbench extends XOpatModuleSingleton {
         if (viewerId !== undefined && viewerId !== null) {
             // `viewerId` is derived from the slide and may match several
             // viewports; a bundle dispatch also names the one it is about.
-            const viewer = (window as any).VIEWER_MANAGER?.getViewer?.(ctx?.viewerSlotId ?? viewerId);
+            const viewer = (window as any).IO_PIPELINE?.viewerFor?.({ viewerId, viewportId: ctx?.viewportId });
             const item = viewer?.scalebar?.getReferencedTiledImage?.() || viewer?.world?.getItemAt?.(0);
             const slideId = this._slideIdOfBackground(item?.getConfig?.("background"));
             if (slideId) return slideId;

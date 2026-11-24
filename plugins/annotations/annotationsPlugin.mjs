@@ -6,6 +6,7 @@ import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
 import { quickDrawMethods } from './methods/quickDraw.mjs';
+import { classSlotMethods } from './methods/classSlots.mjs';
 
 /**
  * GUI/controller layer for the annotations module.
@@ -72,6 +73,7 @@ class AnnotationsGUI extends XOpatPlugin {
         await this.setupFromParams();
 
         this.setupQuickDrawShortcuts();
+        this.setupClassSlotShortcuts();
         this.setupActiveTissue();
         this.setupRightsGating();
         this.initHandlers();
@@ -261,7 +263,8 @@ Object.assign(
     handlerMethods,
     ioMethods,
     presetMethods,
-    quickDrawMethods
+    quickDrawMethods,
+    classSlotMethods
 );
 
 globalThis.AnnotationsGUI = AnnotationsGUI;

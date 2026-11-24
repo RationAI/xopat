@@ -13,6 +13,10 @@
     "quickDraw": {
       "preset": "Rychlé kreslení s předvolbou",
       "shape": "Rychlé kreslení: {{shape}}"
+    },
+    "classSlots": {
+      "select": "Vybrat třídu {{n}}",
+      "assign": "Přiřadit třídu {{n}} výběru"
     }
   },
   "autoSelect": {

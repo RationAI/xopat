@@ -119,16 +119,18 @@ interface IOContext {
      */
     key: string;
     /**
-     * Set for viewer-scoped exports/imports. This is the viewer's `uniqueId`:
-     * it is derived from the slide, names the DOCUMENT, and is what `key` is
-     * built from — it does not name a viewport. Two viewports showing the same
-     * slide share it.
+     * Set for viewer-scoped exports/imports. Despite the (legacy) name this is
+     * SLIDE identity: the viewer's `uniqueId`, derived from the background id.
+     * It names the DOCUMENT and is what `key` is built from — it does not name
+     * a viewport, and two viewports showing the same slide share it.
+     * `backgroundId` is the same axis. To get the viewer, call
+     * `IO_PIPELINE.viewerFor(ctx)`.
      */
     viewerId?: string;
     /**
-     * The viewport (`viewer.id`, e.g. `"osd-2"`) this dispatch addresses. An
-     * owner holding per-viewport state (a canvas) resolves it from THIS, never
-     * from `viewerId`, which may match several viewports.
+     * The viewport (`viewer.id`, e.g. `"osd-2"`) this dispatch addresses — the
+     * only viewport identity in the context. Owners do not read it: they call
+     * `IO_PIPELINE.viewerFor(ctx)`, which resolves it.
      *  - import: an owner that declares `perViewport` gets the document once
      *    for every viewport showing it, each call naming its viewport. Any
      *    other owner gets one delivery per document; the field then names the
@@ -138,7 +140,7 @@ interface IOContext {
      * Unset only when the viewer is not known to the viewer manager. Never part
      * of `key`: slot ids do not survive a reload.
      */
-    viewerSlotId?: string;
+    viewportId?: string;
     /**
      * Set for slide-scoped exports/imports (`bundleScope: "per-viewer-background"`
      * or `"all"`). Resolved via `UTILITIES.currentBackgroundIdFor(viewer)`
@@ -1221,9 +1223,9 @@ interface IOPipelineLike {
         /**
          * The viewport leaving the slide (`viewer.id`), for a slide-leave flush:
          * only its hydration is re-armed. The document itself is still written
-         * from its primary viewport — see {@link IOContext.viewerSlotId}.
+         * from its primary viewport — see {@link IOContext.viewportId}.
          */
-        viewerSlotId?: string;
+        viewportId?: string;
         backgroundId?: string;
         skipFileFallback?: boolean;
         /**
@@ -1242,8 +1244,8 @@ interface IOPipelineLike {
         rawData: unknown,
         scope?: {
             ownerUid?: string; viewerId?: string; backgroundId?: string;
-            /** The viewport to import into (`viewer.id`) — see {@link IOContext.viewerSlotId}. */
-            viewerSlotId?: string;
+            /** The viewport to import into (`viewer.id`) — see {@link IOContext.viewportId}. */
+            viewportId?: string;
             /** Format id of `rawData`; detected (from `fileName` and content) when omitted. */
             format?: string;
             fileName?: string;
@@ -1403,7 +1405,7 @@ interface IOPipelineLike {
          * `perViewport` owner gets the document for every viewport showing
          * `viewerId`, each at most once; any other owner gets it once.
          */
-        viewerSlotId?: string;
+        viewportId?: string;
         backgroundId?: string;
         /**
          * `"system"` for boot hydration and the restore after a slide opens —
@@ -1418,8 +1420,14 @@ interface IOPipelineLike {
     invalidateAll(): void;
     /** @internal Boot restore finished; late owners may now catch up per-viewer. */
     markBootRestoreComplete(): void;
+    /**
+     * The viewer a dispatch is about: the viewport named by `ctx.viewportId`,
+     * else the first one showing `ctx.viewerId`. Owners and sinks resolve their
+     * viewer through this instead of reading either id.
+     */
+    viewerFor(ctx: Pick<IOContext, "viewerId" | "viewportId"> | undefined): OpenSeadragon.Viewer | undefined;
     /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
-    clearHydratedFor(viewerId: string, viewerSlotId?: string): void;
+    clearHydratedFor(viewerId: string, viewportId?: string): void;
     /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
     surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
     /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */

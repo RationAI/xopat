@@ -1419,10 +1419,7 @@ addPlugin('dicom', class extends XOpatPlugin {
         const plugin = this;
 
         const resolveSlide = (ctx) => {
-            const viewer = ctx.viewerId
-                ? VIEWER_MANAGER.getViewer(ctx.viewerId, false)
-                : undefined;
-            return plugin._resolveDicomSlide(viewer);
+            return plugin._resolveDicomSlide(IO_PIPELINE.viewerFor(ctx));
         };
 
         IO_PIPELINE.registerSink({

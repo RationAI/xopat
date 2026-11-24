@@ -180,12 +180,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // Two viewports showing one slide are two canvases over one stored
             // document: each must be hydrated.
             perViewport: true,
-            // The canvas is per VIEWPORT, so it is resolved from `ctx.viewerSlotId`.
-            // `ctx.viewerId` names the document and is shared by every viewport
-            // showing the slide; resolving by it reaches whichever comes first.
+            // The canvas is per VIEWPORT, so it is resolved through
+            // `IO_PIPELINE.viewerFor(ctx)`. `ctx.viewerId` names the document and
+            // is shared by every viewport showing the slide.
             exportBundle: async (ctx) => {
                 if (!ctx.viewerId) return undefined;
-                const fabric = this.getFabric(ctx.viewerSlotId ?? ctx.viewerId);
+                const fabric = this.getFabric(IO_PIPELINE.viewerFor(ctx));
                 if (!fabric) return undefined;
                 // The binding's `formatOptions` (only those it sets; they win over
                 // the user's values) and the dispatch itself go to the format: a format
@@ -194,7 +194,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
-                const fabric = this.getFabric(ctx.viewerSlotId ?? ctx.viewerId);
+                const fabric = this.getFabric(IO_PIPELINE.viewerFor(ctx));
                 if (!fabric) return;
                 // Slide-change restore semantics. The fabric canvas is a
                 // per-viewer overlay that survives OSD world resets, so when

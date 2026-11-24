@@ -613,7 +613,8 @@
         "application": "Application",
         "annotations": "Annotations",
         "annotationModes": "Annotation Modes",
-        "annotationQuickDraw": "Annotation Quick-draw"
+        "annotationQuickDraw": "Annotation Quick-draw",
+        "annotationClasses": "Annotation Classes"
       },
       "core": {
         "panUp": "Pan up",

@@ -181,7 +181,7 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
          * Set when the bundle state lives per VIEWPORT (a canvas, an overlay)
          * and not per document. `ctx.viewerId` is derived from the slide, so two
          * viewports showing the same slide share it and `ctx.key`: with this set,
-         * a restore is delivered to each of them (`ctx.viewerSlotId` names which),
+         * a restore is delivered to each of them (`ctx.viewportId` names which),
          * each hydrated once. Leave it unset when the state is keyed by
          * `ctx.key` / `ctx.viewerId` — one copy serves every viewport, and a
          * second delivery would overwrite what the user changed since the first.

@@ -11,7 +11,7 @@
  *   - the document was exported once per viewport under the same key, every
  *     pass reading the first viewport.
  *
- * A dispatch now names its viewport in `ctx.viewerSlotId` (`viewer.id`). An
+ * A dispatch now names its viewport in `ctx.viewportId` (`viewer.id`). An
  * export is written once, from the document's primary (first) viewport. A
  * restore is delivered once to every viewport showing the document — but only
  * for an owner that declares `perViewport`. An owner keyed by the document
@@ -60,8 +60,8 @@ function sharedPipeline(viewers, { perViewport = true } = {}) {
     });
     pipeline.registerOwner(OWNER, {
         ownerId: "annotations", xoType: "module", bundleScope: "per-viewer-background", perViewport,
-        exportBundle: async (ctx) => { exported.push(ctx.viewerSlotId); return `state of ${ctx.viewerSlotId}`; },
-        importBundle: async (ctx, data) => { imported.push({ slot: ctx.viewerSlotId, key: ctx.key, data }); },
+        exportBundle: async (ctx) => { exported.push(ctx.viewportId); return `state of ${ctx.viewportId}`; },
+        importBundle: async (ctx, data) => { imported.push({ slot: ctx.viewportId, key: ctx.key, data }); },
     });
     pipeline.registerSink({
         id: "store", supports: ["bundle"],
@@ -83,7 +83,7 @@ test("each viewport showing a slide gets its restore, under the shared key @unit
     try {
         // What the loader's boot pass does: one call per viewer, naming it.
         for (const v of viewers) {
-            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewerSlotId: v.id, trigger: "system" });
+            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewportId: v.id, trigger: "system" });
         }
         expect(imported).toEqual([
             { slot: "osd-0", key: "slide-a::slide-a", data: "stored" },
@@ -96,13 +96,25 @@ test("a viewport is hydrated once, whoever asks and however @unit", async () => 
     const viewers = twoOnOneSlide();
     const { pipeline, imported, restore } = sharedPipeline(viewers);
     try {
-        const slot = { viewerId: "slide-a", viewerSlotId: "osd-0", backgroundId: "slide-a", trigger: "system" };
+        const slot = { viewerId: "slide-a", viewportId: "osd-0", backgroundId: "slide-a", trigger: "system" };
         await pipeline.tryRestoreImport(slot);
         await pipeline.tryRestoreImport(slot);
         // A caller that names no viewport reaches every one showing the slide —
         // and still skips the one already hydrated.
         await pipeline.tryRestoreImport({ viewerId: "slide-a", backgroundId: "slide-a", trigger: "system" });
         expect(imported.map(i => i.slot)).toEqual(["osd-0", "osd-1"]);
+    } finally { restore(); }
+});
+
+test("viewerFor resolves the named viewport, else the first one showing the slide @unit", async () => {
+    const viewers = twoOnOneSlide();
+    const { pipeline, restore } = sharedPipeline(viewers);
+    try {
+        expect(pipeline.viewerFor({ viewerId: "slide-a", viewportId: "osd-1" })).toBe(viewers[1]);
+        expect(pipeline.viewerFor({ viewerId: "slide-a" })).toBe(viewers[0]);
+        // A named viewport that is gone is not replaced by its sibling.
+        expect(pipeline.viewerFor({ viewerId: "slide-a", viewportId: "osd-9" })).toBeUndefined();
+        expect(pipeline.viewerFor(undefined)).toBeUndefined();
     } finally { restore(); }
 });
 
@@ -121,20 +133,20 @@ test("one viewport leaving re-arms only its own hydration @unit", async () => {
     const { pipeline, imported, exported, restore } = sharedPipeline(viewers);
     try {
         for (const v of viewers) {
-            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewerSlotId: v.id, trigger: "system" });
+            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewportId: v.id, trigger: "system" });
         }
         // osd-1 navigates away: the slide-leave flush names the leaving viewport.
         await pipeline.flushBundleExport({
-            ownerUid: OWNER, viewerId: "slide-a", viewerSlotId: "osd-1", backgroundId: "slide-a", trigger: "system",
+            ownerUid: OWNER, viewerId: "slide-a", viewportId: "osd-1", backgroundId: "slide-a", trigger: "system",
         });
         // The document is still written from the primary viewport, which stays.
         expect(exported).toEqual(["osd-0"]);
 
         imported.length = 0;
         const again = { viewerId: "slide-a", backgroundId: "slide-a", trigger: "system" };
-        await pipeline.tryRestoreImport({ ...again, viewerSlotId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...again, viewportId: "osd-0" });
         expect(imported, "the viewport that stayed is not re-imported (it would be wiped)").toEqual([]);
-        await pipeline.tryRestoreImport({ ...again, viewerSlotId: "osd-1" });
+        await pipeline.tryRestoreImport({ ...again, viewportId: "osd-1" });
         expect(imported.map(i => i.slot), "the one that left hydrates again on return").toEqual(["osd-1"]);
     } finally { restore(); }
 });
@@ -147,7 +159,7 @@ test("distinct slides are untouched by any of this @unit", async () => {
     const { pipeline, imported, exported, written, restore } = sharedPipeline(viewers);
     try {
         for (const v of viewers) {
-            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewerSlotId: v.id, trigger: "system" });
+            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewportId: v.id, trigger: "system" });
         }
         await pipeline.flushBundleExport({ ownerUid: OWNER });
         expect(imported.map(i => i.key)).toEqual(["slide-a::slide-a", "slide-b::slide-b"]);
@@ -170,9 +182,9 @@ test("a per-document owner is imported once, however many viewports show the sli
     try {
         // Boot pass, then each viewport's own slide-open restore.
         for (const v of viewers) {
-            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewerSlotId: v.id, trigger: "system" });
+            await pipeline.tryRestoreImport({ viewerId: v.uniqueId, viewportId: v.id, trigger: "system" });
         }
-        for (const v of viewers) await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: v.id });
+        for (const v of viewers) await pipeline.tryRestoreImport({ ...SHARED, viewportId: v.id });
         await pipeline.tryRestoreImport(SHARED);
         expect(imported.length).toBe(1);
         expect(imported[0].key).toBe("slide-a::slide-a");
@@ -183,14 +195,14 @@ test("a per-document owner is not re-imported while another viewport still shows
     const viewers = twoOnOneSlide();
     const { pipeline, imported, restore } = sharedPipeline(viewers, { perViewport: false });
     try {
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-0" });
         imported.length = 0;
 
         // osd-1 leaves the slide, then comes back; osd-0 never left.
-        await pipeline.flushBundleExport({ ownerUid: OWNER, ...SHARED, viewerSlotId: "osd-1" });
+        await pipeline.flushBundleExport({ ownerUid: OWNER, ...SHARED, viewportId: "osd-1" });
         viewers[1].bg = "slide-b"; viewers[1].uniqueId = "slide-b";
         viewers[1].bg = "slide-a"; viewers[1].uniqueId = "slide-a";
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-1" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-1" });
         expect(imported, "the shared copy is still in use and must not be replaced").toEqual([]);
     } finally { restore(); }
 });
@@ -199,9 +211,9 @@ test("a per-document owner restores again once the last viewport has left @unit"
     const viewers = [{ id: "osd-0", uniqueId: "slide-a", bg: "slide-a" }];
     const { pipeline, imported, restore } = sharedPipeline(viewers, { perViewport: false });
     try {
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-0" });
-        await pipeline.flushBundleExport({ ownerUid: OWNER, ...SHARED, viewerSlotId: "osd-0" });
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-0" });
+        await pipeline.flushBundleExport({ ownerUid: OWNER, ...SHARED, viewportId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-0" });
         expect(imported.length).toBe(2);
     } finally { restore(); }
 });
@@ -210,18 +222,18 @@ test("closing a viewport keeps a per-document owner hydrated for the one that re
     const viewers = twoOnOneSlide();
     const { pipeline, imported, restore } = sharedPipeline(viewers, { perViewport: false });
     try {
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-0" });
         imported.length = 0;
 
         viewers.pop(); // osd-1 destroyed — what the viewer manager then reports:
         pipeline.clearHydratedFor("slide-a", "osd-1");
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-0" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-0" });
         expect(imported, "osd-0 is still working on that copy").toEqual([]);
 
         viewers.pop(); // osd-0 destroyed too: nobody holds it any more
         pipeline.clearHydratedFor("slide-a", "osd-0");
         viewers.push({ id: "osd-2", uniqueId: "slide-a", bg: "slide-a" });
-        await pipeline.tryRestoreImport({ ...SHARED, viewerSlotId: "osd-2" });
+        await pipeline.tryRestoreImport({ ...SHARED, viewportId: "osd-2" });
         expect(imported.length, "a later viewport on the same slide restores from the sinks").toBe(1);
     } finally { restore(); }
 });

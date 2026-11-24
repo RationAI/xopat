@@ -609,7 +609,8 @@
         "application": "Aplikace",
         "annotations": "Anotace",
         "annotationModes": "Režimy anotací",
-        "annotationQuickDraw": "Rychlé kreslení anotací"
+        "annotationQuickDraw": "Rychlé kreslení anotací",
+        "annotationClasses": "Třídy anotací"
       },
       "core": {
         "panUp": "Posunout nahoru",

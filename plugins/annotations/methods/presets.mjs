@@ -249,7 +249,10 @@ export const presetMethods = {
         );
 
         const rows = [];
+        let slot = 0;
         this.context.presets.foreach((preset) => {
+            // Key bound to this class's slot (see classSlots.mjs), if any.
+            const slotKey = this._classSlotLabel?.(slot++);
             const isLeft = preset.presetID === leftId;
             const isRight = preset.presetID === rightId;
 
@@ -278,6 +281,7 @@ export const presetMethods = {
                 icon,
                 span({ class: 'truncate flex-1 text-xs font-medium' },
                     preset.meta['category']?.value || this.t('annotations.toolbar.unnamedPreset')),
+                slotKey ? span({ class: 'kbd kbd-xs opacity-60' }, slotKey) : null,
                 bindBtn(isLeft, true, 'btn-primary'),
                 bindBtn(isRight, false, 'btn-secondary')
             ));

@@ -13,6 +13,10 @@
     "quickDraw": {
       "preset": "Quick-draw with preset",
       "shape": "Quick-draw: {{shape}}"
+    },
+    "classSlots": {
+      "select": "Select class {{n}}",
+      "assign": "Assign class {{n}} to selection"
     }
   },
   "autoSelect": {

@@ -1796,7 +1796,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   pins one. Must be deployment-derived — never a user preference.
          * @param options.perViewport   the bundle state is held per viewport
          *   (a canvas), not per document: a restore is delivered to every
-         *   viewport showing the slide, `ctx.viewerSlotId` naming which.
+         *   viewport showing the slide, `ctx.viewportId` naming which.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -5692,7 +5692,7 @@ form.submit();
                     // refusal here is logged rather than dialogged.
                     // The slot id names THIS viewport: `contextID` is shared by
                     // every viewport showing the same slide.
-                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, viewerSlotId: viewer.id, trigger: "system" });
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, viewportId: viewer.id, trigger: "system" });
                 } catch (e) {
                     console.error('IO Failure:', e);
                 }

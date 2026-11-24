@@ -2120,7 +2120,7 @@ export class ViewerOpenPipeline {
                 try {
                     await (window as any).IO_PIPELINE?.flushBundleExport?.({
                         viewerId: viewerUniqueIdBeforeReset,
-                        viewerSlotId: viewer?.id,
+                        viewportId: viewer?.id,
                         backgroundId: previousBackgroundId,
                         // Same reasoning as the restore below: this snapshot of
                         // the slide being left is the pipeline's own upkeep,
@@ -2398,7 +2398,7 @@ export class ViewerOpenPipeline {
                         try {
                             await (window as any).IO_PIPELINE?.tryRestoreImport?.({
                                 viewerId: nextViewerUniqueId,
-                                viewerSlotId: viewer?.id,
+                                viewportId: viewer?.id,
                                 backgroundId: nextBackgroundId,
                                 // The user opened a slide, not a restore. What
                                 // hydrates behind that is the pipeline's
