@@ -263,7 +263,17 @@ Fixtures:
 
 Helpers: `ensureSyntheticSlide()`, `requireSlides()`, `requireEnvVar()`,
 `requireKeycloak()`, `requireKeycloakOidc()`, `installBrowserGlobals()`,
-`loadBrowserScript()`, `fromRoot()`.
+`loadBrowserScript()`, `fromRoot()`, `installVan()`, `stubDocument()`.
+
+**Unit-testing code that builds UI with van.js.** `await installVan()` makes
+`globalThis.van` the real `ui/vanjs.mjs` over a small stub document and returns
+`{van, document, restore}` — call `restore()` in `test.afterAll`. Elements keep
+their children, attributes, properties, `classList` and listeners, and
+`element.dispatchEvent({type: "keydown", key: "Escape"})` runs the handlers a
+component attached (`click()` likewise). It has no layout, no event bubbling
+and no selector engine — `querySelector` never finds anything; a test that
+needs those is an `e2e` test. Do not stub `van.tags` with a private `Proxy` —
+that only proves the import did not throw.
 
 Worker options a project sets in `use`: `xopatEnv`, `xopatDevMode`,
 `xopatServerLogLevel`, `xopatServerEnv` (extra process environment for the

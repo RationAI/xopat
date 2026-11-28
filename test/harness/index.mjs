@@ -45,5 +45,6 @@ export {
 } from "./requires.mjs";
 export {
     installBrowserGlobals, loadBrowserScript, loadOpenSeadragon, freshXOpatUser, importWithTestEventSource,
+    installVan, stubDocument,
 } from "./shims.mjs";
 export { repoRoot, fromRoot } from "./paths.mjs";

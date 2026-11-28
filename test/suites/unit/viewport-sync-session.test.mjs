@@ -17,7 +17,7 @@
  *  - pausing a viewer to nudge it and resuming keeps exactly the pose it was
  *    left in as the synced one.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, stubDocument } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -33,7 +33,13 @@ globalThis.VIEWER_MANAGER = { viewers: [] };
 globalThis.$ = { t: (key) => key };
 globalThis.addEventListener ??= () => {};
 globalThis.removeEventListener ??= () => {};
-globalThis.document ??= { createElement: () => ({ style: {}, appendChild() {} }) };
+// Assigned, not defaulted: a suite earlier in this worker may have left a `document`
+// that cannot create elements. Handed back afterwards for the same reason.
+const hadDocument = "document" in globalThis, previousDocument = globalThis.document;
+globalThis.document = stubDocument();
+test.afterAll(() => {
+    if (hadDocument) globalThis.document = previousDocument; else delete globalThis.document;
+});
 
 const { ViewportSyncAPI } = await import("../../../src/classes/osd/scalebar/viewport-sync-api.ts");
 

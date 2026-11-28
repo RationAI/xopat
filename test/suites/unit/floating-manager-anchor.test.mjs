@@ -11,7 +11,8 @@
 import { test, expect, installBrowserGlobals } from "@xopat/test-harness";
 
 const noop = () => {};
-installBrowserGlobals({
+test.afterAll(() => shims.restore());
+const shims = installBrowserGlobals({
     extra: {
         document: { addEventListener: noop, removeEventListener: noop },
         VIEWER_MANAGER: { broadcastHandler: noop, addHandler: noop },

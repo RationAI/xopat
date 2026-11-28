@@ -12,18 +12,12 @@
  * analysis showed its results, and the next job event replaced them with
  * nothing. The record is therefore retained next to the expanded id.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, installVan } from "@xopat/test-harness";
 
-// `jobs-window.mjs` destructures `van.tags` at module scope, so the stub has to
-// exist before the import. Only `state` carries behaviour these tests observe.
-globalThis.window = globalThis.window ?? globalThis;
-globalThis.van = globalThis.van ?? {
-    state: (val) => ({ val }),
-    derive: (fn) => ({ get val() { return fn(); } }),
-    add: () => {},
-    tags: new Proxy({}, { get: () => (...args) => ({ args }) }),
-    tagsNS: () => new Proxy({}, { get: () => (...args) => ({ args }) }),
-};
+// `jobs-window.mjs` destructures `van.tags` at module scope, so van.js has to
+// exist before the import. Only `van.state` carries behaviour these tests observe.
+const dom = await installVan();
+test.afterAll(() => dom.restore());
 globalThis.$ = globalThis.$ ?? { t: (key) => String(key).split(".").pop() };
 globalThis.UI = globalThis.UI ?? {};
 

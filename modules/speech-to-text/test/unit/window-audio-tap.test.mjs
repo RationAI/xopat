@@ -16,7 +16,7 @@
  * module source and invoked against a minimal `this` — rather than a fake
  * mirroring it. A fake would only assert that the copy in this file is correct.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, installVan } from "@xopat/test-harness";
 import { fromRoot } from "@xopat/test-harness/paths";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -36,18 +36,8 @@ globalThis.addModule = globalThis.addModule ?? (() => {});
 globalThis.XOpatModuleSingleton = globalThis.XOpatModuleSingleton ?? class { static instance() {} };
 globalThis.$ = globalThis.$ ?? { t: (key) => key };
 globalThis.UI = globalThis.UI ?? { BaseComponent: class {}, PhIcon: class {} };
-globalThis.van = globalThis.van ?? {
-    tags: new Proxy({}, { get: () => () => ({}) }),
-    state: (value) => ({ val: value }),
-};
-globalThis.document = globalThis.document ?? {
-    createElement: () => ({
-        style: {}, classList: { add() {}, remove() {}, toggle() {} },
-        appendChild() {}, setAttribute() {}, addEventListener() {},
-    }),
-    body: { appendChild() {} },
-    querySelector: () => null,
-};
+// The module's UI is written against van.js; it loads against the real one over the harness document.
+const dom = await installVan();
 const quietChannel = {
     warn() {}, error() {}, info() {}, debug() {}, trace() {}, sensitive() {},
     child() { return quietChannel; }, isEnabled() { return false; }, level() { return "warn"; },
@@ -75,7 +65,10 @@ await esbuild.build({
 const { SpeechToTextModule } = await import(pathToFileURL(outfile).href);
 const enqueueWindow = SpeechToTextModule.prototype._enqueueWindow;
 
-test.afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+test.afterAll(() => {
+    dom.restore();
+    rmSync(tmp, { recursive: true, force: true });
+});
 
 /**
  * The smallest `this` `_enqueueWindow` touches. `transcribe` decides what the

@@ -19,7 +19,7 @@
  * Both are invisible from the outside, which is why they are pinned here against the
  * REAL `attach` / `_armKeepAlive` rather than a description of them.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, installVan } from "@xopat/test-harness";
 import { fromRoot } from "@xopat/test-harness/paths";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -36,18 +36,8 @@ globalThis.addModule = globalThis.addModule ?? (() => {});
 globalThis.XOpatModuleSingleton = globalThis.XOpatModuleSingleton ?? class { static instance() {} };
 globalThis.$ = globalThis.$ ?? { t: (key) => key };
 globalThis.UI = globalThis.UI ?? { BaseComponent: class {}, PhIcon: class {} };
-globalThis.van = globalThis.van ?? {
-    tags: new Proxy({}, { get: () => () => ({}) }),
-    state: (value) => ({ val: value }),
-};
-globalThis.document = globalThis.document ?? {
-    createElement: () => ({
-        style: {}, classList: { add() {}, remove() {}, toggle() {} },
-        appendChild() {}, setAttribute() {}, addEventListener() {},
-    }),
-    body: { appendChild() {} },
-    querySelector: () => null,
-};
+// The module's UI is written against van.js; it loads against the real one over the harness document.
+const dom = await installVan();
 const quiet = {
     warn() {}, error() {}, info() {}, debug() {}, trace() {}, sensitive() {},
     child() { return quiet; }, isEnabled() { return false; }, level() { return "warn"; },
@@ -73,7 +63,10 @@ await esbuild.build({
 });
 const { SileroVadEngine } = await import(pathToFileURL(outfile).href);
 
-test.afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+test.afterAll(() => {
+    dom.restore();
+    rmSync(tmp, { recursive: true, force: true });
+});
 
 /**
  * A MicVAD that reproduces the library's state machine, including its silence.

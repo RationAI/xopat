@@ -22,7 +22,7 @@
  * hand-built `this` — rather than reimplemented here, because a copy of the policy in a test
  * only ever proves the copy.
  */
-import { test, expect, installBrowserGlobals } from "@xopat/test-harness";
+import { test, expect, installBrowserGlobals, installVan } from "@xopat/test-harness";
 import { fromRoot } from "@xopat/test-harness/paths";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -91,20 +91,12 @@ let ChatModule;
 let shims;
 
 test.beforeAll(async () => {
-    // A permissive proxy is right here precisely because nothing under test calls through it:
-    // a hand-listed set of tags would be a second thing to maintain every time the panel adds
-    // an element.
-    const vanStub = {
-        tags: new Proxy({}, { get: () => () => ({}) }),
-        state: (v) => ({ val: v }),
-        derive: (fn) => ({ val: fn() }),
-        add: () => {},
-        hydrate: () => {},
-    };
+    // The panel is written against van.js; nothing under test builds it, so the real library
+    // over the harness document is all the evaluation needs.
+    const dom = await installVan();
     const heavy = installBrowserGlobals({
         extra: {
             addModule: () => {},
-            van: vanStub,
             UI: new Proxy({}, { get: () => class {} }),
             OpenSeadragon: { EventSource: class {} },
             // The loader normally supplies this base class. Only its identity matters — the
@@ -116,6 +108,7 @@ test.beforeAll(async () => {
         ({ ChatModule } = await bundle(path.join(moduleDir, "chat.ts"), "chat"));
     } finally {
         heavy.restore();
+        dom.restore();
     }
     // The class survives its evaluation environment; the tests themselves need only `$.t`,
     // which the failure path reaches for.

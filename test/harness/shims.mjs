@@ -13,6 +13,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { fromRoot } from "./paths.mjs";
 
@@ -84,6 +85,177 @@ export async function loadBrowserScript(absolutePath, globalName) {
     // eslint-disable-next-line no-new-func
     new Function("window", "globalThis", source)(globalThis, globalThis);
     return globalThis[globalName];
+}
+
+/** Properties van.js assigns as properties (it looks for a setter on the prototype); the rest become attributes. */
+const REFLECTED = ["value", "className", "id", "title", "type", "textContent", "placeholder",
+    "checked", "disabled", "spellcheck", "tabIndex"];
+
+/**
+ * An element of {@link stubDocument}: a tree, attributes, reflected properties
+ * and listeners a test can fire. No layout, no selectors, no HTML parsing, no
+ * event bubbling — a test that needs any of those belongs in a browser project.
+ */
+class StubElement {
+    constructor(ownerDocument, tagName) {
+        this.ownerDocument = ownerDocument;
+        this.tagName = String(tagName).toUpperCase();
+        this.nodeType = 1;
+        this.parentNode = null;
+        this.childNodes = [];
+        this.attributes = new Map();
+        this.listeners = new Map();
+        this._style = {};
+        this._props = { value: "", className: "" };
+        this.clientWidth = ownerDocument.size.width;
+        this.clientHeight = ownerDocument.size.height;
+    }
+    get children() { return this.childNodes.filter(n => n.nodeType === 1); }
+    get classList() {
+        const el = this;
+        const read = () => String(el.className ?? "").split(/\s+/).filter(Boolean);
+        const write = names => { el.className = names.join(" "); };
+        return {
+            contains: name => read().includes(name),
+            add: (...names) => write([...new Set([...read(), ...names])]),
+            remove: (...names) => write(read().filter(n => !names.includes(n))),
+            toggle(name, force) {
+                const on = force ?? !read().includes(name);
+                if (on) this.add(name); else this.remove(name);
+                return on;
+            },
+        };
+    }
+    get isConnected() { return this.parentNode !== null; }
+    get style() { return this._style; }
+    set style(cssText) { this._style.cssText = String(cssText); }
+    append(...nodes) {
+        for (const node of nodes) {
+            const child = node !== null && typeof node === "object" ? node : { nodeType: 3, textContent: String(node) };
+            child.parentNode?.removeChild?.(child);
+            child.parentNode = this;
+            this.childNodes.push(child);
+        }
+    }
+    appendChild(node) { this.append(node); return node; }
+    insertBefore(node) { this.append(node); return node; }
+    removeChild(node) {
+        const i = this.childNodes.indexOf(node);
+        if (i >= 0) this.childNodes.splice(i, 1);
+        node.parentNode = null;
+        return node;
+    }
+    remove() { this.parentNode?.removeChild(this); }
+    replaceWith(node) {
+        const parent = this.parentNode;
+        if (!parent) return;
+        const i = parent.childNodes.indexOf(this);
+        this.parentNode = null;
+        if (node && typeof node === "object") { node.parentNode = parent; parent.childNodes[i] = node; }
+        else parent.childNodes.splice(i, 1);
+    }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    removeAttribute(name) { this.attributes.delete(name); }
+    addEventListener(type, fn) {
+        if (typeof fn !== "function") return;
+        const list = this.listeners.get(type) ?? [];
+        if (!list.includes(fn)) list.push(fn);
+        this.listeners.set(type, list);
+    }
+    removeEventListener(type, fn) {
+        const list = this.listeners.get(type) ?? [];
+        const i = list.indexOf(fn);
+        if (i >= 0) list.splice(i, 1);
+    }
+    /** Call this element's listeners for `event.type`. Returns the event the listeners saw. */
+    dispatchEvent(event) {
+        const e = { target: this, defaultPrevented: false, stopped: false,
+            preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, ...event };
+        for (const fn of [...(this.listeners.get(e.type) ?? [])]) fn(e);
+        return e;
+    }
+    getContext() { return null; }
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
+    /** There is no selector engine: nothing is ever found. */
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    click() { this.dispatchEvent({ type: "click" }); }
+    focus() {}
+    blur() {}
+    select() {}
+}
+for (const name of REFLECTED) {
+    Object.defineProperty(StubElement.prototype, name, {
+        get() { return this._props[name]; },
+        set(value) { this._props[name] = value; },
+        configurable: true,
+    });
+}
+
+/**
+ * A document for unit-testing code that builds a little UI (van.js tags, a
+ * canvas overlay) without a browser. See {@link StubElement} for what it is not.
+ *
+ * @param {object} [options]
+ * @param {number} [options.width] `clientWidth` every element reports
+ * @param {number} [options.height] `clientHeight` every element reports
+ */
+export function stubDocument(options = {}) {
+    const doc = { nodeType: 9, size: { width: options.width ?? 0, height: options.height ?? 0 } };
+    doc.createElement = tag => new StubElement(doc, tag);
+    doc.createElementNS = (_ns, tag) => new StubElement(doc, tag);
+    doc.createTextNode = text => ({ nodeType: 3, textContent: String(text), parentNode: null });
+    doc.addEventListener = () => {};
+    doc.removeEventListener = () => {};
+    doc.querySelector = () => null;
+    doc.querySelectorAll = () => [];
+    doc.getElementById = () => null;
+    doc.documentElement = doc.createElement("html");
+    doc.body = doc.documentElement.appendChild(doc.createElement("body"));
+    return doc;
+}
+
+/**
+ * Make `globalThis.van` the REAL van.js (`ui/vanjs.mjs`) over a {@link stubDocument},
+ * so client code written with `van.tags` runs in a Node unit test as it does in
+ * the page — elements, properties, children and `on*` handlers included.
+ *
+ * Use this rather than a private `van = {tags: new Proxy(...)}` stub: a Proxy
+ * that returns `{}` for every tag lets the import succeed and then tests
+ * nothing the component built.
+ *
+ * @param {object} [options]
+ * @param {object} [options.document] an existing {@link stubDocument}
+ * @param {number} [options.width]
+ * @param {number} [options.height]
+ * @returns {Promise<{van: object, document: object, restore: () => void}>}
+ */
+export async function installVan(options = {}) {
+    const document = options.document ?? stubDocument(options);
+    const { default: van } = await import(pathToFileURL(fromRoot("ui/vanjs.mjs")).href);
+    const previous = new Map();
+    const define = (name, value) => {
+        previous.set(name, name in globalThis ? globalThis[name] : NOT_SET);
+        globalThis[name] = value;
+    };
+    if (!("window" in globalThis)) define("window", globalThis);
+    define("document", document);
+    define("van", van);
+    // van wraps a binding's string result in `new Text(...)`.
+    if (typeof globalThis.Text !== "function") {
+        define("Text", class Text { constructor(text) { this.nodeType = 3; this.textContent = String(text); this.parentNode = null; } });
+    }
+    return {
+        van, document,
+        restore() {
+            for (const [name, value] of previous) {
+                if (value === NOT_SET) delete globalThis[name];
+                else globalThis[name] = value;
+            }
+            previous.clear();
+        },
+    };
 }
 
 /** Memoized per path — the vendored bundle is large and its evaluation is pure. */

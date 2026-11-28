@@ -12,21 +12,22 @@
  *
  * Pure mixin-level assertions against a hand-rolled `context`.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, installVan } from "@xopat/test-harness";
 
 let presetMethods;
 const globalsBackup = {};
+let dom;
 
 test.beforeAll(async () => {
     // presets.mjs and its components read van.tags and UI.BaseComponent at module load.
-    globalsBackup.van = globalThis.van;
+    dom = await installVan();
     globalsBackup.UI = globalThis.UI;
-    globalThis.van = { tags: new Proxy({}, { get: () => () => null }) };
     globalThis.UI = { BaseComponent: class {} };
     ({ presetMethods } = await import("../../methods/presets.mjs"));
 });
 
 test.afterAll(() => {
+    dom?.restore();
     for (const [key, value] of Object.entries(globalsBackup)) {
         if (value === undefined) delete globalThis[key];
         else globalThis[key] = value;
