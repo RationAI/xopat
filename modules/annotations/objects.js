@@ -316,6 +316,28 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Smallest on-screen extent (screen px) a hand-drawn shape must reach to be
+     * kept. Anything smaller is an accidental press, not an annotation.
+     * @return {number}
+     */
+    minCreateExtentPx() {
+        return 4;
+    }
+
+    /**
+     * True when an image-space length spans fewer than `screenPx` screen pixels
+     * at the current zoom of the viewer the shape is being drawn in.
+     * @param {number} imageLength length in image pixels
+     * @param {number} [screenPx=this.minCreateExtentPx()]
+     * @return {boolean}
+     */
+    _isBelowScreenExtent(imageLength, screenPx = this.minCreateExtentPx()) {
+        const scale = this._context?.viewer?.scalebar?.imagePixelSizeOnScreen?.();
+        if (!(scale > 0)) return !(imageLength > 0);
+        return !(imageLength * scale >= screenPx); // negated so NaN counts as too small
+    }
+
+    /**
      * The canvas an object belongs to, for zoom/stroke math that must not be
      * read off whichever viewer happens to be focused (AGENTS.md §6).
      *
@@ -1291,6 +1313,17 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     getLength(theObject) {
         return undefined;
+    }
+
+    /**
+     * Constant-cost check that an object has no extent at all (image space,
+     * zoom-independent) and would therefore be invisible. Types without a
+     * cheap test (anything point-list based) return false.
+     * @param {fabric.Object} theObject
+     * @return {boolean}
+     */
+    isDegenerate(theObject) {
+        return false;
     }
 
     /**

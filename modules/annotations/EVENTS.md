@@ -104,8 +104,10 @@ previous state and its history entry was dropped.
 The viewer-scoped events are emitted on contextualized instance of particular
 canvas that belongs to a specific viewer.
 
-##### `annotation-loaded` | `{ viewer: OpenSeadragon.Viewer, clear: boolean, reason: 'import' | 'load-objects' }`
-Raised when the annotations were imported/loaded in a bigger chunk.
+##### `annotation-loaded` | `{ viewer?: OpenSeadragon.Viewer, clear?: boolean, objects?: fabric.Object[], bulk?: true, reason: 'import' | 'import-undo' | 'load-objects' | 'bulk-add' | 'bulk-add-undo' | 'bulk-add-redo' }`
+Raised when the annotations were imported/loaded in a bigger chunk. `addAnnotationsBulk` raises it
+with `bulk: true` and its `reason` option (default `'bulk-add'`), and again on undo/redo of the
+batch. Every reason except `load-objects` is user work and marks the slide unsaved.
 
 ##### `annotation-board-save-request` | `{ viewer: OpenSeadragon.Viewer }`
 
@@ -120,10 +122,11 @@ deleting or hiding the active layer releases it.
 
 ##### `layer-removed` | `{ layer: OSDAnnotations.Layer }`
 
-##### `layer-objects-changed` | `{ layerId: string | null }`
+##### `layer-objects-changed` | `{ layerId: string | null, kind?: 'load' | 'visibility' }`
 Raised after the object set of a layer changes (loading/import, moving annotations between
 layers, `renameLayer()`). A batch move (`setAnnotationsLayer`) raises it once; `layerId` is
-`null` when several layers or the root level are affected.
+`null` when several layers or the root level are affected. `kind` marks the two emitters that
+are not edits — a load and a visibility toggle; every other one marks the slide unsaved.
 
 ##### `annotation-selection-changed` | `{ selected: fabric.Object[], deselected: fabric.Object[], fromCanvas: boolean }`
 `selected` is the whole resulting selection. Bulk changes — `selectAnnotations(objects)`,

@@ -236,9 +236,26 @@ export type AnnotationCreateLimit = {
     maxPerCall: number;
 };
 
+export type AnnotationBatchResult = {
+    /** Number of inputs passed in. */
+    requested: number;
+    /** Number of annotations actually created. */
+    created: number;
+    /** Input indices skipped because their geometry has zero size (would be invisible). */
+    skipped: number[];
+    /** True when the batch was cancelled part-way; `created` then counts what made it. */
+    cancelled: boolean;
+    /** The created annotations. */
+    annotations: AnnotationRecord[];
+};
+
 export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
      * Creates one annotation using the given factory-specific parameters.
+     *
+     * Throws if the geometry has zero size (rect width/height, ellipse rx/ry,
+     * line/arrow endpoints that coincide, or a polygon with fewer than 3 /
+     * polyline with fewer than 2 points) — such an annotation would be invisible.
      *
      * Requires an active preset or an explicit `presetID`; if none exists this throws.
      * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or pass `presetID` here.
@@ -257,10 +274,14 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
      * Each item follows the same factory-specific `parameters` shape as `createAnnotation()`.
      * Uses batched creation safe for large amounts of annotations.
      *
+     * Zero-size inputs (rect width/height, ellipse rx/ry, coinciding line/arrow
+     * endpoints, polygon < 3 / polyline < 2 points) are not created: their indices are listed in `skipped`. Compare
+     * `created` with `requested` to see whether everything was created.
+     *
      * Requires an active preset or an explicit `presetID` on the inputs; if none exists this throws.
      * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or set `presetID` on every input.
      */
-    createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
+    createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationBatchResult>;
 
     /**
      * Deletes one annotation by persistent id, increment id, or internal id.

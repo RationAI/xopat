@@ -153,6 +153,8 @@ function wrapper(objects = []) {
         addAnnotationsBulk: async (list, { addOne }) => { list.forEach(addOne); },
     });
     w.module = {
+        // Deployment default (`include.json` `layers: true`).
+        layersEnabled: true,
         fabric: w,
         session: "s",
         version: "test",

@@ -367,6 +367,60 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this._registerLockGuard();
         this._mirrorPipelineFailures();
+        this._trackUnsavedChanges();
+    }
+
+    /**
+     * Tell the IO pipeline which slides hold unsaved annotation work, so Save
+     * can be offered and leaving the page warns. The pipeline clears a slide's
+     * mark once its bundle reaches a persisting sink (or the file Export), and
+     * ignores marks raised while it hydrates us. See "Dirty state" in
+     * src/IO_PIPELINE.md.
+     *
+     * A bound `crud:*` sink stores each edit as it happens; its outbox reports
+     * what is still at risk, so marking the bundle too would leave a mark that
+     * only an explicit Save could clear.
+     * @private
+     */
+    _trackUnsavedChanges() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.markDirty) return;
+        const markFor = (capabilityId) => (e) => {
+            if (pipeline.isEnabled(this.uid, capabilityId)) return;
+            const viewer = e?.eventSource?.viewer;
+            if (viewer) this.io.markDirty(viewer);
+        };
+        const annotationEdit = markFor("crud:annotation");
+        for (const name of [
+            'annotation-create', 'annotation-delete', 'annotation-replace', 'annotation-edit-end',
+            'annotation-preset-change', 'annotation-add-comment', 'annotation-delete-comment',
+            'annotation-readonly-change', 'annotation-lock-change', 'annotation-set-private',
+            'layer-added', 'layer-removed',
+        ]) this.addFabricHandler(name, annotationEdit);
+        // A user file import or a bulk add (scripting, job results) and their
+        // undo/redo; restore/hydration loads raise `load-objects` and are
+        // suppressed by the pipeline anyway.
+        const userLoads = new Set(['import', 'import-undo', 'bulk-add', 'bulk-add-undo', 'bulk-add-redo']);
+        this.addFabricHandler('annotation-loaded', (e) => {
+            if (userLoads.has(e?.reason)) annotationEdit(e);
+        });
+        // Layer edits (rename, reorder, moving annotations between layers or
+        // within one). Visibility is view state, and a load is not an edit.
+        this.addFabricHandler('layer-objects-changed', (e) => {
+            if (e?.kind !== 'visibility' && e?.kind !== 'load') annotationEdit(e);
+        });
+        // The palette is shared by every open slide, and each slide's bundle
+        // carries it. `preset-create` is left out: presets are also created
+        // implicitly (defaults, auto-select), and a new preset is only work
+        // once it is edited or used.
+        const presetEdit = () => {
+            if (pipeline.isEnabled(this.uid, "crud:preset")) return;
+            for (const viewer of VIEWER_MANAGER.viewers || []) {
+                if (viewer?.world?.getItemCount?.()) this.io.markDirty(viewer);
+            }
+        };
+        this.addHandler('preset-update', presetEdit);
+        this.addHandler('preset-delete', presetEdit);
     }
 
     /**
@@ -923,7 +977,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (!plain || typeof plain !== "object") return plain;
 		const id = plain.layerID;
 		delete plain.layerID;
-		if (id === undefined || id === null || String(id) === "") {
+		if (!this.layersEnabled || id === undefined || id === null || String(id) === "") {
 			delete plain.layer;
 		} else {
 			plain.layer = wrapper?.describeLayer(id) || { id: String(id) };
@@ -2351,6 +2405,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationFilters = [];
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", true) !== false;
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
+		/**
+		 * Whether annotation layers exist in this deployment (static meta `layers`).
+		 * Off: no layer is created, no record carries `layer`, no `layer-change`
+		 * patch is sent — for a destination with nowhere to keep layers.
+		 * @member {boolean}
+		 * @readonly
+		 */
+		this.layersEnabled = this.getStaticMeta("layers", true) !== false;
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -2363,6 +2425,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.PresetManager}
 		 */
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
+		// Annotations read color/label from their preset at render time; a preset
+		// edit must bump the visuals version, or objects keep the old look until
+		// something (e.g. selection) re-renders them one by one.
+		const refreshPresetVisuals = () => this.reapplyVisuals();
+		this.addHandler('preset-update', refreshPresetVisuals);
+		this.addHandler('preset-meta-add', refreshPresetVisuals);
+		this.addHandler('preset-meta-remove', refreshPresetVisuals);
 
 		/**
 		 * FreeFormTool reference

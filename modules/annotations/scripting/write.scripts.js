@@ -322,14 +322,18 @@ ScriptingManager.registerExternalApi(
                 annotation.layerID = String(raw.layerID);
             }
 
-            return annotation;
+            return { annotation, factory };
         }
 
         async createAnnotation(input) {
             await this._assertCreateBudget(1);
 
             const fabric = this._getFabric();
-            const annotation = this._buildAnnotationFromInput(input);
+            const { annotation, factory } = this._buildAnnotationFromInput(input);
+            if (factory.isDegenerate?.(annotation)) {
+                throw new Error(`Annotation '${String(factory.factoryID)}' has zero size and would be invisible; `
+                    + "check 'parameters' (width/height, rx/ry, distinct endpoints, enough points).");
+            }
             const ok = fabric.addAnnotation?.(annotation);
 
             if (ok === false) {
@@ -341,12 +345,21 @@ ScriptingManager.registerExternalApi(
 
         async createAnnotations(inputs, options) {
             const items = Array.isArray(inputs) ? inputs : [];
-            if (items.length === 0) return [];
+            const report = { requested: items.length, created: 0, skipped: [], cancelled: false, annotations: [] };
+            if (items.length === 0) return report;
 
             await this._assertCreateBudget(items.length);
             const opts = options || {};
             const fabric = this._getFabric();
-            const annotations = items.map((input) => this._buildAnnotationFromInput(input));
+            // Zero-size shapes would be invisible: skip them and report their
+            // indices instead of failing the whole batch.
+            const annotations = [];
+            items.forEach((input, index) => {
+                const { annotation, factory } = this._buildAnnotationFromInput(input);
+                if (factory.isDegenerate?.(annotation)) report.skipped.push(index);
+                else annotations.push(annotation);
+            });
+            if (annotations.length === 0) return report;
 
             // Threshold (default 500) lives on the wrapper bulk facility; we
             // pass through any caller overrides. The wrapper handles
@@ -367,7 +380,10 @@ ScriptingManager.registerExternalApi(
                 persist: true,
             });
 
-            return result.annotations.map((annotation) => this._serializeAnnotation(annotation));
+            report.created = result.added;
+            report.cancelled = !!result.cancelled;
+            report.annotations = result.annotations.map((annotation) => this._serializeAnnotation(annotation));
+            return report;
         }
 
         deleteAnnotation(ref) {

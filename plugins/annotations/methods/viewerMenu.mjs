@@ -400,7 +400,8 @@ export const viewerMenuMethods = {
         // and on the target alone otherwise.
         let layerItems = null;
         let layerTitle = this.t('annotations.contextMenu.moveToLayer');
-        if (active && includeMoveToLayer && typeof fabric?.setAnnotationsLayer === 'function') {
+        if (active && includeMoveToLayer && this.context.layersEnabled !== false
+            && typeof fabric?.setAnnotationsLayer === 'function') {
             const targets = selected.length > 1 && selected.includes(active) ? selected : [active];
             if (targets.length > 1) {
                 layerTitle = this.t('annotations.contextMenu.moveSelectionToLayer', { count: targets.length });
@@ -485,7 +486,8 @@ export const viewerMenuMethods = {
         // there is no fabric.Group annotation here).
         let groupParent = null;
         let groupItemsFlat = null;
-        if (typeof fabric?.groupAnnotationsIntoLayer === 'function') {
+        // Grouping IS moving into a layer: nothing to offer without layers.
+        if (this.context.layersEnabled !== false && typeof fabric?.groupAnnotationsIntoLayer === 'function') {
             const selection = fabric.getSelectionSnapshot?.() || [];
             const selectionCount = selection.length;
             const fromSelectionEnabled = selectionCount >= 2;

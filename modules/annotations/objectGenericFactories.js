@@ -73,6 +73,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         return conf;
     }
 
+    isDegenerate(theObject) {
+        return !(theObject.width > 0 && theObject.height > 0); // NaN counts as zero
+    }
+
     getArea(theObject) {
         // `width`/`height` are the UNtransformed dimensions; a rect being resized by
         // a corner handle carries the change in `scaleX`/`scaleY` until `recalculate`
@@ -128,6 +132,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this.discardCreate();
         this._origX = x;
         this._origY = y;
+        this._explicitSize = false;
         this._current = this.create({
             left: x,
             top: y,
@@ -157,6 +162,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!this._current || !(areaPx > 0)) return false;
         const side = Math.sqrt(areaPx);
         const dx = x - this._origX, dy = y - this._origY;
+        // User-chosen size: tiny at this zoom is deliberate, not degenerate.
+        this._explicitSize = true;
         this._current.set({
             left:   dx >= 0 ? this._origX : this._origX - side,
             top:    dy >= 0 ? this._origY : this._origY - side,
@@ -177,7 +184,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         let obj = this.getCurrentObject();
         if (!obj) return true;
 
-        if (obj.width === 0 || obj.height === 0) {
+        // A press without a real drag leaves the 1x1 seed (or a flat sliver):
+        // practically invisible, so it is not an annotation.
+        if (!this._explicitSize && (this._isBelowScreenExtent(obj.width)
+            || this._isBelowScreenExtent(obj.height))) {
             this._context.fabric.deleteHelperAnnotation(obj);
             this._current = undefined;
             return true;
@@ -354,6 +364,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         return conf;
     }
 
+    isDegenerate(theObject) {
+        return !(theObject.rx > 0 && theObject.ry > 0); // NaN counts as zero
+    }
+
     getArea(theObject) {
         // Analytic and exact; the transform only rescales it. Rotation leaves an
         // ellipse's area alone, which the determinant expresses for free.
@@ -421,6 +435,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         this._origX = x;
         this._origY = y;
         this._origScreen = this._imageToWindowPoint(x, y);
+        this._explicitSize = false;
 
         this._current = this.create({
             left: x - 1,
@@ -462,6 +477,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!this._current || !(areaPx > 0)) return false;
         const r = Math.sqrt(areaPx / Math.PI);
         const dx = x - this._origX, dy = y - this._origY;
+        // User-chosen size: tiny at this zoom is deliberate, not degenerate.
+        this._explicitSize = true;
         this._current.set({
             left: dx >= 0 ? this._origX : this._origX - 2 * r,
             top:  dy >= 0 ? this._origY : this._origY - 2 * r,
@@ -483,7 +500,10 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         let obj = this.getCurrentObject();
         if (!obj) return true;
 
-        if (obj.rx === 0 || obj.ry === 0) {
+        // A press without a real drag (or a flat one) leaves a near-zero radius:
+        // practically invisible, so it is not an annotation.
+        if (!this._explicitSize && (this._isBelowScreenExtent(2 * obj.rx)
+            || this._isBelowScreenExtent(2 * obj.ry))) {
             this._context.fabric.deleteHelperAnnotation(obj);
             this._current = undefined;
             return true;
@@ -1087,6 +1107,11 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return undefined;
     }
 
+    // A point's radius is a zoom-derived marker size, not input geometry.
+    isDegenerate(theObject) {
+        return false;
+    }
+
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
@@ -1219,9 +1244,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      *  left: number,
      *  top: number,
      *  points: number,
-     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values.
+     *   A bare array means "same annotation, new geometry": the position is derived from the
+     *   points. Carrying the source's left/top over would draw the new points displaced by
+     *   however far their bounds moved.
      */
     copy(ofObject, parameters) {
+        let derivePosition = false;
         // Deep-clone the point objects so the returned annotation has
         // structurally independent geometry. Sharing point references
         // with the source lets _applyMoveToGeometry (called from drag,
@@ -1229,11 +1258,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         // which breaks undo across edit-mode drag, cut/paste and
         // copy/paste.
         if (parameters && Array.isArray(parameters)) {
-            // array kept for backwards compatibility
+            derivePosition = true;
             parameters = {
                 points: parameters.map(p => ({ x: p.x, y: p.y })),
-                left: ofObject.left,
-                top: ofObject.top,
             }
         } else if (!parameters) {
             parameters = {
@@ -1243,8 +1270,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             }
         }
         const props = this.copyProperties(ofObject);
-        props.left = parameters.left;
-        props.top = parameters.top;
+        if (derivePosition) {
+            // Absent, so fabric derives them from the points (at the copied strokeWidth).
+            delete props.left;
+            delete props.top;
+        } else {
+            props.left = parameters.left;
+            props.top = parameters.top;
+        }
         delete props.points;
         const conf = new this.Class(parameters.points, props);
         this.renderAllControls(conf);
@@ -1504,6 +1537,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return 3;
     }
 
+    // Constant-cost: too few vertices to have an extent. Collinear/coincident
+    // points are deliberately not checked (that is a pass over every point).
+    isDegenerate(theObject) {
+        const points = theObject?.points;
+        return !(Array.isArray(points) && points.length >= this._getMinimumCreatePoints());
+    }
+
     // A press-drag-release is a complete freehand stroke, so mouse-up commits
     // it. A plain click (nothing appended past updateCreate's distance gate)
     // keeps the click-per-vertex path, still closed by start-point proximity,
@@ -1655,6 +1695,11 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         // so they only say which way the line runs. Without the frame the trimmed
         // payload re-imports as a line centred on the image origin.
         return ["x1", "x2", "y1", "y2", "left", "top", "width", "height"];
+    }
+
+    isDegenerate(theObject) {
+        // Negated so a NaN endpoint counts as degenerate too.
+        return !(Math.abs(theObject.x1 - theObject.x2) > 0 || Math.abs(theObject.y1 - theObject.y2) > 0);
     }
 
     getLength(theObject) {
@@ -1824,8 +1869,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         const dy = this._current.y1 - this._current.y2,
             dx = this._current.x1 - this._current.x2;
 
-        let powRad = this._getRelativePixelDiffDistSquared(10);
-        if ((dx * dx + dy * dy > powRad) || (dx * dx + dy * dy > powRad)) {
+        if (!this._isBelowScreenExtent(Math.hypot(dx, dy), 10)) {
             this._current = this.create(
                 [this._current.x1, this._current.y1, this._current.x2, this._current.y2],
                 this._presets.getAnnotationOptions(this._current.isLeftClick)
@@ -1834,10 +1878,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         }
         this._initialize(false);
         return true;
-    }
-
-    _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / this._context.viewer.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 
 
@@ -2275,20 +2315,21 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
      *  left: number,
      *  top: number,
      *  points: number,
-     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
+     * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values.
+     *   A bare array means "same annotation, new geometry": the position is derived from the
+     *   points (see ExplicitPointsObjectFactory#copy).
      */
     copy(ofObject, parameters=undefined) {
+        let derivePosition = false;
         // Deep-clone the ring-of-rings-of-points so the returned
         // annotation has structurally independent geometry — matches
         // the deep clone already used in Multipolygon.edit's
         // _origPoints snapshot.
         const deepCloneRings = (rings) => rings.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
         if (parameters && Array.isArray(parameters)) {
-            // array kept for backwards compatibility
+            derivePosition = true;
             parameters = {
                 points: deepCloneRings(parameters),
-                left: ofObject.left,
-                top: ofObject.top,
             }
         } else if (!parameters) {
             parameters = {
@@ -2299,11 +2340,18 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         }
         const props = this.copyProperties(ofObject);
         delete props.points;
+        if (derivePosition) {
+            // Absent, so fabric derives them from the path (at the copied strokeWidth).
+            delete props.left;
+            delete props.top;
+        }
         const copy = new fabric.Path(this._createPathFromPoints(parameters.points), props);
         // We mimic polygon style - keep points prop
         copy.points = parameters.points;
-        copy.left = parameters.left;
-        copy.top = parameters.top;
+        if (!derivePosition) {
+            copy.left = parameters.left;
+            copy.top = parameters.top;
+        }
         this.renderAllControls(copy);
         return copy;
     }

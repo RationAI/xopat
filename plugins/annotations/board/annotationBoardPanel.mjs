@@ -165,20 +165,23 @@ export class AnnotationBoardPanel {
         // Bulk-action strip: appears once several annotations are selected, so
         // "move these to a layer" does not hide in a right-click menu.
         const t = (key, args) => this.plugin.t(key, args);
+        // `layers: false` (module config): the deployment keeps no layers, so no
+        // action that creates one or moves annotations into one is offered.
+        const layersOn = this.context?.layersEnabled !== false;
         this.selectionCountEl = span({ class: 'text-xs font-medium flex-1 min-w-0 truncate' });
         this.selectionStripEl = div({
                 id: `${this.containerId}-selection-strip`,
                 class: 'hidden items-center gap-1 px-2 py-1 border-b border-base-300 bg-base-200 no-select'
             },
             this.selectionCountEl,
-            button({
+            layersOn ? button({
                     type: 'button',
                     class: 'btn btn-ghost btn-xs gap-1',
                     title: t('annotations.board.moveSelectionToLayer'),
                     onclick: (e) => this._openMoveSelectionMenu(e)
                 },
                 span({ class: 'ph-light ph-stack' }),
-                t('annotations.board.moveSelectionToLayer')),
+                t('annotations.board.moveSelectionToLayer')) : null,
             button({
                     type: 'button',
                     class: 'btn btn-ghost btn-xs btn-square',
@@ -213,13 +216,13 @@ export class AnnotationBoardPanel {
                         extraProperties: { title: this.plugin.t('annotations.board.selectAll') },
                         onClick: () => this.fabric?.selectAllAnnotations?.()
                     }, new UI.PhIcon({ name: 'ph-selection-all' })),
-                    new UI.Button({
+                    ...(layersOn ? [new UI.Button({
                         id: `${this.containerId}-create-layer`,
                         type: UI.Button.TYPE.NONE,
                         extraClasses: 'btn btn-ghost btn-xs btn-square',
                         extraProperties: { title: this.plugin.t('annotations.board.createLayer') },
                         onClick: () => this.fabric?.createLayer()
-                    }, new UI.PhIcon({ name: 'ph-stack-plus' })),
+                    }, new UI.PhIcon({ name: 'ph-stack-plus' }))] : []),
                     new UI.Button({
                         id: `${this.containerId}-refresh`,
                         type: UI.Button.TYPE.NONE,
@@ -1681,6 +1684,9 @@ export class AnnotationBoardPanel {
         };
 
         reorderCell.append(upBtn, downBtn);
+        actionsEl.append(reorderCell);
+        row.appendChild(actionsEl);
+        if (this.context?.layersEnabled === false) return row;
 
         const layerBtn = document.createElement('button');
         layerBtn.className = 'btn btn-ghost btn-xs btn-square';
@@ -1691,8 +1697,7 @@ export class AnnotationBoardPanel {
             this._openMoveToLayerMenuForGroup(layerBtn, members);
         };
 
-        actionsEl.append(reorderCell, layerBtn);
-        row.appendChild(actionsEl);
+        actionsEl.append(layerBtn);
 
         return row;
     }

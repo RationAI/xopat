@@ -83,6 +83,8 @@ function wrapper(objects = []) {
         _applyAnnotationVisibilityState: () => {},
     });
     w.module = {
+        // Deployment default (`include.json` `layers: true`).
+        layersEnabled: true,
         fabric: w,
         session: "s",
         isAnnotationFilteredOut: (o) => !!o.filtered,

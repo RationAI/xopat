@@ -193,13 +193,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.module.externalizeLayer(object, this);
                 if (used && object.layer) used.add(object.layer.id);
             }
-            layers = this.getAllLayers()
-                .map(layer => this.describeLayer(layer.id))
-                .filter(layer => layer && (!used || used.has(layer.id)))
-                .sort((a, b) => a.position - b.position);
-            const active = this.getActiveLayer()?.id;
-            if (active !== undefined && layers.some(layer => layer.id === String(active))) {
-                activeLayerId = String(active);
+            if (this.module.layersEnabled) {
+                layers = this.getAllLayers()
+                    .map(layer => this.describeLayer(layer.id))
+                    .filter(layer => layer && (!used || used.has(layer.id)))
+                    .sort((a, b) => a.position - b.position);
+                const active = this.getActiveLayer()?.id;
+                if (active !== undefined && layers.some(layer => layer.id === String(active))) {
+                    activeLayerId = String(active);
+                }
             }
         }
 
@@ -989,7 +991,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     _reportLayerOf(annotations) {
         const resource = this.module.annotationResource;
-        if (!resource) return;
+        if (!resource || !this.module.layersEnabled) return;
         const list = [];
         for (const object of annotations || []) {
             if (object && object.incrementId !== undefined && object.incrementId !== null) list.push(object);
@@ -1018,9 +1020,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @event layer-added
      * @event active-layer-changed
      * @param {number|string} id optional
-     * @return {OSDAnnotations.Layer} new layer
+     * @return {Promise<void>} settles once the layer exists; read it with
+     *   {@link getLayer}. Nothing is created (and no history entry is made) when
+     *   layers are disabled for the deployment (`OSDAnnotations#layersEnabled`).
      */
     createLayer(id=Date.now()) {
+        if (!this.module.layersEnabled) return Promise.resolve();
         id = String(id);
         let layerData = {id: id, _objects: []};
         let previousActiveId;
@@ -1809,6 +1814,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!Array.isArray(matching) || matching.length === 0 || !target) {
             return { moved: 0, targetLayerId: null };
         }
+        // No layers in this deployment: same answer as a target that does not exist.
+        if (!this.module.layersEnabled) return null;
 
         // Resolve / create the target layer.
         let targetLayerId;
@@ -2660,7 +2667,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 visible: nextVisible
             });
             this.raiseEvent('layer-objects-changed', {
-                layerId: String(layer.id)
+                layerId: String(layer.id),
+                kind: 'visibility',
             });
         }
         return true;
@@ -2859,6 +2867,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     _createLayer(layerData) {
+        // The one place a layer comes into being, so the one place that has to
+        // hold when layers are disabled. Every caller that could carry members
+        // (`createLayer`, a load) has already stood down by then.
+        if (!this.module.layersEnabled) return;
         const restoredLayer = new OSDAnnotations.Layer(this.module, layerData.id);
 
         for (let [key, value] of Object.entries(layerData)) {
@@ -3174,6 +3186,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   Return `false` to mark an item as skipped.
      * @param {(item:fabric.Object)=>void} [options.deleteOne]
      *   Used by the history undo. Defaults to `_deleteAnnotation(a, false)`.
+     * @param {string}  [options.reason='bulk-add'] `reason` on the `annotation-loaded`
+     *   event. Hydration (`_loadObjects`) passes `'load-objects'`; anything else is
+     *   user work (scripting, job results) and marks the slide unsaved. Undo / redo
+     *   of the batch raise `'bulk-add-undo'` / `'bulk-add-redo'`.
      * @param {boolean} [options.persist=false]
      *   Also dispatch each item through `annotationResource.create`, so a bound
      *   `crud:annotation` sink stores it. Default OFF, and that default is load-
@@ -3217,21 +3233,25 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const roomFor = async (count) =>
             !resource?.whenHeadroom || await resource.whenHeadroom(count);
 
+        const reason = opts.reason || 'bulk-add';
+        const raiseLoaded = (added, why = reason) => {
+            try { this.raiseEvent('annotation-loaded', { objects: added, bulk: true, reason: why }); }
+            catch (e) { /* non-fatal */ }
+        };
+
         const pushHistory = (added) => {
             if (!recordHistory || !added.length) return;
             const hist = APPLICATION_CONTEXT?.history;
             if (!hist?.pushExecuted) return;
             const snapshot = added.slice();
+            // The per-item callbacks raise nothing: say once that the batch
+            // came back / went away, so listeners (unsaved state, the board)
+            // see undo and redo like the original add.
             hist.pushExecuted(
-                () => snapshot.forEach((a) => addOne(a)),
-                () => snapshot.forEach((a) => deleteOne(a)),
+                () => { snapshot.forEach((a) => addOne(a)); raiseLoaded(snapshot, 'bulk-add-redo'); },
+                () => { snapshot.forEach((a) => deleteOne(a)); raiseLoaded(snapshot, 'bulk-add-undo'); },
                 { name: historyName }
             );
-        };
-
-        const raiseLoaded = (added) => {
-            try { this.raiseEvent('annotation-loaded', { objects: added, bulk: true }); }
-            catch (e) { /* non-fatal */ }
         };
 
         // Sync fast path — only when the whole batch fits the outbox right now;
@@ -4795,12 +4815,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // `layer` descriptor each object carries (every other format and sink —
         // layers have no IO resource of their own, see OSDAnnotations#externalizeLayer).
         // Both are outside data: only sanitized fields reach a Layer.
+        // With layers disabled nothing is planned and every binding is dropped
+        // below: the annotations of a layered file still load, flat.
+        const layersEnabled = this.module.layersEnabled;
         const layerPlan = new Map();
         const rawObjects = [...input.objects];
         for (const layerData of Array.isArray(input.layers) ? input.layers : []) {
             const descriptor = this.module.sanitizeLayerDescriptor(layerData);
             if (!descriptor || layerPlan.has(descriptor.id)) continue;
-            layerPlan.set(descriptor.id, descriptor);
+            if (layersEnabled) layerPlan.set(descriptor.id, descriptor);
             // A history state (`_captureImportState`) files a layer's members
             // under the layer instead of in `objects`. They used to be left
             // there, so undoing an import lost every annotation that had a layer.
@@ -4811,7 +4834,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         for (const raw of rawObjects) {
             if (!raw || typeof raw !== 'object') continue;
-            if ("layer" in raw) {
+            if (!layersEnabled) {
+                delete raw.layer;
+                delete raw.layerID;
+            } else if ("layer" in raw) {
                 // Inbound half of the `layerID` <-> `layer` swap. A record with a
                 // bare `layerID` (written before layers were persisted) keeps it.
                 // The key goes either way — the whitelist trim leaves it behind
@@ -4919,6 +4945,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         title: 'Loading annotations',
                         recordHistory: false,
                         historyName: 'Load annotations',
+                        reason: 'load-objects',
                         // OFF for every restore/hydration path (the default): those
                         // objects came from a destination, and dispatching them back
                         // would duplicate the slide. Only a user-driven file import
@@ -4935,7 +4962,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     }
 
                     touchedLayers.forEach(layerId => {
-                        self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
+                        self.raiseEvent('layer-objects-changed', { layerId: String(layerId), kind: 'load' });
                     });
 
                     self.raiseEvent('annotation-loaded', {
