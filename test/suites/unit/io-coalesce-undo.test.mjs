@@ -204,3 +204,22 @@ test("coalescing removes work without reordering other identities", { tag: ["@un
     expect(pipeline.dispatched.map(d => d.itemId)).toEqual(["gate", "A", "B"]);
     expect(pipeline.dispatched[1].payload).toEqual({ n: 3 });   // last write won
 });
+
+test("two pending partial updates keep both patches", { tag: ["@unit"] }, async () => {
+    const pipeline = makePipeline();
+    installHistory();
+    const resource = makeResource(pipeline);
+
+    const release = pipeline.block();
+    resource.update("gate", { n: 0 });                 // occupies the worker
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    resource.update("A", { presetID: "tumor" });       // class change
+    resource.update("A", { layer: { id: "L2" } });     // then a layer move
+
+    release();
+    await drain(resource);
+
+    expect(pipeline.dispatched.map(d => d.itemId)).toEqual(["gate", "A"]);
+    expect(pipeline.dispatched[1].payload).toEqual({ presetID: "tumor", layer: { id: "L2" } });
+});

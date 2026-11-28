@@ -938,12 +938,18 @@ OSDAnnotations.PresetManager = class {
                 if (existing) {
                     // Merge upsert: refresh the stored preset in place so
                     // live references (annotations, toolbars) stay valid.
+                    // Re-importing an identical preset (every slide bundle
+                    // carries the shared palette) is not an update.
+                    const before = JSON.stringify(existing.toJSONFriendlyObject());
                     existing.color = p.color;
                     existing.meta = p.meta;
                     existing.objectFactory = p.objectFactory;
                     if (p._factoryIDOverride) existing._factoryIDOverride = p._factoryIDOverride;
                     else delete existing._factoryIDOverride;
-                    this._context.raiseEvent('preset-update', {preset: existing});
+                    if (JSON.stringify(existing.toJSONFriendlyObject()) !== before) {
+                        // `imported`: the change came from loaded data, not a user edit.
+                        this._context.raiseEvent('preset-update', {preset: existing, imported: true});
+                    }
                     if (!first) first = existing;
                 } else {
                     this._context.raiseEvent('preset-create', {preset: p});

@@ -214,7 +214,23 @@ function initXOpatUI() {
         hide: function() {
             globalThis.ContextMenu?.close();
         },
+
+        /** @deprecated No-op: the facade needs no initialization. */
+        init: function() {
+            warnRemovedDropDown("init");
+        },
+
+        /** @deprecated Toggles nothing; use `open(event, items)` / `hide()`. */
+        _toggle: function() {
+            warnRemovedDropDown("_toggle");
+        },
     };
+    function warnRemovedDropDown(name) {
+        const warned = (warnRemovedDropDown._warned ||= new Set());
+        if (warned.has(name)) return;
+        warned.add(name);
+        APPLICATION_CONTEXT.log?.("core.ui")?.warn?.(`DropDown.${name}() is removed and does nothing: use DropDown.open/hide or UI.ContextMenu.`);
+    }
 
     let pluginsToolsBuilder, tissueMenuBuilder;
 

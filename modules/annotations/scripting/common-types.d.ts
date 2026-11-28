@@ -275,13 +275,15 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
      * Uses batched creation safe for large amounts of annotations.
      *
      * Zero-size inputs (rect width/height, ellipse rx/ry, coinciding line/arrow
-     * endpoints, polygon < 3 / polyline < 2 points) are not created: their indices are listed in `skipped`. Compare
-     * `created` with `requested` to see whether everything was created.
+     * endpoints, polygon < 3 / polyline < 2 points) are not created. Resolves to the created
+     * annotations; pass `{ report: true }` to get `{requested, created, skipped, cancelled, annotations}`
+     * instead, where `skipped` lists the zero-size input indices — compare `created` with `requested`
+     * to see whether everything was created.
      *
      * Requires an active preset or an explicit `presetID` on the inputs; if none exists this throws.
      * On a fresh context first call `createPreset(...)` / `selectPreset(id)`, or set `presetID` on every input.
      */
-    createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationBatchResult>;
+    createAnnotations(inputs: AnnotationCreateInput[], options?: { report?: boolean }): Promise<AnnotationRecord[] | AnnotationBatchResult>;
 
     /**
      * Deletes one annotation by persistent id, increment id, or internal id.

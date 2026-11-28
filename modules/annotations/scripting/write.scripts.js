@@ -343,13 +343,22 @@ ScriptingManager.registerExternalApi(
             return this._serializeAnnotation(annotation);
         }
 
+        /**
+         * Resolves to the created annotations (array) — the shape stored scripts
+         * iterate. `{report: true}` resolves to the full batch report instead.
+         */
         async createAnnotations(inputs, options) {
+            const opts = options || {};
+            const report = await this._createAnnotationsReport(inputs, opts);
+            return opts.report === true ? report : report.annotations;
+        }
+
+        async _createAnnotationsReport(inputs, opts) {
             const items = Array.isArray(inputs) ? inputs : [];
             const report = { requested: items.length, created: 0, skipped: [], cancelled: false, annotations: [] };
             if (items.length === 0) return report;
 
             await this._assertCreateBudget(items.length);
-            const opts = options || {};
             const fabric = this._getFabric();
             // Zero-size shapes would be invisible: skip them and report their
             // indices instead of failing the whole batch.

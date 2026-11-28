@@ -1932,6 +1932,18 @@ OSDAnnotations.PolygonUtilities = {
      * @param {boolean} [highestQuality=true]
      */
     simplify: function (points, imagePixelOnScreen, highestQuality = true) {
+        // Deprecated `simplify(points, highestQuality)`: the boolean used to be the
+        // second argument and the pixel size was read from the focused viewer.
+        // Keep that behaviour (it is wrong for a non-focused viewport) and warn once.
+        if (typeof imagePixelOnScreen === "boolean" || arguments.length < 2) {
+            if (!this._warnedLegacySimplify) {
+                this._warnedLegacySimplify = true;
+                console.warn("OSDAnnotations.PolygonUtilities.simplify(points, highestQuality) is deprecated: "
+                    + "use simplify(points, viewer.scalebar.imagePixelSizeOnScreen(), highestQuality).");
+            }
+            if (typeof imagePixelOnScreen === "boolean") highestQuality = imagePixelOnScreen;
+            imagePixelOnScreen = globalThis.VIEWER_MANAGER?.active?.scalebar?.imagePixelSizeOnScreen?.();
+        }
         if (points.length <= 2) return points;
 
         // desired visual tolerance in screen pixels

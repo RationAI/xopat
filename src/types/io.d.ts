@@ -657,7 +657,8 @@ interface IOResourceDef<T = unknown> {
      * Enable rewrite rules on the per-resource outbox queue:
      *  - `create X` then `delete X` (same identity, both unstarted): both removed.
      *  - `delete X` then `create X`: both removed.
-     *  - Multiple `update X`: keep only the latest.
+     *  - Multiple `update X`: keep only the latest; when `merge` is provided the
+     *    earlier patch is folded in first (`merge(prevPatch, nextPatch)`).
      *  - `update X` then `delete X`: drop the update, keep the delete.
      *  - `create X` then `update X`: merge `update`'s patch into the
      *    `create`'s payload via `merge` (only applied if `merge` is provided).
@@ -672,7 +673,8 @@ interface IOResourceDef<T = unknown> {
      */
     coalesce?: boolean;
     /**
-     * Shallow-merge function for the `create + update` coalescing rule.
+     * Shallow-merge function for the `create + update` and `update + update`
+     * coalescing rules.
      * Receives the previous payload and the next patch; returns the merged
      * payload that supersedes the original create.
      */

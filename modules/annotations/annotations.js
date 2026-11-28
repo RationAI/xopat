@@ -275,7 +275,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             coalesce: true,
             // Shallow patch merge for the `create + update` rule. Most
             // annotation patches are a small set of property overrides.
-            merge: (prev, next) => ({ ...(prev || {}), ...(next || {}) }),
+            // `prev` may be the live fabric object a `create` was issued with —
+            // spreading it would copy its canvas refs and lose the prototype-held
+            // `type`, so serialize both sides first.
+            merge: (prev, next) => ({
+                ...(prev ? this.serializeAnnotation(prev) : {}),
+                ...(next ? this.serializeAnnotation(next) : {}),
+            }),
             // Persist pending ops to IndexedDB so server sync survives a
             // page reload. Per-resource cap + age guard the storage size.
             persistOutbox: true,
@@ -413,7 +419,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // carries it. `preset-create` is left out: presets are also created
         // implicitly (defaults, auto-select), and a new preset is only work
         // once it is edited or used.
-        const presetEdit = () => {
+        const presetEdit = (e) => {
+            // A merge import (slide hydration, possibly for ANOTHER viewer whose
+            // restore guard does not cover this one) is loaded data, not user work.
+            if (e?.imported) return;
             if (pipeline.isEnabled(this.uid, "crud:preset")) return;
             for (const viewer of VIEWER_MANAGER.viewers || []) {
                 if (viewer?.world?.getItemCount?.()) this.io.markDirty(viewer);
@@ -955,7 +964,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					if (instance.canvas === item.canvas) { owner = instance; break; }
 				}
 			}
-			return this.externalizeLayer(item.toObject(this._importSerializationProps()), owner);
+			const plain = this.externalizeLayer(item.toObject(this._importSerializationProps()), owner);
+			// DEPRECATED dual-write on the CRUD wire, one release: a storage backend
+			// written against the old record still finds a bare `layerID`. Files and
+			// convertors (externalizeLayer alone) do not get it; inbound, `layer` wins.
+			if (plain?.layer?.id !== undefined) plain.layerID = plain.layer.id;
+			return plain;
 		}
 		return OpenSeadragon.extend(true, Array.isArray(item) ? [] : {}, item);
 	}
@@ -3164,6 +3178,8 @@ OSDAnnotations.AnnotationState = class {
 		const api = base.bindInvocationContext({
 			scriptingContext: {
 				id: `__annotations_${this._id}_${uid}__`,
+				// Pin the instance: `uniqueId` repeats when this slide is open twice.
+				getActiveViewer: () => viewer,
 				getActiveViewerContextId: () => uid,
 				activeViewerContextId: uid,
 				isConsentDialogBypassed: () => false,

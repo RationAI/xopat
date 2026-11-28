@@ -54,6 +54,44 @@ class ViewportSyncAPI {
     /** Short progress text for the SYNC button ("1/3", "auto…"). */
     getProgress() { return this._progress || ""; }
 
+    // -- removed fields, shimmed for one release ------------------------------
+    // State moved into the class-static session. These return read-only
+    // snapshots (writes to them change nothing) and warn once each.
+
+    static _warnRemoved(name, hint) {
+        const warned = (ViewportSyncAPI._removedWarned ||= new Set());
+        if (warned.has(name)) return;
+        warned.add(name);
+        APPLICATION_CONTEXT.log?.("core.sync")?.warn?.(`ViewportSyncAPI.${name} is removed: ${hint}`);
+    }
+
+    /** @deprecated Snapshot `uniqueId -> points`; the session owns the points now. */
+    get points() {
+        ViewportSyncAPI._warnRemoved("points", "the calibration points are internal session state.");
+        const S = this._getSession();
+        const out = new Map();
+        for (const v of this._allSyncViewers()) {
+            const pts = this._pointsOf(S, v.uniqueId);
+            if (pts) out.set(v.uniqueId, pts);
+        }
+        return out;
+    }
+
+    /** @deprecated Snapshot `uniqueId -> transform`; use getRotationOffset() or the scene API. */
+    get transforms() {
+        ViewportSyncAPI._warnRemoved("transforms", "the transforms are internal session state.");
+        return new Map(Object.entries(this._getSession().transforms || {}));
+    }
+
+    /** @deprecated The SYNC chrome reads getProgress()/isBusy(); a UI hook set here is ignored. */
+    get __ui() {
+        ViewportSyncAPI._warnRemoved("__ui", "read getProgress() / isBusy() instead.");
+        return undefined;
+    }
+    set __ui(_value) {
+        ViewportSyncAPI._warnRemoved("__ui", "read getProgress() / isBusy() instead.");
+    }
+
     _notifyUi() {
         try { this.master.__syncToolChanged?.(); } catch (e) { console.warn(e); }
     }

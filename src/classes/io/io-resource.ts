@@ -22,7 +22,7 @@
 // entry of the same identity and applies these rewrite rules:
 //   create + delete → both removed
 //   delete + create → both removed
-//   update + update → keep latest only
+//   update + update → keep latest (patches merged first if def.merge given)
 //   update + delete → drop update, keep delete
 //   create + update → merge into create's payload (if def.merge given)
 // In-flight entries never coalesce. A coalesced-out op always settles with
@@ -845,8 +845,18 @@ export class IOResourceImpl<T = unknown> implements IOResource<T> {
             dropPrev();
             return VERDICT_SKIP;
         }
-        // Rule: update + update → keep latest
+        // Rule: update + update → keep latest; with `merge`, fold the earlier
+        // patch in first. Update payloads are partial patches: dropping the
+        // earlier one loses its fields (e.g. `{presetID}` then `{layer}`).
         if (prev.direction === "update" && newEntry.direction === "update") {
+            if (this.def.merge) {
+                try {
+                    newEntry.rawPayload = this.def.merge(prev.rawPayload, newEntry.rawPayload);
+                } catch (e) {
+                    console.warn(`[IO] resource "${this.name}" merge threw — keeping both ops:`, e);
+                    return VERDICT_ENQUEUE;
+                }
+            }
             return supersedePrev();
         }
         // Rule: update + delete → drop update

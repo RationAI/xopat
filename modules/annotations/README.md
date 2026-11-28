@@ -390,7 +390,9 @@ A mode with settings overrides `customControls()` and returns a `Node` or a `UI`
 `null`); the annotations toolbar shows it in the mode-options panel while the mode is active and
 calls it again on every activation. Build it with van.js / `UI` atoms and attach listeners that
 close over the mode — reference: `MagicWand#customControls`. The older `customHtml()` string is
-deprecated: the host sanitizes it, so inline `on*` handlers in it are removed and do nothing.
+removed as a way to provide controls: the host sanitizes it, so inputs, buttons and inline `on*` handlers in it
+are dropped (a one-time warning names the caller). See `ui/classes/README.md` → *Migrating a panel built from an
+HTML string*.
 
 Modes that analyse what is on screen read it with `AnnotationState.readViewportLayers(options)`,
 a thin wrapper over the core `visualization.renderCurrentLayersPixels` — never a private standalone

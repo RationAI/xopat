@@ -748,5 +748,40 @@ export const presetMethods = {
 
     isUnpreferredPreset(presetID) {
         return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+    },
+
+    // -- removed, shimmed for one release ------------------------------------
+    // Replaced by the shared class picker. They no longer render anything.
+
+    _warnRemovedMethod(name) {
+        const warned = (this._removedMethodsWarned ||= new Set());
+        if (warned.has(name)) return;
+        warned.add(name);
+        APPLICATION_CONTEXT.log?.(`plugin.${this.id}`)?.warn?.(
+            `AnnotationsGUI.${name}() is removed: the class picker renders the preset controls.`);
+    },
+
+    /** @deprecated Refreshes the class picker. */
+    updatePresetsMouseButtons() {
+        this._warnRemovedMethod("updatePresetsMouseButtons");
+        this.updatePresetsHTML();
+    },
+
+    /** @deprecated Returns an empty string. */
+    getPresetControlHTML() {
+        this._warnRemovedMethod("getPresetControlHTML");
+        return "";
+    },
+
+    /** @deprecated Returns an empty string. */
+    getMissingPresetHTML() {
+        this._warnRemovedMethod("getMissingPresetHTML");
+        return "";
+    },
+
+    /** @deprecated Returns an empty string. */
+    RightSideMenuVisibleControls() {
+        this._warnRemovedMethod("RightSideMenuVisibleControls");
+        return "";
     }
 };

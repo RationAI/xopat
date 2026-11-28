@@ -413,7 +413,7 @@ export const globalPluginWindowMethods = {
                             if (!this._warnedLegacyModeHtml.has(modeId)) {
                                 this._warnedLegacyModeHtml.add(modeId);
                                 APPLICATION_CONTEXT.log("plugin.gui_annotations").warn(
-                                    `Mode '${modeId}' uses deprecated customHtml(); implement customControls().`);
+                                    `Mode '${modeId}' uses customHtml(), which is removed: its inputs, buttons and inline handlers are dropped. Implement customControls().`);
                             }
                             controls = legacy;
                         }

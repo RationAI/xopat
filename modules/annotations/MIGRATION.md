@@ -215,7 +215,9 @@ Layers are persisted by riding on their annotations (`convert/README.md` → *La
 code outside the module:
 
 - A **serialized** annotation — `toModel()` / `export()` output, a `crud:annotation` payload — has
-  `layer: {id, name, position}` and no `layerID`. Read `record.layer?.id` where you read `record.layerID`.
+  `layer: {id, name, position}`. Read `record.layer?.id` where you read `record.layerID`. For one release a
+  `crud:annotation` payload also carries the old `layerID` (same id) so existing backends keep working; it will
+  be dropped. Exported files do not.
 - A **live** object is unchanged: `object.layerID`, and no `layer` property.
 - Importing a record with a bare `layerID` still works.
 - A sink bound to `crud:annotation` now receives `{layer}` update patches (`meta.kind: 'layer-change'`)
