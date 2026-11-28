@@ -99,7 +99,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     if (!parent) {
                         try {
                             const res = await this.client().fetchRaw(
-                                `/v3/cases/slides/?${new URLSearchParams({ slide_id: contextPath })}`);
+                                `/v3/cases/slides/?${new URLSearchParams({ case_id: contextPath })}`);
                             let slides = await res.text();
                             if (!res.ok) {
                                 throw new Error(slides);
@@ -110,7 +110,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                             }
                         } catch (err) {
                             console.error("File Browser failed to list slides!", err);
-                            Dialogs.show(`Could not list slides for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
+                            Dialogs.show(this.t("listSlidesFailed", { path: contextPath || "/" }), 5000, Dialogs.MSG_ERR);
                         }
                     }
 
