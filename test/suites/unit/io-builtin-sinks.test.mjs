@@ -222,6 +222,69 @@ test("withRetry keeps the inner sink's route @unit @security", () => {
     expect(wrapped.route).toBe("local");
 });
 
+test("withRetry re-sends only the failed slots of a deleteMany @unit", async () => {
+    const calls = [];
+    let failB = 2;
+    const wrapped = withRetry({
+        id: "bulk", supports: ["crud"], maxBatch: 7,
+        async deleteMany(ctxs) {
+            calls.push(ctxs.map(c => c.itemId));
+            return ctxs.map(c => (c.itemId === "b" && failB-- > 0
+                ? { ok: false, refused: true, reason: "down", code: "503" }
+                : { ok: true, payload: { id: c.itemId } }));
+        },
+    }, { attempts: 3, backoff: () => 0 });
+
+    expect(wrapped.maxBatch).toBe(7);
+    const out = await wrapped.deleteMany(["a", "b", "c"].map(itemId => ctxOf({ direction: "delete", itemId })));
+    expect(calls).toEqual([["a", "b", "c"], ["b"], ["b"]]);
+    expect(out.map(r => r.ok)).toEqual([true, true, true]);
+    expect(out.map(r => r.payload.id)).toEqual(["a", "b", "c"]);
+});
+
+test("withRetry does not re-send a createMany unless create is retryable @unit", async () => {
+    const make = (calls) => ({
+        id: "bulk", supports: ["crud"],
+        async createMany(ctxs, items) {
+            calls.push(items.length);
+            return items.map(() => ({ ok: false, refused: true, reason: "down", code: "503" }));
+        },
+    });
+    const once = [];
+    await withRetry(make(once), { attempts: 3, backoff: () => 0 }).createMany([ctxOf(), ctxOf()], [{}, {}]);
+    expect(once).toEqual([2]);
+
+    const thrice = [];
+    await withRetry(make(thrice), { attempts: 3, backoff: () => 0, methods: ["create"] })
+        .createMany([ctxOf(), ctxOf()], [{}, {}]);
+    expect(thrice).toEqual([2, 2, 2]);
+});
+
+test("withRetry keeps bulk methods and the format pin of a class-based sink @unit", () => {
+    class Sink {
+        id = "klass"; supports = ["crud"];
+        preferredFormat() { return "native"; }
+        async createMany(ctxs) { return ctxs.map(() => ({ ok: true })); }
+        async deleteMany(ctxs) { return ctxs.map(() => ({ ok: true })); }
+    }
+    const wrapped = withRetry(new Sink());
+    expect(typeof wrapped.createMany).toBe("function");
+    expect(typeof wrapped.deleteMany).toBe("function");
+    expect(wrapped.preferredFormat("annotations", ctxOf())).toBe("native");
+});
+
+test("a binding written as a single target instead of a list still resolves @unit", () => {
+    const pipeline = new IOPipeline({
+        POST_DATA: {},
+        getConfig: () => ({ bindings: { annotations: { "bundle-export": "solo" } } }),
+        notify: () => {},
+    });
+    pipeline.registerOwner("module.annotations", { ownerId: "annotations", xoType: "module" });
+    pipeline.registerCapability("module.annotations", { id: "bundle-export", kind: "bundle" });
+    pipeline.registerSink({ id: "solo", supports: ["bundle"], async writeBundle() { return { ok: true }; } });
+    expect(pipeline.bindingsFor("module.annotations", "bundle-export")).toEqual(["solo"]);
+});
+
 // ── file-download ──────────────────────────────────────────────────────────
 
 test("file-download writes the bytes of a binary payload, not the envelope @unit", async () => {

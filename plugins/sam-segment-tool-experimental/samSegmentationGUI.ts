@@ -20,8 +20,8 @@ import "./samState";
  */
 class SAMSegmentationPlugin extends (XOpatPlugin as any) {
     private context: any;
-    // Public: the annotation mode + the mode-options inline handlers resolve the
-    // engine via `plugin('sam-segment-tool-experimental').sam`.
+    // Public: the annotation mode resolves the engine via
+    // `plugin('sam-segment-tool-experimental').sam`.
     sam: any;
 
     constructor(id: string) {
@@ -36,6 +36,10 @@ class SAMSegmentationPlugin extends (XOpatPlugin as any) {
             console.error("SAM: OSDAnnotations module not available.");
             return;
         }
+
+        // The mode-options labels live in this plugin's bundle; register it
+        // before the mode (and so its panel) can be reached.
+        await this.loadLocale();
 
         // Build the inference engine before registering the mode/driver — both
         // read it back via `plugin('sam-segment-tool-experimental').sam`.

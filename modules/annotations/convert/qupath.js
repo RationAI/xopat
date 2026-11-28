@@ -66,6 +66,9 @@ OSDAnnotations.QuPathCodec = class {
             //allow only hex colors
             if (object.fill && preset?.color != object.fill && object.fill[0] == "#") props.color = hexToRgb(object.fill);
             if (object.meta?.category && preset?.meta.category.value != object.meta.category) props.name = object.meta.category;
+            // Not a QuPath concept — it ignores the property — but it is what
+            // keeps the layer when the file comes back to xOpat.
+            if (object.layer) props.layer = object.layer;
 
             for (let p of deleteProps) delete props[p];
             return {
@@ -283,6 +286,8 @@ OSDAnnotations.QuPathCodec = class {
             if (Array.isArray(object.properties?.color)) {
                 parsedResult.fill = asHexColor(object.properties.color);
             }
+            // Validated where every import ends up (FabricWrapper._loadObjects).
+            if (object.properties?.layer) parsedResult.layer = object.properties.layer;
             annotations.push(parsedResult);
         }
 

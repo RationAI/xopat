@@ -68,7 +68,7 @@ function fakeWorkbench() {
         resolveEmpaiaId: (localId) => links.get(String(localId)),
         storageKind: () => "scope",
     });
-    return { sink, annotations, classes, fail, links };
+    return { sink, client, annotations, classes, fail, links };
 }
 
 const rect = (over = {}) => ({ factoryID: "rect", left: 10, top: 10, width: 20, height: 20, presetID: "tumor", ...over });
@@ -164,4 +164,65 @@ test("a bundle upload that fails midway still classifies what it stored @unit", 
     expect(done.ok).toBe(true);
     expect(ids(wb)).toEqual(["E1", "E2", "E3"]);
     expect(classified(wb).sort()).toEqual(["E1", "E2", "E3"]);
+});
+
+test("a bulk create stores every record, a few at a time, one result per item @unit", async () => {
+    const wb = fakeWorkbench();
+    let inFlight = 0, peak = 0;
+    const post = wb.sink.create;
+    wb.sink.create = async function (...args) {
+        peak = Math.max(peak, ++inFlight);
+        await new Promise(r => setTimeout(r, 1));
+        try { return await post.apply(this, args); } finally { inFlight--; }
+    };
+
+    const n = 30;
+    const ctxs = Array.from({ length: n }, (_, i) => ctxOf(String(i)));
+    // One shape the workbench cannot represent: refused on its own.
+    const items = ctxs.map((_, i) => i === 7 ? { factoryID: "no-such-shape" } : rect({ left: i }));
+    const results = await wb.sink.createMany(ctxs, items);
+
+    expect(results).toHaveLength(n);
+    expect(results.filter(r => r.ok)).toHaveLength(n - 1);
+    expect(results[7].code).toBe("W_EMPAIA_UNREPRESENTABLE");
+    expect(ids(wb)).toHaveLength(n - 1);
+    expect(classified(wb).sort()).toEqual(ids(wb).sort());
+    // Each result belongs to the item at its own position.
+    expect(wb.links.get("3")).toBe(results[3].payload.id);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(6);
+});
+
+test("a bulk delete removes every record and treats an already-gone one as done @unit", async () => {
+    const wb = fakeWorkbench();
+    const ctxs = Array.from({ length: 5 }, (_, i) => ctxOf(String(i)));
+    await wb.sink.createMany(ctxs, ctxs.map((_, i) => rect({ left: i })));
+    wb.annotations.delete(wb.links.get("2")); // deleted elsewhere
+
+    const results = await wb.sink.deleteMany(ctxs);
+    expect(results.every(r => r.ok)).toBe(true);
+    expect(ids(wb)).toEqual([]);
+});
+
+test("a failed annotation query throws instead of reading as a slide with no annotations @unit", async () => {
+    const wb = fakeWorkbench();
+    wb.client.queryAnnotations = async () => { throw httpError(503); };
+
+    const seen = [];
+    let thrown;
+    try {
+        for await (const item of wb.sink.query(ctxOf(undefined), {})) seen.push(item);
+    } catch (e) { thrown = e; }
+    expect(seen).toEqual([]);
+    expect(thrown?.statusCode).toBe(503);
+});
+
+test("an aborted annotation query ends quietly @unit", async () => {
+    const wb = fakeWorkbench();
+    const controller = new AbortController();
+    wb.client.queryAnnotations = async () => { controller.abort(); throw httpError(503); };
+
+    const seen = [];
+    for await (const item of wb.sink.query(ctxOf(undefined, { signal: controller.signal }), {})) seen.push(item);
+    expect(seen).toEqual([]);
 });

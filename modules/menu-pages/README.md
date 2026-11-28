@@ -91,8 +91,9 @@ returns a page spec.
 >
 > A page spec is *data*, so it may name a presentational element, never an
 > application shell. Without `JSON_ELEMENTS` the resolver reached the whole `UI`
-> namespace, including `UI.RawHtml` and `UI.StatusBar`, both of which `innerHTML`
-> their own input — script execution with no `{type:"html"}` node involved at all.
+> namespace, including `UI.RawHtml`, which `innerHTML`s its own input (as
+> `UI.StatusBar` did until it became text-only) — script execution with no
+> `{type:"html"}` node involved at all.
 
 ### Menu Page Specification
 

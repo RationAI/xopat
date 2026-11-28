@@ -223,6 +223,15 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         // Only an EXPLICIT binding may name a viewer. The context id is not a viewer id —
         // falling back to it made an unbound context (e.g. the "default" one) claim to be
         // bound to a viewer named 'default', which never exists.
+        // A host that already holds the viewer instance (a tool acting on its own
+        // viewport) pins it directly: `uniqueId` is not unique when one slide is open
+        // in two viewports, so an id lookup would pick whichever comes first.
+        const pinned = this.scriptingContext.getActiveViewer?.();
+        if (pinned) {
+            if (viewers.includes(pinned)) return pinned;
+            throw new Error("The current script context is bound to a viewer that is no longer available.");
+        }
+
         const selectedContextId = this.scriptingContext.getActiveViewerContextId?.() ?? null;
 
         if (selectedContextId) {

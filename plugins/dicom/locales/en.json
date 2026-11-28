@@ -3,6 +3,10 @@
     "name": "DICOMweb Protocol",
     "description": "Renders DICOMweb whole-slide images, CT/MR/PET series and derived Segmentation / Parametric Map objects. Opens only what the session asks for; install the DICOM Browser plugin to browse a store."
   },
+  "sr": {
+    "stowFailed": "Saving annotations to the DICOM server failed.",
+    "loadFailed": "Failed to load annotations from the DICOM server."
+  },
   "series": {
     "fallbackTail": "Series …{{tail}}",
     "fallbackNumbered": "Series #{{number}} …{{tail}}",

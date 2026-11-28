@@ -3,6 +3,10 @@
     "name": "Protokol DICOMweb",
     "description": "Vykresluje snímky celých sklíček DICOMweb, série CT/MR/PET a odvozené objekty Segmentation / Parametric Map. Otevírá jen to, co relace požaduje; pro procházení úložiště nainstalujte plugin DICOM Browser."
   },
+  "sr": {
+    "stowFailed": "Uložení anotací na DICOM server selhalo.",
+    "loadFailed": "Načtení anotací z DICOM serveru selhalo."
+  },
   "series": {
     "fallbackTail": "Série …{{tail}}",
     "fallbackNumbered": "Série č. {{number}} …{{tail}}",

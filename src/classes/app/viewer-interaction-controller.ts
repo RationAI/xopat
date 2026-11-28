@@ -74,7 +74,6 @@ export class ViewerInteractionController {
                 : "auto";
 
             this.appContext.setOption("flexInteractionForwarding", next);
-            this.appContext.setDirty();
             this.refreshAll();
             UTILITIES.syncSessionToUrl(false);
             return next;

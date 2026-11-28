@@ -117,12 +117,20 @@ export function wireSessionLog(): void {
     // you can see this.
     const auth: any = context.auth;
     if (auth?.addHandler) {
-        auth.addHandler('context-settled', (e: any) => safely('auth', () => {
+        const reportSettle = (e: any) => safely('auth', () => {
             log.info({
                 contextId: shorten(e?.contextId),
-                authenticated: e?.authenticated === true || e?.ok === true,
+                authenticated: e?.authenticated === true,
+                reason: shorten(e?.reason),
             }, 'auth settled');
-        }));
+        });
+        // Same reasoning as the slides above: a boot autoLogin settles before this
+        // runs, and `auth-settled` is raised on change only, so replay what we find.
+        for (const cfg of auth.listContexts?.() || []) {
+            const last = auth.getLastSettleResult?.(cfg?.contextId);
+            if (last) reportSettle(last);
+        }
+        auth.addHandler('auth-settled', reportSettle);
     }
 
     // What the pathology model was pointed at, from the browser's side.

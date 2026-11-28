@@ -604,6 +604,13 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
         return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
     }
 
+    isDegenerate(theObject) {
+        const line = theObject?._objects?.[0];
+        if (!line) return true;
+        // Negated so a NaN endpoint counts as degenerate too.
+        return !(Math.abs(line.x1 - line.x2) > 0 || Math.abs(line.y1 - line.y2) > 0);
+    }
+
     /**
      * Called when object is selected - restore custom controls
      * @param {fabric.Object} theObject selected fabricjs object
@@ -724,7 +731,8 @@ OSDAnnotations.Arrow = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line = group._objects?.[0];
         if (!line) { this.discardCreate(); return true; }
-        if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
+        // Same minimum as a plain line: a shorter shaft hides under its head.
+        if (this._isBelowScreenExtent(Math.hypot(line.x1 - line.x2, line.y1 - line.y2), 10)) {
             this.discardCreate();
             return true;
         }

@@ -291,7 +291,9 @@ something that is not a plain relative repo path is refused with
 | `W_GITHUB_TOO_LARGE`       | Bundle exceeds the 1 MB Contents-API cap.                        |
 | `W_GITHUB_ENCODING`        | GitHub returned a non-base64 encoding (unexpected).              |
 | `W_GITHUB_PATH_INVALID`    | `pathTemplate` assembled into something that is not a plain relative repo path (absolute, empty segment, `.`/`..`, >512 chars). Fix the template. |
-| `W_GITHUB_HTTP_<status>`   | Other non-2xx response (including 502/504 from a misconfigured proxy alias).  |
+| `W_GITHUB_HTTP_<status>`   | Other 4xx response.                                                            |
+| `<status>` (`"502"`, `"429"`) | A 5xx or 429 answer — the bare status, as `withRetry` and the outbox stall detector expect (502/504 often mean a misconfigured proxy alias). Retried. |
+| `W_IO_HTTP_NETWORK`        | No answer at all (timeout, abort, host down). Retried.                         |
 
 All refusals fan out to the standard `io:refused` event + Dialogs toast.
 

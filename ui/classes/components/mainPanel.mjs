@@ -24,11 +24,10 @@ export class MainPanel extends Menu {
     }
     // MainMenu
     append(title, titleHtml, html, id, pluginId) {
-        const htmlIn = div();
-        htmlIn.innerHTML = html;
-
-        const titleHtmlIn = div();
-        titleHtmlIn.innerHTML = titleHtml;
+        // toNode sanitizes markup strings (and degrades to text without the
+        // sanitizer); never assign caller strings to innerHTML here.
+        const htmlIn = div(this.toNode(html));
+        const titleHtmlIn = div(this.toNode(titleHtml));
 
         let content =
             div({ id: id, class: "inner-panel " + pluginId + "-plugin-root inner-panel-simple" },
@@ -53,8 +52,7 @@ export class MainPanel extends Menu {
         this.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
     }
     appendRaw(html, id, pluginId) {
-        const htmlIn = div();
-        htmlIn.innerHTML = html;
+        const htmlIn = div(this.toNode(html));
         let content = div({ id: id, class: "inner-panel " + pluginId + "-plugin-root inner-panel-simple" }, htmlIn);
         van.add(document.getElementById(this.tabs["base"].contentDiv.id), content);
     }

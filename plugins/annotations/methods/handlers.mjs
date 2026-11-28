@@ -3,16 +3,14 @@ export function createErrorHandlers(plugin) {
     // sanitizer. Wire behaviour through the toast `actions` map instead: the
     // message markup uses `data-action="<key>"` and the handler binds the key
     // to a function. Keeps the links working without any executable HTML.
-    const highlight = (...args) => window.USER_INTERFACE?.highlight?.(...args);
-    const highlightAutoOutline = () => highlight('Tools', 'annotations-tool-bar', 'sensitivity-auto-outline');
-
     return {
         W_NO_PRESET: (e) => {
             Dialogs.show(
                 plugin.t('annotations.errors.noPresetSelect'),
                 3000, Dialogs.MSG_WARN,
-                { actions: { selectPreset: () => highlight('RightSideMenu', 'annotations-panel',
-                    e.isLeftClick ? 'annotations-left-click' : 'annotations-right-click') } }
+                // Open the class picker itself: the link takes the user to
+                // the control, not to a spot they then have to decode.
+                { actions: { selectPreset: () => plugin._presetSwatchButton?.open?.() } }
             );
             return false;
         },
@@ -23,16 +21,14 @@ export function createErrorHandlers(plugin) {
         W_AUTO_CREATION_FAIL: () => {
             Dialogs.show(
                 plugin.t('annotations.errors.autoCreateFail'),
-                5000, Dialogs.MSG_WARN,
-                { actions: { highlightAutoOutline } }
+                5000, Dialogs.MSG_WARN
             );
             return false;
         },
         E_AUTO_OUTLINE_INVISIBLE_LAYER: () => {
             Dialogs.show(
                 plugin.t('annotations.errors.autoOutlineInvisibleLayer'),
-                5000, Dialogs.MSG_WARN,
-                { actions: { highlightAutoOutline } }
+                5000, Dialogs.MSG_WARN
             );
             return false;
         }
@@ -41,10 +37,11 @@ export function createErrorHandlers(plugin) {
 
 export const handlerMethods = {
     initHandlers() {
-        VIEWER.addHandler('background-image-swap', () => this.setupActiveTissue());
+        VIEWER_MANAGER.broadcastHandler('background-image-swap', () => this.setupActiveTissue());
         VIEWER_MANAGER.broadcastHandler('warn-user', (e) => this._errorHandlers[e.code]?.apply(this, [e]));
 
         this.context.addHandler('import', () => {
+            this.updatePresetsHTML?.();
             this._refreshAllPresetLists?.();
             this._refreshAllAuthorLists?.();
             this._refreshAllAnnotationFilterBadges?.();
@@ -57,7 +54,7 @@ export const handlerMethods = {
         this.context.addHandler('enabled', this.annotationsEnabledHandler.bind(this));
         this.context.addHandler('preset-select', () => {
             this._refreshAllPresetLists?.();
-            this.updatePresetsMouseButtons?.();
+            this.updatePresetsHTML?.();
         });
 
         this.context.addHandler('preset-create', () => {
@@ -94,26 +91,26 @@ export const handlerMethods = {
             this._refreshAllPresetLists?.();
         });
 
-        this.context.addFabricHandler('annotation-set-private', () => {
-            this.context.fabric.rerender();
+        // Broadcast from every viewer's canvas: repaint the one that raised it.
+        this.context.addFabricHandler('annotation-set-private', (e) => {
+            e.eventSource.rerender();
             this._refreshAllBoardPanels?.();
         });
 
         // The padlock icon and the row badge both read the resolved lock state, and
         // interactivity was already re-derived by the setter — this is the repaint.
-        this.context.addFabricHandler('annotation-lock-change', () => {
-            this.context.fabric.rerender();
+        this.context.addFabricHandler('annotation-lock-change', (e) => {
+            e.eventSource.rerender();
             this._refreshAllBoardPanels?.();
         });
 
-        this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
-            this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
-                this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =
+        this.context.Modes.FREE_FORM_TOOL_ADD.customControls =
+            this.context.Modes.FREE_FORM_TOOL_REMOVE.customControls =
+                this.context.Modes.FREE_FORM_TOOL_CORRECT.customControls =
                     this.freeFormToolControls.bind(this);
 
         this.context.addHandler('free-form-tool-radius', (e) => {
-            const fftSize = document.getElementById('fft-size');
-            if (fftSize) fftSize.value = e.radius;
+            if (this._fftSizeInput) this._fftSizeInput.value = e.radius;
         });
     },
 
@@ -145,21 +142,30 @@ export const handlerMethods = {
     },
 
     /**
-     * Mode-options panel content for the three brush modes. Raw HTML string
-     * (the `customHtml()` contract), injected via `UI.RawHtml`; laid out as a
-     * label-over-control column because the panel is narrow and vertical.
+     * Mode-options panel content for the three brush modes (the mode
+     * `customControls()` contract): nodes with a real change listener, laid out
+     * as a label-over-control column because the panel is narrow and vertical.
      * Widths are inline — the purged `tailwind.min.css` drops many utilities.
      */
     freeFormToolControls() {
-        const label = this.t('annotations.modeOptions.brushRadius');
+        const { div, label } = globalThis.van.tags;
         const hint = this.t('annotations.modeOptions.brushRadiusHint');
-        return `
-<div style="display:flex;flex-direction:column;gap:0.25rem;width:14rem;max-width:100%;padding:0.25rem;">
-    <label class="text-xs font-medium opacity-70" for="fft-size" title="${hint}">${label}</label>
-    <input class="input input-sm input-bordered" style="width:100%;" title="${hint}"
-        type="number" min="5" max="100" step="1" name="freeFormToolSize" id="fft-size" autocomplete="off"
-        value="${this.context.freeFormTool.screenRadius}"
-        onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">
-</div>`;
+        const tool = this.context.freeFormTool;
+        // Kept so the 'free-form-tool-radius' handler can mirror wheel changes.
+        this._fftSizeInput = new UI.Input({
+            id: 'fft-size',
+            onChange: function () { tool.setSafeRadius(Number.parseInt(this.value)); },
+            extraProperties: {
+                type: 'number', min: 5, max: 100, step: 1, name: 'freeFormToolSize',
+                autocomplete: 'off', title: hint, style: 'width:100%;',
+                value: tool.screenRadius,
+            },
+        }).create();
+        return div(
+            { style: 'display:flex;flex-direction:column;gap:0.25rem;width:14rem;max-width:100%;padding:0.25rem;' },
+            label({ class: 'text-xs font-medium opacity-70', for: 'fft-size', title: hint },
+                this.t('annotations.modeOptions.brushRadius')),
+            this._fftSizeInput,
+        );
     }
 };

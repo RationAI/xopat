@@ -570,6 +570,14 @@ path never reaches storage. A slide grant never satisfies another slide.
 consent for the same pixels sets `pixelReadPreapproved: true` on its synthetic context. Pathology-foundation
 does this because its own remote-driver consent covers it. Never set it to silence the prompt.
 
+The current viewport has three reads, all on the live first pass and all reporting `isComplete` instead of
+waiting: `renderCurrentBackgroundPixels` (the slide), `renderCurrentViewportPixels` (a caller-supplied
+visualization) and `renderCurrentLayersPixels` (a selection of the live layers: `"visualization"` or
+`{shaderIds}`, optionally `transparent` for a real alpha channel). In-page tools that analyse what is on
+screen use these rather than a private standalone drawer plus `gl.readPixels` — the annotation magic wand and
+viewport segmentation both go through `renderCurrentLayersPixels`. Their pixels never leave the tool and the
+user's own gesture is the request, which is the other legitimate case for `pixelReadPreapproved`.
+
 ### Looking is not acting
 
 A script that only needs to SEE the slide must leave the user's session as it found it. The core verb is

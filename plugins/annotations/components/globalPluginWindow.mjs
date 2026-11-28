@@ -172,7 +172,9 @@ export const globalPluginWindowMethods = {
         this.context.addHandler('import', globalSideRefresh);
 
         this.context.addHandler('save-annotations', async (e) => {
-            await this.exportToFile();
+            // The request names no viewer ("save" from the module); the file
+            // fallback then covers the viewport being worked in.
+            await this.exportToFile(true, true, this.context.viewer);
             e.setHandled(this.t('annotations.export.downloadFallbackHandled'));
         }, null, -Infinity);
 
@@ -255,10 +257,7 @@ export const globalPluginWindowMethods = {
             const syncShapeChoice = () => {
                 this._shapeChoice?.setSelected(this.context.getActiveFactory().factoryID, false);
             };
-            this.context.addHandler('active-factory-change', () => {
-                syncShapeChoice();
-                this.updatePresetsMouseButtons?.();
-            });
+            this.context.addHandler('active-factory-change', syncShapeChoice);
             // The first bound preset seeds the tool silently (no event): if the
             // toolbar was built before any class was bound, catch up here.
             this.context.addHandler('preset-select', syncShapeChoice);
@@ -361,10 +360,13 @@ export const globalPluginWindowMethods = {
             // ...and modes registered afterwards.
             this.context.addHandler('custom-mode-added', (e) => addCustomModeButton(e.mode));
 
-            this._htmlWrap = new UI.RawHtml({
+            // Host for the active mode's controls. Filled by modeChangeHandler
+            // (run once below for the current mode) with real nodes — never
+            // with a mode's HTML string as-is.
+            this._htmlWrap = globalThis.van.tags.div({
                 id: `${this.id}-mode-options-html`,
-                extraClasses: { base: 'w-full h-full text-sm' }
-            }, this.context.mode.customHtml() || '');
+                class: 'w-full h-full text-sm',
+            });
 
             this._modeOptionsPanel = new UI.ToolbarPanelButton({
                 id: 'mode-options',
@@ -401,11 +403,25 @@ export const globalPluginWindowMethods = {
                     // payload is the authoritative statement of what is now in
                     // effect, including a REFUSED switch, which reports AUTO
                     // without anything having changed.
-                    const rawHtml = (mode.customHtml && mode.customHtml()) || '';
-                    const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
+                    let controls = mode.customControls?.() ?? null;
+                    if (!controls) {
+                        // Deprecated string contract (third-party modes): shown
+                        // through the sanitizer, which strips inline handlers.
+                        const legacy = String(mode.customHtml?.() || '').trim();
+                        if (legacy) {
+                            this._warnedLegacyModeHtml ??= new Set();
+                            if (!this._warnedLegacyModeHtml.has(modeId)) {
+                                this._warnedLegacyModeHtml.add(modeId);
+                                APPLICATION_CONTEXT.log("plugin.gui_annotations").warn(
+                                    `Mode '${modeId}' uses customHtml(), which is removed: its inputs, buttons and inline handlers are dropped. Implement customControls().`);
+                            }
+                            controls = legacy;
+                        }
+                    }
+                    const node = controls ? UI.BaseComponent.toNode(controls) : null;
 
-                    if (hasHtml) {
-                        this._htmlWrap.setHtml(rawHtml);
+                    if (node) {
+                        this._htmlWrap.replaceChildren(node);
                         this._modeOptionsPanel.setVisible(true);
                         // Auto-open on every tool switch where options exist.
                         // Manual close within a tool stays closed until the
@@ -414,7 +430,7 @@ export const globalPluginWindowMethods = {
                             this._modeOptionsPanel.open();
                         }
                     } else {
-                        this._htmlWrap.setHtml('');
+                        this._htmlWrap.replaceChildren();
                         this._modeOptionsPanel.setVisible(false);
                     }
                 }

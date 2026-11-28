@@ -343,8 +343,25 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             params.ui[key] = !!value;
             if (cache && self.AppCache) self.AppCache.set(key, !!value);
         },
+        /**
+         * Is there work the user would lose by leaving? Answered by the IO
+         * pipeline's unsaved-changes registry ("Dirty state" in
+         * src/IO_PIPELINE.md).
+         */
+        isDirty(): boolean {
+            return !!(window as any).IO_PIPELINE?.isDirty?.();
+        },
+        /**
+         * @deprecated Marks the `core` owner dirty. Mark the element that owns
+         * the data instead (`this.io.markDirty(viewer)`), so a save of that
+         * data can clear it.
+         */
         setDirty() {
-            (this as unknown as ApplicationContext).__cache.dirty = true;
+            if (!(this as any).__setDirtyWarned) {
+                (this as any).__setDirtyWarned = true;
+                (this as any).log?.("core.io")?.warn?.("APPLICATION_CONTEXT.setDirty() is deprecated: call this.io.markDirty(...) on the owning element.");
+            }
+            (window as any).IO_PIPELINE?.markDirty?.("core");
         },
         /**
          * Get the list of all plugin IDs.
@@ -446,9 +463,6 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         _dangerouslyAccessPlugin(id: string) {
             //remove in the future?
             return PLUGINS[id];
-        },
-        __cache: {
-            dirty: false
         },
         // todo: necessary to keep?
         prepareRendering: () => {

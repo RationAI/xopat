@@ -177,6 +177,22 @@ export type VisualizationViewportRenderOptions = {
     label?: string;
 };
 
+/**
+ * Which live shader layers a layer render includes.
+ *  - `"visualization"`: every visible overlay layer, the slide itself excluded.
+ *  - `{ shaderIds }`: exactly these layers, by renderer shader id; rendered even when hidden.
+ */
+export type VisualizationLayerSelection = "visualization" | { shaderIds: string[] };
+
+export type VisualizationLayersRenderOptions = VisualizationViewportRenderOptions & {
+    layers: VisualizationLayerSelection;
+    /**
+     * Composite onto alpha 0 instead of the viewer backdrop, so the alpha channel reports where
+     * the selected layers actually painted. Without it every pixel comes back opaque.
+     */
+    transparent?: boolean;
+};
+
 export type VisualizationViewportPixelsResult = {
     width: number;
     height: number;
@@ -660,6 +676,23 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * same read; ask the user or continue from metadata.
      */
     renderCurrentBackgroundPixels(options?: VisualizationViewportRenderOptions): Promise<VisualizationViewportPixelsResult>;
+
+    /**
+     * Renders a SELECTION of the layers currently shown in the viewport, at the live zoom/pan, and
+     * returns raw RGBA pixels ({ width, height, data, isComplete }). `layers: "visualization"` is the
+     * overlay without the slide; `layers: { shaderIds }` picks layers by renderer shader id. Each
+     * selected layer is rendered on its own (blend mode "show"), with its current control values.
+     * Pass `transparent: true` to get a real alpha channel: alpha 0 where no selected layer painted.
+     *
+     * This reads the LIVE viewport, so it never waits for tiles: check `isComplete` before
+     * measuring or caching anything derived from these pixels. Does not move the viewport and
+     * does not change any layer.
+     *
+     * PERMISSION: asks the user before reading slide pixels (they may remember the answer for
+     * this slide, all slides for a while, or always). Throws when declined — do not retry the
+     * same read; ask the user or continue from metadata.
+     */
+    renderCurrentLayersPixels(options: VisualizationLayersRenderOptions): Promise<VisualizationViewportPixelsResult>;
 
     /**
      * Renders an ARBITRARY image region OFF-SCREEN through the flex-renderer pipeline and returns

@@ -14,7 +14,7 @@ const { div, span } = van.tags;
  * @property {number} [bottomPx=10] Distance from bottom of the viewer area
  * @property {number} [edgePadPx=15] Padding from viewer edges
  * @property {boolean} [visible=true] Initial visibility
- * @property {string} [initialMessage=""] Initial HTML message
+ * @property {string} [initialMessage=""] Initial message (plain text)
  * @property {BaseUIOptions["extraClasses"]} [extraClasses]
  * @property {BaseUIOptions["extraProperties"]} [extraProperties] String-only props
  */
@@ -71,9 +71,9 @@ export class StatusBar extends BaseComponent {
         return this;
     }
 
-    /** @param {string} html @returns {StatusBar} */
-    show(html) {
-        this._message.val = html ?? "";
+    /** @param {string} text plain text; markup is shown literally @returns {StatusBar} */
+    show(text) {
+        this._message.val = String(text ?? "");
         this.setVisible(true);
         return this;
     }
@@ -93,7 +93,8 @@ export class StatusBar extends BaseComponent {
                 style: this._style,
                 ...this.extraProperties,
             },
-            span({ class: "one-liner", innerHTML: this._message })
+            // State as a child = reactive text node; the message is never parsed as HTML.
+            span({ class: "one-liner" }, this._message)
         );
         return root;
     }

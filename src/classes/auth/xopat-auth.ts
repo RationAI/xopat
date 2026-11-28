@@ -392,12 +392,18 @@ export interface AuthInteractionInfo {
     pending?: boolean;
 }
 
-export class XOpatAuth {
+/**
+ * Core auth broker, reachable as `APPLICATION_CONTEXT.auth`.
+ *
+ * @extends OpenSeadragon.EventSource
+ * @fires XOpatAuth#auth-settled  `{contextId, authenticated, reason}` — a context's settle verdict changed
+ * @fires XOpatAuth#auth-changed  `{contextId}` — a login/logout/secret transition of a configured context
+ */
+export class XOpatAuth extends OpenSeadragon.EventSource {
     private _brokers = new Map<string, AuthBroker>();
     private _contexts = new Map<string, AuthContextConfig>();
     private _initialized = new Set<string>();
     private _subscribed = new Set<string>();
-    private _listeners = new Set<(contextId: string) => void>();
     /** Contexts declared via {@link requireContext} but not yet claimed by a broker. */
     private _required = new Map<string, AuthContextRequirement>();
     /** Contexts whose current config came from a requirement fallback, not a broker. */
@@ -424,7 +430,6 @@ export class XOpatAuth {
     private _settling = new Map<string, Promise<AuthSettleResult>>();
     /** Memoized terminal verdicts, invalidated by {@link _notify}. */
     private _settled = new Map<string, AuthSettleResult>();
-    private _settleListeners = new Set<(result: AuthSettleResult) => void>();
     /** Contexts whose credential died and that only a user gesture can revive. */
     private _needsInteraction = new Map<string, AuthInteractionInfo>();
     /**
@@ -490,6 +495,7 @@ export class XOpatAuth {
     private _bootStoreHandle: any = null;
 
     constructor() {
+        super();
         // Synchronous, and before anything else can touch the URL — see
         // `_consumeBootMarkers`.
         this._consumeBootMarkers();
@@ -1047,10 +1053,20 @@ export class XOpatAuth {
         return out;
     }
 
-    /** Subscribe to settle verdicts for ANY context. Returns an unsubscribe fn. */
+    /**
+     * Subscribe to settle verdicts for ANY context. Returns an unsubscribe fn.
+     *
+     * A wrapper over the `auth-settled` event that isolates the callback: OSD's
+     * `raiseEvent` does not, so one throwing raw handler stops the rest, while a
+     * throwing `onSettled` callback only logs.
+     */
     onSettled(cb: (result: AuthSettleResult) => void): () => void {
-        this._settleListeners.add(cb);
-        return () => { this._settleListeners.delete(cb); };
+        const handler = (e: any) => {
+            try { cb({ contextId: e.contextId, authenticated: e.authenticated, reason: e.reason }); }
+            catch (err) { console.warn("XOpatAuth onSettled listener failed", err); }
+        };
+        this.addHandler("auth-settled", handler);
+        return () => { this.removeHandler("auth-settled", handler); };
     }
 
     private async _settleContext(contextId: string | null | undefined, opts: SettleOptions): Promise<AuthSettleResult> {
@@ -1232,14 +1248,15 @@ export class XOpatAuth {
     }
 
     /**
-     * Notify settle subscribers. XOpatAuth is not an EventSource and must not
-     * become a new global, so the event rides on XOpatUser using its own naming
-     * rules: bare `auth-settled` for the core context, `auth-settled:<ctx>` else.
+     * Notify settle subscribers: `auth-settled` on this instance (one event name
+     * for every context, the id is in the payload). The same verdict is mirrored
+     * on XOpatUser under its naming rules — bare `auth-settled` for the core
+     * context, `auth-settled:<ctx>` else — for subscribers that predate this.
      */
     private _raiseSettled(result: AuthSettleResult): void {
-        for (const cb of this._settleListeners) {
-            try { cb(result); } catch (e) { console.warn("XOpatAuth onSettled listener failed", e); }
-        }
+        try {
+            this.raiseEvent("auth-settled", { ...result });
+        } catch (e) { console.warn("XOpatAuth auth-settled handler failed", e); }
         const user = this._user();
         if (!user) return;
         try {
@@ -1654,7 +1671,11 @@ export class XOpatAuth {
         const app = (window as any).APPLICATION_CONTEXT;
         if (app?.isUiBootComplete?.() !== true) return { ok: true, reason: "booting" };
         try {
-            if (app?.history?.canUndo?.() === true) return { ok: false, reason: "unsaved-work" };
+            // Unsaved data (IO dirty state), or anything undoable: a redirect
+            // would discard both.
+            if (app?.isDirty?.() === true || app?.history?.canUndo?.() === true) {
+                return { ok: false, reason: "unsaved-work" };
+            }
         } catch (e) { /* no history is not a reason to refuse */ }
         return { ok: true };
     }
@@ -1909,10 +1930,17 @@ export class XOpatAuth {
         }
     }
 
-    /** Subscribe to auth state changes for ANY configured context. */
+    /**
+     * Subscribe to auth state changes for ANY configured context. A wrapper over
+     * the `auth-changed` event that isolates the callback (see {@link onSettled}).
+     */
     onChange(cb: (contextId: string) => void): () => void {
-        this._listeners.add(cb);
-        return () => { this._listeners.delete(cb); };
+        const handler = (e: any) => {
+            try { cb(e.contextId); }
+            catch (err) { console.warn("XOpatAuth onChange listener failed", err); }
+        };
+        this.addHandler("auth-changed", handler);
+        return () => { this.removeHandler("auth-changed", handler); };
     }
 
     private _notify(contextId: string, base?: string, payload?: any): void {
@@ -1966,9 +1994,9 @@ export class XOpatAuth {
             // scrim in the middle of the sign-in that is about to succeed; the next
             // transition of this context re-evaluates.
         }
-        for (const cb of this._listeners) {
-            try { cb(contextId); } catch (e) { console.warn("XOpatAuth onChange listener failed", e); }
-        }
+        try {
+            this.raiseEvent("auth-changed", { contextId });
+        } catch (e) { console.warn("XOpatAuth auth-changed handler failed", e); }
     }
 
     /**

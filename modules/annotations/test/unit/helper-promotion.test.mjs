@@ -17,8 +17,11 @@ let A;
 
 globalThis.window = globalThis.window ?? globalThis;
 
+let shims;
+test.afterAll(() => shims?.restore());
+
 test.beforeAll(async () => {
-    installBrowserGlobals({
+    shims = installBrowserGlobals({
         extra: {
             XOpatModuleSingleton: class {},
             XOpatViewerSingleton: class {},

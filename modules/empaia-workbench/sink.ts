@@ -20,7 +20,10 @@
  * Neither sink interprets a payload it did not produce: `empaia-app-storage`
  * stores the owner's bytes verbatim and hands them back unchanged.
  *
- * Both are inert until an admin binds them in `ENV.client.io.bindings`.
+ * `empaia-annotations` is claimed for the annotations module at runtime
+ * (`claimBinding` in `index.ts`), below an explicit operator binding;
+ * `empaia-app-storage` is inert until an admin binds it in
+ * `ENV.client.io.bindings`.
  */
 
 import {
@@ -78,6 +81,31 @@ type IOResultLike = { ok: true; payload?: unknown; format?: string; meta?: Recor
 
 function refuse(reason: string, code: string, userMessage?: string): IOResultLike {
     return { ok: false, refused: true, reason, code, userMessage };
+}
+
+/** Requests in flight at once for a bulk create/delete — a browser's per-host budget, shared with tiles. */
+const BULK_CONCURRENCY = 6;
+/** Ops taken off the outbox per bulk call; small enough that a stall is noticed within one round. */
+const BULK_BATCH = 48;
+
+/**
+ * Run `task` over `items`, at most `limit` at a time; results keep input order.
+ * A task that throws becomes a refusal for that item only.
+ */
+async function mapBounded<T>(
+    items: T[], limit: number, task: (item: T, index: number) => Promise<IOResultLike>,
+): Promise<IOResultLike[]> {
+    const out: IOResultLike[] = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const i = next++;
+            try { out[i] = await task(items[i]!, i); }
+            catch (e: any) { out[i] = refuse(e?.message ?? String(e), "W_EMPAIA_BULK_ITEM_THREW"); }
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return out;
 }
 
 /**
@@ -456,6 +484,25 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
             }
         },
 
+        // ── bulk forms ──────────────────────────────────────────────────────
+        //
+        // The workbench has no usable list route (see `Wbs3Client.postAnnotations`:
+        // every list body answers 412), so a batch is still one request per record
+        // — but several at a time instead of strictly one after another, which is
+        // what let a scripted batch of thousands outrun the outbox. Each record
+        // goes through the very same `create` / `delete` above, so every per-item
+        // rule (class withdrawal, 404-is-success, lock learning) holds unchanged.
+
+        maxBatch: BULK_BATCH,
+
+        createMany(this: any, ctxs: any[], items: any[]): Promise<IOResultLike[]> {
+            return mapBounded(ctxs, BULK_CONCURRENCY, (ctx, i) => this.create(ctx, items[i]));
+        },
+
+        deleteMany(this: any, ctxs: any[]): Promise<IOResultLike[]> {
+            return mapBounded(ctxs, BULK_CONCURRENCY, (ctx) => this.delete(ctx));
+        },
+
         /**
          * Streamed read. `params` is domain-specific and owner-supplied; we read
          * `backgroundId`-independent filters plus an optional viewport so the
@@ -490,8 +537,10 @@ export function makeAnnotationsSink(deps: EmpaiaSinkDeps): any {
                     });
                 } catch (e: any) {
                     if (signal?.aborted) return;
-                    console.warn("[empaia-workbench] annotation query failed:", e?.message ?? e);
-                    return;
+                    // Not swallowed: ending the stream here made a server error
+                    // indistinguishable from "this slide has no annotations".
+                    // The pipeline surfaces a throw as `W_IO_QUERY_THREW`.
+                    throw e;
                 }
 
                 for (const annotation of page.items) {
@@ -671,6 +720,16 @@ function storageKey(ctx: any): string {
 }
 
 export function makeAppStorageSink(deps: EmpaiaSinkDeps): any {
+    // The endpoint replaces the whole dictionary, so a write is read → merge →
+    // put. Two owners flushing together would both read the same dictionary and
+    // the later put would erase the earlier one's slot: writes run one at a time.
+    let writes: Promise<unknown> = Promise.resolve();
+    const serially = <R>(job: () => Promise<R>): Promise<R> => {
+        const run = writes.then(job, job);
+        writes = run.catch(() => {});
+        return run;
+    };
+
     return {
         id: APP_STORAGE_SINK_ID,
         label: "EMPAIA App-UI Storage",
@@ -691,9 +750,10 @@ export function makeAppStorageSink(deps: EmpaiaSinkDeps): any {
             const kind = deps.storageKind();
             const key = storageKey(ctx);
 
+            return serially(async (): Promise<IOResultLike> => {
             try {
-                // The endpoint replaces the whole dictionary, so merge first —
-                // otherwise one owner's flush wipes every other owner's slot.
+                // Merge first — otherwise one owner's flush wipes every other
+                // owner's slot.
                 const current = await client.getStorage(kind);
                 const content = { ...current.content };
                 if (payload === undefined || payload === null) {
@@ -712,6 +772,7 @@ export function makeAppStorageSink(deps: EmpaiaSinkDeps): any {
                     $.t("io.storageWriteFailed", { ns: "empaia-workbench" })
                 );
             }
+            });
         },
 
         async readBundle(ctx: any): Promise<IOResultLike> {

@@ -230,14 +230,18 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     padding-right: 0.25rem;
     font-size: 0.6875rem;
 }
-/* Compact dropdown header (Dropdown.setCompactHeader): a split square button
-   for narrow chrome such as a vertical toolbar column. The selection icon takes
-   the left half, the caret the right half — same glyph size, so each is a real
-   click target (the caret opens the menu, the icon re-triggers the selection).
-   The 58px reserved for the roomy padded header is dropped by the caller; what
-   makes this fit is losing the padding, not stacking. Real CSS rather than
-   Tailwind: the shipped build is purged, and this needs to beat .btn's own
+/* Split dropdown header (Dropdown `splitHeader`, icon-only): the selection icon
+   re-triggers the current choice, the caret opens the menu. The button is cut
+   into two full-height cells so the click target of each is exact and has no
+   dead padding in between: 65% icon, 35% caret. An even split made the caret
+   the bigger target in practice (its cell reached the button edge, the icon's
+   did not) and the menu opened when the tool was meant.
+   `.dropdown-header-compact` (Dropdown.setCompactHeader) is the same layout
+   for narrow chrome such as a vertical toolbar column, where the caller also
+   drops the 58px reserved for the roomy header. Real CSS rather than Tailwind:
+   the shipped build is purged, and this needs to beat .btn's own
    padding/align-items. */
+.dropdown-header-split,
 .dropdown-header-compact {
     flex-direction: row;
     flex-wrap: nowrap;
@@ -284,8 +288,8 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     margin: 0.125rem 0;
 }
 
+.dropdown-header-split > i,
 .dropdown-header-compact > i {
-    flex: 1 1 50%;
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -295,14 +299,22 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     font-size: 0.875rem;
     line-height: 1;
 }
-/* Each half stays a full-height click target, but the glyphs pack against the
-   shared centre line instead of being centred inside their own cell — two
+/* Each cell stays a full-height click target, but the glyphs pack against the
+   shared boundary instead of being centred inside their own cell — two
    centred cells read as one wide gap between the icon and its caret. */
+.dropdown-header-split > i:first-child,
 .dropdown-header-compact > i:first-child {
+    flex: 0 0 65%;
     justify-content: flex-end;
+    padding-right: 3px !important;
 }
+/* Smaller than the icon: it is the secondary action, and it has to fit a cell
+   that is only a third of a narrow button. */
+.dropdown-header-split > i[data-dropdown-arrow],
 .dropdown-header-compact > i[data-dropdown-arrow] {
+    flex: 0 0 35%;
     justify-content: flex-start;
+    font-size: 0.75rem;
 }
 
 /* Docked toolbar seat: a faint well inside the 35px app bar so an embedded

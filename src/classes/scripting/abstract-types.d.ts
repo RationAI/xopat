@@ -17,6 +17,12 @@ export type HostScriptContext = Pick<
 > & {
     getActiveViewerContextId(): string | null;
     setActiveViewerContextId(contextId: string | null | undefined): unknown;
+    /**
+     * Optional: the exact viewer instance this context acts on. Takes precedence over
+     * `getActiveViewerContextId`, whose `uniqueId` lookup is ambiguous when the same slide
+     * is open in several viewports. Host-side (trusted main-thread) contexts only.
+     */
+    getActiveViewer?(): OpenSeadragon.Viewer | null;
     isConsentDialogBypassed(): boolean;
     setBypassConsentDialog(value: boolean): unknown;
     /**

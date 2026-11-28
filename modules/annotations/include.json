@@ -50,6 +50,12 @@
     "exportPrivate" : true,
     // If default preset should be provided
     "provideDefaultPresets": true,
+    // Annotation layers. Layers are persisted on the annotations they hold
+    // (`layer: {id, name, position}` on every record, `{layer}` update patches to
+    // a bound "crud:annotation" sink). Set to false when the bound destination
+    // has nowhere to keep that: no layer is created, read or written, and the
+    // layer UI is hidden. See convert/README.md -> Layers.
+    "layers": true,
     //Arguments to format convertors
     "convertors": {
         //Default export/import format. Must be a registered convertor ID - one of

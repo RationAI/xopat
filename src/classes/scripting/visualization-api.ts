@@ -4,6 +4,8 @@ import type {
     VisualizationStateSnapshot,
     VisualizationViewportRenderOptions,
     VisualizationViewportPixelsResult,
+    VisualizationLayerSelection,
+    VisualizationLayersRenderOptions,
     VisualizationRegionRenderOptions,
     VisualizationRegionPixelsResult,
     VisualizationRegionPngResult,
@@ -308,6 +310,33 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             viewer.__scriptVisualizationStandaloneDrawer = drawer;
             APPLICATION_CONTEXT.renderDebug?.registerDrawer(drawer, {
                 label: "script-viz", viewer, kind: "offscreen"
+            });
+        }
+        return drawer;
+    }
+
+    /**
+     * A second per-viewer standalone drawer that composites onto alpha 0 instead of the viewer's
+     * backdrop, so the alpha channel of a readback says where a layer actually painted.
+     *
+     * Separate from {@link getCurrentStandaloneDrawer} because all three options are
+     * construction-time only in flex-renderer (`presentationClearColor` has no setter). The
+     * private context mirrors the library's own documented recipe for a real alpha channel.
+     * Deliberately NOT kept in sync with the viewer's background fill colour
+     * (viewer-open-pipeline) - staying transparent is the point of it.
+     */
+    protected getTransparentStandaloneDrawer(): any {
+        const viewer: any = this.activeViewer;
+        let drawer = viewer.__scriptVisualizationTransparentDrawer;
+        if (!drawer) {
+            drawer = this.standaloneFactory(viewer, {
+                presentationClearColor: [0, 0, 0, 0],
+                backgroundColor: "#00000000",
+                sharedContextKey: null,
+            });
+            viewer.__scriptVisualizationTransparentDrawer = drawer;
+            APPLICATION_CONTEXT.renderDebug?.registerDrawer(drawer, {
+                label: "script-viz-transparent", viewer, kind: "offscreen"
             });
         }
         return drawer;
@@ -1601,6 +1630,95 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadBackgroundRender"));
         const { canvas, isComplete } = await this.extractBackgroundCanvas(options);
         const pixels = this.readCanvasPixels(canvas, options, "Failed to create a 2D context for background extraction.");
+        return { ...pixels, isComplete };
+    }
+
+    /**
+     * Harvest a SELECTION of the live shader stack, keyed for `drawWithConfiguration`.
+     *
+     * `"visualization"` is the stack with the slide subtracted. The boundary is a POSITION in the
+     * renderer order (backgrounds are emitted first), not an id match: live renderer ids are
+     * namespaced per viewer, so comparing against config background ids matches nothing.
+     * `{shaderIds}` takes renderer ids as `getShaderLayerOrder()` reports them, or their
+     * un-namespaced form.
+     *
+     * Every harvested layer is forced to `use_mode: "show"` on a COPY of its config and cache:
+     * any other mode blends against the layer underneath, and this pass omits those layers, so a
+     * heatmap configured as a mask would composite to nothing. The live cache is never mutated.
+     */
+    protected harvestLayerConfiguration(
+        viewer: any,
+        layers: VisualizationLayerSelection
+    ): Record<string, any> {
+        const renderer: any = viewer?.drawer?.renderer;
+        if (!renderer?.getShaderLayerOrder || !renderer?.getShaderLayerConfig) {
+            throw new Error("The active viewer has no renderer to read layers from.");
+        }
+
+        const order: string[] = renderer.getShaderLayerOrder() || [];
+        let ids: string[];
+        let explicit = false;
+        if (layers === "visualization") {
+            const split = (window as any).UTILITIES?.getBackgroundShaderSplitIndex?.(viewer);
+            ids = order.slice(Number.isInteger(split) && split > 0 ? split : 0);
+        } else if (layers && Array.isArray((layers as any).shaderIds)) {
+            const ns: string = viewer.__shaderNamespace || "";
+            const wanted = new Set<string>();
+            for (const id of (layers as any).shaderIds) {
+                if (typeof id !== "string" || !id.length) continue;
+                wanted.add(id);
+                wanted.add(ns + id);
+            }
+            ids = order.filter(id => wanted.has(id));
+            explicit = true;
+        } else {
+            throw new Error("layers must be \"visualization\" or {shaderIds: string[]}.");
+        }
+
+        const configuration: Record<string, any> = {};
+        for (const id of ids) {
+            const cfg = renderer.getShaderLayerConfig(id);
+            if (!cfg || cfg.error) continue;
+            // An explicitly named layer is rendered even when the user has it hidden: the
+            // caller asked for THAT layer's pixels, not for what is on screen.
+            const hidden = cfg.visible === 0 || cfg.visible === false;
+            if (hidden && !explicit) continue;
+            configuration[id] = {
+                ...cfg,
+                ...(hidden ? { visible: 1 } : {}),
+                use_mode: "show",
+                cache: { ...(cfg.cache || {}), use_mode: "show" }
+            };
+        }
+        if (!Object.keys(configuration).length) {
+            throw new Error("No renderable shader layer matches the requested selection.");
+        }
+        return configuration;
+    }
+
+    /**
+     * Renders a selection of the CURRENT viewport's live shader layers and returns RGBA pixels
+     * plus `isComplete`. Same live-first-pass reuse as {@link extractBackgroundCanvas}: the pixels
+     * are exactly as complete as what is on screen, so this never waits.
+     */
+    async renderCurrentLayersPixels(
+        options: VisualizationLayersRenderOptions
+    ): Promise<VisualizationViewportPixelsResult> {
+        await this.requirePixelReadConsent(this.activeViewer, $.t("scripting.consent.pixelReadViewportRender"));
+        const viewer: any = this.activeViewer;
+        const configuration = this.harvestLayerConfiguration(viewer, options?.layers);
+        const out = await this.runSerializedRegionTask(viewer, () =>
+            (options.transparent ? this.getTransparentStandaloneDrawer() : this.getCurrentStandaloneDrawer()).extract({
+                mode: "second-pass",
+                configuration,
+                view: viewer.drawer,
+                result: "canvas",
+            }), { kind: "viewport", label: options.label });
+
+        const { canvas, isComplete } = this.unwrapExtract(out, "Failed to render the selected layers.");
+        const pixels = this.readCanvasPixels(
+            this.cropAndScaleCanvas(canvas, options), options,
+            "Failed to create a 2D context for layer extraction.");
         return { ...pixels, isComplete };
     }
 

@@ -162,6 +162,43 @@ export class AnnotationBoardPanel {
             this.filterBadgesEl
         );
 
+        // Bulk-action strip: appears once several annotations are selected, so
+        // "move these to a layer" does not hide in a right-click menu.
+        const t = (key, args) => this.plugin.t(key, args);
+        // `layers: false` (module config): the deployment keeps no layers, so no
+        // action that creates one or moves annotations into one is offered.
+        const layersOn = this.context?.layersEnabled !== false;
+        this.selectionCountEl = span({ class: 'text-xs font-medium flex-1 min-w-0 truncate' });
+        this.selectionStripEl = div({
+                id: `${this.containerId}-selection-strip`,
+                class: 'hidden items-center gap-1 px-2 py-1 border-b border-base-300 bg-base-200 no-select'
+            },
+            this.selectionCountEl,
+            layersOn ? button({
+                    type: 'button',
+                    class: 'btn btn-ghost btn-xs gap-1',
+                    title: t('annotations.board.moveSelectionToLayer'),
+                    onclick: (e) => this._openMoveSelectionMenu(e)
+                },
+                span({ class: 'ph-light ph-stack' }),
+                t('annotations.board.moveSelectionToLayer')) : null,
+            button({
+                    type: 'button',
+                    class: 'btn btn-ghost btn-xs btn-square',
+                    title: t('annotations.board.deselect'),
+                    onclick: () => this.fabric?.clearAnnotationSelection?.()
+                },
+                span({ class: 'ph-light ph-selection-slash' })),
+            button({
+                    type: 'button',
+                    id: `${this.containerId}-delete-selection`,
+                    class: 'btn btn-ghost btn-xs btn-square',
+                    title: t('annotations.board.deleteSelection'),
+                    onclick: () => this.fabric?.deleteSelection?.()
+                },
+                span({ class: 'ph-light ph-trash' }))
+        );
+
         this.rootComponent = new UI.Div({
                 id: this.containerId,
                 extraClasses: 'relative flex flex-col h-full min-h-0 annotation-board-panel'
@@ -173,12 +210,19 @@ export class AnnotationBoardPanel {
                 new UI.Div({ extraClasses: 'text-sm flex-1 min-w-0 truncate uppercase font-bold opacity-50' }, this.plugin.t('annotations.board.title')),
                 new UI.Div({ extraClasses: 'flex items-center gap-1' },
                     new UI.Button({
+                        id: `${this.containerId}-select-all`,
+                        type: UI.Button.TYPE.NONE,
+                        extraClasses: 'btn btn-ghost btn-xs btn-square',
+                        extraProperties: { title: this.plugin.t('annotations.board.selectAll') },
+                        onClick: () => this.fabric?.selectAllAnnotations?.()
+                    }, new UI.PhIcon({ name: 'ph-selection-all' })),
+                    ...(layersOn ? [new UI.Button({
                         id: `${this.containerId}-create-layer`,
                         type: UI.Button.TYPE.NONE,
                         extraClasses: 'btn btn-ghost btn-xs btn-square',
                         extraProperties: { title: this.plugin.t('annotations.board.createLayer') },
                         onClick: () => this.fabric?.createLayer()
-                    }, new UI.PhIcon({ name: 'ph-stack-plus' })),
+                    }, new UI.PhIcon({ name: 'ph-stack-plus' }))] : []),
                     new UI.Button({
                         id: `${this.containerId}-refresh`,
                         type: UI.Button.TYPE.NONE,
@@ -203,6 +247,7 @@ export class AnnotationBoardPanel {
                 )
             ),
             this.searchPanelEl,
+            this.selectionStripEl,
             new UI.Div({
                 id: this.bodyId,
                 extraClasses: 'flex-1 overflow-y-auto px-0 py-2 min-h-0'
@@ -345,13 +390,19 @@ export class AnnotationBoardPanel {
     _installDelegatedHandlers() {
         if (!this.layerLogsEl || this._delegatedClickInstalled) return;
         this.layerLogsEl.addEventListener('click', (e) => {
-            // Group rows are intentionally not clickable on left-click. Bulk-
-            // selecting 50+ annotations cascades through selectAnnotation /
-            // annotation-selection-changed and freezes the viewer; bulk
-            // operations live behind the right-click context menu instead.
+            // Group rows are intentionally not clickable on left-click: the
+            // row carries its own bulk controls.
             if (e.target.closest('[data-type="annotation-group"]')) return;
             const annRow = e.target.closest('[data-type="annotation"]');
-            if (!annRow) return;
+            if (!annRow) {
+                // A layer row: make it the layer new annotations go to;
+                // clicking the active one again releases it.
+                const layerRow = e.target.closest('[data-type="layer"]');
+                if (layerRow && !e.target.closest('input, button')) {
+                    this._toggleActiveLayer(layerRow.dataset.id);
+                }
+                return;
+            }
             const id = Number(annRow.dataset.id);
             if (!Number.isFinite(id)) return;
             const obj = this.fabric?.findObjectOnCanvasByIncrementId?.(id);
@@ -382,7 +433,14 @@ export class AnnotationBoardPanel {
                 }
             }
 
-            if (!active) return; // layer rows / empty gutters fall through
+            if (!active) {
+                const layerRow = e.target.closest('[data-type="layer"]');
+                if (layerRow) {
+                    e.preventDefault();
+                    this._openLayerActionsMenu(e, layerRow.dataset.id);
+                }
+                return; // empty gutters fall through
+            }
 
             e.preventDefault();
             const viewer = this.fabric?.viewer ?? this.viewer ?? null;
@@ -419,6 +477,8 @@ export class AnnotationBoardPanel {
             'layer-objects-changed',
             'annotation-selection-changed',
             'layer-selection-changed',
+            // The active-layer marker is part of the layer row.
+            'active-layer-changed',
         ];
         const handlers = [];
         const bump = () => {
@@ -520,9 +580,140 @@ export class AnnotationBoardPanel {
             this._buildRows();
             this._lastBuiltVersion = this._dataVersion;
         }
-        this._renderRows();
+        // One selection lookup for the whole pass, instead of scanning the
+        // selection once per rendered row.
+        const selected = fabric.getSelectedAnnotations?.() || [];
+        this._renderSelectedIds = new Set(selected.map(o => o?.incrementId));
+        try {
+            this._renderRows();
+        } finally {
+            this._renderSelectedIds = null;
+        }
+        this._updateSelectionStrip(selected.length);
         this._updateDeleteSelectionHeaderButton();
         this._updateActiveLayerVisual(fabric.getActiveLayer?.());
+    }
+
+    /** Show the bulk-action strip while several annotations are selected. */
+    _updateSelectionStrip(count) {
+        if (!this.selectionStripEl) return;
+        const show = count >= 2;
+        this.selectionStripEl.classList.toggle('hidden', !show);
+        this.selectionStripEl.classList.toggle('flex', show);
+        if (show) this.selectionCountEl.textContent = this.plugin.t('annotations.board.selectedCount', { count });
+    }
+
+    /** Make a layer the target of new annotations; the active one toggles off. */
+    _toggleActiveLayer(layerId) {
+        const fabric = this.fabric;
+        if (!fabric || layerId === undefined || layerId === null) return;
+        if (String(fabric.getActiveLayer?.()?.id) === String(layerId)) fabric.unsetActiveLayer?.();
+        else fabric.setActiveLayer?.(String(layerId));
+    }
+
+    /**
+     * Layer choices shared by every "move to layer" menu.
+     * @param {(target: string|null|{kind:'new'}) => void} apply
+     * @param {object} [opts]
+     * @param {string} [opts.excludeLayerId] layer to leave out (the source)
+     * @param {boolean} [opts.includeRoot=true]
+     */
+    _layerTargetItems(apply, { excludeLayerId = '', includeRoot = true } = {}) {
+        const t = (key, args) => this.plugin.t(key, args);
+        const items = [];
+        if (includeRoot) {
+            items.push({ title: t('annotations.contextMenu.noLayer'), icon: 'ph-stack-minus', action: () => apply(null) });
+        }
+        for (const layer of (this.fabric?.getAllLayers?.() || [])) {
+            if (String(layer.id) === String(excludeLayerId)) continue;
+            items.push({
+                title: layer.name || t('annotations.contextMenu.layerNamed', { id: layer.id }),
+                icon: 'ph-stack',
+                action: () => apply(String(layer.id)),
+            });
+        }
+        items.push({ title: t('annotations.contextMenu.newLayer'), icon: 'ph-stack-plus', action: () => apply({ kind: 'new' }) });
+        return items;
+    }
+
+    /** Move `annotations` to a layer id, to root (`null`) or into a fresh layer. */
+    _moveAnnotationsTo(annotations, target) {
+        const fabric = this.fabric;
+        if (!fabric || !annotations?.length) return;
+        if (target && typeof target === 'object') fabric.groupAnnotationsIntoLayer?.(annotations, target);
+        else fabric.setAnnotationsLayer?.(annotations, target);
+    }
+
+    _openMenu(event, items) {
+        if (!items?.length) return;
+        const ctxMenu = window.ContextMenu;
+        if (ctxMenu?.open) ctxMenu.open(event, items);
+        else window.DropDown?.open?.(event, items);
+    }
+
+    _openMoveSelectionMenu(event) {
+        const selection = this.fabric?.getSelectedAnnotations?.() || [];
+        if (!selection.length) return;
+        this._openMenu(event, this._layerTargetItems(target => this._moveAnnotationsTo(selection, target)));
+    }
+
+    _openLayerActionsMenu(event, layerId) {
+        const fabric = this.fabric;
+        const layer = fabric?.getLayer?.(String(layerId));
+        if (!layer) return;
+        const t = (key, args) => this.plugin.t(key, args);
+        const id = String(layer.id);
+        const selection = (fabric.getSelectedAnnotations?.() || [])
+            .filter(o => String(o.layerID ?? '') !== id);
+        const count = selection.length;
+
+        this._openMenu(event, [
+            {
+                title: t('annotations.board.selectAllInLayer'),
+                icon: 'ph-selection-all',
+                action: () => fabric.selectAllAnnotations?.({ layerId: id }),
+            },
+            {
+                title: t('annotations.board.moveSelectionHere', { count }),
+                icon: 'ph-arrow-bend-down-right',
+                containerCss: !count && 'opacity-50',
+                action: () => count && fabric.setAnnotationsLayer?.(selection, id),
+            },
+            {
+                title: t('annotations.board.renameLayer'),
+                icon: 'ph-pencil-simple',
+                action: () => {
+                    this._renamingLayerId = id;
+                    this._dataVersion++;
+                    this.requestRender(true);
+                },
+            },
+            {
+                title: t('annotations.board.deleteLayer'),
+                icon: 'ph-trash',
+                action: async () => {
+                    const members = Number(layer.getAnnotationCount?.() ?? 0);
+                    // Deleting a layer deletes its annotations: ask unless it is empty.
+                    if (members > 0 && !(await globalThis.UI.Modal.confirm({
+                        header: t('annotations.board.deleteLayer'),
+                        body: t('annotations.board.deleteLayerConfirm', { name: layer.name, count: members }),
+                        confirmLabel: t('annotations.board.deleteLayer'),
+                    }))) return;
+                    fabric.deleteLayer?.(id);
+                },
+            },
+        ]);
+    }
+
+    _commitLayerRename(layerId, value) {
+        if (this._renamingLayerId !== layerId) return;
+        this._renamingLayerId = null;
+        const renamed = value !== null && this.fabric?.renameLayer?.(layerId, value);
+        // A refused / cancelled rename raises no event: redraw the plain name.
+        if (!renamed) {
+            this._dataVersion++;
+            this.requestRender(true);
+        }
     }
 
     /**
@@ -847,13 +1038,12 @@ export class AnnotationBoardPanel {
             menu.appendChild(item);
         };
 
-        if (sourceLayerId) addItem('(no layer)', () => apply(null));
+        const t = (key, args) => this.plugin.t(key, args);
+        if (sourceLayerId) addItem(t('annotations.contextMenu.noLayer'), () => apply(null));
         for (const l of layers) {
-            addItem(l.name || `Layer ${l.id}`, () => apply(l.id));
+            addItem(l.name || t('annotations.contextMenu.layerNamed', { id: l.id }), () => apply(l.id));
         }
-        if (!menu.children.length) {
-            addItem('(no other layers)', () => {});
-        }
+        addItem(t('annotations.contextMenu.newLayer'), () => this._moveAnnotationsTo(members, { kind: 'new' }));
 
         document.body.appendChild(menu);
         const rect = anchorBtn.getBoundingClientRect();
@@ -1068,10 +1258,36 @@ export class AnnotationBoardPanel {
             this.requestRender(true);
         };
 
-        layer.name = layer.name || this.plugin.t('annotations.board.layerName', {name: layer.label || ''});
-        nameEl.textContent = layer.name;
+        const t = (key, args) => this.plugin.t(key, args);
+        layer.name = layer.name || t('annotations.board.layerName', {name: layer.label || ''});
+        if (this._renamingLayerId === layerId) {
+            const edit = document.createElement('input');
+            edit.type = 'text';
+            edit.value = layer.name;
+            edit.className = 'input input-xs input-bordered flex-1 min-w-0';
+            edit.onkeydown = (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') this._commitLayerRename(layerId, edit.value);
+                else if (e.key === 'Escape') this._commitLayerRename(layerId, null);
+            };
+            edit.onblur = () => this._commitLayerRename(layerId, edit.value);
+            nameEl.replaceWith(edit);
+            queueMicrotask(() => { edit.focus(); edit.select(); });
+        } else {
+            nameEl.textContent = layer.name;
+        }
         badgeEl.textContent = annCount;
         areaEl.textContent = `Σ ${this._formatArea(this._computeLayerArea(layer))}`;
+
+        // The active layer is where new annotations go — say so on the row.
+        const isActive = String(this.fabric?.getActiveLayer?.()?.id) === layerId;
+        row.title = t(isActive ? 'annotations.board.activeLayerHint' : 'annotations.board.activateLayerHint');
+        if (isActive) {
+            wrapper.classList.add('history-layer-current');
+            const marker = phIcon('ph-pencil-simple-line', 'text-sm text-primary shrink-0');
+            marker.title = t('annotations.board.activeLayerHint');
+            badgeEl.before(marker);
+        }
 
         const visBtn = document.createElement('button');
         visBtn.className = 'btn btn-ghost btn-xs btn-square';
@@ -1092,7 +1308,7 @@ export class AnnotationBoardPanel {
 
             const upBtn = document.createElement('button');
             upBtn.className = 'btn btn-ghost btn-xs btn-square';
-            upBtn.title = 'Move layer up';
+            upBtn.title = t('annotations.board.moveLayerUp');
             upBtn.appendChild(phIcon('ph-arrow-up', 'text-xs'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
@@ -1101,14 +1317,25 @@ export class AnnotationBoardPanel {
 
             const downBtn = document.createElement('button');
             downBtn.className = 'btn btn-ghost btn-xs btn-square';
-            downBtn.title = 'Move layer down';
+            downBtn.title = t('annotations.board.moveLayerDown');
             downBtn.appendChild(phIcon('ph-arrow-down', 'text-xs'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(downBtn) || layer, 'down');
             };
 
-            actions.append(upBtn, downBtn);
+            // Everything else a layer can do (select its members, receive the
+            // selection, rename, delete) — also on the row's right-click.
+            const moreBtn = document.createElement('button');
+            moreBtn.className = 'btn btn-ghost btn-xs btn-square';
+            moreBtn.title = t('annotations.board.layerActions');
+            moreBtn.appendChild(phIcon('ph-dots-three-vertical', 'text-xs'));
+            moreBtn.onclick = (e) => {
+                e.stopPropagation();
+                this._openLayerActionsMenu(e, (targetForRow(moreBtn) || layer).id);
+            };
+
+            actions.append(upBtn, downBtn, moreBtn);
         }
 
         // Annotations under this layer render as separate sibling rows on the
@@ -1189,8 +1416,9 @@ export class AnnotationBoardPanel {
     _renderAnnotation(object, opts = {}) {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         const isFiltered = !!this.context.isAnnotationFilteredOut?.(object);
-        const isSelected = !!this.fabric?.getSelectedAnnotations?.()
-            ?.some(o => o?.incrementId === object.incrementId);
+        const isSelected = this._renderSelectedIds
+            ? this._renderSelectedIds.has(object.incrementId)
+            : !!this.fabric?.getSelectedAnnotations?.()?.some(o => o?.incrementId === object.incrementId);
         const isChild = !!opts.parentGroupKey;
 
         // Clone the static skeleton, then write per-row data.
@@ -1456,6 +1684,9 @@ export class AnnotationBoardPanel {
         };
 
         reorderCell.append(upBtn, downBtn);
+        actionsEl.append(reorderCell);
+        row.appendChild(actionsEl);
+        if (this.context?.layersEnabled === false) return row;
 
         const layerBtn = document.createElement('button');
         layerBtn.className = 'btn btn-ghost btn-xs btn-square';
@@ -1466,8 +1697,7 @@ export class AnnotationBoardPanel {
             this._openMoveToLayerMenuForGroup(layerBtn, members);
         };
 
-        actionsEl.append(reorderCell, layerBtn);
-        row.appendChild(actionsEl);
+        actionsEl.append(layerBtn);
 
         return row;
     }
@@ -1550,15 +1780,16 @@ export class AnnotationBoardPanel {
         }
 
         const [lo, hi] = fromIdx <= toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-        // Reset selection then add each annotation in range. Anchor stays put
+        // Replace the selection with the range in one update. Anchor stays put
         // so the user can refine the range with another shift+click.
-        fabric.selectAnnotation?.(rows[lo].obj, false, true);
-        for (let i = lo + 1; i <= hi; i++) {
+        const range = [];
+        for (let i = lo; i <= hi; i++) {
             const r = rows[i];
             if (r.kind !== 'ann' || !r.obj) continue;
             if (this.context.isAnnotationFilteredOut?.(r.obj)) continue;
-            fabric.selectAnnotation?.(r.obj, false, false);
+            range.push(r.obj);
         }
+        fabric.selectAnnotations?.(range, { clearPrevious: true });
     }
 
     _focusViewportOn(bbox) {
@@ -1623,6 +1854,9 @@ export class AnnotationBoardPanel {
     _updateSelectionVisuals(selected, deselected, type) {
         if (!this.root) return;
         const norm = v => Array.isArray(v) ? v : (v ? [v] : []);
+        // A bulk change is painted by the re-render the same event queues; a
+        // DOM lookup per object here would only stall it.
+        if (norm(selected).length + norm(deselected).length > 100) return;
         for (const obj of norm(selected)) {
             const id = type === 'annotation' ? obj.incrementId : obj.id;
             const el = this.root.querySelector(`[data-type="${type}"][data-id="${String(id)}"]`);
@@ -1727,9 +1961,9 @@ export class AnnotationBoardPanel {
             const item = target?.closest?.('[data-type="annotation"],[data-type="layer"]');
             if (item || shouldIgnore(target)) return;
 
+            // Only the annotation selection: the active layer is a drawing
+            // target the user set on purpose, and must survive a stray click.
             this.fabric.clearAnnotationSelection?.(true);
-            this.fabric.clearLayerSelection?.();
-            this.fabric.unsetActiveLayer?.();
         };
         container._clearSelHandler = handler;
         container.addEventListener('pointerdown', handler);

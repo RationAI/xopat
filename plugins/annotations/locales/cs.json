@@ -27,9 +27,8 @@
       "border": "Okraj",
       "opacity": "Neprůhlednost",
       "editPresets": "Upravit",
-      "leftClickPreset": "Levé tlačítko myši kreslí touto třídou",
-      "rightClickPreset": "Pravé tlačítko myši kreslí touto třídou",
-      "unknownPreset": "Neznámá",
+      "leftClickPreset": "Kreslit tuto třídu levým tlačítkem myši",
+      "rightClickPreset": "Kreslit tuto třídu pravým tlačítkem myši",
       "noPresetsPrefix": "Nejsou k dispozici žádné předvolby tříd.",
       "createPresetLink": "Vytvořte předvolbu pro anotování.",
       "tabs": {
@@ -58,7 +57,12 @@
       "sameAuthor": "Stejný autor",
       "sameCategoryText": "Stejný text kategorie",
       "actions": "Akce",
-      "modifyAnnotation": "Upravit anotaci"
+      "modifyAnnotation": "Upravit anotaci",
+      "selectAll": "Vybrat vše",
+      "selectAllInLayer": "Vybrat vše v této vrstvě",
+      "deselect": "Zrušit výběr",
+      "moveSelectionToLayer": "Přesunout anotace ({{count}}) do vrstvy",
+      "newLayer": "Nová vrstva…"
     },
     "workspace": {
       "label": "Pracovní oblast",
@@ -67,12 +71,13 @@
     },
     "errors": {
       "noPresetSelect": "Není vybrána žádná třída anotace. <a class='pointer' data-action='selectPreset'>Vyberte ji zde</a> a začněte anotovat.",
-      "autoCreateFail": "Automatickou anotaci se nepodařilo vytvořit. Ujistěte se, že <a class='pointer' data-action='highlightAutoOutline'>detekujete ve správné vrstvě</a> a vybíráte barevnou oblast. Pomoci může i úprava prahu.",
-      "autoOutlineInvisibleLayer": "<a class='pointer' data-action='highlightAutoOutline'>Zvolená vrstva</a> není viditelná: metoda automatického obrysu nebude fungovat.",
+      "autoCreateFail": "Automatickou anotaci se nepodařilo vytvořit. Ujistěte se, že detekujete ve správné vrstvě a vybíráte barevnou oblast. Pomoci může i úprava prahu.",
+      "autoOutlineInvisibleLayer": "Zvolená vrstva není viditelná: metoda automatického obrysu nebude fungovat.",
       "metaCreateFail": "Nepodařilo se vytvořit pole metadat „{{name}}“.",
       "metaDeleteFail": "Nepodařilo se smazat pole metadat.",
       "presetRemoveFail": "Nepodařilo se odebrat třídu.",
-      "metaNameRequired": "Musíte zadat název nového pole."
+      "metaNameRequired": "Musíte zadat název nového pole.",
+      "annotationsDisabled": "Anotace jsou vypnuté. Nejprve je zapněte."
     },
     "tutorial": {
       "title": "Anotace",
@@ -95,8 +100,7 @@
       "presetSwatch": "Třídy pro kreslení (levé / pravé tlačítko myši)",
       "presetSwatchTitle": "Třídy pro kreslení",
       "editPresets": "Upravit třídy…",
-      "noPresets": "Zatím žádné třídy",
-      "unnamedPreset": "Nepojmenovaná třída"
+      "noPresets": "Zatím žádné třídy"
     },
     "export": {
       "menuTitle": "Anotace",
@@ -184,8 +188,6 @@
       "vocabularyPick": "Přidat třídu ze seznamu...",
       "vocabularyExhausted": "Každá dostupná třída již má předvolbu.",
       "vocabularyLocked": "Tato třída pochází z připojené služby a nelze ji zde přejmenovat ani změnit.",
-      "useLeft": "Použít pro levé tlačítko",
-      "useRight": "Použít pro pravé tlačítko",
       "finishEditing": "Dokončit úpravy"
     },
     "lock": {
@@ -209,6 +211,20 @@
       "search": "Hledat a filtrovat",
       "area": "Plocha",
       "searchPlaceholder": "Hledat...",
+      "selectAll": "Vybrat všechny anotace",
+      "selectedCount": "Vybráno: {{count}}",
+      "moveSelectionToLayer": "Přesunout do vrstvy",
+      "deselect": "Zrušit výběr",
+      "layerActions": "Akce vrstvy",
+      "selectAllInLayer": "Vybrat vše ve vrstvě",
+      "moveSelectionHere": "Přesunout výběr sem ({{count}})",
+      "renameLayer": "Přejmenovat",
+      "deleteLayer": "Smazat vrstvu",
+      "deleteLayerConfirm": "Smazat vrstvu „{{name}}“ včetně jejích anotací ({{count}})?",
+      "activeLayerHint": "Nové anotace se přidávají do této vrstvy. Kliknutím ukončíte.",
+      "activateLayerHint": "Kliknutím budete nové anotace přidávat do této vrstvy",
+      "moveLayerUp": "Posunout vrstvu nahoru",
+      "moveLayerDown": "Posunout vrstvu dolů",
       "metricColumn": {
         "label": "Metrika",
         "off": "—",

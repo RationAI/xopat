@@ -66,7 +66,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.version = "0.0.1";
         this.session = this.version + "_" + Date.now();
 
-        this._activeViewer = VIEWER;
+        // The gesture owner: the one viewport the shared mode, cursor and factories
+        // act on (see `get viewer`). It changes only through `claimGestureViewer`,
+        // driven by the manager's activation events here and by the fabric wrapper
+        // that actually receives the pointer — never by reading the global VIEWER.
+        this._gestureViewer = VIEWER_MANAGER.get();
+        this._pendingGestureViewer = undefined;
+        this._resolvingGestureViewer = false;
+        VIEWER_MANAGER.addHandler('active-viewer-changed', (e) => this.claimGestureViewer(e.viewer));
+        VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
+            if (this._pendingGestureViewer === e.viewer) this._pendingGestureViewer = undefined;
+            if (this._gestureViewer !== e.viewer) return;
+            // A lock cannot outlive its viewer: hand over without consulting the mode.
+            const next = VIEWER_MANAGER.get();
+            this._gestureViewer = next && next !== e.viewer ? next : undefined;
+        });
         this.commentsEnabled = true;
 
         // Always-on measurement label overlay. Off by default; toggled per
@@ -112,7 +126,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this.addFabricHandler('annotation-selection-changed', (e) => {
             if (this._editSelectionSyncDepth > 0) return;
-            this._syncEditModeToSelection(e?.viewer, e?.selected || [], e?.deselected || []);
+            this._syncEditModeToSelection(e.eventSource.viewer, e?.selected || [], e?.deselected || []);
         });
 
         // TODO: necessary? kinda overkill...
@@ -163,9 +177,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             // The fabric canvas itself is still per-viewer (one wrapper per
             // OSD viewer); only the IO state-keying axis is per-slide.
             bundleScope: "per-viewer-background",
+            // Two viewports showing one slide are two canvases over one stored
+            // document: each must be hydrated.
+            perViewport: true,
+            // The canvas is per VIEWPORT, so it is resolved through
+            // `IO_PIPELINE.viewerFor(ctx)`. `ctx.viewerId` names the document and
+            // is shared by every viewport showing the slide.
             exportBundle: async (ctx) => {
                 if (!ctx.viewerId) return undefined;
-                const fabric = this.getFabric(ctx.viewerId);
+                const fabric = this.getFabric(IO_PIPELINE.viewerFor(ctx));
                 if (!fabric) return undefined;
                 // The binding's `formatOptions` (only those it sets; they win over
                 // the user's values) and the dispatch itself go to the format: a format
@@ -174,7 +194,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             },
             importBundle: async (ctx, data) => {
                 if (!ctx.viewerId) return;
-                const fabric = this.getFabric(ctx.viewerId);
+                const fabric = this.getFabric(IO_PIPELINE.viewerFor(ctx));
                 if (!fabric) return;
                 // Slide-change restore semantics. The fabric canvas is a
                 // per-viewer overlay that survives OSD world resets, so when
@@ -255,7 +275,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             coalesce: true,
             // Shallow patch merge for the `create + update` rule. Most
             // annotation patches are a small set of property overrides.
-            merge: (prev, next) => ({ ...(prev || {}), ...(next || {}) }),
+            // `prev` may be the live fabric object a `create` was issued with —
+            // spreading it would copy its canvas refs and lose the prototype-held
+            // `type`, so serialize both sides first.
+            merge: (prev, next) => ({
+                ...(prev ? this.serializeAnnotation(prev) : {}),
+                ...(next ? this.serializeAnnotation(next) : {}),
+            }),
             // Persist pending ops to IndexedDB so server sync survives a
             // page reload. Per-resource cap + age guard the storage size.
             persistOutbox: true,
@@ -347,6 +373,63 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
         this._registerLockGuard();
         this._mirrorPipelineFailures();
+        this._trackUnsavedChanges();
+    }
+
+    /**
+     * Tell the IO pipeline which slides hold unsaved annotation work, so Save
+     * can be offered and leaving the page warns. The pipeline clears a slide's
+     * mark once its bundle reaches a persisting sink (or the file Export), and
+     * ignores marks raised while it hydrates us. See "Dirty state" in
+     * src/IO_PIPELINE.md.
+     *
+     * A bound `crud:*` sink stores each edit as it happens; its outbox reports
+     * what is still at risk, so marking the bundle too would leave a mark that
+     * only an explicit Save could clear.
+     * @private
+     */
+    _trackUnsavedChanges() {
+        const pipeline = globalThis.IO_PIPELINE;
+        if (!pipeline?.markDirty) return;
+        const markFor = (capabilityId) => (e) => {
+            if (pipeline.isEnabled(this.uid, capabilityId)) return;
+            const viewer = e?.eventSource?.viewer;
+            if (viewer) this.io.markDirty(viewer);
+        };
+        const annotationEdit = markFor("crud:annotation");
+        for (const name of [
+            'annotation-create', 'annotation-delete', 'annotation-replace', 'annotation-edit-end',
+            'annotation-preset-change', 'annotation-add-comment', 'annotation-delete-comment',
+            'annotation-readonly-change', 'annotation-lock-change', 'annotation-set-private',
+            'layer-added', 'layer-removed',
+        ]) this.addFabricHandler(name, annotationEdit);
+        // A user file import or a bulk add (scripting, job results) and their
+        // undo/redo; restore/hydration loads raise `load-objects` and are
+        // suppressed by the pipeline anyway.
+        const userLoads = new Set(['import', 'import-undo', 'bulk-add', 'bulk-add-undo', 'bulk-add-redo']);
+        this.addFabricHandler('annotation-loaded', (e) => {
+            if (userLoads.has(e?.reason)) annotationEdit(e);
+        });
+        // Layer edits (rename, reorder, moving annotations between layers or
+        // within one). Visibility is view state, and a load is not an edit.
+        this.addFabricHandler('layer-objects-changed', (e) => {
+            if (e?.kind !== 'visibility' && e?.kind !== 'load') annotationEdit(e);
+        });
+        // The palette is shared by every open slide, and each slide's bundle
+        // carries it. `preset-create` is left out: presets are also created
+        // implicitly (defaults, auto-select), and a new preset is only work
+        // once it is edited or used.
+        const presetEdit = (e) => {
+            // A merge import (slide hydration, possibly for ANOTHER viewer whose
+            // restore guard does not cover this one) is loaded data, not user work.
+            if (e?.imported) return;
+            if (pipeline.isEnabled(this.uid, "crud:preset")) return;
+            for (const viewer of VIEWER_MANAGER.viewers || []) {
+                if (viewer?.world?.getItemCount?.()) this.io.markDirty(viewer);
+            }
+        };
+        this.addHandler('preset-update', presetEdit);
+        this.addHandler('preset-delete', presetEdit);
     }
 
     /**
@@ -380,6 +463,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             handler: (ctx) => {
                 if (ctx?.direction !== "pre-update" && ctx?.direction !== "pre-delete") return { ok: true };
                 if (ctx.meta?.kind === 'comment-add' || ctx.meta?.kind === 'comment-delete') return { ok: true };
+                // Which layer an annotation is filed under is organisation, not
+                // content: the board never asked the lock before moving one, and
+                // this patch only reports that move to the destination.
+                if (ctx.meta?.kind === 'layer-change') return { ok: true };
                 const target = ctx.meta?.object ?? ctx.meta?.previous;
                 const state = this.getAnnotationLockState(target);
                 if (state.mutable) return { ok: true };
@@ -433,8 +520,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
-     * Get fabric wrapper that is bound to a target viewer instance.
-     * The output of this method must not be cached and always accessed for accurate reference.
+     * Fabric wrapper of the gesture owner (see `viewer`). This answers "where does
+     * the drawing in progress go", and nothing else: code acting on a particular
+     * annotation, menu, board or event must use the wrapper it was given
+     * (`getFabric(viewer)`, the event's `eventSource`), not this.
+     * The output must not be cached and always accessed for accurate reference.
      * @return {OSDAnnotations.FabricWrapper|undefined} undefined if the viewer is gone
      */
     get fabric() {
@@ -471,18 +561,73 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
-     * Get actual active viewer instance the user interacts with.
-     * @return {OpenSeadragon.Viewer}
+     * The gesture owner: the viewport the shared mode, cursor and factories act on.
+     * There is exactly one, because there is one mode and one cursor. It is NOT
+     * "the viewer the user means" for an action on existing data — see `fabric`.
+     *
+     * A switch the current mode refused (`locksViewer`) stays pending and is
+     * retried here, so it takes effect as soon as the lock is released.
+     * @return {OpenSeadragon.Viewer|undefined}
      */
     get viewer() {
-        if (this.__calledViewerGetter) return this._activeViewer;
-        this.__calledViewerGetter = true;
-        const newRef = VIEWER;
-        if (newRef !== this._activeViewer && !this.mode.locksViewer(this._activeViewer, newRef)) {
-            this._activeViewer = VIEWER;
+        if (this._pendingGestureViewer && !this._resolvingGestureViewer) {
+            this.claimGestureViewer(this._pendingGestureViewer);
         }
-        this.__calledViewerGetter = false;
-        return this._activeViewer;
+        return this._gestureViewer;
+    }
+
+    /**
+     * Compatibility shim for an API whose `viewer` argument is required but was
+     * historically optional. Reports the offending method once and answers with
+     * the gesture owner, which is what the old fallback amounted to. New code
+     * must pass the viewer; this goes away with the deprecation.
+     * @param {string} method name of the API called without a viewer
+     * @return {OpenSeadragon.Viewer|undefined}
+     */
+    resolveImplicitViewer(method) {
+        const reported = this._implicitViewerReported || (this._implicitViewerReported = new Set());
+        if (!reported.has(method)) {
+            reported.add(method);
+            APPLICATION_CONTEXT.log("module.annotations").warn(
+                `${method}() called without a viewer; falling back to the gesture owner is deprecated. ` +
+                `Pass the viewer the action belongs to.`
+            );
+        }
+        return this.viewer;
+    }
+
+    /**
+     * Ask for the gesture to move to a viewer. Called with the viewer an input
+     * event came from (the fabric wrapper) or the manager activated.
+     * The current mode may refuse while it holds work bound to the present owner.
+     * @param {OpenSeadragon.Viewer} viewer
+     * @return {boolean} true if `viewer` owns the gesture after the call
+     */
+    claimGestureViewer(viewer) {
+        if (!viewer) return false;
+        if (viewer === this._gestureViewer) {
+            this._pendingGestureViewer = undefined;
+            return true;
+        }
+        // `locksViewer` implementations read `this.viewer`; do not re-enter.
+        if (this._resolvingGestureViewer) return false;
+
+        let locked = false;
+        if (this._gestureViewer) {
+            this._resolvingGestureViewer = true;
+            try {
+                locked = !!this.mode.locksViewer(this._gestureViewer, viewer);
+            } finally {
+                this._resolvingGestureViewer = false;
+            }
+        }
+        if (locked) {
+            this._pendingGestureViewer = viewer;
+            return false;
+        }
+        this._gestureViewer = viewer;
+        this._pendingGestureViewer = undefined;
+        return true;
     }
 
 
@@ -796,7 +941,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @private
 	 */
 	_importSerializationProps() {
-		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps]));
+		// `layer`: a decoder that hands over live objects (DICOM SR) sets the
+		// inbound layer descriptor on them, and it has to reach _loadObjects.
+		return Array.from(new Set([...this._exportedProps(true), ...this._extraProps, ...this._forcedProps, "layer"]));
 	}
 
 	/**
@@ -811,9 +958,66 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	serializeAnnotation(item) {
 		if (item instanceof fabric.Object) {
-			return item.toObject(this._importSerializationProps());
+			let owner;
+			if (item.canvas) {
+				for (const instance of OSDAnnotations.FabricWrapper.instances()) {
+					if (instance.canvas === item.canvas) { owner = instance; break; }
+				}
+			}
+			const plain = this.externalizeLayer(item.toObject(this._importSerializationProps()), owner);
+			// DEPRECATED dual-write on the CRUD wire, one release: a storage backend
+			// written against the old record still finds a bare `layerID`. Files and
+			// convertors (externalizeLayer alone) do not get it; inbound, `layer` wins.
+			if (plain?.layer?.id !== undefined) plain.layerID = plain.layer.id;
+			return plain;
 		}
 		return OpenSeadragon.extend(true, Array.isArray(item) ? [] : {}, item);
+	}
+
+	/**
+	 * Layers have no IO resource of their own: a layer travels on the annotations
+	 * it holds. In memory an annotation points at its layer with `layerID`; every
+	 * record that LEAVES the module (bundle export, CRUD payload) carries the one
+	 * property `layer: {id, name, position}` instead, so a destination that keeps
+	 * the record keeps the layer. This is the outbound half of that swap, the
+	 * inbound half is in `FabricWrapper._loadObjects`.
+	 *
+	 * @param {object} plain serialized annotation, modified in place
+	 * @param {OSDAnnotations.FabricWrapper} [wrapper] owner of the layer; without it
+	 *   only the id can be written
+	 * @return {object} plain
+	 */
+	externalizeLayer(plain, wrapper = undefined) {
+		if (!plain || typeof plain !== "object") return plain;
+		const id = plain.layerID;
+		delete plain.layerID;
+		if (!this.layersEnabled || id === undefined || id === null || String(id) === "") {
+			delete plain.layer;
+		} else {
+			plain.layer = wrapper?.describeLayer(id) || { id: String(id) };
+		}
+		return plain;
+	}
+
+	/**
+	 * Read a layer descriptor that came from outside (a file, a sink, a peer) —
+	 * only the known fields, each type-checked and bounded.
+	 * @param {*} raw
+	 * @return {{id: string, name?: string, position?: number, visible?: boolean}|undefined}
+	 *   undefined when it does not identify a layer
+	 */
+	sanitizeLayerDescriptor(raw) {
+		if (!raw || typeof raw !== "object") return undefined;
+		if (typeof raw.id !== "string" && typeof raw.id !== "number") return undefined;
+		const id = String(raw.id);
+		if (!id || id.length > 128) return undefined;
+
+		const result = { id };
+		const name = typeof raw.name === "string" ? raw.name.trim().slice(0, 200) : "";
+		if (name) result.name = name;
+		if (typeof raw.position === "number" && Number.isFinite(raw.position)) result.position = raw.position;
+		if (typeof raw.visible === "boolean") result.visible = raw.visible;
+		return result;
 	}
 
 	/******************* SETTERS, GETTERS **********************/
@@ -1071,22 +1275,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     _generateInternalId() {
         const MULTIPLIER = 100;
         const now = Date.now();
-        const objects = this.fabric.canvas._objects;
-        let lastIdTime = null;
-
-        if (objects.length > 0) {
-            const lastObj = objects.at(-1);
-            const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
-
-            if (idSource?.internalID) {
-                lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
-            }
-        }
-
-        if (now === lastIdTime) {
+        // Uniqueness is tracked here, not read off a canvas: ids are handed out to
+        // every viewport from this one generator, and a canvas says nothing about
+        // an id issued a moment ago for an object on another one.
+        if (now === this._lastIdTime) {
             this._idCounter++;
         } else {
             this._idCounter = 0;
+            this._lastIdTime = now;
         }
 
         return now * MULTIPLIER + this._idCounter;
@@ -1438,9 +1634,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * Resolve what "locked" currently means for one annotation.
      *
      * Two flags feed it. `object.locked` is the **user's** lock, behind the padlock in
-     * the annotation's toolbar: by default the annotation stops responding to the canvas
-     * entirely — it is not hit-tested and not selectable, so the user can draw straight
-     * over it — every mutation is refused, and the user may release it again.
+     * the annotation's toolbar: by default the annotation leaves the press path — it is
+     * not hit-tested, so the user can draw straight over it, though a plain click still
+     * selects it — every mutation is refused, and the user may release it again.
      * `object.readOnly` is a lock the user did not place and cannot lift (an analysis
      * job's output, a record another scope owns): it stays selectable, readable and
      * commentable but refuses every mutation.
@@ -2223,6 +2419,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationFilters = [];
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", true) !== false;
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
+		/**
+		 * Whether annotation layers exist in this deployment (static meta `layers`).
+		 * Off: no layer is created, no record carries `layer`, no `layer-change`
+		 * patch is sent — for a destination with nowhere to keep layers.
+		 * @member {boolean}
+		 * @readonly
+		 */
+		this.layersEnabled = this.getStaticMeta("layers", true) !== false;
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -2235,6 +2439,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.PresetManager}
 		 */
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
+		// Annotations read color/label from their preset at render time; a preset
+		// edit must bump the visuals version, or objects keep the old look until
+		// something (e.g. selection) re-renders them one by one.
+		const refreshPresetVisuals = () => this.reapplyVisuals();
+		this.addHandler('preset-update', refreshPresetVisuals);
+		this.addHandler('preset-meta-add', refreshPresetVisuals);
+		this.addHandler('preset-meta-remove', refreshPresetVisuals);
 
 		/**
 		 * FreeFormTool reference
@@ -2527,8 +2738,11 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         return undefined;
     }
 
-    getSelectedEditableObject(viewer = undefined) {
-        const fabric = viewer !== undefined ? this.getFabric(viewer) : this.fabric;
+    /**
+     * @param {ViewerLikeItem} viewer the viewer whose selection is asked about (required)
+     */
+    getSelectedEditableObject(viewer) {
+        const fabric = this.getFabric(viewer ?? this.resolveImplicitViewer('getSelectedEditableObject'));
         const selected = fabric?.getSelectedAnnotations?.() || [];
         if (selected.length !== 1) return undefined;
 
@@ -2539,12 +2753,16 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         return object;
     }
 
-    startEditModeForObject(object, viewer = undefined) {
+    /**
+     * @param {fabric.Object} object
+     * @param {ViewerLikeItem} viewer the viewer the object lives in (required)
+     */
+    startEditModeForObject(object, viewer) {
         if (!object) return false;
 
         this._ensureEditSelectionMode();
 
-        const targetViewer = viewer || this.viewer;
+        const targetViewer = viewer ?? this.resolveImplicitViewer('startEditModeForObject');
         const fabric = this.getFabric(targetViewer);
         if (!fabric) return false;
 
@@ -2578,6 +2796,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         this._ensureEditSelectionMode();
 
         const preferred = this._preferredEditTarget;
+        // Entered from the mode switch (toolbar, shortcut) there is no object and
+        // no viewer to point at: editing is then a gesture, and starts on its owner.
         const targetViewer = viewer || preferred?.viewer || this.viewer;
         const fabric = this.getFabric(targetViewer);
         this._preferredEditTarget = undefined;
@@ -2611,7 +2831,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
         if (this.mode !== this.Modes.EDIT_SELECTION) return;
         if (this._isEditSelectionSyncSuspended?.()) return;
 
-        const fabric = viewer ? this.getFabric(viewer) : this.fabric;
+        // Always the viewer the selection changed in (the event's source).
+        const fabric = viewer && this.getFabric(viewer);
         if (!fabric) return;
 
         const edited =
@@ -2861,10 +3082,20 @@ OSDAnnotations.AnnotationState = class {
 	}
 
 	/**
-	 * @private
-	 * Some modes have custom controls,
-	 * note that behaviour of this is still not very well designed, e.g. if used in one
-	 * plugin it should not be used in others
+	 * Controls shown in the host's mode-options panel while this mode is active.
+	 * Build them as DOM (van.js / UI components) with real listeners that close
+	 * over this mode — never as an HTML string with inline `on*` handlers.
+	 * Called each time the mode becomes active, so return fresh nodes reflecting
+	 * the current state.
+	 * @return {Node|UI.BaseComponent|null} controls, or null for none
+	 */
+	customControls() {
+		return null;
+	}
+
+	/**
+	 * @deprecated Override {@link customControls} instead. A string returned here
+	 *   is sanitized by the host before display, which strips inline handlers.
 	 * @return {string} HTML for custom controls
 	 */
 	customHtml() {
@@ -2923,6 +3154,40 @@ OSDAnnotations.AnnotationState = class {
     getHistoryDelegate() {
         return null;
     }
+
+	/**
+	 * Read the pixels of selected shader layers as the current viewport of this mode's
+	 * viewer shows them. Goes through the core `visualization` scripting namespace - the one
+	 * render path, with its per-viewer queue, scheduler gate and capture announcement - so
+	 * modes never keep a private offscreen drawer.
+	 *
+	 * The pixels stay inside the tool and the user's own gesture is the request, hence no
+	 * pixel-read prompt (see src/classes/scripting/README.md).
+	 * @param {object} options VisualizationLayersRenderOptions: `layers`, `transparent`,
+	 *   `width`, `height`, `maxPixels`...; `pixelFormat` is forced to "typed"
+	 * @return {Promise<{width: number, height: number, data: Uint8ClampedArray, isComplete: boolean}>}
+	 *   RGBA rows from the top-left; `isComplete` false if tiles were still loading
+	 */
+	async readViewportLayers(options) {
+		const viewer = this.context.viewer;
+		const base = APPLICATION_CONTEXT.Scripting?.getApi?.("visualization");
+		if (!viewer || !base?.bindInvocationContext) {
+			throw new Error("The visualization API is not available.");
+		}
+		const uid = viewer.uniqueId;
+		const api = base.bindInvocationContext({
+			scriptingContext: {
+				id: `__annotations_${this._id}_${uid}__`,
+				// Pin the instance: `uniqueId` repeats when this slide is open twice.
+				getActiveViewer: () => viewer,
+				getActiveViewerContextId: () => uid,
+				activeViewerContextId: uid,
+				isConsentDialogBypassed: () => false,
+				pixelReadPreapproved: true,
+			},
+		});
+		return api.renderCurrentLayersPixels({ ...options, pixelFormat: "typed" });
+	}
 
 	/**
 	 * Discard action: default deletes active object
@@ -3083,10 +3348,6 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	// 	return true; //considered as handled
 	// }
 
-	customHtml() {
-		return "";
-	}
-
 	get defaultKeyCombo() {
 		return "KeyQ";
 	}
@@ -3132,7 +3393,8 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	//find either array of points (intersection) or nested array of points /targets/
-	fftFindTarget(point, ffTool, brushPolygon, offset=0) {
+	// radius: half-size of the searched area in image pixels, the brush radius by default
+	fftFindTarget(point, ffTool, brushPolygon, offset=0, radius=ffTool.radius) {
 		function getObjectAsCandidateForIntersectionTest(o) {
 			if (!o.sessionID) return false;
 			let	factory = o._factory();
@@ -3153,10 +3415,10 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		// Instead, loop only through near polygons in the nice order -> this will process
 		// first top annotations -> potentially selected
 		const candidates = this.context.fabric.findIntersectingObjectsByBBox({
-			x: point.x - ffTool.radius - offset,
-			y: point.y - ffTool.radius - offset,
-			width: ffTool.radius * 2 + offset,
-			height: ffTool.radius * 2 + offset
+			x: point.x - radius - offset,
+			y: point.y - radius - offset,
+			width: radius * 2 + offset,
+			height: radius * 2 + offset
 		}, getObjectAsCandidateForIntersectionTest);
 
 		const polygonUtils = OSDAnnotations.PolygonUtilities;

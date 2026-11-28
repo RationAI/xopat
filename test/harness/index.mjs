@@ -44,6 +44,7 @@ export {
     KEYCLOAK_OIDC_REDIRECT_PROBE,
 } from "./requires.mjs";
 export {
-    installBrowserGlobals, loadBrowserScript, loadOpenSeadragon, freshXOpatUser,
+    installBrowserGlobals, loadBrowserScript, loadOpenSeadragon, freshXOpatUser, importWithTestEventSource,
+    installVan, stubDocument,
 } from "./shims.mjs";
 export { repoRoot, fromRoot } from "./paths.mjs";

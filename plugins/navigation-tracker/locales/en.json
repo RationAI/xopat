@@ -2,5 +2,10 @@
   "meta": {
     "name": "Navigation viewport tracker",
     "description": "Record the movement of the navigator in the viewer."
+  },
+  "io": {
+    "menuTitle": "Export/Import",
+    "heading": "Navigator tracking IO",
+    "download": "Download as a file."
   }
 }

@@ -76,7 +76,7 @@ test("a refused mode switch from auto still announces the effective mode", { tag
         return {
             editId,
             editable: polygon.isEditable(),
-            reachesGuard: Boolean(module.getSelectedEditableObject()),
+            reachesGuard: Boolean(module.getSelectedEditableObject(fabricWrapper.viewer)),
             selected: fabricWrapper.getSelectedAnnotations().length,
             modeAfter: module.mode.getId(),
             events,

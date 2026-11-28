@@ -61,9 +61,26 @@ function setToastMessage(el, html) {
     return false;
 }
 
+/**
+ * Notification toast.
+ *
+ * By default the one global toast, fixed to the window. With
+ * `{ anchored: true }` it is a local one instead: positioned inside whatever
+ * element it is appended to (which must be a positioning context), so a
+ * message can sit on the thing it is about — see `Dialogs.forViewer()`.
+ *
+ * Either way only the card takes pointer events; the box around it never
+ * blocks the controls underneath.
+ */
 export class Toast extends BaseComponent {
-    constructor() {
-        super({ id: "dialogs-container" });
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.anchored=false] position inside the parent
+     *   element instead of the window
+     */
+    constructor(options = {}) {
+        super(options.anchored ? {} : { id: "dialogs-container" });
+        this._anchored = !!options.anchored;
         this._durationMs = 5000;
         this._importance = { key: "info", icon: ICONS.info };
         this._buttons = [];
@@ -74,7 +91,8 @@ export class Toast extends BaseComponent {
     }
 
     /**
-     * Place the toast container at the top or the bottom of the viewport.
+     * Place the toast container at the top or the bottom of the viewport
+     * (of its parent element when anchored).
      * Safe to call before or after {@link create}.
      * @param {"top"|"bottom"} position
      */
@@ -82,6 +100,13 @@ export class Toast extends BaseComponent {
         const pos = position === "top" ? "top" : "bottom";
         this._position = pos;
         if (!this.root) return;
+        if (this._anchored) {
+            // A viewport may reserve space at its bottom edge (depth ruler).
+            this.root.style.top = pos === "top" ? "0.5rem" : "";
+            this.root.style.bottom = pos === "top"
+                ? "" : "calc(0.5rem + var(--xo-viewer-bottom-inset, 0px))";
+            return;
+        }
         this.root.classList.remove("toast-top", "toast-bottom");
         this.root.classList.add(pos === "top" ? "toast-top" : "toast-bottom");
         // Inline offsets sidestep Tailwind purge issues with `top-4` / `bottom-4`.
@@ -102,7 +127,7 @@ export class Toast extends BaseComponent {
      * html:string,
      * importance?:{key:string,icon?:string},
      * durationMs?:number,
-     * buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>,
+     * buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string,title?:string}>,
      * actions?:Record<string,Function>, // <-- NEW: JS references for inline text
      * count?:number,
      * pending?:number
@@ -133,7 +158,8 @@ export class Toast extends BaseComponent {
             "relative isolate flex items-center gap-2 " +
             "rounded-md border border-base-300 bg-base-200/95 text-base-content shadow-sm " +
             "px-3 py-2 " +
-            "min-w-[320px] w-[min(520px,calc(100vw-2rem))]";
+            // An anchored toast is sized by its host (see `create`).
+            (this._anchored ? "" : "min-w-[320px] w-[min(520px,calc(100vw-2rem))]");
 
         const skin = SKINS[this._importance.key] || SKINS.info;
         accent.className = `absolute left-0 top-0 h-full w-[3px] rounded-l-xl ${skin.accent}`;
@@ -144,6 +170,8 @@ export class Toast extends BaseComponent {
         progress.style.animation = null;
         progress.className = `pointer-events-none absolute left-0 right-0 bottom-0 h-0.5 ${skin.progress} animate-toastbar`;
         progress.style.animationDuration = `${this._durationMs}ms`;
+        // A sticky toast (< 1000 ms, see the scheduler) counts nothing down.
+        progress.style.display = this._durationMs >= 1000 ? "" : "none";
 
         iconEl.innerHTML = this._importance.icon || ICONS.info;
 
@@ -211,8 +239,13 @@ export class Toast extends BaseComponent {
         for (const b of this._buttons) {
             const el = document.createElement("button");
             el.type = "button";
-            el.className = `btn btn-ghost btn-xs h-6 min-h-0 ${b.class || ""}`;
+            // A long label wraps inside the card rather than widening the row
+            // (`.toast` sets `white-space: nowrap`, `.btn` a fixed height).
+            el.className = `btn btn-ghost btn-xs whitespace-normal text-left max-w-full ${b.class || ""}`;
+            el.style.height = "auto";
+            el.style.minHeight = "1.5rem";
             el.textContent = b.label;
+            if (b.title) el.title = b.title;
             el.addEventListener("click", (ev) => b.onClick?.(ev, window.Dialogs));
             btnBar.appendChild(el);
         }
@@ -260,20 +293,30 @@ export class Toast extends BaseComponent {
     create() {
         const verticalClass = this._position === "top" ? "toast-top" : "toast-bottom";
         this.root = div(
-            {
+            this._anchored ? {
+                // Spans the host's width and centres the card in it. Not a
+                // DaisyUI `.toast`: that one is `position: fixed`.
+                class: "hidden opacity-0 transition-opacity duration-150 absolute flex justify-center",
+                style: "left:0.5rem;right:0.5rem;z-index:10;pointer-events:none"
+            } : {
                 id: this.id,
                 class:
                     "hidden opacity-0 transition-opacity duration-150 " +
                     "fixed left-1/2 -translate-x-1/2 z-[1000000] " +
                     `toast ${verticalClass} toast-center`,
-                style: this._position === "top" ? "top:1rem" : "bottom:1rem"
+                // Only the card is interactive: the padded box around it must
+                // not swallow clicks meant for whatever lies underneath.
+                style: (this._position === "top" ? "top:1rem" : "bottom:1rem") + ";pointer-events:none"
             },
             div(
-                { "data-toast-card": "", class: "relative" },
+                {
+                    "data-toast-card": "", class: "relative",
+                    style: "pointer-events:auto" + (this._anchored ? ";width:min(520px,100%)" : "")
+                },
                 div({ "data-accent": "", class: "absolute left-0 top-0 h-full w-[3px] rounded-l-md bg-info" }),
 
                 div(
-                    { class: "flex items-center gap-2 pl-[10px] w-full" },
+                    { class: "flex items-center gap-2 pl-[10px] w-full min-w-0" },
 
                     div({ class: "shrink-0 flex items-center gap-1 pl-2 text-base-content/80" },
                         div({ "data-icon": "", class: "shrink-0" }),
@@ -281,8 +324,23 @@ export class Toast extends BaseComponent {
                         span({ "data-count": "", class: "hidden" })
                     ),
 
-                    // message expands, keeps layout stable
-                    span({ "data-msg": "", class: "flex-1 text-[13px] leading-snug whitespace-normal break-words" }),
+                    // Message and buttons share one wrapping box: the message
+                    // keeps a readable width and the buttons drop below it when
+                    // they do not fit, instead of squeezing it to a few words
+                    // per line and pushing the close button out of the card.
+                    div({ class: "flex-1 min-w-0 flex flex-wrap items-center gap-2" },
+                        span({
+                            "data-msg": "",
+                            class: "text-[13px] leading-snug whitespace-normal break-words",
+                            // Inline: arbitrary `basis-*` utilities are purged.
+                            style: "flex:1 1 14rem;min-width:0"
+                        }),
+                        div({
+                            "data-buttons": "",
+                            class: "flex flex-wrap justify-end gap-1 max-w-full",
+                            style: "margin-left:auto"
+                        })
+                    ),
 
                     // pending indicator (click to cycle next)
                     button(
@@ -296,12 +354,10 @@ export class Toast extends BaseComponent {
                         ""
                     ),
 
-                    div({ "data-buttons": "", class: "ml-1 inline-flex gap-1" }),
-
                     button(
                         {
                             type: "button",
-                            class: "btn btn-ghost btn-xs h-6 w-6 min-h-0 p-0 ml-1 text-base-content/70 hover:text-base-content",
+                            class: "btn btn-ghost btn-xs shrink-0 h-6 w-6 min-h-0 p-0 ml-1 text-base-content/70 hover:text-base-content",
                             onclick: () => {
                                 this.hide();
                                 this._onClosed && this._onClosed();
@@ -318,6 +374,7 @@ export class Toast extends BaseComponent {
 
         this.root.addEventListener("mouseenter", () => this._onHover?.(true));
         this.root.addEventListener("mouseleave", () => this._onHover?.(false));
+        if (this._anchored) this.setPosition(this._position);
         return this.root;
     }
 }
@@ -640,7 +697,8 @@ function normalizeButtons(buttons) {
         return buttons.filter(Boolean).map(b => ({
             label: String(b.label ?? ""),
             onClick: b.onClick,
-            class: b.class
+            class: b.class,
+            title: b.title ? String(b.title) : undefined
         })).filter(b => b.label);
     }
     if (buttons && typeof buttons === "object") {

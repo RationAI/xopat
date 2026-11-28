@@ -133,7 +133,7 @@ the padlock icon, the board badge:
 
 | flag | who sets it | default meaning |
 |---|---|---|
-| `locked` | the user, via the padlock in the annotation's toolbar | does not respond to the canvas at all: not hit-tested, not selectable, so the user can **draw straight over it**; every mutation refused; releasable again |
+| `locked` | the user, via the padlock in the annotation's toolbar | out of the press path: not hit-tested, not rubber-band selectable, so the user can **draw straight over it**; a plain click still selects it; every mutation refused; releasable again |
 | `readOnly` | an owner — an analysis job's output, a record another scope owns, a rights resolver | stays selectable, readable and commentable; every mutation refused; **not** releasable by the user |
 
 Both are enforced at the IO checkpoint by a guard the module registers itself, so
@@ -151,10 +151,14 @@ state back at its sink). Both live in `copiedProperties` and `necessaryPropertie
 so they survive export, import and undo — a lock that evaporated on reload would be
 worse than no lock at all.
 
-A locked annotation is off the canvas's hit-test, so the padlock that released it is
-out of reach there: the **board row** is the way back — clicking it selects and
-centres the annotation (which brings its toolbar, and the padlock, back), and the
-row's `…` menu carries Lock/Unlock directly.
+A locked annotation is off the canvas's hit-test, but it must not look dead: a
+release that no mode consumed, that was a click rather than a drag, and that landed
+on nothing else selects the locked annotation under it
+(`fabric.Canvas#findBlockedObjectUnderMouse`). That brings its toolbar back with the
+padlock drawn closed and **red**, which both explains why the shape does not respond
+and is the control that releases it. The **board row** does the same — clicking it
+selects and centres the annotation — and the row's `…` menu carries Lock/Unlock
+directly.
 
 #### Redefining what a lock means
 
@@ -345,6 +349,18 @@ The `objectFactory` argument is the module's active drawing tool (`getActiveFact
 `undefined` when no preset is bound to the button. It is not the preset's own factory: a preset
 is a class, and selecting one never changes the tool.
 
+**A mode never sees the second press of a double-click.** Users double-click to "confirm" out
+of desktop habit, and a point tool that received both presses left two points stacked on one
+spot. The canvas drops a repeated press before `handleClickDown`, for both buttons
+(`FabricWrapper#_isRepeatedPress`): a `mousedown` is judged by `MouseEvent.detail`, the
+browser's own click count, so the double-click speed is the one configured in the OS; a
+`pointerdown`, which carries no count, by same button, same spot, within 500 ms. The toolbar
+pill ignores the matching release, so a double-clicked padlock toggles once. What a double-click *means* is decided in one place, the
+canvas's `mouse:dblclick` handler: commit the multi-point shape in progress
+(`finishCurrentCreation()`), otherwise — only when the first click did nothing — cycle the
+selection through stacked annotations. A mode wanting its own double-click behaviour
+implements `finishCurrentCreation()`; it does not count presses.
+
 `OSDAnnotations.StateCustomCreate` and `OSDAnnotations.FixedAreaMode` are the reference
 implementations; `plugins/sam-segment-tool-experimental/samState.ts` shows the same rule applied
 to a plugin-owned mode. Modes whose short click does real work (the free-form-tool brushes, the
@@ -352,6 +368,35 @@ magic wand, viewport segmentation) legitimately consume every release.
 
 `objectSelected(event, object)` is the per-mode veto over a selection the canvas is about to make —
 return `false` to refuse it. It is consulted only on the NOT_CONSUMED path.
+
+##### Magic wand
+
+`OSDAnnotations.MagicWand` (`magic-wand.js`) selects by colour, and is driven by strokes rather than
+by a threshold: drag over the image to **add** what it detects to the annotation under the press (or
+to a new one), right-drag or Alt-drag to **remove** it. Nothing is detected while hovering.
+
+- The viewport is read once per viewport state, at CSS-pixel resolution, and a stroke works on that
+  frozen frame. A seed compares against the mean colour of its 5×5 neighbourhood, never one pixel,
+  and a stroke's region only ever grows — which is what keeps the result from jumping.
+- A fill that covers most of the frame is treated as a leak and dropped; the rest of the stroke stays.
+- The detected region is handed to the brush engine, `FreeFormTool.applyMask(canvas)` (white adds,
+  black removes, transparent keeps), so holes, multipolygons, annotations reaching outside the
+  viewport and the single undo step per stroke are the brush tools' behaviour, not a second copy.
+  Like a brush stroke, one annotation stays one connected shape.
+
+#### Mode options
+
+A mode with settings overrides `customControls()` and returns a `Node` or a `UI` component (or
+`null`); the annotations toolbar shows it in the mode-options panel while the mode is active and
+calls it again on every activation. Build it with van.js / `UI` atoms and attach listeners that
+close over the mode — reference: `MagicWand#customControls`. The older `customHtml()` string is
+removed as a way to provide controls: the host sanitizes it, so inputs, buttons and inline `on*` handlers in it
+are dropped (a one-time warning names the caller). See `ui/classes/README.md` → *Migrating a panel built from an
+HTML string*.
+
+Modes that analyse what is on screen read it with `AnnotationState.readViewportLayers(options)`,
+a thin wrapper over the core `visualization.renderCurrentLayersPixels` — never a private standalone
+drawer plus `gl.readPixels` (viewport segmentation uses the same call with `layers: "visualization"`).
 
 #### The Factory
 Factories govern how object behave - it is the module API over annotations. They provide handful

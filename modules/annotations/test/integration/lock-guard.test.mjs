@@ -104,7 +104,61 @@ test("locking takes the annotation out of hit-testing without dropping the selec
     expect(result.state.releasable, "the user placed it, so the user may lift it").toBe(true);
 });
 
-test("a locked annotation refuses mutation but accepts its own release", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+test("a click on a locked annotation selects it instead of doing nothing", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    // Out of the hit-test, a locked shape used to swallow the click silently: no
+    // selection, no toolbar, no padlock — indistinguishable from a broken canvas,
+    // and the lock could only be lifted from the board.
+    await withLockHelpers(xopat);
+
+    const id = await xopat.page.evaluate(() => {
+        const { fabricWrapper, object } = window.__lockSetup();
+        fabricWrapper.setAnnotationLocked(object, true);
+        fabricWrapper.clearAnnotationSelection(true);
+        window.__lockTestObject = object;
+        return object.incrementId;
+    });
+
+    await xopat.page.waitForFunction(() => !window.VIEWER.isAnimating?.(), null, { timeout: 30_000 });
+    const points = await xopat.page.evaluate(() => {
+        const viewport = window.VIEWER.viewport;
+        const c = viewport.viewportToImageCoordinates(viewport.getCenter(true));
+        const toScreen = (ix, iy) => {
+            const p = viewport.imageToWindowCoordinates(new window.OpenSeadragon.Point(ix, iy));
+            return { x: Math.round(p.x), y: Math.round(p.y) };
+        };
+        // Inside the triangle `__lockSetup` draws, and well clear of it.
+        return { inside: toScreen(c.x, c.y - 60), outside: toScreen(c.x, c.y + 300) };
+    });
+
+    const clickAt = async (at) => {
+        await xopat.page.mouse.move(at.x, at.y);
+        await xopat.page.mouse.down();
+        await xopat.page.mouse.up();
+        await xopat.page.waitForTimeout(200);
+    };
+    const read = () => xopat.page.evaluate(() => {
+        const fabricWrapper = window.OSDAnnotations.instance().getFabric(window.VIEWER);
+        const object = window.__lockTestObject;
+        return {
+            selected: (fabricWrapper.getSelectedAnnotations() || []).map((o) => o.incrementId),
+            active: fabricWrapper.canvas.getActiveObject() === object,
+            hitTestBlocked: !!object.__hitTestBlocked,
+            locked: !!object.locked,
+        };
+    });
+
+    await clickAt(points.inside);
+    const onShape = await read();
+    expect(onShape.selected, "the locked annotation under the click is selected").toEqual([id]);
+    expect(onShape.active, "as the active object, which is what draws its toolbar and padlock").toBe(true);
+    expect(onShape.hitTestBlocked, "while a press over it still passes through").toBe(true);
+    expect(onShape.locked, "and selecting it released nothing").toBe(true);
+
+    await clickAt(points.outside);
+    expect((await read()).selected, "a click elsewhere lets go of it again").toEqual([]);
+});
+
+test("a locked annotation refuses mutation but accepts its own release",{ tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
     await withLockHelpers(xopat);
 
     const result = await xopat.page.evaluate(() => {
@@ -244,4 +298,54 @@ test("the toggle is measured against the resolved lock, not the raw flag", { tag
     expect(result.release, "so releasing it is real work, not a no-op").toBe(true);
     expect(result.events, "and it announced itself exactly once").toEqual([false]);
     expect(result.redundant, "while locking what is already locked still short-circuits").toBe(false);
+});
+
+test("double-clicking the padlock toggles the lock once", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    // Each release of a double-click used to dispatch the slot again, so a user who
+    // double-clicks out of habit locked and unlocked in one gesture: no visible change,
+    // and an annotation they believed was protected.
+    await withLockHelpers(xopat);
+    await xopat.page.waitForFunction(() => !window.VIEWER.isAnimating?.(), null, { timeout: 30_000 });
+
+    await xopat.page.evaluate(() => {
+        const { fabricWrapper, object } = window.__lockSetup();
+        window.__lockTestObject = object;
+        window.__lockEvents = [];
+        // While navigating, presses are pointer events with no click count, so the
+        // canvas times them itself. Four CDP round-trips under a parallel run do not
+        // fit the real interval; widen it so the gesture, not the transport, decides.
+        fabricWrapper.constructor.DOUBLE_PRESS_MS = 60_000;
+        fabricWrapper.addHandler("annotation-lock-change", (e) => window.__lockEvents.push(!!e.locked));
+        fabricWrapper.selectAnnotation(object, false, true);
+        fabricWrapper.canvas.renderAll();
+    });
+
+    // The pill records where it was drawn (`_lastLeft`/`_lastTop`, canvas-element space)
+    // and its click zones (pill-local x); together they say where the padlock is.
+    const padlock = await xopat.page.evaluate(() => {
+        const fabricWrapper = window.OSDAnnotations.instance().getFabric(window.VIEWER);
+        const control = window.__lockTestObject.controls.toolbar;
+        const zone = (control._zones || []).find((z) => z.id === "lock");
+        if (!zone || control._lastLeft == null) return null;
+        const box = fabricWrapper.canvas.upperCanvasEl.getBoundingClientRect();
+        return {
+            x: Math.round(box.x + control._lastLeft + (zone.x0 + zone.x1) / 2),
+            y: Math.round(box.y + control._lastTop),
+        };
+    });
+    expect(padlock, "the selected annotation drew its toolbar with a padlock").not.toBeNull();
+
+    await xopat.page.mouse.move(padlock.x, padlock.y);
+    await xopat.page.mouse.down({ clickCount: 1 });
+    await xopat.page.mouse.up({ clickCount: 1 });
+    await xopat.page.mouse.down({ clickCount: 2 });
+    await xopat.page.mouse.up({ clickCount: 2 });
+    await xopat.page.waitForTimeout(250);
+
+    const result = await xopat.page.evaluate(() => ({
+        locked: !!window.__lockTestObject.locked,
+        events: window.__lockEvents.slice(),
+    }));
+    expect(result.events, "the lock changed once, not on and off again").toEqual([true]);
+    expect(result.locked, "so the annotation ends up locked").toBe(true);
 });

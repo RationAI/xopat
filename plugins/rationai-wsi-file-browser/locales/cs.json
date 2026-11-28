@@ -2,5 +2,6 @@
   "meta": {
     "name": "Prohlížeč sklíček WSI-Service",
     "description": "Procházejte a otevírejte snímky celých sklíček poskytované službou RationAI WSI Service."
-  }
+  },
+  "listSlidesFailed": "Nepodařilo se načíst sklíčka pro cestu {{path}}!"
 }

@@ -77,8 +77,7 @@
       "rendererUnavailable": "xOpat's renderer could not start in this browser. It needs WebGL2 with capabilities this device or browser did not provide. Try an updated or different browser, or open the viewer on a desktop.",
       "back": "Go back",
       "noDetails": "No details provided",
-      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
-      "cacheImportFail": "Plugin {{plugin}} failed to load cached data. Please, let us know about this issue and provide <a onclick=\"{{action}}\" class=\"btn-pointer\">exported</a> file.",
+      "pluginImportFail": "Plugin {{plugin}} failed to load data. Please, let us know about this issue and provide <a data-action=\"export\">exported</a> file.",
       "ioNothingStored": "{{owner}}: data was not stored — no storage destination accepted it.",
       "ioNothingStoredWhy": "{{owner}}: data was not stored — {{reason}}",
       "ioNothingLoaded": "{{owner}}: data could not be loaded — no storage source answered.",
@@ -86,6 +85,9 @@
       "ioUnsupported": "Storage is misconfigured: \"{{sink}}\" cannot perform \"{{operation}}\".",
       "ioNoDestination": "Storage for {{what}} is misconfigured — none of the configured destinations exist, so data is being discarded.",
       "ioSinkNotReady": "{{count}} change(s) are waiting: the storage destination is not connected yet. Nothing has been lost — they will be sent as soon as it is available.",
+      "ioOutboxFull": "Cannot save: too many changes are still waiting to be sent ({{pending}}, the limit is {{cap}}). Please wait for the sync to catch up, or check your connection.",
+      "ioOutboxBatchTooLarge": "This would send {{count}} changes at once, but at most {{cap}} can wait to be sent. Please do it in smaller parts.",
+      "ioBulkStalled": "Only {{added}} of {{total}} items were added: the storage destination cannot be reached right now and no more changes can wait to be sent. Retry the rest once the connection is back.",
       "ioOffline": "{{count}} change(s) are waiting to be sent — you appear to be offline. Nothing has been lost.",
       "ioRefusedNoReason": "Your change to {{what}} was refused and has not been saved.",
       "ioSlideHashKey": "Storage is misconfigured: data is addressed by slide, but the deployment sets no slide hash key.",
@@ -140,7 +142,7 @@
     "user": {
       "notConfigured": "User menu is not available.",
       "anonymous": "Not logged in.",
-      "loggedOut": "You have been logged out. Please, <a onclick=\"UTILITIES.refreshPage()\">log-in</a> again.",
+      "loggedOut": "You have been logged out. Please, <a data-action=\"login\">log-in</a> again.",
       "roles": {
         "title": "Role",
         "titlePlural": "Roles",
@@ -281,10 +283,6 @@
         "cacheSaved": "Parameter values saved with this session override the layer defaults. Clear them if the layer looks wrong.",
         "noVisualization": "[no overlays]",
         "select": "Select shader",
-        "cache": {
-          "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
-          "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
-        },
         "controls": {
           "image": {
             "hint": "The atlas starts empty. Upload an image to create a new atlas entry.",
@@ -319,6 +317,7 @@
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
         "save": "Save",
+        "saveUnsaved": "Save (unsaved changes)",
         "explainSave": "Save to configured backends (falls back to file download if none)",
         "saveOk": "Saved.",
         "savePartial": "Saved with refusals — some destinations did not accept the data. Use <b>Export</b> to keep a complete local copy.",
@@ -372,9 +371,8 @@
       "clipboardBlocked": "Clipboard access is blocked by the browser.",
       "invalidPostData": "The request has no setup data. See POST data:",
       "postDataSyntaxErr": "The visualization setup is not parse-able.",
-      "cookiesDisabled": "An attempt to load data through cookies failed. Cookies are disabled. You can enable them in <a onclick=\"{{action}}\" class='btn-pointer'>Settings</a>.",
       "paramConfSaved": "Modifications in parameters saved.",
-      "bgReferenceMissing": "JSON parametrization of the visualizer requires valid <i>dataReference</i> for each background layer.",
+      "bgReferenceMissing": "JSON parametrization of the visualizer requires valid dataReference for each background layer.",
       "shaderTypeMissing": "You must specify <b>type</b> parameter for each visualization layer.",
       "pluginRemoved": "This plugin has been automatically\nremoved: there was an error.",
       "pluginRemovedNamed": "Plugin <b>{{plugin}}</b> has been removed: there was an error.",
@@ -395,9 +393,9 @@
       "scrollRequiresClick": "Click the viewer first to zoom with the mouse wheel.",
       "joystickOn": "Joystick navigation on — press and hold the mouse button, then move to pan.",
       "joystickOff": "Joystick navigation off.",
-      "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
+      "warnPageReload": "It seems you've made some work already. It might be wise to <a data-action=\"export\">export</a> your setup first. <a data-action=\"refresh\">Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
-      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
+      "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a data-action=\"open\">Click here to open.</a>",
       "windowBlocked": "An application modal window '{{title}}' was blocked by your browser.",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
@@ -410,8 +408,8 @@
       "cyclicDeps": "Found cyclic dependency in {{context}}: {{dependency}}",
       "removedInvalidDeps": "Removed due to invalid dependency, one of: {{dependencies}}",
       "pluginUnknownDeps": "The plugin requires unknown module.",
-      "pluginInvalidDeps": "Failure: plugin relies on dependencies with errors. <code>{{error}}</code>",
-      "pluginInvalid": "Invalid plugin! <code>{{error}}</code>"
+      "pluginInvalidDeps": "Failure: plugin relies on dependencies with errors. {{error}}",
+      "pluginInvalid": "Invalid plugin! {{error}}"
     },
     "monaco": {
       "saveError": "Could not save the code."
@@ -613,7 +611,8 @@
         "application": "Application",
         "annotations": "Annotations",
         "annotationModes": "Annotation Modes",
-        "annotationQuickDraw": "Annotation Quick-draw"
+        "annotationQuickDraw": "Annotation Quick-draw",
+        "annotationClasses": "Annotation Classes"
       },
       "core": {
         "panUp": "Pan up",
@@ -632,6 +631,10 @@
         "redo": "Redo",
         "screenshot": "Screenshot",
         "toggleGlobalMenu": "Show / hide the global menu",
+        "syncToggle": "Sync this viewport: link / unlink",
+        "syncToggleDesc": "Links the viewport with the others, or unlinks it. Cancels a calibration that is running; resumes a viewport paused for adjustment.",
+        "syncAdjust": "Sync: pause to adjust / resume",
+        "syncAdjustDesc": "Pauses sync on this viewport so it can be moved on its own. Press again to resume and keep the new position as its alignment.",
         "viewportCopy": "Copy / align viewport",
         "viewportCopyDesc": "Copies the current viewport to the clipboard, or aligns the view when a copied viewport is already on it. Transferable between viewer windows.",
         "peek": "Peek at background",
@@ -681,6 +684,9 @@
         "docsUrl": "Documentation",
         "bugs": "Report an issue"
       }
+    },
+    "explorer": {
+      "loadFailed": "Could not load this list"
     },
     "common": {
       "Load": "Load",
@@ -858,23 +864,31 @@
       "labelLink": "LINK",
       "labelRef": "REF",
       "labelSync": "SYNC",
+      "labelAdjust": "ADJ",
       "autoProgress": "auto…",
-      "enabled": "Sync enabled",
       "enabledApproximate": "Viewports linked, but the slides could not be matched precisely — alignment is approximate. Shift-click SYNC to calibrate by hand.",
-      "disabled": "Sync disabled",
       "cancelled": "Sync cancelled",
       "failed": "Sync not enabled",
       "needsTwoSlides": "Sync is possible with more than one slide opened.",
       "menuTitle": "Sync options",
       "menuAuto": "Link automatically",
       "menuManual": "Calibrate manually…",
+      "menuAdjust": "Pause to adjust…",
+      "menuAdjustResume": "Resume sync (keep adjustment)",
+      "menuAdjustDiscard": "Discard adjustment",
       "menuClear": "Clear this viewport's alignment",
+      "adjustHint": "Sync is paused for this viewport. Move, zoom or rotate it until it matches the others, then resume.",
+      "adjustResume": "Resume",
+      "adjustDiscard": "Discard",
+      "adjustResumeTitle": "Resume sync and keep this viewport where it is",
+      "adjustUnavailable": "Nothing to adjust yet: align this viewport with another one first.",
+      "poorFit": "The three points do not match well: check that they were clicked in the same order and on the same landmarks. The viewport is linked, but the alignment may be off. Calibrate again, or pause to adjust.",
+      "undoPoint": "Undo point",
       "pickPoints": "Click three matching points to calibrate sync. Drag to pan, Backspace undoes the last point, Esc cancels.",
       "pickPointsFirst": "Mark three landmarks on the first viewport — every other viewport is then matched to them. Drag to pan, Backspace undoes the last point, Esc cancels.",
       "pickPointsThenReference": "Click three landmarks on this slide; you will then mark the same three on the reference slide. Drag to pan, Backspace undoes the last point, Esc cancels.",
       "pickMatchingOnReference": "Now click the same three points on the reference slide, in the order numbered on the slide you are aligning. Drag to pan, Backspace undoes the last point, Esc cancels.",
       "pickMatchingPoints": "Click the same three points here, in the order numbered on the reference slide. Drag to pan, Backspace undoes the last point, Esc cancels.",
-      "calibrationSaved": "Calibration saved",
       "calibrationTimeout": "Sync calibration timed out",
       "resetTitle": "Clear this viewport's alignment — the next LINK re-aligns it by hand",
       "cleared": "Alignment cleared — LINK again to pick points",

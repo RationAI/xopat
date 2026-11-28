@@ -176,7 +176,24 @@ To keep components in the DOM in the correct order, use the zIndex property. The
 - Use setClass with semantic keys (e.g., size, style, display) so external code and functional properties can interoperate.
 - Define all attributes you intend to change later under extraProperties so setExtraProperty works without throwing.
 - Prefer the generic constructor pattern unless you absolutely need a custom API.
-- When rendering raw HTML strings, ensure the content is trusted. Plain text strings are wrapped into a span automatically.
+- HTML strings (starting with `<`) are sanitized: formatting tags survive, but form controls (`input`, `select`,
+  `textarea`, `button`, `label`, `form`), inline `on*` handlers, `style` and `id` are removed. Plain text strings are
+  wrapped into a span automatically.
+
+## Migrating a panel built from an HTML string
+Legacy APIs that took markup — `MainPanel.append` / `appendRaw`, `RightSideMenu.append`, `FloatingWindow` string
+content, an annotation mode's `customHtml()` — sanitize it, so controls and inline handlers in it disappear (a
+one-time `core.ui` warning names the caller). Build the controls as nodes and wire handlers in JS:
+
+```js
+const { div, input, label } = van.tags;
+// before: panel.append(title, "", `<input id="thr" type="range" oninput="myPlugin.set(this.value)">`, id, pluginId);
+const slider = input({ type: "range", oninput: e => plugin.set(e.target.value) });
+panel.append(title, "", div(label($.t("myPlugin.threshold")), slider), id, pluginId);
+```
+
+Prefer an existing component (`UI.Slider`, `UI.Select`, `UI.Checkbox`, …) over a raw tag. An annotation mode returns
+its controls from `customControls()`; `customHtml()` is removed — its output no longer yields working controls.
 
 ## Common pitfalls
 - Forgetting to override create() will throw an error at runtime.

@@ -265,7 +265,9 @@
     const PILL_RADIUS = 8;
     const PILL_FONT_COUNT = '600 12px system-ui, -apple-system, Segoe UI, sans-serif';
     const PILL_FONT_SUFFIX = '500 9px system-ui, -apple-system, Segoe UI, sans-serif';
-    const PILL_BG = 'rgba(30, 41, 59, 0.92)';
+    // Opaque on purpose: the pill's transparency comes from globalAlpha alone
+    // (see _drawClusters), so it matches the annotations it stands in for.
+    const PILL_BG = 'rgb(30, 41, 59)';
     const PILL_FG = '#fff';
     const PILL_SHADOW = 'rgba(0,0,0,0.4)';
     const PILL_GAP_AFTER_ICON = 5;
@@ -316,10 +318,16 @@
     // keyed by the displayed label, then drawImage on every frame. Cache
     // size is bounded — only ~30 distinct labels exist
     // (count buckets + "9.9k+" cap).
-    const _pillCache = new Map();   // label -> {bitmap, w, h}
+    const _pillCache = new Map();   // `${label}@${retina}` -> {bitmap, w, h}
     const _PILL_CACHE_MAX = 64;
 
-    function _renderPillBitmap(label) {
+    /**
+     * @param {string} label
+     * @param {number} retina backing-store scale; the bitmap is rasterised at
+     *   device resolution so it is not stretched (blocky) on high-DPI screens.
+     *   Returned w/h/anchors stay in CSS pixels.
+     */
+    function _renderPillBitmap(label, retina) {
         // Measure on a temp ctx to know the final pill size.
         const measureCanvas = document.createElement('canvas');
         const m = measureCanvas.getContext('2d');
@@ -341,9 +349,10 @@
         const bh = Math.ceil(pillH + SHADOW_PAD * 2);
 
         const bmp = document.createElement('canvas');
-        bmp.width = bw;
-        bmp.height = bh;
+        bmp.width = Math.ceil(bw * retina);
+        bmp.height = Math.ceil(bh * retina);
         const bctx = bmp.getContext('2d');
+        bctx.scale(retina, retina);
 
         const x = SHADOW_PAD;
         const y = SHADOW_PAD;
@@ -379,34 +388,34 @@
         const bottomMidY = y + PILL_PAD_Y + PILL_TOP_ROW_H + PILL_ROW_GAP + PILL_BOTTOM_ROW_H * 0.5;
         bctx.font = PILL_FONT_SUFFIX;
         bctx.textAlign = 'center';
-        bctx.fillStyle = 'rgba(255,255,255,0.85)';
+        bctx.fillStyle = PILL_FG;
         bctx.fillText(PILL_SUFFIX_TEXT, x + pillW * 0.5, bottomMidY);
 
         return { bitmap: bmp, w: bw, h: bh, anchorX: bw * 0.5, anchorY: bh * 0.5 };
     }
 
-    function _getPillBitmap(label) {
-        let entry = _pillCache.get(label);
+    function _getPillBitmap(label, retina) {
+        const key = `${label}@${retina}`;
+        let entry = _pillCache.get(key);
         if (entry) return entry;
-        entry = _renderPillBitmap(label);
+        entry = _renderPillBitmap(label, retina);
         if (_pillCache.size >= _PILL_CACHE_MAX) {
             // simple FIFO eviction
             const firstKey = _pillCache.keys().next().value;
             _pillCache.delete(firstKey);
         }
-        _pillCache.set(label, entry);
+        _pillCache.set(key, entry);
         return entry;
     }
 
     function _drawClusters(ctx, canvas, rects) {
-        // Cluster pills follow the global annotation opacity, with the same
-        // 2× boost (capped at 1.0) used by the per-annotation toolbar pill in
-        // modules/annotations/objects.js. At opacity 0 the pills disappear
-        // along with the annotations they represent.
+        // Cluster pills stand in for the annotations they hide, so they are
+        // drawn at exactly the global annotation opacity (the bitmap itself
+        // is opaque). At opacity 0 they disappear along with the annotations.
         const idx = canvas.__spatialIndex;
         const annOpacity = idx?.wrapper?.module?.presets?.commonAnnotationVisuals?.opacity ?? 1;
         if (annOpacity <= 0) return;
-        const pillAlpha = Math.min(1, annOpacity * 2);
+        const pillAlpha = Math.min(1, annOpacity);
 
         // Reset transform to retina-only; pills are drawn in CSS pixel space
         // so their size stays constant regardless of canvas zoom.
@@ -420,10 +429,11 @@
             const s = r.screen;
             if (!s) continue;
             const label = _formatClusterCount(r.count);
-            const pill = _getPillBitmap(label);
+            const pill = _getPillBitmap(label, retina);
             const cx = s.x + s.w * 0.5;
             const cy = s.y + s.h * 0.5;
-            ctx.drawImage(pill.bitmap, Math.round(cx - pill.anchorX), Math.round(cy - pill.anchorY));
+            // Explicit CSS-pixel size: the bitmap is `retina`× larger.
+            ctx.drawImage(pill.bitmap, Math.round(cx - pill.anchorX), Math.round(cy - pill.anchorY), pill.w, pill.h);
         }
 
         ctx.restore();
@@ -803,11 +813,39 @@
         // fabric discards the active object whenever the pointer sits on a non-evented
         // target, so the owner of this flag could not keep a selection (and its
         // controls) alive on an object it wanted the mouse to pass through.
-        if (obj?.__hitTestBlocked) return false;
+        if (obj?.__hitTestBlocked && !this.__hitTestIncludesBlocked) return false;
         const passedBbox = _origCheckTarget.call(this, pointer, obj);
         if (!passedBbox) return passedBbox;
         if (!this.__spatialIndex) return passedBbox;
         return this.__preciseContains(obj, pointer);
+    };
+
+    /**
+     * The topmost `__hitTestBlocked` object under the pointer, tested exactly as an
+     * unblocked one would be. Blocked objects are invisible to `findTarget` on purpose,
+     * which also means the owner of the flag cannot tell "the user clicked empty slide"
+     * from "the user clicked the thing I blocked" — this answers the second question
+     * without putting the object back into fabric's own targeting.
+     * @memberOf fabric.Canvas
+     * @param {fabric.Point} pointer viewport-space pointer, as in the fabric event's `pointer`
+     * @return {fabric.Object|null}
+     */
+    fabric.Canvas.prototype.findBlockedObjectUnderMouse = function (pointer) {
+        if (!pointer) return null;
+        const idx = this.__spatialIndex;
+        const pool = idx ? idx.realCandidates(this.vptCoords, this) : this._objects;
+        this.__hitTestIncludesBlocked = true;
+        try {
+            for (let i = pool.length - 1; i >= 0; i--) {
+                const obj = pool[i];
+                if (!obj.__hitTestBlocked) continue;
+                idx?.ensureFresh(obj);
+                if (this._checkTarget(pointer, obj)) return obj;
+            }
+        } finally {
+            this.__hitTestIncludesBlocked = false;
+        }
+        return null;
     };
 
     const _origSearchPossibleTargets = fabric.Canvas.prototype._searchPossibleTargets;

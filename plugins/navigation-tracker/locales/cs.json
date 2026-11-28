@@ -2,5 +2,10 @@
   "meta": {
     "name": "Sledování navigačního výřezu",
     "description": "Zaznamenává pohyb navigátoru v prohlížeči."
+  },
+  "io": {
+    "menuTitle": "Export/Import",
+    "heading": "Vstup a výstup sledování navigátoru",
+    "download": "Stáhnout jako soubor."
   }
 }

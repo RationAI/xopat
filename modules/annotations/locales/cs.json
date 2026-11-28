@@ -13,7 +13,12 @@
     "quickDraw": {
       "preset": "Rychlé kreslení s předvolbou",
       "shape": "Rychlé kreslení: {{shape}}"
-    }
+    },
+    "classSlots": {
+      "select": "Vybrat třídu {{n}}",
+      "assign": "Přiřadit třídu {{n}} výběru"
+    },
+    "selectAll": "Vybrat všechny anotace"
   },
   "autoSelect": {
     "noData": "Nejsou k dispozici žádná data k anotování!",
@@ -26,8 +31,9 @@
   },
   "modeOptions": {
     "magicWand": {
-      "growth": "Růst",
-      "growthHint": "Jak daleko se výběr rozšíří od místa kliknutí (změníte kolečkem myši).",
+      "hint": "Tažením přes obraz přidáte, co hůlka rozpozná. Tažením pravým tlačítkem nebo s klávesou Alt to odeberete.",
+      "tolerance": "Tolerance",
+      "toleranceHint": "Jak moc se barva smí lišit, aby byla ještě vybrána (změníte kolečkem myši s klávesou Shift).",
       "layer": "Detekovat z vrstvy"
     }
   },

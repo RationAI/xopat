@@ -66,6 +66,9 @@ class IOMlflowSink extends XOpatModuleSingleton {
             getTarget: () => this.getTarget(),
             isTargetRejected: () => this.isTargetRejected(),
         });
+        // Deliberately NOT wrapped in `withRetry`: a write is a `logBatch` whose
+        // metric points default their timestamp to "now", so re-sending one
+        // whose answer was lost appends a second point to the metric history.
         this._disposeSink = pipeline.registerSink(sink);
     }
 

@@ -32,6 +32,8 @@ export function makeSessionMemorySink(): IOSink {
         id: "session-memory",
         label: "In-memory (session)",
         supports: ["bundle"],
+        // In-page only: gone with the tab, so a write here is not a save.
+        persists: false,
 
         async writeBundle(ctx, payload) {
             if (payload === undefined || payload === null) {

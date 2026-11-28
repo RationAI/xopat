@@ -296,3 +296,112 @@ test("helper control points stay non-interactive across index refreshes", { tag:
     const after = await readState(xopat);
     expect(after.selectedAreHelpers, "a control point is never the selection").toBe(false);
 });
+
+/**
+ * A double-click is one gesture, not two.
+ *
+ * Users double-click to "confirm" out of desktop habit. Each press used to reach the mode
+ * as its own, so a point tool left two points stacked on one spot and closing a polygon on
+ * its start point began a second polygon. The canvas now drops the repeated press
+ * (`_isRepeatedPress`, off `MouseEvent.detail`), and the one thing a double-click is meant
+ * to do — commit the multi-point shape in progress — still happens in `mouse:dblclick`.
+ *
+ * `clickCount` is what makes Playwright stamp `detail` and dispatch `dblclick`; two plain
+ * `click()` calls would be two single clicks and prove nothing.
+ */
+async function doubleClick(xopat, at) {
+    await xopat.page.mouse.move(at.x, at.y);
+    await xopat.page.mouse.down({ clickCount: 1 });
+    await xopat.page.mouse.up({ clickCount: 1 });
+    await xopat.page.mouse.down({ clickCount: 2 });
+    await xopat.page.mouse.up({ clickCount: 2 });
+    await xopat.page.waitForTimeout(250);
+}
+
+/** Switch the manual mode to another tool; returns screen points clear of the test rect. */
+async function useTool(xopat, factoryId) {
+    await xopat.page.waitForFunction(() => !window.VIEWER.isAnimating?.(), null, { timeout: 30_000 });
+    return xopat.page.evaluate((id) => {
+        const module = window.OSDAnnotations.instance();
+        const factory = module.getAnnotationObjectFactory(id);
+        const preset = module.presets.addPreset(undefined, id, "#00ff00", factory);
+        module.presets.selectPreset(preset.presetID, true);
+        module.setActiveFactory(factory);
+        module.setModeById("custom");
+
+        const viewport = window.VIEWER.viewport;
+        const c = window.__annotationTestCentre;
+        const toScreen = (ix, iy) => {
+            const p = viewport.imageToWindowCoordinates(new window.OpenSeadragon.Point(ix, iy));
+            return { x: Math.round(p.x), y: Math.round(p.y) };
+        };
+        const d = c.size;
+        return {
+            inside: toScreen(c.x, c.y),
+            square: [
+                toScreen(c.x - d, c.y - d),
+                toScreen(c.x - d + 120, c.y - d),
+                toScreen(c.x - d + 120, c.y - d + 120),
+                toScreen(c.x - d, c.y - d + 120),
+            ],
+        };
+    }, factoryId);
+}
+
+function inFlight(xopat) {
+    return xopat.page.evaluate(() => {
+        const module = window.OSDAnnotations.instance();
+        return Boolean(module.getActiveFactory(true)?.getCurrentObject?.());
+    });
+}
+
+test("a double-click with the point tool creates one point", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    const setup = await withOneAnnotation(xopat);
+    const points = await useTool(xopat, "point");
+
+    // On top of the existing rect: the place where a second effect would show twice over,
+    // as a second point and as the selection digging down to the rect beneath.
+    await doubleClick(xopat, points.inside);
+
+    const state = await readState(xopat);
+    expect(state.annotations, "one point, not two stacked on the same spot").toBe(setup.baseline + 1);
+    expect(state.selectedIds, "and the rect underneath was not dug up by the double-click")
+        .not.toContain(setup.id);
+    expect(state.strayHelpers).toBe(0);
+});
+
+test("a double-click commits the polygon in progress, once", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    const setup = await withOneAnnotation(xopat);
+    const points = await useTool(xopat, "polygon");
+
+    for (const v of points.square.slice(0, 3)) await shortClick(xopat, v);
+    expect(await inFlight(xopat), "three vertices in, the polygon is still open").toBe(true);
+
+    await doubleClick(xopat, points.square[3]);
+
+    const state = await readState(xopat);
+    expect(state.annotations, "the double-click committed exactly one polygon").toBe(setup.baseline + 1);
+    expect(await inFlight(xopat), "and its second press did not start another").toBe(false);
+    expect(state.strayHelpers, "no vertex dots left behind").toBe(0);
+
+    const vertices = await xopat.page.evaluate(() => {
+        const fabricWrapper = window.OSDAnnotations.instance().getFabric(window.VIEWER);
+        const polygons = fabricWrapper.canvas._objects
+            .filter((o) => !o.isHelperAnnotation && !o.isHighlight && o.factoryID === "polygon");
+        return polygons.map((o) => o.points.length);
+    });
+    expect(vertices, "the first click of the double-click placed the fourth vertex").toEqual([4]);
+});
+
+test("closing a polygon on its start point with a double-click starts nothing new", { tag: ["@synthetic", "@integration"] }, async ({ xopat }) => {
+    const setup = await withOneAnnotation(xopat);
+    const points = await useTool(xopat, "polygon");
+
+    for (const v of points.square) await shortClick(xopat, v);
+    await doubleClick(xopat, points.square[0]);
+
+    const state = await readState(xopat);
+    expect(state.annotations, "one polygon").toBe(setup.baseline + 1);
+    expect(await inFlight(xopat), "and no second polygon begun by the confirming click").toBe(false);
+    expect(state.strayHelpers).toBe(0);
+});

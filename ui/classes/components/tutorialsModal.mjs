@@ -4,41 +4,55 @@ import { Modal } from "./modal.mjs";
 
 const { div, p, button, i: iTag, span } = van.tags;
 
-// One-time stylesheet for hover/transition rules. The previous markup used
-// `hover:scale-[1.02]`, which isn't in the shipped tailwind.min.css, so cards
-// stayed static on hover. A scoped class with a real CSS pseudo-rule restores
-// the lift without depending on the JIT bundle.
+// One-time stylesheet for hover/focus/transition rules, tinted surfaces and
+// shadows only — pseudo-classes and arbitrary values are not in the purged
+// tailwind.min.css. Static layout/typography stays on DaisyUI/Tailwind
+// classes in the markup. Every colour is a
+// DaisyUI token (`--b1/--b2/--bc/--p/--a`), so the same rules read correctly
+// in any light or dark deployment theme; no literal white/black surfaces.
 if (typeof document !== "undefined" && !document.getElementById("__xopat_tutorials_modal_css")) {
     const style = document.createElement("style");
     style.id = "__xopat_tutorials_modal_css";
     style.textContent = `
+        .xopat-tutorials-shell {
+            background-image:
+                radial-gradient(120% 90% at 0% 0%, oklch(var(--p) / 0.14), transparent 55%),
+                radial-gradient(90% 80% at 100% 100%, oklch(var(--a) / 0.12), transparent 60%);
+            border: 1px solid oklch(var(--bc) / 0.10);
+            box-shadow: 0 24px 60px oklch(0 0 0 / 0.35);
+        }
         .xopat-tutorial-card {
-            position: relative;
-            border-radius: 0.75rem;
-            cursor: pointer;
-            overflow: hidden;
-            background: oklch(var(--b1) / 0.78);
-            backdrop-filter: blur(18px) saturate(160%);
-            -webkit-backdrop-filter: blur(18px) saturate(160%);
-            border: 1px solid rgba(255,255,255,0.30);
+            outline: none;
+            background: oklch(var(--b2) / 0.72);
+            border: 1px solid oklch(var(--bc) / 0.12);
             transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+            box-shadow: 0 2px 8px oklch(0 0 0 / 0.08);
         }
-        .xopat-tutorial-card:hover {
+        .xopat-tutorial-card:hover,
+        .xopat-tutorial-card:focus-visible {
             transform: translateY(-2px);
-            background: oklch(var(--b1) / 0.88);
-            border-color: rgba(255,255,255,0.55);
-            box-shadow: 0 18px 38px rgba(0,0,0,0.22), 0 0 0 1px oklch(var(--p) / 0.30);
+            background: oklch(var(--b2));
+            border-color: oklch(var(--p) / 0.55);
+            box-shadow: 0 14px 32px oklch(0 0 0 / 0.20);
         }
-        .xopat-tutorial-card .xopat-tutorial-card__accent {
+        .xopat-tutorial-card:focus-visible { box-shadow: 0 0 0 2px oklch(var(--p) / 0.75), 0 14px 32px oklch(0 0 0 / 0.20); }
+        .xopat-tutorial-card__accent {
             position: absolute;
             top: 0; left: 0; right: 0; height: 3px;
             background: linear-gradient(90deg, oklch(var(--p)), oklch(var(--a)));
             opacity: 0;
             transition: opacity 0.18s ease;
         }
-        .xopat-tutorial-card:hover .xopat-tutorial-card__accent { opacity: 1; }
-        /* Glass close button for the gradient backdrop. */
+        .xopat-tutorial-card:hover .xopat-tutorial-card__accent,
+        .xopat-tutorial-card:focus-visible .xopat-tutorial-card__accent { opacity: 1; }
+        .xopat-tutorial-card__icon {
+            width: 3rem;   /* w-12/h-12 are purged from tailwind.min.css */
+            height: 3rem;
+            background: oklch(var(--p) / 0.14);
+            transition: background-color 0.18s ease;
+        }
+        .xopat-tutorial-card:hover .xopat-tutorial-card__icon,
+        .xopat-tutorial-card:focus-visible .xopat-tutorial-card__icon { background: oklch(var(--p) / 0.22); }
         .xopat-tutorial-close {
             position: absolute;
             top: 0.875rem;
@@ -50,15 +64,14 @@ if (typeof document !== "undefined" && !document.getElementById("__xopat_tutoria
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            color: #ffffff;
-            background: rgba(0,0,0,0.22);
-            border: 1px solid rgba(255,255,255,0.30);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            transition: background 0.15s ease;
+            color: oklch(var(--bc) / 0.8);
+            background: oklch(var(--bc) / 0.06);
+            border: 1px solid oklch(var(--bc) / 0.14);
+            transition: background-color 0.15s ease, color 0.15s ease;
             z-index: 5;
         }
-        .xopat-tutorial-close:hover { background: rgba(0,0,0,0.35); }
+        .xopat-tutorial-close:hover,
+        .xopat-tutorial-close:focus-visible { color: oklch(var(--bc)); background: oklch(var(--bc) / 0.14); outline: none; }
     `;
     document.head.appendChild(style);
 }
@@ -67,10 +80,11 @@ if (typeof document !== "undefined" && !document.getElementById("__xopat_tutoria
  * Tutorial selection screen.
  *
  * Renders the registered tutorials as a responsive card grid that fills the
- * whole modal width. The modal sits on a vibrant gradient backdrop with
- * decorative blurred circles; the content area uses a frosted-glass overlay
- * so card text stays readable regardless of where the gradient happens to be
- * brightest. Clicking a card invokes `onSelect(index)`; title/description and
+ * whole modal width. The shell and cards are painted from DaisyUI theme
+ * tokens only (base surfaces, base-content text, primary/accent tints), so
+ * contrast holds in every light and dark deployment theme. Cards are
+ * keyboard-focusable (Enter/Space selects). Clicking a card invokes
+ * `onSelect(index)`; title/description and
  * entries are van.js-state driven so updates after mount stay cheap.
  *
  * Previously this component delegated to `IllustratedModal` (left text pane,
@@ -99,50 +113,35 @@ export class TutorialsModal extends BaseComponent {
     create() {
         if (this._created) return this.modal.root;
 
-        // Theme-reactive pastel: full-opacity pastel stops are multiplied
-        // against `oklch(var(--b1))` via `background-blend-mode: multiply`.
-        // Light themes (b1 = white) leave the pastels untouched — soft, vivid
-        // sherbet. Dark themes (b1 = dark slate) multiply the pastels toward
-        // the dark base, producing a muted, gently tinted variant instead of
-        // jarring neon. No DaisyUI brand palette involved.
-        const gradient = this.options.gradient
-            || "linear-gradient(135deg, #c7d2fe 0%, #ddd6fe 25%, #fbcfe8 55%, #fed7aa 85%, #fef3c7 100%)";
-
-        // Theme-bound text — base-content flips with the active theme, so the
-        // header copy stays readable on both light and dark backdrops. The
-        // halo is tuned per theme via mix-blend-mode so it disappears in dark
-        // mode (where it would otherwise glow oddly).
-        const headerColor = "oklch(var(--bc))";
-        const headerHalo  = "";
-
+        // The shell is a theme surface (base-100) tinted by soft primary /
+        // accent radial glows — all DaisyUI tokens, so it reads in light and
+        // dark alike. The earlier pastel-multiply backdrop with literal-white
+        // decorative circles turned into grey blobs on dark themes, one of
+        // them sitting on top of the description copy.
         const header = div(
             {
                 style: "position: relative; z-index: 2; display: flex; flex-direction: column; gap: 0.5rem;"
-                     + " padding: 1.75rem 1.875rem 0.5rem;",
+                     + " padding: 1.75rem 4rem 0.25rem 1.875rem;",
             },
             div(
                 {
-                    style: `font-size: 1.75rem; font-weight: 400; letter-spacing: -0.015em; color: ${headerColor}; ${headerHalo}`,
+                    style: "font-size: 1.625rem; font-weight: 500; letter-spacing: -0.015em; line-height: 1.25; color: oklch(var(--bc));",
                 },
                 this._titleState,
             ),
             div({ style: "width: 2.5rem; height: 3px; border-radius: 9999px; background: linear-gradient(90deg, oklch(var(--p)), oklch(var(--a)));" }),
             p(
                 {
-                    style: `margin: 0.5rem 0 0; font-size: 0.875rem; color: ${headerColor}; opacity: 0.78; line-height: 1.5; ${headerHalo}`,
+                    style: "margin: 0.375rem 0 0; font-size: 0.875rem; line-height: 1.5; color: oklch(var(--bc) / 0.72);",
                 },
                 this._descriptionState,
             ),
         );
 
-        // Card grid sits directly on the gradient too — individual glass
-        // cards make each entry feel like a discrete surface that floats on
-        // the same backdrop, rather than a row of white blocks on a
-        // disconnected glass strip.
         this._grid = div({
             id: "tutorials",
-            class: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto",
-            style: "position: relative; z-index: 2; padding: 1rem 1.875rem 0.75rem; max-height: 55vh;",
+            class: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto",
+            style: "position: relative; z-index: 2; padding: 1.25rem 1.875rem 0.75rem; max-height: 55vh;",
         });
 
         // Mobile notice — rendered in place of the card grid when the
@@ -156,13 +155,14 @@ export class TutorialsModal extends BaseComponent {
                  + " font-size: 0.95rem; text-align: center;",
         });
 
-        // Custom close button — the modal-box default X has poor contrast on
-        // the vibrant gradient.
+        // Custom close button positioned over the shell corner.
         const closeButton = div(
             {
                 role: "button",
                 tabindex: "0",
                 class: "xopat-tutorial-close",
+                title: $.t("common.Close"),
+                "aria-label": $.t("common.Close"),
                 onclick: () => this._handleExit(),
                 onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._handleExit(); } },
             },
@@ -176,32 +176,22 @@ export class TutorialsModal extends BaseComponent {
             },
             button(
                 {
-                    style: "border-radius: 9999px; padding: 0 1.5rem; height: 2.25rem; min-height: 2.25rem;"
-                         + " background: #ffffff; color: oklch(var(--p)); border: none; cursor: pointer;"
-                         + " font-size: 0.875rem; font-weight: 600;"
-                         + " box-shadow: 0 8px 20px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.04);",
+                    type: "button",
+                    class: "btn btn-sm btn-ghost rounded-full",
+                    style: "padding: 0 1.25rem;",
                     onclick: () => this._handleExit(),
                 },
                 this._exitLabelState,
             ),
         );
 
-        const circle = (s) => div({ style: `position: absolute; border-radius: 9999px; pointer-events: none; z-index: 1; ${s}` });
-
+        // `options.gradient` (optional) layers a caller-supplied backdrop
+        // over the themed surface; callers own its contrast.
         const shell = div(
             {
-                style: `position: relative; border-radius: 1rem; overflow: hidden;`
-                     + ` background-image: ${gradient};`
-                     + ` background-color: oklch(var(--b1));`
-                     + ` background-blend-mode: multiply;`
-                     + ` box-shadow: 0 22px 50px rgba(31,41,55,0.22), inset 0 0 0 1px rgba(255,255,255,0.45);`,
+                class: "xopat-tutorials-shell relative rounded-2xl overflow-hidden bg-base-100 text-base-content",
+                style: this.options.gradient ? `background-image: ${this.options.gradient};` : "",
             },
-            // Soft white highlights — keep the layered-light feel without
-            // looking glassy/grey against the pastel base.
-            circle("top: -5rem; left: -3rem; width: 18rem; height: 18rem; background: rgba(255,255,255,0.45); filter: blur(2px);"),
-            circle("top: 35%; right: -5rem; width: 22rem; height: 22rem; background: rgba(255,255,255,0.30); filter: blur(3px);"),
-            circle("bottom: -6rem; left: 25%; width: 20rem; height: 20rem; background: rgba(255,255,255,0.35); filter: blur(2px);"),
-            circle("top: 10%; left: 38%; width: 6rem; height: 6rem; background: rgba(255,255,255,0.55);"),
             header,
             this._grid,
             this._mobileNotice,
@@ -299,12 +289,12 @@ export class TutorialsModal extends BaseComponent {
      * `USER_INTERFACE.Tutorials.show()` to explain why no tutorials can be
      * launched at mobile widths instead of opening an empty / non-functional
      * launcher.
-     * @param {string} text plain-text or HTML notice copy.
+     * @param {string} text plain-text notice copy.
      */
     setMobileNotice(text) {
         this.create();
         if (!this._mobileNotice) return;
-        this._mobileNotice.innerHTML = String(text ?? "");
+        this._mobileNotice.textContent = String(text ?? "");
         this._mobileNotice.style.display = "block";
         if (this._grid) this._grid.style.display = "none";
     }
@@ -340,33 +330,33 @@ export class TutorialsModal extends BaseComponent {
         const iconClass = entry.icon || "ph-compass";
         const pluginRootClass = entry.pluginRootClass || "";
 
-        const children = [];
-
-        if (entry.pluginName) {
-            children.push(span({
-                class: "badge badge-sm badge-ghost absolute top-2 right-2"
-            }, entry.pluginName));
-        }
-
-        children.push(iTag({ class: `ph-light ${iconClass} text-3xl my-2 text-primary` }));
-        children.push(div({ class: "card-title text-lg font-light justify-center" }, entry.name || ""));
-        if (entry.description) {
-            children.push(p({ class: "text-sm opacity-80" }, entry.description));
-        }
+        const select = () => this.onSelect(index);
 
         return div(
             {
-                class: `xopat-tutorial-card ${pluginRootClass}`.trim(),
-                onclick: () => this.onSelect(index)
+                class: `xopat-tutorial-card relative flex flex-col items-center text-center gap-1 rounded-xl cursor-pointer overflow-hidden ${pluginRootClass}`.trim(),
+                role: "button",
+                tabindex: "0",
+                // Padding inline (p-5/pt-9 are purged); extra top room for the
+                // corner badge so a long plugin name never sits on the icon.
+                style: `padding: ${entry.pluginName ? "2.25rem" : "1.5rem"} 1.25rem 1.375rem;`,
+                onclick: select,
+                onkeydown: (e) => {
+                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
+                },
             },
             div({ class: "xopat-tutorial-card__accent" }),
+            entry.pluginName ? span({
+                class: "badge badge-sm badge-ghost absolute top-2 right-2 truncate",
+                style: "max-width: calc(100% - 1rem); display: block;",
+                title: entry.pluginName,
+            }, entry.pluginName) : null,
             div(
-                {
-                    class: "card-body items-center text-center gap-1",
-                    style: "padding: 1.25rem 1rem;",
-                },
-                ...children
-            )
+                { class: "xopat-tutorial-card__icon flex items-center justify-center rounded-full text-2xl text-primary mb-1" },
+                iTag({ class: `ph-light ${iconClass}` }),
+            ),
+            div({ class: "text-lg font-medium leading-snug" }, entry.name || ""),
+            entry.description ? p({ class: "text-sm opacity-70 m-0" }, entry.description) : null,
         );
     }
 

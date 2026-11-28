@@ -478,19 +478,26 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         const containers = document.querySelectorAll(`#load-plugin-${CSS.escape(id)}`);
         if (!containers.length) return;
 
-        let markup: string;
-        if (status === "idle") {
-            markup = `<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`;
-        } else if (status === "loading") {
-            markup = `<button disabled class="btn btn-sm">` +
-                `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
-                `</button>`;
-        } else if (status === "loaded") {
-            markup = `<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`;
-        } else {
-            markup = `<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`;
-        }
-        containers.forEach(node => { node.innerHTML = markup; });
+        // Built as nodes: the plugin id must never be spliced into markup or
+        // into an inline handler string.
+        const labelKey = { idle: 'common.Load', loading: 'common.Loading', loaded: 'common.Loaded', failed: 'common.Failed' }[status];
+        containers.forEach(node => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-sm";
+            if (status === "idle") {
+                button.addEventListener("click", () => { UTILITIES.loadPlugin(id); });
+            } else {
+                button.disabled = true;
+            }
+            if (status === "loading") {
+                const spinner = document.createElement("span");
+                spinner.className = "loading loading-spinner loading-xs";
+                button.append(spinner);
+            }
+            button.append($.t(labelKey));
+            node.replaceChildren(button);
+        });
     }
 
     /** Append a stylesheet <link> to <head>. Paths come from element metadata (deployment-controlled). */
@@ -501,6 +508,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         link.href = href;
         document.head.appendChild(link);
     }
+
+    /** Set once the user chose to reload and lose unsaved work: the tab-close guard stands down. */
+    let discardingUnsaved = false;
 
     /** Escape text destined for an HTML sink. Error texts come from plugin code and server records. */
     function escapeHtml(value: unknown) {
@@ -1794,6 +1804,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   owner's domain in `IO_PIPELINE.formats`) a sink that takes any
          *   format stores when neither the binding nor the sink's own config
          *   pins one. Must be deployment-derived — never a user preference.
+         * @param options.perViewport   the bundle state is held per viewport
+         *   (a canvas), not per document: a restore is delivered to every
+         *   viewport showing the slide, `ctx.viewportId` naming which.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -1802,7 +1815,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
             bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
-            defaultFormat?: () => string | undefined;
+            perViewport?: boolean;
+            defaultFormat?: (ctx?: IOContext) => string | undefined;
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
@@ -1813,6 +1827,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 ownerId: this.__id,
                 xoType: this.__xoContext,
                 bundleScope: options.bundleScope,
+                perViewport: options.perViewport,
                 exportBundle: options.exportBundle,
                 importBundle: options.importBundle,
                 defaultFormat: options.defaultFormat,
@@ -1833,8 +1848,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     console.error("IO Failure (initIO restore):", this.constructor.name, e);
                     this.error({
                         error: e, code: "W_IO_INIT_ERROR",
-                        message: $.t("error.pluginImportFail",
-                            { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" }),
+                        message: $.t("error.pluginImportFail", { plugin: this.id }),
+                        actions: { export: () => USER_INTERFACE.highlightElementId('global-export') },
                     });
                 }
             }
@@ -1896,6 +1911,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                     }),
                 capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
                 isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
+                markDirty: (where?: IODirtyWhere) => IO_PIPELINE.markDirty(uid, where),
+                markClean: (where?: IODirtyWhere) => IO_PIPELINE.markClean(uid, where),
+                isDirty: (where?: IODirtyScope) => IO_PIPELINE.isDirty({ ...where, ownerUid: uid }),
             };
         }
 
@@ -2436,17 +2454,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         destroy() {
             const state = (this.constructor as any).__getBroadcastState?.();
             if (state) {
+                // Broadcast handlers are attached as-is (see broadcastHandler /
+                // __attachAllHandlersToInstance), and `record.instances` is the
+                // set cancelBroadcast walks — drop this instance from both.
                 for (const [eventName, perHandler] of state.entries()) {
-                    for (const [, record] of perHandler.entries()) {
-                        const wrappers = record?.wrappers;
-                        if (!wrappers?.get || !wrappers?.delete) {
-                            continue;
-                        }
-                        const wrapper = wrappers.get(this);
-                        if (wrapper) {
-                            try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
-                        }
-                        wrappers.delete(this);
+                    for (const [handler, record] of perHandler.entries()) {
+                        if (!record.instances.delete(this as any)) continue;
+                        try { this.removeHandler(eventName, handler); } catch (_) { /* ignore */ }
                     }
                 }
             }
@@ -2638,6 +2652,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             for (const [eventName, perHandler] of state.entries()) {
                 for (const [origHandler, record] of perHandler.entries()) {
+                    // Recorded so cancelBroadcast reaches instances created
+                    // after the handler was registered, not only earlier ones.
+                    record.instances.add(inst as any);
                     inst.addHandler(eventName, origHandler, record.userData, record.priority);
                 }
             }
@@ -3489,6 +3506,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             try { showLoading?.(true); } catch (_) { /* no-op */ }
             try {
                 const outcome: IOResult[] = [];
+                // Only what the file captures counts as saved: an edit landing
+                // while sinks are slow is newer than the form.
+                const dirtyMark = IO_PIPELINE.dirtyMark();
                 const form = await UTILITIES.getForm("", undefined, false, outcome);
                 // Warnings and errors only: the ring also holds every adopted
                 // `console.log`, which routinely names slide paths — a file the
@@ -3511,7 +3531,11 @@ ${form}
                 // Already allowed by `core.export.file` above: its own knob,
                 // not the local-file one.
                 saveAsFile("export.html", doc);
-                APPLICATION_CONTEXT.__cache.dirty = false;
+                // The file is the persisted copy, though it rides on the
+                // in-page `post-data` sink. Owners refused from it stay unsaved.
+                // Without POST support the form carries only the app config —
+                // no owner was flushed into it, so nothing is saved by it.
+                if (APPLICATION_CONTEXT.env.server.supportsPost) IO_PIPELINE.markCleanUpTo(dirtyMark, outcome);
                 // The file is written either way — the export is not "failed"
                 // because one owner was refused. But an export silently missing
                 // a feature's data is worse than a noisy one, so name what was
@@ -3534,11 +3558,15 @@ ${form}
          */
         reportExportOmissions: function (results: IOResult[] | undefined) {
             if (!Array.isArray(results) || !results.length) return;
+            // An owner one destination refused but another took (a remote store
+            // down, the file still written) was not left out.
+            const leftOut = IO_PIPELINE.ownersLeftOut(results);
             const names = new Set<string>();
             for (const r of results) {
                 if (!r || r.ok) continue;
                 const ownerId = (r as any).ownerId;
                 if (!ownerId) continue;
+                if (leftOut && !leftOut.has((r as any).ownerUid)) continue;
                 // `elementName` resolves a `%key%` name and degrades to the id,
                 // so a message can never leak a raw reference or `undefined`.
                 const kind = (r as any).ownerUid?.startsWith?.("plugin.") ? "plugins" : "modules";
@@ -3596,7 +3624,6 @@ ${form}
                 if (refused.length === 0) {
                     // Case B — happy path, everything persisted.
                     Dialogs.show($.t("main.bar.saveOk"), 3000, Dialogs.MSG_SUCCESS);
-                    APPLICATION_CONTEXT.__cache.dirty = false;
                 } else if (refused.length === all.length) {
                     // Case C — every destination refused. Don't silently fall
                     // back to file-download (that's Export's job), but DO
@@ -3604,12 +3631,10 @@ ${form}
                     Dialogs.show($.t("main.bar.saveFailed"), 8000, Dialogs.MSG_ERR);
                 } else {
                     // Case D — some destinations refused. The others got
-                    // through, but part of the user's work did NOT: the session
-                    // stays dirty so the unload warning still fires and a
-                    // retry/Export is still offered. Marking it clean here made
-                    // a partial save indistinguishable from a complete one,
-                    // which is the one state where losing the reminder costs
-                    // data.
+                    // through, but part of the user's work did NOT. No clean-up
+                    // here: the pipeline clears dirty state per document only
+                    // for writes that landed, so the refused ones still trigger
+                    // the unload warning and a retry/Export is still offered.
                     Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
                 }
                 // Naming the refused owners is separate from the verdict above:
@@ -3650,26 +3675,41 @@ ${form}
                 }
             });
             if (!result?.context) {
-                Dialogs.show($.t('messages.modalWindowBlocked', {
-                    title: "Loading...",
-                    action: "UTILITIES.clone(); Dialogs.hide();"
-                }), 15000, Dialogs.MSG_WARN);
+                Dialogs.show($.t('messages.modalWindowBlocked', { title: "Loading..." }),
+                    15000, Dialogs.MSG_WARN,
+                    { actions: { open: () => { UTILITIES.clone(); Dialogs.hide(); } } });
             }
         },
 
-        setDirty: () => APPLICATION_CONTEXT.__cache.dirty = true,
+        /** @deprecated Use `this.io.markDirty(viewer)` in the owning element. */
+        setDirty: () => APPLICATION_CONTEXT.setDirty(),
 
         /**
          * Refresh the page and reload the viewer, optionally limiting which plugins are included.
          * @param {string[]|undefined} [includedPluginsList] - IDs of plugins to include; current active if omitted.
+         * @param {{discard?: boolean}} [options] - `discard: true` reloads without the unsaved-changes
+         *   warning and without the browser's leave prompt; only for a user who chose to discard.
          * @returns {Promise<void>}
          */
-        refreshPage: async function (includedPluginsList: string[] | undefined = undefined) {
-            if (APPLICATION_CONTEXT.__cache.dirty) {
-                Dialogs.show($.t('messages.warnPageReload', {
-                    onExport: "UTILITIES.export();",
-                    onRefresh: "APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();"
-                }), 15000, Dialogs.MSG_WARN);
+        refreshPage: async function (includedPluginsList: string[] | undefined = undefined, options: { discard?: boolean } = {}) {
+            if (options.discard) {
+                // The user chose to lose what is unsaved: neither this check nor
+                // the tab-close guard may ask again. CRUD queues still count as
+                // unsaved after `markClean()`, so asking again would loop.
+                discardingUnsaved = true;
+            } else if (APPLICATION_CONTEXT.isDirty()) {
+                // Links are `data-action` keys: the toast sanitizer strips inline
+                // handlers, so behaviour is bound here, not in the translation.
+                Dialogs.show($.t('messages.warnPageReload'), 15000, Dialogs.MSG_WARN, {
+                    actions: {
+                        export: () => UTILITIES.export(),
+                        refresh: () => {
+                            // The user chose to discard.
+                            IO_PIPELINE.markClean();
+                            UTILITIES.refreshPage(includedPluginsList, { discard: true });
+                        },
+                    },
+                });
                 return;
             }
 
@@ -4391,17 +4431,17 @@ form.submit();
         }
     };
 
-    // Tab-close guard for unsaved state. Any module that flips the dirty
-    // flag via APPLICATION_CONTEXT.setDirty() (annotations, viewer-open
-    // pipeline, inspector controllers, ...) gets the browser's native
-    // "Leave site?" prompt for free. Modern browsers ignore custom
-    // messages; both setters are still required for the prompt to show.
-    // Off by default: bypassCloseConfirmation defaults to true (src/config.json,
-    // ENV XOPAT_BYPASS_CLOSE_CONFIRMATION). Deployments opt in by setting it
-    // false; when bypassed we skip registering the listener altogether.
+    // Tab-close guard for unsaved state. The IO pipeline owns it: an owner
+    // whose persistence needs an explicit Save calls `this.io.markDirty(...)`
+    // on user edits (annotations do), CRUD resources report queued ops that
+    // would be lost, and a write to a persisting sink clears it. See "Dirty
+    // state" in src/IO_PIPELINE.md. Modern browsers ignore custom messages;
+    // both setters are still required for the prompt to show.
+    // On by default; deployments opt out with bypassCloseConfirmation
+    // (src/config.json, ENV XOPAT_BYPASS_CLOSE_CONFIRMATION).
     if (!APPLICATION_CONTEXT.getOption('bypassCloseConfirmation')) {
         window.addEventListener('beforeunload', (event) => {
-            if (!APPLICATION_CONTEXT.__cache.dirty) return;
+            if (discardingUnsaved || !APPLICATION_CONTEXT.isDirty()) return;
             event.preventDefault();
             event.returnValue = '';
         });
@@ -5686,7 +5726,9 @@ form.submit();
                     // `trigger: "system"` — the boot hydration pass. It runs
                     // once per viewer before the user has done anything, so a
                     // refusal here is logged rather than dialogged.
-                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, trigger: "system" });
+                    // The slot id names THIS viewport: `contextID` is shared by
+                    // every viewport showing the same slide.
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID, viewportId: viewer.id, trigger: "system" });
                 } catch (e) {
                     console.error('IO Failure:', e);
                 }
@@ -5777,9 +5819,10 @@ form.submit();
 
             // Re-arm bundle hydration for this viewer id: uniqueIds are
             // data-derived, so a future viewer opening the same slide gets
-            // the SAME id and must restore from sinks again.
+            // the SAME id and must restore from sinks again. Only this
+            // viewport's mark: another one may still be showing the slide.
             if (destroyedUniqueId) {
-                IO_PIPELINE.clearHydratedFor(destroyedUniqueId);
+                IO_PIPELINE.clearHydratedFor(destroyedUniqueId, viewer.id);
             }
 
             const menu = this.viewerMenus[viewer.id];

@@ -72,7 +72,7 @@ test("a cross-origin download never navigates the viewer", { tag: ["@e2e"] }, as
     const result = await xopat.page.evaluate(async () => {
         const before = window.location.href;
         // Dirty state is what arms the unload guard — without it the bug is invisible.
-        window.APPLICATION_CONTEXT.setDirty();
+        window.IO_PIPELINE.markDirty("test.download-gating");
 
         const source = {
             canDownloadSlideFile: () => true,

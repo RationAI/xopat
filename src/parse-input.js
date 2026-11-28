@@ -38,7 +38,7 @@ function xOpatParseConfiguration(postData, i18n, supportsPost, ENV) {
                 configuration = JSON.parse(configuration);
             } catch (e) {
                 return getError(  "messages.urlInvalid", "messages.postDataSyntaxErr",
-                    ` "JSON Error: ${e}<br>`
+                    `JSON Error: ${e}\n`
                     + JSON.stringify(configuration.data));
             }
         }

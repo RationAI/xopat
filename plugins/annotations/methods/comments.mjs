@@ -33,7 +33,8 @@ export const commentMethods = {
         } else if (this._selectedAnnot) {
             this.commentsToggleWindow(true, true);
         }
-        this._commentFabric().rerender();
+        // The flag is module-wide, so every viewport's canvas shows it.
+        for (const fabric of OSDAnnotations.FabricWrapper.instances()) fabric.rerender();
     },
 
     commentsDefaultOpen(enabled) {
@@ -82,9 +83,10 @@ export const commentMethods = {
             Dialogs.show(this.t('annotations.comments.errors.notLoggedIn'), 3000, Dialogs.MSG_WARN);
             return;
         }
-        // Recover a lost selection from the active fabric before giving up —
-        // covers the deselect/multi-viewport race that leaves _selectedAnnot
-        // null while the comments window is still open on a valid annotation.
+        // Recover a lost selection before giving up — covers the
+        // deselect/multi-viewport race that leaves _selectedAnnot null while the
+        // comments window is still open on a valid annotation. Asked of the canvas
+        // the window was last showing, which is where that annotation lives.
         if (!this._selectedAnnot) {
             const fabric = this._commentFabric();
             const active = fabric?.canvas?.getActiveObject?.();
@@ -390,17 +392,17 @@ export const commentMethods = {
         }
     },
 
-    // The fabric owning the currently selected annotation. In a multi-viewport
-    // session the selection may live on a non-active viewer, so comment
-    // mutations must target this fabric rather than this.context.fabric (the
-    // active viewer's). Falls back to the active fabric when nothing is bound.
+    // The fabric of the annotation the (single, global) comments window shows:
+    // the canvas its selection event came from. It outlives the deselection so a
+    // lost selection can be recovered from the same canvas. Comment mutations
+    // target this fabric, never this.context.fabric (the gesture owner's).
     _commentFabric() {
-        return this._selectedAnnotFabric || this.context.fabric;
+        return this._selectedAnnotFabric;
     },
 
-    _annotationSelected(object, fabric = undefined) {
+    _annotationSelected(object, fabric) {
         this._selectedAnnot = object;
-        this._selectedAnnotFabric = fabric || this.context.fabric;
+        this._selectedAnnotFabric = fabric;
         this._renderComments(object.comments);
         this._startCommentsRefresh();
 
@@ -409,9 +411,9 @@ export const commentMethods = {
         }
     },
 
-    _annotationDeselected(object, fabric = undefined) {
+    _annotationDeselected(object, fabric) {
         this._selectedAnnot = null;
-        this._selectedAnnotFabric = null;
+        this._selectedAnnotFabric = fabric;
         this._previousAnnotId = object.id;
         this.commentsToggleWindow(false, true);
         this._clearComments();

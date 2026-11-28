@@ -5,8 +5,9 @@
 //   byOwnerResource — composite [ownerUid, resourceName] for fast per-resource scans on boot
 //   byCreatedAt    — timestamp index for age-based eviction sweeps
 //
-// API used by IOResource: `add`, `remove`, `bumpAttempt`, `listForResource`,
-// `count`, `pruneOlderThan`, `quotaSnapshot`. All async.
+// API used by IOResource: `addMany`, `removeMany`, `update`, `bumpAttempt`,
+// `listForResource`, `count`, `pruneOlderThan`, `quotaSnapshot`. All async.
+// Writes come in runs: one transaction per run, not per operation.
 //
 // Failure handling: open() resolves with `null` if IndexedDB is unavailable
 // (private mode, very old browser). Callers degrade to in-memory queue.
@@ -108,6 +109,43 @@ export class OutboxStore {
     remove(clientOpId: string): Promise<void> {
         const { store } = this.tx("readwrite");
         return this.wrap(store.delete(clientOpId)) as unknown as Promise<void>;
+    }
+
+    /** Resolve when the transaction has committed; reject when it aborted. */
+    private done(tx: IDBTransaction): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error ?? new Error("IndexedDB transaction aborted"));
+        });
+    }
+
+    /**
+     * Write a run of entries in ONE transaction: all of them are stored, or
+     * (quota, a payload that cannot be cloned) none is.
+     */
+    addMany(entries: PersistedOutboxEntry[]): Promise<void> {
+        if (!entries.length) return Promise.resolve();
+        const { tx, store } = this.tx("readwrite");
+        const done = this.done(tx);
+        try {
+            for (const entry of entries) store.put(entry);
+        } catch (e) {
+            // `put` throws synchronously for a payload that cannot be cloned.
+            try { tx.abort(); } catch { /* already finished */ }
+            done.catch(() => {});
+            return Promise.reject(e);
+        }
+        return done;
+    }
+
+    /** Delete a run of entries in one transaction. */
+    removeMany(clientOpIds: string[]): Promise<void> {
+        if (!clientOpIds.length) return Promise.resolve();
+        const { tx, store } = this.tx("readwrite");
+        const done = this.done(tx);
+        for (const id of clientOpIds) store.delete(id);
+        return done;
     }
 
     async bumpAttempt(clientOpId: string): Promise<void> {

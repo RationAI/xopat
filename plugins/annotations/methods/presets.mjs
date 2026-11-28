@@ -1,4 +1,5 @@
 import { PresetCard } from '../components/presetCard.mjs';
+import { PresetBindList } from '../components/presetBindList.mjs';
 
 const { div, span, input, select, option, button, i, b, a, br, h4 } = globalThis.van.tags;
 
@@ -66,6 +67,11 @@ export const presetMethods = {
         return [span(String(item))];
     },
 
+    /**
+     * Expand one card of the class editor (and collapse the others). Purely
+     * about which editor is open: binding a class to a mouse button is done by
+     * the card's own bind buttons.
+     */
     _selectPresetCard(presetId, sourceCard) {
         if (!this._presetCards) return;
         const next = this._presetSelection === presetId ? undefined : presetId;
@@ -75,109 +81,73 @@ export const presetMethods = {
         this._presetSelection = next;
     },
 
-    updatePresetsMouseButtons() {
-        const leftPreset = this.context.getPreset(true);
-        const rightPreset = this.context.getPreset(false);
-        const left = document.getElementById('annotations-left-click');
-        const right = document.getElementById('annotations-right-click');
-
-        if (leftPreset) {
-            this._setContainerContent(left, this.getPresetControlHTML(leftPreset, true));
-        } else {
-            this._setContainerContent(left, this.getMissingPresetHTML(true));
-        }
-        if (rightPreset) {
-            this._setContainerContent(right, this.getPresetControlHTML(rightPreset, false));
-        } else {
-            this._setContainerContent(right, this.getMissingPresetHTML(false));
-        }
-
-        this._refreshPresetSwatch?.();
-    },
-
+    /** Repaint every class-binding surface that is not rebuilt per viewer. */
     updatePresetsHTML() {
-        this.updatePresetsMouseButtons();
-        this._updateRightSideMenuPresetList();
+        this._refreshPresetSwatch?.();
+        // The class editor stays open across a binding change.
+        if (this._presetCards) {
+            const leftId = this.context.getPreset(true)?.presetID;
+            const rightId = this.context.getPreset(false)?.presetID;
+            for (const [id, card] of this._presetCards) card.setBound?.(id === leftId, id === rightId);
+        }
     },
 
-    _updateRightSideMenuPresetList() {
-        const target = document.getElementById('preset-list-inner-mp');
-        if (!target) return;
+    /** Name a class is shown under, everywhere. */
+    _presetDisplayName(preset) {
+        return preset?.getMetaValue?.('category') || this.t('annotations.presets.unnamed');
+    },
 
-        const leftPresetId = this.context.getPreset(true)?.presetID;
-        const rightPresetId = this.context.getPreset(false)?.presetID;
-
-        const container = div({class: 'flex flex-col gap-1 w-full max-h-[200px] overflow-y-auto pr-1'});
-
+    /**
+     * The one class picker (see {@link PresetBindList}), fed from current state.
+     * @param {object} [opts]
+     * @param {string} [opts.maxHeight]
+     * @param {Node} [opts.empty]
+     * @return {Node}
+     */
+    _buildPresetBindList({ maxHeight, empty } = {}) {
+        const rows = [];
+        let slot = 0;
         this.context.presets.foreach((preset) => {
-            const isLeft = preset.presetID === leftPresetId;
-            const isRight = preset.presetID === rightPresetId;
-            const isActive = isLeft || isRight;
-
-            const item = button({
-                    class: `btn btn-ghost btn-sm justify-start gap-2 normal-case font-medium w-full truncate border ${isActive ? 'bg-base-200 border-base-300' : 'border-transparent'}`.trim(),
-                    onclick: () => this._clickPresetSelect(true, preset.presetID),
-                    oncontextmenu: (e) => {
-                        e.preventDefault();
-                        this._clickPresetSelect(false, preset.presetID);
-                    }
-                },
-                iconNode('ph-tag', 'text-sm', `color: ${preset.color};`),
-                span({class: 'truncate flex-1 text-left'}, preset.meta['category']?.value || 'Unnamed Class'),
-
-                // Functional "Remove" Icons
-                isLeft ? button({
-                    class: 'badge badge-primary badge-xs h-4 w-4 p-0 font-bold hover:bg-error hover:border-error transition-colors',
-                    title: 'Click to remove Left assignment',
-                    onclick: (e) => {
-                        e.stopPropagation();
-                        this.context.setPreset(undefined, true);
-                    }
-                }, 'L') : null,
-
-                isRight ? button({
-                    class: 'badge badge-outline badge-xs h-4 w-4 p-0 font-bold hover:bg-error hover:text-error-content transition-colors',
-                    title: 'Click to remove Right assignment',
-                    onclick: (e) => {
-                        e.stopPropagation();
-                        this.context.setPreset(undefined, false);
-                    }
-                }, 'R') : null
-            );
-            container.appendChild(item);
+            rows.push({
+                id: preset.presetID,
+                name: this._presetDisplayName(preset),
+                color: preset.color,
+                // Key bound to this class's slot (see classSlots.mjs), if any.
+                slotKey: this._classSlotLabel?.(slot++),
+                dimmed: this.isUnpreferredPreset(preset.presetID),
+            });
         });
-
-        this._setContainerContent(target, container);
+        return new PresetBindList({
+            rows,
+            leftId: this.context.getPreset(true)?.presetID,
+            rightId: this.context.getPreset(false)?.presetID,
+            disabled: !!this.context.disabledInteraction,
+            maxHeight,
+            empty,
+            t: (key) => this.t(key),
+            onBind: (id, isLeft, explicit) => this._bindPreset(id, isLeft, { toggle: explicit }),
+        }).create();
     },
 
-    getPresetControlHTML(preset, isLeftClick) {
-        // The chip shows what the button draws: the active tool in the class colour.
-        const tool = this.context.getActiveFactory(isLeftClick);
-        const category = preset.getMetaValue('category') || tool.title();
-        return div({
-                class: 'group flex items-center gap-2 bg-base-300 hover:bg-base-100 px-2 py-1 rounded-lg transition-all cursor-pointer border border-base-content/10',
-                onclick: () => this.showPresets(isLeftClick)
-            },
-            iconNode(tool.getIcon(), 'text-xs', `color: ${preset.color};`),
-            span({ class: 'text-xs font-bold truncate max-w-[80px]' }, category),
-            button({
-                class: 'btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100 min-h-0 h-5 w-5',
-                onclick: (event) => {
-                    event.stopPropagation();
-                    this.context.setPreset(undefined, isLeftClick);
-                }
-            }, iconNode('ph-x', 'text-[10px]'))
-        );
-    },
-
-    getMissingPresetHTML(isLeftClick) {
-        return button({
-                class: 'btn btn-ghost btn-xs border-dashed border-base-content/20 gap-1 normal-case font-medium',
-                onclick: () => this.showPresets(isLeftClick)
-            },
-            iconNode('ph-plus', 'text-[10px]'),
-            'Set'
-        );
+    /**
+     * Bind a class to a mouse button.
+     * @param {string} presetId
+     * @param {boolean} isLeft
+     * @param {object} [opts]
+     * @param {boolean} [opts.toggle=false] release the binding when the class is
+     *   already bound to that button; without it such a call is a no-op, so a
+     *   plain click on the active class never unbinds it by accident
+     * @return {boolean} whether the binding changed
+     */
+    _bindPreset(presetId, isLeft, { toggle = false } = {}) {
+        if (this.context.disabledInteraction) return false;
+        if (presetId === undefined || presetId === null) return false;
+        const preset = this.context.presets.get(presetId);
+        if (!preset) return false;
+        const bound = this.context.getPreset(isLeft)?.presetID === preset.presetID;
+        if (bound && !toggle) return false;
+        this.context.setPreset(bound ? undefined : preset, isLeft);
+        return true;
     },
 
     /**
@@ -237,71 +207,29 @@ export const presetMethods = {
         const panel = this._presetSwatchPanel;
         if (!panel) return;
 
-        const leftId = this.context.getPreset(true)?.presetID;
-        const rightId = this.context.getPreset(false)?.presetID;
-
         const header = div({ class: 'flex items-center justify-between px-1 pb-1.5' },
             span({ class: 'text-[11px] font-semibold uppercase tracking-wide opacity-50' },
-                this.t('annotations.toolbar.presetSwatchTitle')),
-            span({ class: 'flex items-center gap-1 text-[10px] opacity-50' },
-                span({ class: 'kbd kbd-xs' }, 'L'),
-                span({ class: 'kbd kbd-xs' }, 'R'))
+                this.t('annotations.toolbar.presetSwatchTitle'))
         );
-
-        const rows = [];
-        this.context.presets.foreach((preset) => {
-            const isLeft = preset.presetID === leftId;
-            const isRight = preset.presetID === rightId;
-
-            // Small tinted icon carries the preset colour. Set via DOM to keep a
-            // user-supplied colour out of an attribute string.
-            const icon = iconNode('ph-tag', 'text-base shrink-0');
-            icon.style.color = preset.color || '';
-
-            const bindBtn = (bound, asLeft, tone) => button({
-                    class: `btn btn-xs btn-square font-bold ${bound ? tone : 'btn-ghost opacity-30 hover:opacity-100'}`.trim(),
-                    title: this.t(asLeft ? 'annotations.viewerMenu.leftClickPreset' : 'annotations.viewerMenu.rightClickPreset'),
-                    onclick: (e) => { e.stopPropagation(); this._clickPresetSelect(asLeft, preset.presetID); }
-                }, asLeft ? 'L' : 'R');
-
-            // The row binds with the button it is clicked with: left click -> left
-            // mouse button, right click -> right. The L/R buttons stay for touch
-            // and for discoverability.
-            rows.push(div({
-                    class: `flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-lg transition-colors cursor-pointer ${(isLeft || isRight) ? 'bg-base-300' : 'hover:bg-base-200'}`.trim(),
-                    onclick: () => this._clickPresetSelect(true, preset.presetID),
-                    oncontextmenu: (e) => {
-                        e.preventDefault();
-                        this._clickPresetSelect(false, preset.presetID);
-                    }
-                },
-                icon,
-                span({ class: 'truncate flex-1 text-xs font-medium' },
-                    preset.meta['category']?.value || this.t('annotations.toolbar.unnamedPreset')),
-                bindBtn(isLeft, true, 'btn-primary'),
-                bindBtn(isRight, false, 'btn-secondary')
-            ));
-        });
-
-        if (!rows.length) {
-            rows.push(div({ class: 'text-xs opacity-50 text-center py-3' },
-                this.t('annotations.toolbar.noPresets')));
-        }
 
         const editLink = button({
                 class: 'btn btn-ghost btn-xs justify-center gap-1 normal-case font-normal opacity-70 hover:opacity-100 mt-1 pt-1 border-t border-base-300 rounded-none',
                 onclick: () => {
                     this._presetSwatchButton?.close?.();
-                    this.showPresets(true);
+                    this.showPresets();
                 }
             },
             iconNode('ph-pencil-simple', 'text-xs'),
             this.t('annotations.toolbar.editPresets')
         );
 
+        // Same list as the side panel's "Classes" section.
         panel.replaceChildren(
             header,
-            div({ class: 'flex flex-col gap-0.5 max-h-[240px] overflow-y-auto' }, ...rows.filter(Boolean)),
+            this._buildPresetBindList({
+                maxHeight: '240px',
+                empty: div({ class: 'text-xs opacity-50 text-center py-3' }, this.t('annotations.toolbar.noPresets')),
+            }),
             editLink
         );
     },
@@ -316,7 +244,7 @@ export const presetMethods = {
     getPresetHTMLById(id, isLeftClick, index = undefined) {
         const preset = this.context.presets.get(id);
         if (!preset) return undefined;
-        return this.getPresetHTML(preset, this.context.presets.getActivePreset(isLeftClick), index);
+        return this.getPresetHTML(preset);
     },
 
     _metaFieldHtml(presetId, key, metaObject, allowDelete = true, classes = '') {
@@ -353,8 +281,13 @@ export const presetMethods = {
             isSelected,
             enableModify: this.enablePresetModify,
             lock: this._presetCardLock(preset),
+            bound: {
+                left: this.context.getPreset(true)?.presetID === preset.presetID,
+                right: this.context.getPreset(false)?.presetID === preset.presetID,
+            },
             t: (key) => this.t(key),
             callbacks: {
+                onBind: (id, isLeft) => this._bindPreset(id, isLeft, { toggle: true }),
                 onSelect: (id) => this._selectPresetCard(id),
                 onDelete: (id, instance) => this._removePresetCard(id, instance),
                 onColorChange: (id, value) => this.updatePresetWith(id, 'color', value),
@@ -381,7 +314,6 @@ export const presetMethods = {
             const node = instance?.root || fallbackEl || this._presetCards?.get(presetId)?.root;
             node?.remove();
             this._presetCards?.delete(presetId);
-            this._updateRightSideMenuPresetList();
             this._updatePresetEmptyState();
             return;
         }
@@ -574,29 +506,13 @@ export const presetMethods = {
         );
     },
 
-    _createPresetDialogFooter(allowSelect) {
-        const container = div({ class: 'flex justify-end items-center gap-2 w-full pt-3 mt-1 border-t border-base-300' });
-
-        if (allowSelect) {
-            container.append(
-                button({
-                    class: 'btn btn-outline btn-sm',
-                    onclick: () => this._clickPresetSelect(false)
-                }, this.t('annotations.presets.useRight') || 'Use for Right Click'),
-                button({
-                    class: 'btn btn-primary btn-sm',
-                    onclick: () => this._clickPresetSelect(true)
-                }, this.t('annotations.presets.useLeft') || 'Use for Left Click')
-            );
-        } else {
-            container.append(
-                button({
-                    class: 'btn btn-primary btn-sm px-6',
-                    onclick: () => this._closePresetDialog()
-                }, this.t('annotations.presets.finishEditing') || 'Finish Editing')
-            );
-        }
-        return container;
+    _createPresetDialogFooter() {
+        return div({ class: 'flex justify-end items-center gap-2 w-full pt-3 mt-1 border-t border-base-300' },
+            button({
+                class: 'btn btn-primary btn-sm px-6',
+                onclick: () => this._closePresetDialog()
+            }, this.t('annotations.presets.finishEditing'))
+        );
     },
 
     _applyPresetFilter(searchValue = '') {
@@ -621,22 +537,21 @@ export const presetMethods = {
         if (hint) hint.classList.toggle('hidden', visible > 0 || cards.length === 0);
     },
 
-    showPresets(isLeftClick) {
+    /**
+     * Open the class editor. One dialog, whatever opened it: it edits classes,
+     * and each card carries the same left/right bind buttons as the pickers.
+     */
+    showPresets() {
         if (this.context.disabledInteraction) {
-            Dialogs.show('Annotations are disabled. Enable them first.', 2500, Dialogs.MSG_WARN);
+            Dialogs.show(this.t('annotations.errors.annotationsDisabled'), 2500, Dialogs.MSG_WARN);
             return;
         }
         // Close any prior dialog first — _closePresetDialog clears the
         // card map and container refs, so it must run before we (re)build them.
         this._closePresetDialog();
 
-        const allowSelect = isLeftClick !== undefined;
         this._presetSelection = undefined;
         this._presetCards = new Map();
-
-        const currentPreset = allowSelect
-            ? (this.context.getPreset(isLeftClick) || this.context.presets.get())
-            : undefined;
 
         const cardsContainer = div({
             class: 'flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1'
@@ -654,7 +569,7 @@ export const presetMethods = {
                 const nodes = this._normalizeDomLike(item);
                 cardsContainer.append(...nodes);
             } else {
-                cardsContainer.appendChild(this.getPresetHTML(item, currentPreset));
+                cardsContainer.appendChild(this.getPresetHTML(item));
             }
         }
 
@@ -666,8 +581,8 @@ export const presetMethods = {
             noResults
         );
 
-        const header = this._createPresetDialogHeader(isLeftClick);
-        const footer = this._createPresetDialogFooter(allowSelect);
+        const header = this._createPresetDialogHeader();
+        const footer = this._createPresetDialogFooter();
 
         const modal = new UI.Modal({
             header,
@@ -695,24 +610,22 @@ export const presetMethods = {
         this._presetCardsContainer = null;
     },
 
+    /**
+     * Bind the class picked in a menu (`presetID`, or the pending
+     * `_presetSelection`) to a mouse button. Never releases a binding.
+     */
     _clickPresetSelect(isLeft, presetID = undefined) {
-        // Get the preset object
-        const preset = presetID ? this.context.presets.get(presetID) : this._presetSelection;
-
-        // Check current assignment for toggle behavior
-        const currentActive = this.context.getPreset(isLeft);
-        const isAlreadyActive = currentActive?.presetID === preset?.presetID;
-
-        setTimeout(() => {
-            this._closePresetDialog();
-            // If it's already active, send undefined to remove the assignment
-            this.context.setPreset(isAlreadyActive ? undefined : preset, isLeft);
-        }, 150);
+        this._bindPreset(presetID ?? this._presetSelection, isLeft);
         return false;
     },
 
-    _getMousePosition(e, checkBounds = true) {
-        const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+    // `fabric` in the helpers below is the wrapper of the viewer the context menu
+    // was opened for, and is required. `this.context.fabric` is the ACTIVE viewer's
+    // wrapper — a different canvas whenever the menu comes from another viewport's
+    // board, since side-menu clicks do not change the active viewer.
+    _getMousePosition(e, fabric, checkBounds = true) {
+        const viewer = fabric.viewer;
+        const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
         if (!image) return { x: 0, y: 0 };
         const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
         const { x, y } = image.windowToImageCoordinates(screen);
@@ -732,26 +645,26 @@ export const presetMethods = {
         this._copiedIsCopy = true;
     },
 
-    _cutAnnotation(mousePos, annotation) {
+    _cutAnnotation(mousePos, annotation, fabric) {
         this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = false;
-        this._deleteAnnotation(annotation);
+        this._deleteAnnotation(annotation, fabric);
     },
 
-    _deleteAnnotation(annotation) {
-        this.context.fabric.deleteObject(annotation);
+    _deleteAnnotation(annotation, fabric) {
+        fabric.deleteObject(annotation);
     },
 
-    _canPasteAnnotation(e, getMouseValue = false) {
+    _canPasteAnnotation(e, fabric, getMouseValue = false) {
         if (!this._copiedAnnotation) return null;
-        const mousePos = this._getMousePosition(e);
+        const mousePos = this._getMousePosition(e, fabric);
         if (getMouseValue) return mousePos;
         return !!mousePos;
     },
 
-    _pasteAnnotation(e) {
-        const mousePos = this._canPasteAnnotation(e, true);
+    _pasteAnnotation(e, fabric) {
+        const mousePos = this._canPasteAnnotation(e, fabric, true);
         if (!mousePos) {
             if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
             return;
@@ -764,25 +677,25 @@ export const presetMethods = {
         const targetTop = mousePos.y + this._copiedPos.y;
         factory.move(copy, targetLeft - copy.left, targetTop - copy.top);
         if (this._copiedIsCopy) delete copy.internalID;
-        this.context.fabric.addAnnotation(copy);
+        fabric.addAnnotation(copy);
         factory.renderAllControls(copy);
     },
 
-    _clickAnnotationChangePreset(annotation) {
+    _clickAnnotationChangePreset(annotation, fabric) {
         if (this._presetSelection === undefined) {
             Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
             return false;
         }
         setTimeout(() => {
             this._closePresetDialog();
-            this.context.fabric.changeAnnotationPreset(annotation, this._presetSelection);
+            fabric.changeAnnotationPreset(annotation, this._presetSelection);
         }, 150);
         return false;
     },
 
-    _clickAnnotationMarkPrivate(annotation) {
+    _clickAnnotationMarkPrivate(annotation, fabric) {
         const newValue = !this._getAnnotationProps(annotation).private;
-        this.context.fabric.setAnnotationPrivate(annotation, newValue);
+        fabric.setAnnotationPrivate(annotation, newValue);
     },
 
     _getAnnotationProps(annotation) {
@@ -810,7 +723,6 @@ export const presetMethods = {
             buttonNode?.before(newNode);
         }
         this._updatePresetEmptyState();
-        this._updateRightSideMenuPresetList();
     },
 
     getAnnotationsHeadMenu(error = '') {
@@ -836,5 +748,40 @@ export const presetMethods = {
 
     isUnpreferredPreset(presetID) {
         return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+    },
+
+    // -- removed, shimmed for one release ------------------------------------
+    // Replaced by the shared class picker. They no longer render anything.
+
+    _warnRemovedMethod(name) {
+        const warned = (this._removedMethodsWarned ||= new Set());
+        if (warned.has(name)) return;
+        warned.add(name);
+        APPLICATION_CONTEXT.log?.(`plugin.${this.id}`)?.warn?.(
+            `AnnotationsGUI.${name}() is removed: the class picker renders the preset controls.`);
+    },
+
+    /** @deprecated Refreshes the class picker. */
+    updatePresetsMouseButtons() {
+        this._warnRemovedMethod("updatePresetsMouseButtons");
+        this.updatePresetsHTML();
+    },
+
+    /** @deprecated Returns an empty string. */
+    getPresetControlHTML() {
+        this._warnRemovedMethod("getPresetControlHTML");
+        return "";
+    },
+
+    /** @deprecated Returns an empty string. */
+    getMissingPresetHTML() {
+        this._warnRemovedMethod("getMissingPresetHTML");
+        return "";
+    },
+
+    /** @deprecated Returns an empty string. */
+    RightSideMenuVisibleControls() {
+        this._warnRemovedMethod("RightSideMenuVisibleControls");
+        return "";
     }
 };

@@ -179,10 +179,12 @@ function _listOpenViewers() {
     return all;
 }
 
+// Viewers are identified here by their slot id (`viewer.id`), never `uniqueId`:
+// that one is derived from the slide, so two viewports showing the same slide
+// would be one entry in the picker and one target for the action.
 function _activeViewerId() {
-    const vm = (typeof window !== 'undefined') ? window.VIEWER_MANAGER : null;
-    const active = vm?.active || (typeof window !== 'undefined' ? window.VIEWER : null);
-    return active ? String(active.uniqueId) : null;
+    const active = window.VIEWER_MANAGER?.get();
+    return active ? String(active.id) : null;
 }
 
 export const createAnnotationSettingsMenu = (plugin) => {
@@ -202,7 +204,7 @@ export const createAnnotationSettingsMenu = (plugin) => {
     const _bumpViewers = () => { viewersTick.val = viewersTick.val + 1; };
     const _onViewerCreate = () => _bumpViewers();
     const _onViewerDestroy = (e) => {
-        const goneId = String(e?.uniqueId || '');
+        const goneId = String(e?.viewer?.id || '');
         if (goneId && exportViewerId.val === goneId) exportViewerId.val = null;
         if (goneId && importViewerId.val === goneId) importViewerId.val = null;
         _bumpViewers();
@@ -269,7 +271,7 @@ export const createAnnotationSettingsMenu = (plugin) => {
                     onchange: (e) => { stateRef.val = e.target.value || null; }
                 },
                 viewers.map(v => {
-                    const id = String(v.uniqueId);
+                    const id = String(v.id);
                     const name = _resolveViewerLabel(v, plugin);
                     const isActive = id === activeId;
                     const isSelected = (stateRef.val ? id === stateRef.val : isActive);

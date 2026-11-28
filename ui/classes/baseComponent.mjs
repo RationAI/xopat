@@ -70,9 +70,29 @@ function _upgradeDegradedHtml() {
     }
 }
 
+// Markup the allowlist drops that a legacy panel relied on to WORK (controls,
+// inline handlers, inline styles, ids). Seeing one means the caller still builds
+// its UI from an HTML string; say so once per call site instead of silently
+// handing back a panel with its controls missing.
+const _LEGACY_MARKUP = /<\s*(input|select|textarea|button|label|form)\b|\son[a-z]+\s*=|\s(style|id)\s*=/i;
+const _legacyWarned = new Set();
+function _warnLegacyMarkup(source) {
+    if (!_LEGACY_MARKUP.test(source) || _legacyWarned.size >= 64) return;
+    // The first stack frame outside this file names the caller.
+    const frames = (new Error().stack || "").split("\n").slice(1);
+    const caller = (frames.find(f => !f.includes("baseComponent")) || "").trim() || "unknown caller";
+    if (_legacyWarned.has(caller)) return;
+    _legacyWarned.add(caller);
+    const message = "UI markup string lost form controls, inline handlers, style or id attributes to "
+        + "sanitization: pass nodes or UI components instead (ui/classes/README.md). Caller: " + caller;
+    const log = globalThis.APPLICATION_CONTEXT?.log?.("core.ui");
+    if (log?.warn) log.warn(message); else console.warn(message);
+}
+
 const HtmlRenderer = v => {
     const s = v.trim();
     if (s.startsWith("<")) {
+        _warnLegacyMarkup(s);
         const sanitize = globalThis.SanitizeHtml;
         if (typeof sanitize === "function") {
             const wrap = div();

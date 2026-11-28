@@ -277,7 +277,7 @@ LLMs (and humans) often skip steps 1–2 and jump to step 3 or worse. Don't.
 
 1. **Reuse an existing component** in `ui/classes/components/`. Catalogue (non-exhaustive):
    - Dialogs / modals: `Modal`, `IllustratedModal`, `LoginModal`, `TutorialsModal`, `ProgressDialog`
-   - Notifications: `Toast`, `StatusBar`, `GlobalTooltip`
+   - Notifications: `Toast`, `StatusBar`, `GlobalTooltip` (a message about one viewport — a tool's instruction, its failure — goes through `Dialogs.forViewer(viewer, {position})`, which shows it inside that viewport with its own queue, instead of the global `Dialogs.show`)
    - Pop-overs: `Popover` (anchored floating panel for arbitrary content — sliders, inputs — portaled to `<body>`, closes on Escape / outside press; use it instead of hand-wiring `placeFixedAnchored` + `FloatingManager`, and instead of an inline row that resizes its host)
    - Windows / panels: `FloatingWindow`, `DockableWindow`, `MainLayout`, `MainPanel`, `RightSideViewerMenu`, `NavigatorSideMenu`, `ShaderSideMenu`, `ShaderLayer`, `DataAdjustmentsPanel`, `AdjustmentControls` (live sliders rendered from adjustment descriptors), `DepthRuler` (per-viewer focal-plane ruler on the viewport's bottom edge; it reserves a bottom inset — honour `--xo-viewer-bottom-inset` / `scalebar.setBottomInset` rather than overlapping it)
    - Menus / tabs: `Menu`, `MenuTab`, `MenuTabBanner`, `MultiPanelMenu`, `MultiPanelMenuTab`, `TabsMenu`, `Explorer`
@@ -483,6 +483,7 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 
 ### UI patterns
 
+- **Pointer gestures on the slide come from OSD viewer events, not raw DOM listeners.** `canvas-click`, `canvas-double-click`, `canvas-drag`, `canvas-press` are the one definition of what a click, a double-click or a drag *is* (thresholds per pointer type, touch included). Never attach `click` / `dblclick` to the canvas and never time clicks yourself to detect a double. `canvas-double-click` is raised synchronously right after the second `canvas-click` of the pair, so a tool that acts per click undoes that second action in its `canvas-double-click` handler and defers anything final (closing a shape, finishing a pick) by a microtask. Set `e.preventDefaultAction = true` to keep OSD from zooming. Reference: `pickThreePoints` in `viewport-sync-api.ts`.
 - **Canvas right-click goes through `CanvasContextMenu` providers.** Register a provider; never call `DropDown.open` directly from `nonprimary-release-not-handled`.
 - **Hot-path Fabric integration: patch the prototype.** For high-frequency events (every render, every object touch), monkey-patch `fabric.Canvas` / `fabric.Object` prototype methods rather than wiring `canvas.on(...)` listeners — events are an order of magnitude slower on the hot path.
 

@@ -433,6 +433,14 @@ interface OwnerRecord {
      *  `both`                    — global + per-viewer (legacy).
      *  `all`                     — global + per-viewer + per-viewer-background. */
     bundleScope: BundleScope;
+    /**
+     * The owner keeps its bundle state per VIEWPORT (a canvas, an overlay)
+     * rather than per document. A restore is then delivered to every viewport
+     * showing the document, each hydrated once. Off by default: an owner whose
+     * state is keyed by `ctx.key` holds one copy however many viewports show
+     * it, and a second delivery would overwrite what the user changed since.
+     */
+    perViewport: boolean;
     /** See `IOOwnerBundleHooks.defaultFormat`. */
     defaultFormat?: (ctx?: IOContext) => string | undefined;
     capabilities: Map<string, IOCapability>;
@@ -486,6 +494,22 @@ export class IOPipeline implements IOPipelineLike {
     /** Tracked CRUD resources — populated via `registerResource(...)` from
      *  `defineResource()`. Drained collectively by `flushAllResources()`. */
     private readonly resources: Set<IOResource<any>> = new Set();
+    /**
+     * Unsaved-changes registry: `ownerUid` -> bundle key -> generation stamp.
+     * Key `""` is the owner's global document. See "Dirty state" in
+     * src/IO_PIPELINE.md. A stamp lets a save clear only what it actually
+     * captured: an edit landing while a slow sink is writing keeps the key dirty.
+     */
+    private readonly dirty: Map<string, Map<string, number>> = new Map();
+    private dirtyGeneration = 0;
+    /**
+     * Owners currently hydrating from a sink: `ownerUid` -> viewerId (`""` =
+     * owner-wide) -> nesting count. Their change events on THAT viewer are not
+     * user work; an edit on another viewer meanwhile still is.
+     */
+    private readonly restoring: Map<string, Map<string, number>> = new Map();
+    /** Last `hasUnsavedWork()` answer per resource, to emit transitions only. */
+    private readonly resourceDirty: WeakMap<IOResource<any>, boolean> = new WeakMap();
     /** Guards keyed by resource name; `"*"` is the wildcard bucket. */
     private readonly guards: Map<string, IOGuardSpec[]> = new Map();
     /** Resolved per-owner bindings cache (invalidated on registerOwner / config change). */
@@ -527,8 +551,14 @@ export class IOPipeline implements IOPipelineLike {
      * would wipe anything the user changed in between. Cleared on the
      * slide-leave flush and on viewer removal (`clearHydratedFor`) so
      * genuine re-opens re-hydrate.
+     *
+     * The key names a DOCUMENT; the value lists the viewports (`viewer.id`
+     * slot ids, `""` when the caller named none) it was delivered to. A
+     * `viewerId` is derived from the slide, so two viewports showing the same
+     * slide share the key — each still needs its own delivery, and one of them
+     * leaving must not re-arm the other.
      */
-    private hydratedKeys = new Set<string>();
+    private hydratedKeys = new Map<string, Set<string>>();
     /**
      * Same keys, for slots whose restore was ATTEMPTED and came back with
      * nothing but failures. What is stored there is unknown, so nothing is
@@ -986,6 +1016,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: string;
             xoType: "core" | "plugin" | "module";
             bundleScope?: BundleScope;
+            perViewport?: boolean;
         } & IOOwnerBundleHooks,
     ): IODisposer {
         const existing = this.owners.get(ownerUid);
@@ -994,6 +1025,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: info.ownerId,
             xoType: info.xoType,
             bundleScope: "global",
+            perViewport: false,
             capabilities: new Map(),
             defaultBindings: {},
             disabled: false,
@@ -1001,6 +1033,7 @@ export class IOPipeline implements IOPipelineLike {
         record.ownerId = info.ownerId;
         record.xoType = info.xoType;
         if (info.bundleScope) record.bundleScope = info.bundleScope;
+        if (typeof info.perViewport === "boolean") record.perViewport = info.perViewport;
         if (info.exportBundle) record.exportBundle = info.exportBundle;
         if (info.importBundle) record.importBundle = info.importBundle;
         if (info.defaultFormat) record.defaultFormat = info.defaultFormat;
@@ -1036,7 +1069,7 @@ export class IOPipeline implements IOPipelineLike {
         for (const c of caps) {
             const cap: IOCapability =
                 typeof c === "string"
-                    ? { id: c, kind: c.startsWith("crud:") ? "crud" : "bundle" }
+                    ? { id: c, kind: c.startsWith("crud:") ? "crud" : c.startsWith("kv:") ? "kv" : "bundle" }
                     : c;
             owner.capabilities.set(cap.id, cap);
         }
@@ -1199,8 +1232,12 @@ export class IOPipeline implements IOPipelineLike {
         // `W_IO_SINK_NOT_READY`, i.e. hold data for a destination that is switched
         // off on purpose. An UNREGISTERED sink must keep going through
         // `filterRegistered` — that one may still be on its way.
-        const route = (list: IOBindingTarget[]): IOResolvedBinding[] | undefined => {
-            const live = (list ?? []).filter((raw) => {
+        const route = (given: IOBindingTarget[] | IOBindingTarget): IOResolvedBinding[] | undefined => {
+            // `"bundle-export": "github"` is the obvious thing to write and it
+            // used to throw here (no `.filter` on a string), taking every
+            // dispatch for the owner with it. One target is a list of one.
+            const list: IOBindingTarget[] = Array.isArray(given) ? given : (given == null ? [] : [given]);
+            const live = list.filter((raw) => {
                 const sink = normalizeBindingTarget(raw)?.sink;
                 return !sink || this.isSinkEnabled(sink);
             });
@@ -1681,13 +1718,16 @@ export class IOPipeline implements IOPipelineLike {
      * skipped as "already hydrated". Called by the viewer manager on
      * viewer removal.
      */
-    clearHydratedFor(viewerId: string) {
+    clearHydratedFor(viewerId: string, viewportId?: string) {
         // Keys are `${uid}|${viewerId}::${bgId}` (or `${uid}|${viewerId}`);
         // element uids contain no `|`, so the first `|` is the separator.
-        for (const k of Array.from(this.hydratedKeys)) {
-            const bundleKey = k.substring(k.indexOf("|") + 1);
+        const viewers = this.getViewers();
+        for (const k of Array.from(this.hydratedKeys.keys())) {
+            const at = k.indexOf("|");
+            const bundleKey = k.substring(at + 1);
             if (bundleKey === viewerId || bundleKey.startsWith(`${viewerId}::`)) {
-                this.hydratedKeys.delete(k);
+                const backgroundId = bundleKey === viewerId ? undefined : bundleKey.substring(viewerId.length + 2);
+                this.rearmHydration(k, this.owners.get(k.substring(0, at)), viewerId, backgroundId, viewportId, viewers);
             }
         }
         for (const k of Array.from(this.restoreFailedKeys)) {
@@ -1698,9 +1738,79 @@ export class IOPipeline implements IOPipelineLike {
         }
     }
 
+    /**
+     * Which hydration mark a restore sets and checks: the viewport's for a
+     * per-viewport owner, the single document-wide one (`""`) for any other.
+     */
+    private hydrationSlot(owner: OwnerRecord, viewportId: string | undefined): string {
+        return owner.perViewport ? (viewportId ?? "") : "";
+    }
+
+    /**
+     * Drop the hydration mark of one viewport for a document, or of every
+     * viewport when no slot is named.
+     */
+    private forgetHydration(guardKey: string, viewportId?: string) {
+        if (viewportId === undefined) { this.hydratedKeys.delete(guardKey); return; }
+        const slots = this.hydratedKeys.get(guardKey);
+        if (!slots) return;
+        slots.delete(viewportId);
+        if (slots.size === 0) this.hydratedKeys.delete(guardKey);
+    }
+
+    /**
+     * A viewport stopped showing a document (it navigated away, or was closed):
+     * make its next visit restore again.
+     *
+     * A per-viewport owner forgets that viewport's mark only. A per-document
+     * owner holds ONE copy for everyone, so its mark goes only once nobody else
+     * is showing the document — otherwise the leaver's return would re-import
+     * over the state the remaining viewport is still working on. A caller that
+     * names no viewport gets the unconditional re-arm it always did.
+     */
+    private rearmHydration(
+        guardKey: string,
+        owner: OwnerRecord | undefined,
+        viewerId: string,
+        backgroundId: string | undefined,
+        leavingSlotId: string | undefined,
+        viewers: Array<{ uniqueId: string; viewer?: any }>,
+    ) {
+        if (owner?.perViewport) { this.forgetHydration(guardKey, leavingSlotId); return; }
+        const stillShown = leavingSlotId !== undefined
+            && this.slotsShowing(viewerId, viewers).some(s => s.slotId !== leavingSlotId
+                && (backgroundId === undefined || this.resolveCurrentBackgroundId(s.viewer) === backgroundId));
+        if (!stillShown) this.forgetHydration(guardKey);
+    }
+
+    /**
+     * The viewports currently showing `viewerId`, in manager order. Several can:
+     * the id is derived from the slide, not from the viewport.
+     */
+    private slotsShowing(
+        viewerId: string, viewers: Array<{ uniqueId: string; viewer?: any }>,
+    ): Array<{ slotId: string | undefined; viewer: any }> {
+        return viewers.filter(v => v.uniqueId === viewerId)
+            .map(v => ({ slotId: v.viewer?.id as string | undefined, viewer: v.viewer }));
+    }
+
+    /**
+     * The viewer a dispatch is about: the viewport named by `ctx.viewportId`,
+     * else the first one showing `ctx.viewerId`. A named viewport that is gone
+     * resolves to `undefined` — never to another viewport showing the same slide.
+     */
+    viewerFor(ctx: Pick<IOContext, "viewerId" | "viewportId"> | undefined): any {
+        if (!ctx) return undefined;
+        const viewers = this.getViewers();
+        if (ctx.viewportId !== undefined) {
+            return viewers.find(v => v.viewer?.id === ctx.viewportId)?.viewer;
+        }
+        return ctx.viewerId ? viewers.find(v => v.uniqueId === ctx.viewerId)?.viewer : undefined;
+    }
+
     // ── orchestration: bundle export ───────────────────────────────────
 
-    async flushBundleExport(scope?: { ownerUid?: string; capabilityId?: string; viewerId?: string; backgroundId?: string; skipFileFallback?: boolean; trigger?: "user" | "system" }): Promise<IOResult[]> {
+    async flushBundleExport(scope?: { ownerUid?: string; capabilityId?: string; viewerId?: string; viewportId?: string; backgroundId?: string; skipFileFallback?: boolean; trigger?: "user" | "system" }): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
         const skipFileFallback = !!scope?.skipFileFallback;
@@ -1764,13 +1874,28 @@ export class IOPipeline implements IOPipelineLike {
                 // when it flushes a vacated slide just before re-opening with new
                 // content. Only fires for owners that opted INTO slide-aware
                 // scoping; the explicit `backgroundId` is the previous slide id.
+                // One key is ONE document, however many viewports show it (a
+                // `viewerId` is derived from the slide). It is written once, from
+                // its primary viewport — the first one showing it, in manager
+                // order — and the owner is told which (`ctx.viewportId`).
+                // Writing it once per viewport would let whichever came last
+                // replace the others' under the same key.
+                // With a background named, only a viewport showing THAT
+                // background qualifies: virtual children share a `viewerId`
+                // without sharing a slide.
+                const primarySlot = (viewerId: string, backgroundId?: string) =>
+                    this.slotsShowing(viewerId, viewers).find(s => backgroundId === undefined
+                        || this.resolveCurrentBackgroundId(s.viewer) === backgroundId)?.slotId;
+
                 if (scope?.viewerId && scope.backgroundId !== undefined) {
                     if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback, trigger,
+                        primarySlot(scope.viewerId, scope.backgroundId) ?? scope.viewportId);
                     // Slide-leave: re-arm hydration for this (viewer, background)
-                    // so returning to the slide restores from sinks again.
+                    // so returning to the slide restores from sinks again — see
+                    // `rearmHydration` for what "this" means with two viewports.
                     const left = `${uid}|${this.composeBundleKey(scope.viewerId, scope.backgroundId)}`;
-                    this.hydratedKeys.delete(left);
+                    this.rearmHydration(left, owner, scope.viewerId, scope.backgroundId, scope.viewportId, viewers);
                     // ...and forget a failed read: the next visit reads again.
                     this.restoreFailedKeys.delete(left);
                     continue;
@@ -1778,7 +1903,8 @@ export class IOPipeline implements IOPipelineLike {
 
                 // Explicit viewerId only — viewer-scoped flush (legacy path).
                 if (scope?.viewerId) {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results, skipFileFallback, trigger);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results, skipFileFallback, trigger,
+                        primarySlot(scope.viewerId) ?? scope.viewportId);
                     continue;
                 }
 
@@ -1786,15 +1912,22 @@ export class IOPipeline implements IOPipelineLike {
                     await this.runOneBundleExport(uid, owner, cap, sinks, undefined, undefined, results, skipFileFallback, trigger);
                 }
                 if (isViewerScoped(owner.bundleScope)) {
+                    const written = new Set<string>();
                     for (const v of viewers) {
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results, skipFileFallback, trigger);
+                        if (written.has(v.uniqueId)) continue;
+                        written.add(v.uniqueId);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results, skipFileFallback, trigger, v.viewer?.id);
                     }
                 }
                 if (isViewerBackgroundScoped(owner.bundleScope)) {
+                    const written = new Set<string>();
                     for (const v of viewers) {
                         const bgId = this.resolveCurrentBackgroundId(v.viewer);
                         if (!bgId) continue; // no current slide → nothing to key by
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results, skipFileFallback, trigger);
+                        const key = this.composeBundleKey(v.uniqueId, bgId);
+                        if (written.has(key)) continue;
+                        written.add(key);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results, skipFileFallback, trigger, v.viewer?.id);
                     }
                 }
             }
@@ -1852,6 +1985,204 @@ export class IOPipeline implements IOPipelineLike {
         return false;
     }
 
+    // -- dirty state (unsaved changes) ---------------------------------
+
+    /**
+     * Resolve where-ish input to the bundle key the owner's export writes under,
+     * so a successful write clears exactly the mark it covers. A viewer resolves
+     * to the document it shows; the owner's `bundleScope` decides how much of
+     * that identifies its document — mirroring the keys `flushBundleExport`
+     * dispatches: `uniqueId::background` (slide-aware), `uniqueId` (per-viewer)
+     * or `""` (global). An unregistered owner keeps the most specific key.
+     */
+    private dirtyKeyOf(ownerUid: string | undefined, where?: IODirtyWhere): string {
+        if (!where) return "";
+        const isViewer = typeof (where as any).uniqueId === "string";
+        let viewerId: string | undefined = isViewer ? (where as any).uniqueId : (where as IODirtyScope).viewerId;
+        let backgroundId: string | undefined = isViewer
+            ? this.resolveCurrentBackgroundId(where)
+            : (where as IODirtyScope).backgroundId;
+        const scope = ownerUid ? this.owners.get(ownerUid)?.bundleScope : undefined;
+        if (scope && !isViewerBackgroundScoped(scope)) {
+            backgroundId = undefined;
+            if (!isViewerScoped(scope)) viewerId = undefined;
+        }
+        return this.composeBundleKey(viewerId, backgroundId);
+    }
+
+    /** Is `ownerUid` hydrating owner-wide, or on `viewerId`? */
+    private isRestoring(ownerUid: string, viewerId: string | undefined): boolean {
+        const views = this.restoring.get(ownerUid);
+        if (!views) return false;
+        if (views.has("")) return true;
+        // No viewer named: the mark cannot be told apart from the restore.
+        return viewerId === undefined ? views.size > 0 : views.has(viewerId);
+    }
+
+    private splitBundleKey(key: string): { viewerId?: string; backgroundId?: string } {
+        if (!key) return {};
+        const i = key.indexOf("::");
+        return i < 0 ? { viewerId: key } : { viewerId: key.slice(0, i), backgroundId: key.slice(i + 2) };
+    }
+
+    private emitDirtyChanged(ownerUid: string, key: string, dirty: boolean) {
+        this.emitQueueEvent_("io:dirty-changed", {
+            ownerUid, ...this.splitBundleKey(key), dirty, anyDirty: this.isDirty(),
+        });
+    }
+
+    /**
+     * Record that `ownerUid` holds changes not yet stored anywhere the user can
+     * get them back from. Ignored while the pipeline itself hydrates the owner
+     * on that viewer (a restore is not user work).
+     */
+    markDirty(ownerUid: string, where?: IODirtyWhere): void {
+        if (!ownerUid) return;
+        const viewerId = !where ? undefined
+            : typeof (where as any).uniqueId === "string" ? (where as any).uniqueId : (where as IODirtyScope).viewerId;
+        if (this.isRestoring(ownerUid, viewerId)) return;
+        const key = this.dirtyKeyOf(ownerUid, where);
+        let keys = this.dirty.get(ownerUid);
+        if (!keys) this.dirty.set(ownerUid, keys = new Map());
+        const was = keys.has(key);
+        keys.set(key, ++this.dirtyGeneration);
+        if (!was) this.emitDirtyChanged(ownerUid, key, true);
+    }
+
+    /**
+     * Forget unsaved changes. No owner clears everything (the user chose to
+     * discard); no `where` clears every key of that owner.
+     */
+    markClean(ownerUid?: string, where?: IODirtyWhere): void {
+        if (!ownerUid) {
+            const all = Array.from(this.dirty.entries());
+            this.dirty.clear();
+            for (const [uid, keys] of all) for (const key of keys.keys()) this.emitDirtyChanged(uid, key, false);
+            return;
+        }
+        const keys = this.dirty.get(ownerUid);
+        if (!keys) return;
+        if (where === undefined) {
+            this.dirty.delete(ownerUid);
+            for (const key of keys.keys()) this.emitDirtyChanged(ownerUid, key, false);
+            return;
+        }
+        this.clearDirtyKey(ownerUid, this.dirtyKeyOf(ownerUid, where));
+    }
+
+    /** Clear one key, but only if nothing re-dirtied it after `upTo`. */
+    private clearDirtyKey(ownerUid: string, key: string, upTo = Infinity): void {
+        const keys = this.dirty.get(ownerUid);
+        const stamp = keys?.get(key);
+        if (!keys || stamp === undefined || stamp > upTo) return;
+        keys.delete(key);
+        if (!keys.size) this.dirty.delete(ownerUid);
+        this.emitDirtyChanged(ownerUid, key, false);
+    }
+
+    /** Current generation: pair with {@link markCleanUpTo} around a save that is not a sink write. */
+    dirtyMark(): number { return this.dirtyGeneration; }
+
+    /**
+     * Clear every key stamped at or before `mark`, except for owners that
+     * {@link ownersLeftOut} names. Used by the file Export: the HTML form IS the
+     * persisted copy, although it rides on the in-memory `post-data` sink.
+     */
+    markCleanUpTo(mark: number, results?: IOResult[]): void {
+        const refused = this.ownersLeftOut(results);
+        // A refusal that names nobody may concern anyone: keep everything.
+        if (!refused) return;
+        for (const [uid, keys] of Array.from(this.dirty.entries())) {
+            if (refused.has(uid)) continue;
+            for (const key of Array.from(keys.keys())) this.clearDirtyKey(uid, key, mark);
+        }
+    }
+
+    /**
+     * Owners whose data did not get written anywhere in a flush: at least one
+     * failure and no success among `results`. A remote sink refusing while the
+     * in-page copy (`post-data`) or the local fallback took the payload is not
+     * "left out" — the file has it. `undefined` when a failure names no owner,
+     * so it cannot be attributed.
+     */
+    ownersLeftOut(results?: IOResult[]): Set<string> | undefined {
+        const failed = new Set<string>(), written = new Set<string>();
+        for (const r of results ?? []) {
+            if (!r) continue;
+            const uid = (r as any).ownerUid;
+            if (r.ok) { if (uid) written.add(uid); continue; }
+            if (!uid) return undefined;
+            failed.add(uid);
+        }
+        for (const uid of written) failed.delete(uid);
+        return failed;
+    }
+
+    /**
+     * Does anything hold unsaved changes? Covers explicit marks and CRUD
+     * resources whose queued ops would be lost on close
+     * (`IOResource.hasUnsavedWork`). A scoped filter asks about marks only:
+     * resource queues are not keyed by document. With an owner named, the
+     * scope is resolved to that owner's document key like `markDirty` does.
+     */
+    isDirty(filter?: { ownerUid?: string } & IODirtyScope): boolean {
+        const scoped = !!filter && (filter.viewerId !== undefined || filter.backgroundId !== undefined);
+        const wantKey = scoped ? this.dirtyKeyOf(filter!.ownerUid, filter!) : undefined;
+        for (const [uid, keys] of this.dirty) {
+            if (filter?.ownerUid && uid !== filter.ownerUid) continue;
+            if (wantKey === undefined ? keys.size > 0 : keys.has(wantKey)) return true;
+        }
+        if (scoped) return false;
+        for (const r of this.resources) {
+            if (filter?.ownerUid && (r as any).ownerUid !== filter.ownerUid) continue;
+            if (r.hasUnsavedWork?.() === true) return true;
+        }
+        return false;
+    }
+
+    /** What is unsaved, for UI that names it. Resources report under their owner, without a scope. */
+    dirtyEntries(): IODirtyEntry[] {
+        const out: IODirtyEntry[] = [];
+        for (const [uid, keys] of this.dirty) {
+            for (const key of keys.keys()) out.push({ ownerUid: uid, ...this.splitBundleKey(key) });
+        }
+        for (const r of this.resources) {
+            if (r.hasUnsavedWork?.() === true) out.push({ ownerUid: (r as any).ownerUid, resourceName: r.name });
+        }
+        return out;
+    }
+
+    /** Called by `IOResource` whenever its queue changes shape. Emits transitions only. */
+    resourceDirtyChanged_(resource: IOResource<any>, ownerUid: string): void {
+        const now = resource.hasUnsavedWork?.() === true;
+        const was = this.resourceDirty.get(resource) === true;
+        if (now === was) return;
+        this.resourceDirty.set(resource, now);
+        this.emitQueueEvent_("io:dirty-changed", {
+            ownerUid, resourceName: resource.name, dirty: now, anyDirty: this.isDirty(),
+        });
+    }
+
+    /**
+     * Run an owner's hydration with `markDirty` suppressed for it on the viewer
+     * being restored (`viewerId` unset = owner-wide, e.g. a global bundle).
+     * Keyed by viewer rather than the full document key: the background a viewer
+     * reports can still be settling while it opens.
+     */
+    private async asRestore<T>(uid: string, viewerId: string | undefined, fn: () => Promise<T> | T): Promise<T> {
+        const view = viewerId ?? "";
+        let views = this.restoring.get(uid);
+        if (!views) this.restoring.set(uid, views = new Map());
+        views.set(view, (views.get(view) ?? 0) + 1);
+        try {
+            return await fn();
+        } finally {
+            const n = (views.get(view) ?? 1) - 1;
+            if (n <= 0) views.delete(view); else views.set(view, n);
+            if (!views.size && this.restoring.get(uid) === views) this.restoring.delete(uid);
+        }
+    }
+
     private resolveCurrentBackgroundId(viewer: any): string | undefined {
         const utils = (window as any).UTILITIES;
         return utils && typeof utils.currentBackgroundIdFor === "function"
@@ -1873,6 +2204,7 @@ export class IOPipeline implements IOPipelineLike {
         viewerId: string | undefined,
         backgroundId: string | undefined,
         trigger: "user" | "system" = "user",
+        viewportId?: string,
     ): IOContext {
         return {
             direction: "export",
@@ -1882,6 +2214,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: owner.ownerId,
             key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            viewportId,
             backgroundId,
             trigger,
             meta: {},
@@ -1898,8 +2231,12 @@ export class IOPipeline implements IOPipelineLike {
         results: IOResult[],
         skipFileFallback: boolean = false,
         trigger: "user" | "system" = "user",
+        viewportId?: string,
     ): Promise<void> {
-        const ctx: IOContext = this.bundleCtx(uid, owner, cap, viewerId, backgroundId, trigger);
+        const ctx: IOContext = this.bundleCtx(uid, owner, cap, viewerId, backgroundId, trigger, viewportId);
+        // What this write captures: an edit landing while the sinks run is newer
+        // than the payload and must keep the key dirty.
+        const dirtyMark = this.dirtyGeneration;
         // Veto phase, asked once per route (see IOContext.route). Both run
         // before `exportBundle`, so a fully denied export never materializes a
         // payload at all.
@@ -2014,7 +2351,18 @@ export class IOPipeline implements IOPipelineLike {
         );
         const dispatchResults: IOResult[] = [...pass.results];
         let succeeded = pass.succeeded;
-        results.push(...pass.results);
+        // Stored somewhere the user can get it back from: no longer unsaved.
+        // `pass.results` is index-aligned with `picked`. An in-memory sink
+        // (`persists: false`: session-memory, post-data) keeps the key dirty.
+        if (pass.results.some((r, i) => r?.ok && picked[i]?.sink.persists !== false)) {
+            this.clearDirtyKey(uid, ctx.key, dirtyMark);
+        }
+        // Each sink's answer carries the owner, ok or not: a caller aggregating
+        // a flush (Export's `markCleanUpTo`) needs to tell "this owner was
+        // written somewhere" from "this owner was left out", and a bare sink
+        // result cannot say which owner it belongs to.
+        const stamped = (r: IOResult): IOResult => (r && !(r as any).ownerUid ? { ...r, ...ownerOf(ctx) } : r);
+        results.push(...pass.results.map(stamped));
         if (!sinkVerdict.ok) results.push({ ...sinkVerdict, ...ownerOf(ctx) });
 
         // Last-resort local copy. Runs when nothing was stored AND the local
@@ -2048,7 +2396,7 @@ export class IOPipeline implements IOPipelineLike {
                 // bound destination.
                 const localCtx: IOContext = { ...ctx, route: "local" };
                 try {
-                    const r = await fallback.writeBundle(localCtx, own.payload);
+                    const r = stamped(await fallback.writeBundle(localCtx, own.payload));
                     results.push(r);
                     dispatchResults.push(r);
                     if (r.ok) {
@@ -2057,6 +2405,7 @@ export class IOPipeline implements IOPipelineLike {
                             "warn",
                         );
                         succeeded++;
+                        if (fallback.persists !== false) this.clearDirtyKey(uid, ctx.key, dirtyMark);
                     } else if (r.refused) {
                         this.surfaceRefusal(localCtx, r);
                     }
@@ -2087,9 +2436,24 @@ export class IOPipeline implements IOPipelineLike {
      * and feed it to the owner's `importBundle` hook. Used at boot for
      * global state and on each viewer open for per-viewer state.
      */
-    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string; backgroundId?: string; trigger?: "user" | "system" } = {}): Promise<IOResult[]> {
+    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string; viewportId?: string; backgroundId?: string; trigger?: "user" | "system" } = {}): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
+        // Who a restore of `viewerId` is delivered to. The caller names the
+        // viewport when it acts for one. Without a name, a per-viewport owner
+        // (`OwnerRecord.perViewport`) gets every viewport showing the document,
+        // each hydrated at most once; any other owner holds one copy and gets
+        // one delivery. A viewer the manager does not list (yet) still gets one
+        // unslotted pass.
+        const targetsOf = (viewerId: string, owner: OwnerRecord): Array<{ slotId: string | undefined; viewer: any }> => {
+            const showing = this.slotsShowing(viewerId, viewers);
+            if (scope.viewportId !== undefined) {
+                return [showing.find(s => s.slotId === scope.viewportId)
+                    ?? { slotId: scope.viewportId, viewer: undefined }];
+            }
+            if (!showing.length) return [{ slotId: undefined, viewer: undefined }];
+            return owner.perViewport ? showing : [showing[0]!];
+        };
         // Loud unless the caller says this is the pipeline's own bookkeeping.
         // Every shipped caller IS bookkeeping (boot, slide-open) and says so;
         // the default stays "user" so a future one has to think about it.
@@ -2125,20 +2489,26 @@ export class IOPipeline implements IOPipelineLike {
             // slide-aware scoping; their state lives across slide swaps.
             if (scope.viewerId !== undefined && scope.backgroundId !== undefined) {
                 if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
-                await this.runOneRestore(uid, owner, sinks, scope.viewerId, scope.backgroundId, results, trigger);
+                for (const t of targetsOf(scope.viewerId, owner)) {
+                    await this.runOneRestore(uid, owner, sinks, scope.viewerId, scope.backgroundId, results, trigger, t.slotId);
+                }
                 continue;
             }
             // Explicit viewer scope only — boot-time `forceDataImportInitialization`
             // path. Dispatches per-viewer (legacy semantics); per-viewer-background
             // owners get their boot restore here too, with the current bg id.
             if (scope.viewerId !== undefined) {
+                const targets = targetsOf(scope.viewerId, owner);
                 if (isViewerBackgroundScoped(owner.bundleScope)) {
-                    const v = viewers.find(x => x.uniqueId === scope.viewerId);
-                    const bgId = this.resolveCurrentBackgroundId(v?.viewer);
-                    if (bgId) await this.runOneRestore(uid, owner, sinks, scope.viewerId, bgId, results, trigger);
+                    for (const t of targets) {
+                        const bgId = this.resolveCurrentBackgroundId(t.viewer);
+                        if (bgId) await this.runOneRestore(uid, owner, sinks, scope.viewerId, bgId, results, trigger, t.slotId);
+                    }
                 }
                 if (isViewerScoped(owner.bundleScope)) {
-                    await this.runOneRestore(uid, owner, sinks, scope.viewerId, undefined, results, trigger);
+                    for (const t of targets) {
+                        await this.runOneRestore(uid, owner, sinks, scope.viewerId, undefined, results, trigger, t.slotId);
+                    }
                 }
                 continue;
             }
@@ -2157,14 +2527,14 @@ export class IOPipeline implements IOPipelineLike {
             // their own viewer-create handler (out of scope here).
             if (!this.bootRestorePending && isViewerScoped(owner.bundleScope)) {
                 for (const v of viewers) {
-                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, undefined, results, trigger);
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, undefined, results, trigger, v.viewer?.id);
                 }
             }
             if (!this.bootRestorePending && isViewerBackgroundScoped(owner.bundleScope)) {
                 for (const v of viewers) {
                     const bgId = this.resolveCurrentBackgroundId(v.viewer);
                     if (!bgId) continue;
-                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, bgId, results, trigger);
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, bgId, results, trigger, v.viewer?.id);
                 }
             }
         }
@@ -2219,25 +2589,29 @@ export class IOPipeline implements IOPipelineLike {
         backgroundId: string | undefined,
         results: IOResult[],
         trigger: "user" | "system" = "user",
+        viewportId?: string,
     ): Promise<void> {
         // Background-scoped restores hydrate at most once per
-        // (owner, viewer, background) — see `hydratedKeys`. Viewer-only and
-        // global restores keep their existing semantics.
+        // (owner, viewer, background, viewport) — see `hydratedKeys`.
+        // Viewer-only and global restores keep their existing semantics.
         const guardKey = `${uid}|${this.composeBundleKey(viewerId, backgroundId)}`;
         if (backgroundId === undefined) {
-            return this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+            return this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey, viewportId);
         }
-        if (this.hydratedKeys.has(guardKey)) return;
+        const slot = this.hydrationSlot(owner, viewportId);
+        if (this.hydratedKeys.get(guardKey)?.has(slot)) return;
         // `hydratedKeys` is only written after the reads settle, so two callers
         // arriving in the same tick (boot pass + viewer-open pass) both got past
         // the check above and both ran `importBundle` — the double hydration the
         // set exists to prevent. The second caller waits for the first instead.
-        const inFlight = this.hydrating.get(guardKey);
+        // NUL cannot occur in an id, so the pair cannot collide with another key.
+        const flightKey = `${guardKey}\u0000${slot}`;
+        const inFlight = this.hydrating.get(flightKey);
         if (inFlight) { await inFlight; return; }
-        const run = this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey);
+        const run = this.runOneRestoreUnguarded(uid, owner, sinks, viewerId, backgroundId, results, trigger, guardKey, viewportId);
         const settled = run.then(() => {}, () => {});
-        this.hydrating.set(guardKey, settled);
-        try { await run; } finally { this.hydrating.delete(guardKey); }
+        this.hydrating.set(flightKey, settled);
+        try { await run; } finally { this.hydrating.delete(flightKey); }
     }
 
     private async runOneRestoreUnguarded(
@@ -2249,6 +2623,7 @@ export class IOPipeline implements IOPipelineLike {
         results: IOResult[],
         trigger: "user" | "system",
         guardKey: string,
+        viewportId?: string,
     ): Promise<void> {
         const ctxBase: Omit<IOContext, "meta" | "capabilityId"> = {
             direction: "import",
@@ -2257,6 +2632,7 @@ export class IOPipeline implements IOPipelineLike {
             ownerId: owner.ownerId,
             key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            viewportId,
             backgroundId,
             trigger,
         };
@@ -2267,7 +2643,11 @@ export class IOPipeline implements IOPipelineLike {
         // `route: "sink"` — this is a restore FROM bound sinks (post-data at
         // boot, a remote store, …), so it is the owner's own capability that
         // decides. The user-picked-file route is `importBundle` below.
-        const importCapability = sinks.values().next().value ?? "bundle-import";
+        // An import capability if any sink was reached through one — the map's
+        // first entry may be a sink known only from an export binding, and the
+        // guards would then judge a restore by the export capability.
+        const boundCaps = Array.from(sinks.values());
+        const importCapability = boundCaps.find(c => c.includes("import")) ?? boundCaps[0] ?? "bundle-import";
         const guardCtx = {
             ...ctxBase, direction: "pre-import", route: "sink",
             capabilityId: importCapability, meta: {},
@@ -2410,7 +2790,7 @@ export class IOPipeline implements IOPipelineLike {
             : [];
         for (const target of targets) {
             try {
-                await owner.importBundle!(target.ctx, target.payload);
+                await this.asRestore(uid, target.ctx.viewerId, () => owner.importBundle!(target.ctx, target.payload));
                 if (target.payload !== undefined) {
                     results.push({ ok: true });
                     dispatchResults.push({ ok: true });
@@ -2438,7 +2818,9 @@ export class IOPipeline implements IOPipelineLike {
         // that is merely *not registered yet* is already safe: it resolves to no
         // sinks at all, nothing is attempted, and the slot stays free.
         if (backgroundId !== undefined && succeeded > 0) {
-            this.hydratedKeys.add(guardKey);
+            let slots = this.hydratedKeys.get(guardKey);
+            if (!slots) this.hydratedKeys.set(guardKey, slots = new Set());
+            slots.add(this.hydrationSlot(owner, viewportId));
             this.restoreFailedKeys.delete(guardKey);
         }
         // Read attempted, nothing but failures (a cancelled file pick is not
@@ -2454,8 +2836,8 @@ export class IOPipeline implements IOPipelineLike {
             && dispatchResults.some(r => !r.ok && r.code !== "W_IO_CANCELLED")) {
             if (!targets.length && !this.restoreFailedKeys.has(guardKey)) {
                 try {
-                    await owner.importBundle!(
-                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined);
+                    await this.asRestore(uid, ctxBase.viewerId, () => owner.importBundle!(
+                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined));
                 } catch (e) {
                     console.warn(`[IO] owner "${uid}" failed to clear state after an unreadable restore:`, e);
                 }
@@ -2491,7 +2873,7 @@ export class IOPipeline implements IOPipelineLike {
      */
     async importBundle(
         rawData: unknown,
-        scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string; format?: string; fileName?: string },
+        scope?: { ownerUid?: string; viewerId?: string; viewportId?: string; backgroundId?: string; format?: string; fileName?: string },
     ): Promise<IOResult[]> {
         const results: IOResult[] = [];
         for (const [uid, owner] of this.owners) {
@@ -2508,6 +2890,7 @@ export class IOPipeline implements IOPipelineLike {
                 ownerId: owner.ownerId,
                 key: this.composeBundleKey(scope?.viewerId, scope?.backgroundId),
                 viewerId: scope?.viewerId,
+                viewportId: scope?.viewportId,
                 backgroundId: scope?.backgroundId,
                 meta: scope?.fileName ? { fileName: scope.fileName } : {},
             };
@@ -2518,7 +2901,11 @@ export class IOPipeline implements IOPipelineLike {
             // route: the payload came from the user's own machine, so it is
             // `core.io.local-file` that decides whether hand-loading is
             // available at all — not the owner's sink capability.
-            const verdict = this.runGuards({ ...ctx, direction: "pre-import", route: "local" });
+            // The route is part of the ctx the owner receives too — the restore
+            // path stamps it, and an owner must be able to tell a hand-loaded
+            // file from a bound destination the same way on both.
+            ctx.route = "local";
+            const verdict = this.runGuards({ ...ctx, direction: "pre-import" });
             if (!verdict.ok) { results.push({ ...verdict, ...ownerOf(ctx) }); continue; }
             try {
                 if (owner.importBundle) {
@@ -2572,7 +2959,15 @@ export class IOPipeline implements IOPipelineLike {
             // already carries a `userMessage`, so an unsurfaced-but-message-
             // bearing refusal would be swallowed by exactly the check meant to
             // prevent double-toasting.
-            if (!method) return this.unsupported(sink.id, ctx.direction);
+            if (!method) {
+                // A sink may implement only the bulk form; a lone op is then a
+                // batch of one, not an unsupported operation.
+                const many = bulkMethodName(ctx.direction);
+                if (many && typeof sink[many] === "function") {
+                    return this.callBulk(sink, many, [ctx], [payload]).then(r => r[0]);
+                }
+                return this.unsupported(sink.id, ctx.direction);
+            }
             return Promise.resolve(method.call(sink, ctx, payload));
         }, {
             policy: "until-refusal",
@@ -2591,6 +2986,133 @@ export class IOPipeline implements IOPipelineLike {
             if (pass.last.ok) return refusal;
         }
         return pass.last;
+    }
+
+    /**
+     * Largest run of same-direction ops a resource outbox may hand to
+     * {@link dispatchMany}: the smallest `maxBatch` among the bound sinks that
+     * implement the bulk method, or 1 when none does — in which case the outbox
+     * keeps its one-op-at-a-time path and nothing changes for that binding.
+     */
+    batchLimit(ownerUid: string, capabilityId: string, direction: IODirection): number {
+        const many = bulkMethodName(direction);
+        if (!many) return 1;
+        let limit = 0;
+        for (const id of this.bindingsFor(ownerUid, capabilityId)) {
+            const sink = this.sinks.get(id);
+            if (!sink || typeof sink[many] !== "function") continue;
+            const max = Math.max(1, Math.floor(Number(sink.maxBatch) || 200));
+            limit = limit ? Math.min(limit, max) : max;
+        }
+        return limit || 1;
+    }
+
+    /**
+     * {@link dispatch} for a run of ops sharing owner, capability and direction.
+     *
+     * Same rules, applied per item: each ctx is gated on its own (a batch may
+     * span viewers, and `accepts` is allowed to care), sinks run in binding
+     * order, an item one sink refused is not offered to the next, and an item
+     * no sink stored is a refusal. What changes is the number of sink calls —
+     * and the number of dialogs: one per distinct refusal, not one per item.
+     * `io:refused` / `io:fully-refused` still fire for every item.
+     */
+    async dispatchMany(ctxs: IOContext[], payloads: unknown[]): Promise<IOResult[]> {
+        const head = ctxs[0];
+        if (!head) return [];
+        const many = bulkMethodName(head.direction);
+        const sinkIds = this.bindingsFor(head.ownerUid, head.capabilityId);
+        if (!many || !sinkIds.length) {
+            const out: IOResult[] = [];
+            for (let i = 0; i < ctxs.length; i++) out.push(await this.dispatch(ctxs[i]!, payloads[i]));
+            return out;
+        }
+
+        type Refusal = Extract<IOResult, { ok: false }>;
+        const perItem = ctxs.map(() => ({
+            results: [] as IOResult[], declines: [] as string[],
+            succeeded: 0, last: { ok: true } as IOResult, refused: undefined as IOResult | undefined,
+        }));
+        const takers = new Map<string, { sink: IOSink; items: Array<{ i: number; ctx: IOContext }> }>();
+        ctxs.forEach((ctx, i) => {
+            const gated = this.selectGatedSinks(sinkIds, () => ctx);
+            perItem[i]!.declines = gated.declines;
+            for (const p of gated.picked) {
+                let group = takers.get(p.sink.id);
+                if (!group) takers.set(p.sink.id, group = { sink: p.sink, items: [] });
+                group.items.push({ i, ctx: p.ctx });
+            }
+        });
+
+        const toasted = new Set<string>();
+        const thrown = new WeakSet<object>();
+        // A system-triggered refusal is logged, never shown — so it must not use
+        // up the one dialog a user-triggered sibling in the same batch is owed.
+        const markToasted = (ctx: IOContext, key: string) => {
+            if (ctx.trigger !== "system") toasted.add(key);
+        };
+        const surfaceOnce = (ctx: IOContext, r: Refusal) => {
+            const key = `${r.code ?? ""}|${r.userMessage ?? r.reason ?? ""}`;
+            this.surfaceRefusal(ctx, r, !toasted.has(key));
+            markToasted(ctx, key);
+        };
+
+        for (const sinkId of sinkIds) {
+            const group = takers.get(sinkId);
+            const live = group?.items.filter(x => !perItem[x.i]!.refused) ?? [];
+            if (!group || !live.length) continue;
+            const sink = group.sink;
+            const single = pickMethod(sink, head.direction);
+            // A throw is recorded but, as in `runSinkPass`, never stops the
+            // remaining sinks from being offered the item.
+            const threw = (ctx: IOContext, e: any): IOResult => {
+                const r: Refusal = {
+                    ok: false, refused: true, reason: e?.message ?? String(e), code: "W_IO_SINK_THREW",
+                    ...(e?.userMessage ? { userMessage: e.userMessage } : {}), ...ownerOf(ctx),
+                };
+                surfaceOnce(ctx, r);
+                thrown.add(r);
+                return r;
+            };
+
+            let batch: Array<IOResult | undefined>;
+            if (typeof sink[many] === "function") {
+                try {
+                    batch = await this.callBulk(sink, many, live.map(x => x.ctx), live.map(x => payloads[x.i]));
+                } catch (e: any) {
+                    batch = live.map(x => threw(x.ctx, e));
+                }
+            } else {
+                batch = [];
+                for (const x of live) {
+                    if (!single) { batch.push(this.unsupported(sink.id, head.direction)); continue; }
+                    try { batch.push(await single.call(sink, x.ctx, payloads[x.i])); }
+                    catch (e: any) { batch.push(threw(x.ctx, e)); }
+                }
+            }
+
+            live.forEach((x, k) => {
+                const state = perItem[x.i]!;
+                const r: IOResult = batch[k] ?? { ok: true };
+                state.results.push(r);
+                state.last = r;
+                if (r.ok) { state.succeeded++; return; }
+                if (thrown.has(r) || !(r as Refusal).refused) return; // a throw is already surfaced
+                surfaceOnce(x.ctx, r as Refusal);
+                if ((r as Refusal).code !== "W_IO_UNSUPPORTED") state.refused = r;
+            });
+        }
+
+        return ctxs.map((ctx, i) => {
+            const state = perItem[i]!;
+            const last = state.last;
+            if (state.succeeded > 0) return state.refused ?? last;
+            const key = `fully|${state.declines[0] ?? ""}`;
+            const refusal = this.emitFullyRefused(ctx, state.results, state.declines, !toasted.has(key));
+            markToasted(ctx, key);
+            if (state.refused) return state.refused;
+            return last.ok ? refusal : last;
+        });
     }
 
     // ── orchestration: streamed query (on-the-fly hydration) ───────────
@@ -2675,8 +3197,8 @@ export class IOPipeline implements IOPipelineLike {
      * queued dispatch path. Plugins should NOT call this directly — return
      * a refusal IOResult from a sink/guard instead.
      */
-    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>) {
-        this.surfaceRefusal(ctx, r);
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast = true) {
+        this.surfaceRefusal(ctx, r, toast);
     }
 
     /**
@@ -2691,7 +3213,12 @@ export class IOPipeline implements IOPipelineLike {
         } catch { /* viewer manager may not yet exist */ }
     }
 
-    private surfaceRefusal(ctx: IOContext, r: Extract<IOResult, { ok: false }>) {
+    /**
+     * @param toast `false` when the caller has already shown this same refusal
+     *   for a sibling op (a batch, a full outbox): the event still fires per op,
+     *   the dialog does not repeat.
+     */
+    private surfaceRefusal(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast = true) {
         // Unconditional: the event is how features react and how the roles UI
         // learns what is restricted. Only the DIALOG is a judgement call.
         this.bus.raiseEvent("io:refused", { ctx, result: r });
@@ -2707,7 +3234,7 @@ export class IOPipeline implements IOPipelineLike {
                 // not cause and cannot act on. Four of them at once is what
                 // this branch exists to stop. Logged, not shown.
                 this.logRefusal(ctx, r, msg);
-            } else if (this.shouldToastRefusal(ctx, r)) {
+            } else if (toast && this.shouldToastRefusal(ctx, r)) {
                 // A `userMessage` is the sink author's signal that this refusal
                 // is meant to be shown to the user (e.g. "GitHub rejected the
                 // access token"). Treat that as an error; bare refusals without
@@ -2977,7 +3504,7 @@ export class IOPipeline implements IOPipelineLike {
      *  declined). Signal of a misconfigured binding that would otherwise
      *  silently drop data. Emitted at most once per dispatch, and surfaced
      *  to the user — a write nobody accepted is data loss, not a log line. */
-    private emitFullyRefused(ctx: IOContext, results: IOResult[], declines: string[] = []) {
+    private emitFullyRefused(ctx: IOContext, results: IOResult[], declines: string[] = [], toast = true) {
         const refusal = this.noSinkAccepted(ctx, declines, results);
         console.warn(`[IO] ${refusal.reason} — data not written. Check ENV.client.io.bindings.`);
         const payload = { ctx, results, declines, result: refusal };
@@ -2990,7 +3517,7 @@ export class IOPipeline implements IOPipelineLike {
         // user-facing refusal (e.g. "GitHub rejected the access token") has
         // said the useful thing already. Only speak up when nothing did.
         const alreadySurfaced = results.some(r => !r.ok && (r as any).userMessage);
-        if (!alreadySurfaced) this.surfaceRefusal(ctx, refusal);
+        if (!alreadySurfaced) this.surfaceRefusal(ctx, refusal, toast);
         return refusal;
     }
 
@@ -3006,6 +3533,37 @@ export class IOPipeline implements IOPipelineLike {
             : { ok: false as const, refused: true as const, reason, code, ...ownerOf(ctx) };
         this.surfaceRefusal(ctx, r);
         return r;
+    }
+
+    /**
+     * Call a sink's bulk method and hold it to its contract: exactly one result
+     * object per input, in input order. Anything else — no array, a short one, a
+     * hole, a bare `true` — is NOT read as success: the item was never
+     * confirmed stored, so it is refused (and reverted by the resource) instead
+     * of being dropped from the outbox as done. A throw propagates.
+     */
+    private async callBulk(
+        sink: IOSink, many: "createMany" | "updateMany" | "deleteMany", ctxs: IOContext[], payloads: unknown[],
+    ): Promise<IOResult[]> {
+        const raw: unknown = many === "createMany" ? await sink.createMany!(ctxs, payloads)
+            : many === "updateMany" ? await sink.updateMany!(ctxs, payloads)
+                : await sink.deleteMany!(ctxs);
+        const usable = Array.isArray(raw);
+        const list = usable ? raw as unknown[] : [];
+        if (!usable || list.length !== ctxs.length) {
+            console.error(`[IO] sink "${sink.id}" ${many}() broke its contract: expected ${ctxs.length} `
+                + `results, got ${usable ? list.length : typeof raw}. Unanswered items are refused.`);
+        }
+        return ctxs.map((ctx, k) => {
+            const r = list[k];
+            if (r && typeof r === "object" && typeof (r as any).ok === "boolean") return r as IOResult;
+            return {
+                ok: false as const, refused: true as const,
+                reason: `sink "${sink.id}" ${many}() returned no result for item ${k + 1} of ${ctxs.length}`,
+                code: "W_IO_BULK_RESULT",
+                ...ownerOf(ctx),
+            };
+        });
     }
 
     private unsupported(sinkId: string, op: string): IOResult {
@@ -3044,6 +3602,12 @@ function mergeByPriority(a: IOGuardSpec[], b: IOGuardSpec[]): IOGuardSpec[] {
     while (i < a.length) out.push(a[i++]!);
     while (j < b.length) out.push(b[j++]!);
     return out;
+}
+
+function bulkMethodName(direction: IODirection): "createMany" | "updateMany" | "deleteMany" | undefined {
+    return direction === "create" ? "createMany"
+        : direction === "update" ? "updateMany"
+            : direction === "delete" ? "deleteMany" : undefined;
 }
 
 function pickMethod(t: IOSink, direction: IODirection):

@@ -167,7 +167,7 @@ is managed internally and is not advised to set. `preset` keyword means this pro
                         example: polygon -> PolygonFactory
     meta            custom metadata, unlike with presets this is only an override value: it is a {id: any} map
     presetID        a numerical preset id binding
-    layerID         a numerical layer id binding, experimental
+    layer           the layer the annotation is in: {id, name, position}; absent = in no layer (see Layers below)
     id              annotation ID, can be undefined, unused by the core module, supported for external use
     author
     created
@@ -197,7 +197,29 @@ is by default undefined.
 ``sessionID`` property not only marks the current annotation session identification, it also acts as an interactivity flag - 
 if it is missing, the given annotation is not modifiable.
 
-``layerID`` not currently used, prepared for layers support. TODO update docs once ready.
+##### Layers
+A layer is not stored on its own: there is no layer resource and no sink handles one. It travels on the
+annotations it holds. On a live object the binding is `layerID`; a record that leaves the module (an export,
+a CRUD payload) carries `layer: {id, name, position}` instead — `position` is the layer's place on the board —
+and never `layerID`. `OSDAnnotations#externalizeLayer` does the swap on the way out,
+`FabricWrapper#_loadObjects` on the way in, where the descriptor is validated and the layers are rebuilt in
+`position` order. A record with a bare `layerID` (written before layers were persisted) is still read; its
+layer comes back unnamed. Visibility is view state and is not written.
+
+A format's `encode` receives objects that already carry `layer`; a `decode` only has to hand it back on the
+object. The export model also has `layers` (every layer, members or not) and `activeLayerId` for a format
+with room for them.
+
+| Format | Layers |
+|---|---|
+| `native` | `layer` on each object, plus top-level `layers` and `activeLayerId` — the only format that keeps an empty layer |
+| `geo-json` | `properties.layer` |
+| `qupath` | `properties.layer`; QuPath ignores it, it serves the way back to xOpat |
+| `dicom` (plugin) | private `XOPAT.LAYER` TEXT child per annotation |
+| `asap-xml`, `empaia` | none — the model has nowhere to put it |
+
+A per-item (CRUD) destination is told about a move, a rename or a reorder with a `{layer}` patch on each
+annotation concerned, `{layer: null}` for "in no layer" (`meta.kind: 'layer-change'`).
 
 ``presetID`` ID for the metadata group (a class) that describes the annotation. Presets are class templates
 that are defined once, and used repeatedly.

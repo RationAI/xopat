@@ -39,7 +39,9 @@ class IOGithubSink extends XOpatModuleSingleton {
             label: "GitHub",
             getOptions: (ctx?: IOContext) => this._composeOptions(pipeline, ctx),
         });
-        this._disposeSink = pipeline.registerSink(sink);
+        // Transient failures (no answer, 5xx, 429) are retried — except
+        // creates, which are not idempotent. Older cores lack the wrapper.
+        this._disposeSink = pipeline.registerSink(pipeline.withRetry ? pipeline.withRetry(sink) : sink);
     }
 
     /**

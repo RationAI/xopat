@@ -47,7 +47,9 @@ function escapeHtml(value) {
 function serializeDomLike(value) {
     if (value == null) return "";
     if (Array.isArray(value)) return value.map(item => serializeDomLike(item)).join("");
-    if (typeof value === "string") return value;
+    // Strings are caller-supplied: sanitize (toNode) before they are serialized
+    // into the child window's innerHTML, never pass them through raw.
+    if (typeof value === "string") return BaseComponent.toNode(value)?.outerHTML || "";
     if (typeof value === "number" || typeof value === "boolean") return String(value);
     if (value.outerHTML) return value.outerHTML;
     if (value.nodeType) {
@@ -84,7 +86,9 @@ function parseDimension(value, fallback) {
  *  - closable?: boolean (default true)
  *  - external?: boolean (default false)
  *  - externalProps?: {
- *      - headTags?: string[]
+ *      - headTags?: string[]  TRUSTED markup written verbatim into the child
+ *          document's <head>. Code-authored only; never pass session, config
+ *          or user-derived strings. (String `content` IS sanitized.)
  *      - onRender?: (childWindow: Window) => void
  *      - content?: any
  *      - mode?: "content" | "editor"
@@ -279,9 +283,8 @@ export class FloatingWindow extends BaseComponent {
         if (content instanceof Node) {
             newNode = content;
         } else if (typeof content === "string") {
-            const wrap = document.createElement("div");
-            wrap.innerHTML = content;
-            newNode = wrap.firstElementChild || wrap;
+            // Sanitized (or text when the sanitizer is unavailable).
+            newNode = this.toNode(content) || document.createElement("div");
         } else if (content?.create) {
             newNode = content.create();
         } else {

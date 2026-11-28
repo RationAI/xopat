@@ -454,6 +454,15 @@ declare global {
             "io:outbox-unavailable": { ownerUid: string; resourceName: string; reason: string };
             /** Persistent outbox: boot replay finished for one resource. */
             "io:outbox-replayed": { ownerUid: string; resourceName: string; count: number };
+            /** Unsaved-changes state flipped for one owner document (`viewerId`/
+             *  `backgroundId`, none = global) or one CRUD resource
+             *  (`resourceName`). `anyDirty` is the app-wide answer, what the
+             *  Save cue and the leave-page prompt read. See "Dirty state" in
+             *  src/IO_PIPELINE.md. */
+            "io:dirty-changed": {
+                ownerUid: string; viewerId?: string; backgroundId?: string;
+                resourceName?: string; dirty: boolean; anyDirty: boolean;
+            };
         }
 
         // ── TiledImage extension ────────────────────────────────────────────

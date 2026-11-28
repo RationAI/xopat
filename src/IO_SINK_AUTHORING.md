@@ -18,7 +18,7 @@ reference material after this page:
 | [`modules/io-github-sink`](../modules/io-github-sink/) | bundle → a git repository | option layering, path templates, an operator-facing README |
 | [`modules/io-mlflow-sink`](../modules/io-mlflow-sink/) | bundle + crud → experiment tracking | binary payloads, run/artifact mapping |
 | [`modules/empaia-workbench`](../modules/empaia-workbench/) | crud + bundle → an embedding host | readiness, retry policy, `claimBinding` |
-| [`src/classes/io/sinks/http-rest.ts`](classes/io/sinks/http-rest.ts) | the minimal one, 129 lines | the smallest complete sink |
+| [`src/classes/io/sinks/http-rest.ts`](classes/io/sinks/http-rest.ts) | the minimal one | the smallest complete sink |
 
 ---
 
@@ -55,6 +55,7 @@ interface IOSink {
     label?: string;
     supports: IOCapabilityKind[] | IOSinkSupport;
     route?: "sink" | "local";
+    persists?: boolean;                   // default true; false = in-page only, a write is not a save
     formats?: Record<string, string[]>;   // bundle formats you take, per domain — see §7
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
@@ -65,12 +66,32 @@ interface IOSink {
     read?(ctx): Promise<IOResult> | IOResult;
     update?(ctx, patch): Promise<IOResult> | IOResult;
     delete?(ctx): Promise<IOResult> | IOResult;
+    createMany?(ctxs, items): Promise<IOResult[]> | IOResult[];   // optional bulk forms
+    updateMany?(ctxs, patches): Promise<IOResult[]> | IOResult[];
+    deleteMany?(ctxs): Promise<IOResult[]> | IOResult[];
+    maxBatch?: number;                                            // default 200
     query?(ctx, params): AsyncIterable<unknown>;
 }
 ```
 
 Only `id` and `supports` are required — implement the methods your kinds need.
 Full types in [`src/types/io.d.ts`](types/io.d.ts).
+
+**Implement `createMany` / `updateMany` / `deleteMany` if your platform will ever
+receive many records at once** (an import, a scripted batch, reclassifying a
+selection, "delete all"). They are optional: without them every record is its own
+call, strictly one after another — nothing is lost or refused for it (the outbox
+takes a change of any size), it is only slow, and the slide counts as unsaved
+until the queue has drained. Nothing else is asked of a sink for large changes;
+in particular it need not implement bundles. The contract: one result per input, in input order; each item succeeds or
+is refused on its own; `ctxs[i]` is that item's context (a batch may span viewers,
+so do not read the slide from `ctxs[0]`). A platform with a real list route sends
+one request; one without it can still run its single-record route a few at a time
+(`modules/empaia-workbench/sink.ts` does exactly that). A throw refuses the whole
+batch — prefer per-item refusals. The pipeline holds you to the contract: a slot
+you leave unanswered is refused with `W_IO_BULK_RESULT` and reverted, never
+assumed stored. You may implement the bulk form alone; a single op then arrives
+as a batch of one.
 
 Every method returns an `IOResult`: `{ok: true, payload?}` (a `readBundle` may add `format` and `meta`, §7) or
 `{ok: false, refused: true, reason, userMessage?, code?}`. `reason` is logged;
@@ -219,6 +240,10 @@ IO_PIPELINE.registerSink(
 
 Feature-test `withRetry` — it is typed optional on the pipeline. Note it passes
 `query` through unwrapped, because retrying a stream would re-yield items.
+`createMany` / `updateMany` / `deleteMany` follow `create` / `update` / `delete`: retried when their single
+form is, and only the slots that failed are sent again. They are invoked on the
+inner sink, so a bulk method written as `this.create(...)` per item reaches your
+own `create`, not the retrying wrapper.
 
 Retry only what a retry can fix. A 4xx is the upstream saying no; repeating it
 just delays the refusal and, for a create, risks duplicates. If your platform
@@ -286,7 +311,7 @@ what every other destination (and the user's own download) receives.
   [`IO_PIPELINE.md` → Formats](IO_PIPELINE.md#formats).
 - Per-item CRUD is handed the owner's serialized item as is. Convert it with
   `IO_PIPELINE.formats.encodeItem(domain, id, item, { io: ctx })`.
-- `withRetry(sink)` keeps everything the sink declares (`route`, `formats`, `preferredFormat`).
+- `withRetry(sink)` keeps everything the sink declares (`route`, `formats`, `preferredFormat`, `maxBatch`, the bulk methods) — for a class-based sink too.
 
 ## 8. Getting bound
 
@@ -317,6 +342,7 @@ still overrides it, and `disabledCapabilities` still silences it.
 - [ ] Payload round-trips byte-for-byte; empty read is a success.
 - [ ] README documents the exact `io.bindings` block an operator must write.
 - [ ] Paths built with `IO_PIPELINE.formatPath`.
+- [ ] `persists: false` only if what you store dies with the tab: a successful write to a persisting sink clears the owner's unsaved-changes state (`IO_PIPELINE.md` → *Dirty state*).
 
 ## See also
 

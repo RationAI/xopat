@@ -467,6 +467,47 @@ export class Explorer extends BaseComponent {
 
         const bucket = this._ensureBucket(levelIndex, parent, this._search);
 
+        try {
+            await this._loadBucket(levelIndex, lvl, parent, bucket);
+        } catch (e) {
+            // A provider that throws used to reject this promise and leave the
+            // host blank. Un-latch the bucket so Retry really fetches again, and
+            // show what happened in place of the list.
+            bucket._init = false;
+            console.error("Explorer: failed to load level", e);
+            host.innerHTML = "";
+            host.appendChild(this._renderLoadError(levelIndex, e));
+            return;
+        }
+
+        const view = this._renderLevelView(levelIndex, parent, bucket);
+        if (replace) {
+            host.innerHTML = "";
+            host.appendChild(view);
+        } else {
+            host.appendChild(view);
+        }
+    }
+
+    /** Header (so the user can still navigate away) + the error and a Retry button. */
+    _renderLoadError(levelIndex, error) {
+        const detail = error?.message ? String(error.message) : "";
+        return div({ class: this.classMap.base, id: this.id },
+            this._renderHeader(levelIndex),
+            div({ class: "flex-1 min-h-0 flex flex-col items-center justify-center gap-2 p-4 text-center", role: "alert" },
+                span({ class: "ph-light ph-warning text-error text-3xl" }),
+                div({ class: "font-medium" }, $.t('explorer.loadFailed')),
+                detail ? div({ class: "text-sm text-base-content/60 break-all" }, detail) : null,
+                van.tags.button({
+                    type: "button",
+                    class: "btn btn-sm btn-outline mt-2",
+                    onclick: () => this._loadAndRender(levelIndex, { replace: true }).then(() => this._emitStateChange()),
+                }, span({ class: "ph-light ph-arrow-clockwise" }), $.t('common.retry')),
+            ),
+            this.loader.create());
+    }
+
+    async _loadBucket(levelIndex, lvl, parent, bucket) {
         // ⬅️ On first init for this bucket, pick the starting page.
         if (!bucket._init) {
             bucket._init = true;
@@ -489,14 +530,6 @@ export class Explorer extends BaseComponent {
                     await this._fetchPage(levelIndex, parent, bucket, bucket.currentPage);
                 }
             }
-        }
-
-        const view = this._renderLevelView(levelIndex, parent, bucket);
-        if (replace) {
-            host.innerHTML = "";
-            host.appendChild(view);
-        } else {
-            host.appendChild(view);
         }
     }
 
@@ -990,11 +1023,29 @@ export class Explorer extends BaseComponent {
         });
         ro.observe(viewport);
 
+        // A failed page fetch keeps the current page and offers Retry in the
+        // footer: silently staying put reads as "the button does nothing".
+        const pageErrorState = van.state(null); // null | () => Promise (the retry)
+        const guardedPaging = (step) => {
+            const run = async () => {
+                const before = currentPage;
+                pageErrorState.val = null;
+                try {
+                    await step();
+                } catch (e) {
+                    console.error("Explorer: failed to load page", e);
+                    currentPage = before;
+                    pageErrorState.val = run;
+                }
+            };
+            return run;
+        };
+
         // Navigation controls
         const controls = div({ class: "flex items-center justify-between p-2 border-t border-base-300/70 gap-2" },
             div(
                 { class: "join" },
-                this._btn("ph-caret-left", async () => {
+                this._btn("ph-caret-left", guardedPaging(async () => {
                     if (currentPage <= 0) return;
                     this._restoreAborted = true;
                     currentPage -= 1;
@@ -1004,9 +1055,9 @@ export class Explorer extends BaseComponent {
                     canNextState.val = true;
                     swapToPage();
                     this._emitStateChange();
-                }),
+                })),
                 span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
-                this._btn("ph-caret-right", async () => {
+                this._btn("ph-caret-right", guardedPaging(async () => {
                     // `currentPage` is 0-based and `totalPages` is a COUNT, so the
                     // last valid page is `totalPages - 1`. Without the -1 the user
                     // could always step one page past the end: a wasted provider
@@ -1036,9 +1087,18 @@ export class Explorer extends BaseComponent {
                     canNextState.val = lastPage == null || currentPage < lastPage;
                     swapToPage();
                     this._emitStateChange();
-                }, canNextState)
+                }), canNextState)
             ),
-            div({ class: "text-xs opacity-70" }, () => total != null ? `${total} items` : "")
+            () => pageErrorState.val
+                ? div({ class: "flex items-center gap-1 text-xs text-error", role: "alert" },
+                    span({ class: "ph-light ph-warning" }),
+                    $.t('explorer.loadFailed'),
+                    van.tags.button({
+                        type: "button",
+                        class: "btn btn-xs btn-ghost",
+                        onclick: () => pageErrorState.val?.(),
+                    }, $.t('common.retry')))
+                : div({ class: "text-xs opacity-70" }, () => total != null ? `${total} items` : "")
         );
 
         // Mount subtree
@@ -1123,15 +1183,24 @@ export class Explorer extends BaseComponent {
             sentinel.setAttribute("data-sentinel", "1");
             listEl.appendChild(sentinel);
 
-            const syncSentinel = () => { sentinel.textContent = segDone() ? "— end —" : "Loading…"; };
+            let loadFailed = false;
+            const syncSentinel = () => {
+                if (!loadFailed) { sentinel.textContent = segDone() ? "— end —" : "Loading…"; return; }
+                // A failed batch is not the end of the list: say so and offer Retry
+                // (the observer will not fire again while the sentinel stays in view).
+                sentinel.replaceChildren(
+                    span({ class: "text-error", role: "alert" }, $.t('explorer.loadFailed'), " "),
+                    van.tags.button({ type: "button", class: "btn btn-xs btn-ghost", onclick: () => loadMore() },
+                        $.t('common.retry')));
+            };
 
-            this._ioMore = new IntersectionObserver(async entries => {
-                if (!entries.some(e => e.isIntersecting)) return;
+            const loadMore = async () => {
                 if (segDone()) { syncSentinel(); return; }
                 // The callback is async, so without a latch a second firing
                 // reads the same virtualOffset and issues a duplicate request.
                 if (bucket.loadingMore) return;
                 bucket.loadingMore = true;
+                loadFailed = false;
                 try {
                     const seg = await this._fetchVirtualBatch(levelIndex, parent, bucket, true);
                     (seg?.items || []).forEach((item, idx) => {
@@ -1144,6 +1213,7 @@ export class Explorer extends BaseComponent {
                 } catch (e) {
                     // Providers can throw; leaving the latch set would freeze paging.
                     console.error("Explorer: failed to load next batch", e);
+                    loadFailed = true;
                 } finally {
                     bucket.loadingMore = false;
                     // Also runs on the empty-batch path, which used to return
@@ -1151,6 +1221,12 @@ export class Explorer extends BaseComponent {
                     // whenever the total was an exact multiple of pageSize.
                     syncSentinel();
                 }
+            };
+
+            this._ioMore = new IntersectionObserver(entries => {
+                if (!entries.some(e => e.isIntersecting)) return;
+                if (loadFailed) return; // wait for an explicit Retry
+                void loadMore();
             }, { root, rootMargin: "512px 0px", threshold: 0.01 });
             this._ioMore.observe(sentinel);
         };

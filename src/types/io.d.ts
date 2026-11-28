@@ -118,8 +118,29 @@ interface IOContext {
      * blob storage by `ctx.key` get a deterministic slot per slide.
      */
     key: string;
-    /** Set for viewer-scoped exports/imports. */
+    /**
+     * Set for viewer-scoped exports/imports. Despite the (legacy) name this is
+     * SLIDE identity: the viewer's `uniqueId`, derived from the background id.
+     * It names the DOCUMENT and is what `key` is built from — it does not name
+     * a viewport, and two viewports showing the same slide share it.
+     * `backgroundId` is the same axis. To get the viewer, call
+     * `IO_PIPELINE.viewerFor(ctx)`.
+     */
     viewerId?: string;
+    /**
+     * The viewport (`viewer.id`, e.g. `"osd-2"`) this dispatch addresses — the
+     * only viewport identity in the context. Owners do not read it: they call
+     * `IO_PIPELINE.viewerFor(ctx)`, which resolves it.
+     *  - import: an owner that declares `perViewport` gets the document once
+     *    for every viewport showing it, each call naming its viewport. Any
+     *    other owner gets one delivery per document; the field then names the
+     *    viewport the restore was triggered for, as information only.
+     *  - export: a document is written once, from its primary viewport (the
+     *    first one showing it); this names that viewport.
+     * Unset only when the viewer is not known to the viewer manager. Never part
+     * of `key`: slot ids do not survive a reload.
+     */
+    viewportId?: string;
     /**
      * Set for slide-scoped exports/imports (`bundleScope: "per-viewer-background"`
      * or `"all"`). Resolved via `UTILITIES.currentBackgroundIdFor(viewer)`
@@ -469,6 +490,15 @@ interface IOSink {
      */
     route?: "sink" | "local";
     /**
+     * Does a successful `writeBundle` put the data somewhere the user can get it
+     * back from after closing the page? Default `true`. In-page stores
+     * (`session-memory`, `post-data`) declare `false`, so writing to them does
+     * not clear the owner's unsaved-changes state ("Dirty state" in
+     * src/IO_PIPELINE.md). Not the same question as "remote": a downloaded file
+     * persists.
+     */
+    persists?: boolean;
+    /**
      * Bundle formats this sink takes, per domain (owner id; `"*"` for any):
      * `{ annotations: ["dicom"] }`. The pipeline asks the owner for the first
      * one that is registered and hands the sink that payload, with
@@ -496,6 +526,32 @@ interface IOSink {
     read?(ctx: IOContext): Promise<IOResult> | IOResult;
     update?(ctx: IOContext, patch: unknown): Promise<IOResult> | IOResult;
     delete?(ctx: IOContext): Promise<IOResult> | IOResult;
+    /**
+     * Optional bulk forms of `create` / `update` / `delete`. When a bound sink implements
+     * one, the resource outbox hands it a run of consecutive same-direction ops
+     * (at most `maxBatch`) in ONE call instead of one call per op — the
+     * difference between a 10 000-annotation import draining in seconds and
+     * overflowing the outbox.
+     *
+     * Contract: return exactly one result per input, in input order. Each item
+     * succeeds or is refused on its own (a refused item is reverted locally, the
+     * rest stay). `ctxs[i]` is that item's own context (`itemId`,
+     * `meta.localId`, `meta.clientOpId`, viewer scope) — a batch may span
+     * viewers. A throw refuses the whole batch. Sinks without these methods are
+     * called per item as before. `updateMany` gets one patch per ctx
+     * (`ctxs[i].itemId`); a resource that coalesces never hands it two patches
+     * of one item in a run, one that does not may — they are in issue order.
+     *
+     * The contract is enforced: a slot with no result object (no array, a
+     * short one, a hole) is refused with `W_IO_BULK_RESULT` and reverted — it
+     * is never read as success. A sink may implement the bulk form alone; a
+     * lone op then arrives as a batch of one.
+     */
+    createMany?(ctxs: IOContext[], items: unknown[]): Promise<IOResult[]> | IOResult[];
+    updateMany?(ctxs: IOContext[], patches: unknown[]): Promise<IOResult[]> | IOResult[];
+    deleteMany?(ctxs: IOContext[]): Promise<IOResult[]> | IOResult[];
+    /** Largest batch `createMany` / `updateMany` / `deleteMany` accept. Default 200. */
+    maxBatch?: number;
     /**
      * Streamed parameterised read. The owner sends `params` (free-form,
      * domain-specific — bbox + zoom, page tokens, anything) and the
@@ -601,7 +657,8 @@ interface IOResourceDef<T = unknown> {
      * Enable rewrite rules on the per-resource outbox queue:
      *  - `create X` then `delete X` (same identity, both unstarted): both removed.
      *  - `delete X` then `create X`: both removed.
-     *  - Multiple `update X`: keep only the latest.
+     *  - Multiple `update X`: keep only the latest; when `merge` is provided the
+     *    earlier patch is folded in first (`merge(prevPatch, nextPatch)`).
      *  - `update X` then `delete X`: drop the update, keep the delete.
      *  - `create X` then `update X`: merge `update`'s patch into the
      *    `create`'s payload via `merge` (only applied if `merge` is provided).
@@ -616,7 +673,8 @@ interface IOResourceDef<T = unknown> {
      */
     coalesce?: boolean;
     /**
-     * Shallow-merge function for the `create + update` coalescing rule.
+     * Shallow-merge function for the `create + update` and `update + update`
+     * coalescing rules.
      * Receives the previous payload and the next patch; returns the merged
      * payload that supersedes the original create.
      */
@@ -643,13 +701,23 @@ interface IOResourceDef<T = unknown> {
      */
     persistOutbox?: boolean;
     /**
-     * Maximum entries kept in the persistent outbox before refusing new
-     * enqueues with `code: "W_IO_OUTBOX_FULL"`. Default 5000.
+     * Maximum entries kept in the persistent outbox at a time. Default 5000.
+     * It bounds what is *stored*, not what is accepted: ops past it keep their
+     * place in the queue and get their crash-recovery record as the head
+     * drains. Until then `hasUnsavedWork()` is true — a reload would lose them.
+     * Counted as ops still owed to a destination, so it applies only while one
+     * is bound (or bound and not registered yet).
      */
     persistMaxEntries?: number;
     /**
-     * Drop persisted entries older than this (ms) on boot and during
-     * periodic sweeps. Default 7 days. Stale ops are unlikely to be
+     * Most ops the queue holds at all, persisted or not, before new ones are
+     * refused with `code: "W_IO_OUTBOX_FULL"` (and reverted). A memory ceiling,
+     * not a pacing device. Default 1 000 000; never below `persistMaxEntries`.
+     */
+    maxPending?: number;
+    /**
+     * Drop persisted entries older than this (ms) on boot. Default 7 days.
+     * Stale ops are unlikely to be
      * acceptable to the server anyway.
      */
     persistMaxAgeMs?: number;
@@ -785,6 +853,28 @@ interface IOResource<T = unknown> {
      * the page, wait for sync to finish" workflows.
      */
     flush(): Promise<IOResult[]>;
+    /**
+     * How many more ops fit under the persisted cap (`persistMaxEntries`), i.e.
+     * are reload-safe as soon as they are written. `Infinity` for a resource
+     * without `persistOutbox`, and while no destination is bound (the cap
+     * counts ops owed to one). Advisory: ops past it are still accepted and
+     * dispatched, they are just not crash-safe until the queue drains.
+     */
+    headroom(): number;
+    /**
+     * Backpressure for bulk producers: resolves `true` once `count` more ops
+     * fit (immediately when they already do; `count` is clamped to the cap).
+     * Resolves `false` when they do not fit and the queue cannot drain right
+     * now (offline, or the bound sink has not registered) — never hangs.
+     */
+    whenHeadroom(count?: number): Promise<boolean>;
+    /**
+     * Ops owed to a destination that would be lost if the page closed now:
+     * pending ops of a resource without `persistOutbox` (or whose IndexedDB
+     * store is unavailable), or of a persisted one whose queue is stalled.
+     * Feeds `IO_PIPELINE.isDirty()`.
+     */
+    hasUnsavedWork(): boolean;
     /**
      * Abandon any pending (unstarted) ops in the outbox queue. Their
      * `.settled` Promises resolve to a refusal with `code: "W_IO_QUEUE_DROPPED"`.
@@ -1124,7 +1214,13 @@ interface IOPipelineLike {
     // ── owner registry (for bundle hooks + ownerId↔uid mapping) ─────────
     registerOwner(
         ownerUid: string,
-        info: { ownerId: string; xoType: "core" | "plugin" | "module" } & IOOwnerBundleHooks,
+        info: {
+            ownerId: string; xoType: "core" | "plugin" | "module";
+            /** See `initIO`'s `bundleScope`. Default `"global"`. */
+            bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+            /** Bundle state is held per viewport — see `initIO`'s `perViewport`. */
+            perViewport?: boolean;
+        } & IOOwnerBundleHooks,
     ): IODisposer;
 
     // ── binding resolution ──────────────────────────────────────────────
@@ -1195,6 +1291,12 @@ interface IOPipelineLike {
         ownerUid?: string;
         capabilityId?: string;
         viewerId?: string;
+        /**
+         * The viewport leaving the slide (`viewer.id`), for a slide-leave flush:
+         * only its hydration is re-armed. The document itself is still written
+         * from its primary viewport — see {@link IOContext.viewportId}.
+         */
+        viewportId?: string;
         backgroundId?: string;
         skipFileFallback?: boolean;
         /**
@@ -1213,12 +1315,22 @@ interface IOPipelineLike {
         rawData: unknown,
         scope?: {
             ownerUid?: string; viewerId?: string; backgroundId?: string;
+            /** The viewport to import into (`viewer.id`) — see {@link IOContext.viewportId}. */
+            viewportId?: string;
             /** Format id of `rawData`; detected (from `fileName` and content) when omitted. */
             format?: string;
             fileName?: string;
         },
     ): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
+    /**
+     * `dispatch` for a run of same-owner, same-capability, same-direction ops.
+     * One result per input, in order. Uses a sink's `createMany` / `deleteMany`
+     * where present and falls back to its per-item method otherwise.
+     */
+    dispatchMany(ctxs: IOContext[], payloads: unknown[]): Promise<IOResult[]>;
+    /** Largest run the outbox may hand to `dispatchMany` (1 = no bound sink batches). */
+    batchLimit(ownerUid: string, capabilityId: string, direction: IODirection): number;
 
     /**
      * Drain every registered CRUD resource's outbox. Awaits each
@@ -1246,6 +1358,31 @@ interface IOPipelineLike {
      * channel report success.
      */
     hasRemoteBundleSinks(ownerUid?: string, capabilityId?: string): boolean;
+
+    // -- dirty state (unsaved changes) ---------------------------------
+    /**
+     * Record unsaved changes of `ownerUid` for one document: a viewer (resolved
+     * to the slide it shows), an explicit `{viewerId, backgroundId}`, or
+     * nothing for the owner's global state. Cleared automatically when a
+     * bundle export for that document reaches a sink with `persists !== false`,
+     * or by the file Export. Ignored while the pipeline hydrates the owner.
+     */
+    markDirty(ownerUid: string, where?: IODirtyWhere): void;
+    /** Forget unsaved changes: all of them, an owner's, or one document's. */
+    markClean(ownerUid?: string, where?: IODirtyWhere): void;
+    /** Anything unsaved? Includes CRUD resources with at-risk queued ops. */
+    isDirty(filter?: { ownerUid?: string } & IODirtyScope): boolean;
+    /** What is unsaved, for UI that names it. */
+    dirtyEntries(): IODirtyEntry[];
+    /** Owners with a failure and no successful write among `results`; `undefined` if a failure names no owner. */
+    ownersLeftOut(results?: IOResult[]): Set<string> | undefined;
+    /** Current dirty generation; pair with {@link markCleanUpTo}. */
+    dirtyMark(): number;
+    /**
+     * Clear everything marked at or before `mark`, except owners named by a
+     * refusal in `results`. For a save that is not a sink write (file Export).
+     */
+    markCleanUpTo(mark: number, results?: IOResult[]): void;
     /**
      * Stream raw items from the first bound sink whose `query` method
      * exists and `accepts(ctx)` (if defined) passes. `ctx.direction` is
@@ -1367,6 +1504,12 @@ interface IOPipelineLike {
     tryRestoreImport(scope?: {
         ownerUid?: string;
         viewerId?: string;
+        /**
+         * The viewport this restore is for (`viewer.id`). Omitted, a
+         * `perViewport` owner gets the document for every viewport showing
+         * `viewerId`, each at most once; any other owner gets it once.
+         */
+        viewportId?: string;
         backgroundId?: string;
         /**
          * `"system"` for boot hydration and the restore after a slide opens —
@@ -1381,10 +1524,16 @@ interface IOPipelineLike {
     invalidateAll(): void;
     /** @internal Boot restore finished; late owners may now catch up per-viewer. */
     markBootRestoreComplete(): void;
+    /**
+     * The viewer a dispatch is about: the viewport named by `ctx.viewportId`,
+     * else the first one showing `ctx.viewerId`. Owners and sinks resolve their
+     * viewer through this instead of reading either id.
+     */
+    viewerFor(ctx: Pick<IOContext, "viewerId" | "viewportId"> | undefined): OpenSeadragon.Viewer | undefined;
     /** @internal Forget hydration marks for a viewer — uniqueIds are data-derived and get reused. */
-    clearHydratedFor(viewerId: string): void;
+    clearHydratedFor(viewerId: string, viewportId?: string): void;
     /** @internal Surface a post-commit refusal. Used by `IOResource`; owners should not call it. */
-    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>): void;
+    surfaceRefusal_(ctx: IOContext, r: Extract<IOResult, { ok: false }>, toast?: boolean): void;
     /** @internal Emit one of the `io:queue-*` / `io:outbox-*` events. */
     emitQueueEvent_(name: string, payload: Record<string, unknown>): void;
     /** @internal The shared POST_DATA dictionary the `post-data` sink writes into. */
@@ -1395,4 +1544,22 @@ interface IOPipelineLike {
      * `IO_PIPELINE.registerSink(IO_PIPELINE.withRetry(mySink, { attempts: 3 }))`.
      */
     withRetry?(inner: IOSink, options?: Record<string, unknown>): IOSink;
+}
+
+/** A document an owner's unsaved changes belong to. */
+interface IODirtyScope {
+    viewerId?: string;
+    backgroundId?: string;
+}
+
+/** Where an owner's changes live: a viewer (its current slide), or an explicit scope. */
+type IODirtyWhere = IODirtyScope | OpenSeadragon.Viewer;
+
+/** One unsaved item, as listed by `IO_PIPELINE.dirtyEntries()`. */
+interface IODirtyEntry {
+    ownerUid: string;
+    viewerId?: string;
+    backgroundId?: string;
+    /** Set for a CRUD resource whose queued ops are at risk. */
+    resourceName?: string;
 }

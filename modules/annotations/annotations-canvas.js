@@ -180,8 +180,35 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (selectedIds) objects = objects.filter(o => selectedIds.has(String(o.id)));
         }
 
+        // Every object names its layer in full (`layer: {id, name, position}`), so
+        // any format that keeps object properties keeps the layers. `layers` adds
+        // what objects cannot say — a layer nobody is in — for a format with room
+        // for it (native).
+        let layers, activeLayerId;
+        if (objects) {
+            const used = options.scopeSelected && new Set(
+                (this.getSelectedLayers?.() || []).filter(Boolean).map(l => String(l.id)));
+            for (const object of objects) {
+                if (!object) continue;
+                this.module.externalizeLayer(object, this);
+                if (used && object.layer) used.add(object.layer.id);
+            }
+            if (this.module.layersEnabled) {
+                layers = this.getAllLayers()
+                    .map(layer => this.describeLayer(layer.id))
+                    .filter(layer => layer && (!used || used.has(layer.id)))
+                    .sort((a, b) => a.position - b.position);
+                const active = this.getActiveLayer()?.id;
+                if (active !== undefined && layers.some(layer => layer.id === String(active))) {
+                    activeLayerId = String(active);
+                }
+            }
+        }
+
         return {
             objects,
+            layers,
+            activeLayerId,
             // Always present: a format that does not write presets may still
             // read them (a class name comes from the object's preset).
             presets: this.module.presets.toObject(),
@@ -484,7 +511,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             nextState = this._normalizeImportState({ objects: toImport });
         } else {
             affectsPresets = Array.isArray(toImport?.presets) && toImport.presets.length > 0;
-            if (affectsPresets || (Array.isArray(toImport?.objects) && toImport.objects.length > 0)) {
+            if (affectsPresets
+                || (Array.isArray(toImport?.objects) && toImport.objects.length > 0)
+                // A file may hold nothing but (empty) layers.
+                || (Array.isArray(toImport?.layers) && toImport.layers.length > 0)) {
                 imported = true;
                 nextState = this._normalizeImportState({
                     objects: Array.isArray(toImport?.objects) ? toImport.objects : [],
@@ -726,7 +756,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Set current active layer
+     * Set current active layer: the layer newly created annotations land in
+     * (see {@link _addAnnotationToLayer}). It is a drawing target only — it
+     * does not restrict which annotations can be selected or edited.
      * @param {OSDAnnotations.Layer|number} layer layer instance or id
      * @event active-layer-changed
      */
@@ -735,15 +767,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             ? layer
             : (this._layers[String(layer)] ?? this._layers[layer]);
 
-        if (!nextLayer) return;
-
-        const previousLayer = this._layer;
-        if (previousLayer && previousLayer.id !== nextLayer.id) {
-            previousLayer.setActive(false);
-        }
+        if (!nextLayer || this._layer === nextLayer) return;
 
         this._layer = nextLayer;
-        this._layer.setActive(true);
 
         this.raiseEvent('active-layer-changed', {
             layer: this._layer
@@ -756,7 +782,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     unsetActiveLayer() {
         if (!this._layer) return;
-        this._layer.setActive(false);
         this._layer = undefined;
 
         this.raiseEvent('active-layer-changed', {
@@ -778,7 +803,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (!this._selectedLayers.has(layer.id)) {
             this._selectedLayers.add(layer.id);
-            layer.setActive(true);
 
             if (!silent) this._emitLayerSelectionChanged([layer], []);
         }
@@ -797,7 +821,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!layer || !this._selectedLayers.has(layer.id)) return;
 
         this._selectedLayers.delete(layer.id);
-        layer.setActive(false);
 
         if (this._layer && this._layer.id === layer.id) {
             const last = Array.from(this._selectedLayers).at(-1);
@@ -817,11 +840,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (deselect.length === 0 && !hadActiveLayer) return;
 
-        deselect.forEach(layer => layer.setActive(false));
         this._selectedLayers.clear();
 
         if (this._layer) {
-            this._layer.setActive(false);
             this._layer = undefined;
 
             if (!silent) {
@@ -944,23 +965,113 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Create new layer
+     * What a layer is to the outside: the descriptor written on every annotation
+     * in it (see {@link OSDAnnotations#externalizeLayer}). Visibility is view
+     * state and is left out.
+     * @param {number|string} layerId
+     * @return {{id: string, name: string, position: number}|undefined} undefined for an unknown layer
+     */
+    describeLayer(layerId) {
+        const layer = this.getLayer(String(layerId));
+        if (!layer) return undefined;
+        const id = String(layer.id);
+        return { id, name: layer.name, position: this.getBoardItemIndex('layer', id) };
+    }
+
+    /**
+     * Tell a bound `crud:annotation` destination which layer the given annotations
+     * are in now. Layers have no resource of their own, so a move, a rename or a
+     * reorder is a `{layer}` patch on each annotation concerned (`{layer: null}`
+     * for "in no layer") — the comments precedent, see {@link addComment}.
+     *
+     * Report only: the change is already made and already has its history entry,
+     * so there is nothing to apply and a refusal reverts nothing.
+     * @param {Iterable<fabric.Object>} annotations
+     * @private
+     */
+    _reportLayerOf(annotations) {
+        const resource = this.module.annotationResource;
+        if (!resource || !this.module.layersEnabled) return;
+        const list = [];
+        for (const object of annotations || []) {
+            if (object && object.incrementId !== undefined && object.incrementId !== null) list.push(object);
+        }
+        if (!list.length) return;
+        const room = resource.headroom?.() ?? Infinity;
+        if (list.length > room) {
+            // Never a reason to refuse a board gesture. Each record catches up the
+            // next time it is written in full.
+            APPLICATION_CONTEXT.log?.("module.annotations")?.warn?.(
+                "layer change not reported: outbox has no room", { count: list.length, room });
+            return;
+        }
+        const viewerId = this.viewer?.uniqueId;
+        for (const object of list) {
+            const hasLayer = object.layerID !== undefined && object.layerID !== null && String(object.layerID) !== '';
+            resource.update(object.incrementId, {
+                layer: hasLayer ? (this.describeLayer(object.layerID) || { id: String(object.layerID) }) : null,
+            }, { meta: { kind: 'layer-change', object, viewerId } });
+        }
+    }
+
+    /**
+     * Create new layer. The new layer becomes the active one (new annotations
+     * land in it); undo restores the previously active layer.
      * @event layer-added
+     * @event active-layer-changed
      * @param {number|string} id optional
-     * @return {OSDAnnotations.Layer} new layer
+     * @return {Promise<void>} settles once the layer exists; read it with
+     *   {@link getLayer}. Nothing is created (and no history entry is made) when
+     *   layers are disabled for the deployment (`OSDAnnotations#layersEnabled`).
      */
     createLayer(id=Date.now()) {
+        if (!this.module.layersEnabled) return Promise.resolve();
         id = String(id);
         let layerData = {id: id, _objects: []};
+        let previousActiveId;
 
         return APPLICATION_CONTEXT.history.push(
-            () => this._createLayer(layerData),
+            () => {
+                previousActiveId = this._layer?.id;
+                this._createLayer(layerData);
+                this.setActiveLayer(id);
+            },
             () => {
                 layerData = this._serializeLayer(id);
                 this._deleteLayer(id);
+                if (previousActiveId !== undefined) this.setActiveLayer(previousActiveId);
             },
             { name: 'Create layer' }
         );
+    }
+
+    /**
+     * Rename a layer. Single undoable history entry.
+     * @event layer-objects-changed
+     * @param {number|string} id layer id
+     * @param {string} name new name; blank is refused
+     * @returns {boolean} true if renamed
+     */
+    renameLayer(id, name) {
+        const layer = this.getLayer(String(id));
+        const next = typeof name === 'string' ? name.trim() : '';
+        if (!layer || !next || next === layer.name) return false;
+        const previous = layer.name;
+
+        const apply = (value) => {
+            const target = this.getLayer(String(id));
+            if (!target) return false;
+            target.name = value;
+            this._reportLayerOf(target.getObjects());
+            this.raiseEvent('layer-objects-changed', { layerId: String(id) });
+            return true;
+        };
+        APPLICATION_CONTEXT.history.push(
+            () => apply(next),
+            () => apply(previous),
+            { name: 'Rename layer' }
+        );
+        return true;
     }
 
     /**
@@ -1075,6 +1186,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             while (target >= 0 && target < order.length && order[target].type !== 'layer') target += step;
             if (target < 0 || target >= order.length) return false;
             [order[idx], order[target]] = [order[target], order[idx]];
+            // Both layers changed position, and position is on their members' records.
+            for (const moved of [order[idx], order[target]]) {
+                this._reportLayerOf(this.getLayer(moved.id)?.getObjects());
+            }
             return true;
         };
         const reverseDir = direction === 'up' ? 'down' : 'up';
@@ -1291,6 +1406,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 annotation.layerID = undefined;
                 this.upsertBoardItem('annotation', annotation.incrementId, toIndex);
             }
+            this._reportLayerOf([annotation]);
             this.canvas.requestRenderAll();
             try {
                 this.raiseEvent('layer-objects-changed', { layerId: toLayerId ?? oldLayerId ?? null });
@@ -1326,72 +1442,131 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             : null;
         if (target !== null && !this.getLayer(target)) return 0;
 
+        // Everything below works per affected layer / on the board order as a
+        // whole, never per object: a "select all → move" batch is thousands of
+        // objects, and a per-object index lookup made it quadratic.
+
+        // Position lookups, built once and only for the containers involved.
+        let boardIndexOf = null;
+        const layerIndexOf = new Map();
+        const indexInBoard = (obj) => {
+            if (!boardIndexOf) {
+                boardIndexOf = new Map();
+                this._boardOrder.forEach((item, i) => {
+                    if (item.type === 'annotation') boardIndexOf.set(String(item.id), i);
+                });
+            }
+            return boardIndexOf.get(String(obj.incrementId)) ?? -1;
+        };
+        const indexInLayer = (layerId, obj) => {
+            let map = layerIndexOf.get(layerId);
+            if (!map) {
+                map = new Map();
+                (this.getLayer(layerId)?._objects || []).forEach((o, i) => map.set(o.incrementId, i));
+                layerIndexOf.set(layerId, map);
+            }
+            return map.get(obj.incrementId) ?? -1;
+        };
+
         // Snapshot only the annotations whose layerID will actually change.
         // Each entry captures enough state to undo: oldLayerId, oldBoardIndex
         // (for root annotations), oldLayerIndex (for layered ones).
         const snapshot = [];
+        const seen = new Set();
         for (const obj of annotations) {
-            if (!obj) continue;
+            if (!obj || seen.has(obj)) continue;
+            seen.add(obj);
             const oldLayerId = obj.layerID ? String(obj.layerID) : null;
             if (oldLayerId === target) continue;
-            const oldBoardIndex = oldLayerId
-                ? -1
-                : this.getBoardItemIndex('annotation', obj.incrementId);
-            const oldLayerIndex = oldLayerId
-                ? (this.getLayer(oldLayerId)?.getAnnotationIndex?.(obj) ?? -1)
-                : -1;
-            snapshot.push({ obj, oldLayerId, oldBoardIndex, oldLayerIndex });
+            snapshot.push({
+                obj,
+                oldLayerId,
+                oldBoardIndex: oldLayerId ? -1 : indexInBoard(obj),
+                oldLayerIndex: oldLayerId ? indexInLayer(oldLayerId, obj) : -1,
+            });
         }
         if (snapshot.length === 0) return 0;
 
-        const moveTo = () => {
-            const targetLayer = target ? this.getLayer(target) : null;
+        /** Take every snapshot object out of wherever it currently lives. */
+        const detachAll = () => {
+            const byLayer = new Map();
+            const rootIds = new Set();
             for (const { obj } of snapshot) {
                 if (obj.layerID) {
-                    const old = this.getLayer(String(obj.layerID));
-                    if (old) old.removeObject(obj);
+                    const id = String(obj.layerID);
+                    if (!byLayer.has(id)) byLayer.set(id, []);
+                    byLayer.get(id).push(obj);
                 } else {
-                    this.removeBoardItem('annotation', obj.incrementId);
-                }
-                if (targetLayer) {
-                    obj.layerID = String(targetLayer.id);
-                    targetLayer.addObject(obj);
-                } else {
-                    obj.layerID = undefined;
-                    this.upsertBoardItem('annotation', obj.incrementId);
+                    rootIds.add(String(obj.incrementId));
                 }
             }
+            for (const [id, objs] of byLayer) this.getLayer(id)?.removeObjects(objs);
+            if (rootIds.size) {
+                this._boardOrder = this._boardOrder.filter(
+                    item => item.type !== 'annotation' || !rootIds.has(String(item.id)));
+            }
+        };
+
+        const notify = (layerId) => {
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             try {
-                this.raiseEvent('layer-objects-changed', {
-                    layerId: target
-                });
+                this.raiseEvent('layer-objects-changed', { layerId });
             } catch (e) { /* non-fatal */ }
         };
 
-        const restore = () => {
-            for (const entry of snapshot) {
-                const { obj, oldLayerId, oldBoardIndex, oldLayerIndex } = entry;
-                if (obj.layerID) {
-                    const cur = this.getLayer(String(obj.layerID));
-                    if (cur) cur.removeObject(obj);
-                } else {
-                    this.removeBoardItem('annotation', obj.incrementId);
-                }
-                if (oldLayerId) {
-                    const old = this.getLayer(oldLayerId);
-                    obj.layerID = oldLayerId;
-                    if (old) old.addObject(obj, oldLayerIndex >= 0 ? oldLayerIndex : undefined);
-                } else {
+        const moveTo = () => {
+            const targetLayer = target ? this.getLayer(target) : null;
+            detachAll();
+            if (targetLayer) {
+                targetLayer.addObjects(snapshot.map(entry => entry.obj));
+            } else {
+                for (const { obj } of snapshot) {
                     obj.layerID = undefined;
-                    this.upsertBoardItem('annotation', obj.incrementId,
-                        oldBoardIndex >= 0 ? oldBoardIndex : undefined);
+                    this._boardOrder.push({ type: 'annotation', id: String(obj.incrementId) });
+                    // Leaving a hidden layer makes the object interactive again.
+                    this._applyAnnotationVisibilityState(obj);
                 }
             }
-            this.canvas.requestRenderAll();
-            try {
-                this.raiseEvent('layer-objects-changed', { layerId: null });
-            } catch (e) { /* non-fatal */ }
+            notify(target);
+        };
+
+        const restore = () => {
+            detachAll();
+            // Re-insert at the recorded positions, ascending, so each index is
+            // valid by the time it is used.
+            const byOldLayer = new Map();
+            const toRoot = [];
+            for (const entry of snapshot) {
+                if (entry.oldLayerId) {
+                    if (!byOldLayer.has(entry.oldLayerId)) byOldLayer.set(entry.oldLayerId, []);
+                    byOldLayer.get(entry.oldLayerId).push({
+                        object: entry.obj,
+                        index: entry.oldLayerIndex >= 0 ? entry.oldLayerIndex : Infinity,
+                    });
+                } else {
+                    toRoot.push(entry);
+                }
+            }
+            for (const [id, entries] of byOldLayer) {
+                entries.sort((a, b) => a.index - b.index);
+                const layer = this.getLayer(id);
+                if (layer) layer.addObjects(entries);
+                else for (const e of entries) e.object.layerID = undefined;
+            }
+            toRoot.sort((a, b) =>
+                (a.oldBoardIndex >= 0 ? a.oldBoardIndex : Infinity) - (b.oldBoardIndex >= 0 ? b.oldBoardIndex : Infinity));
+            for (const { obj, oldBoardIndex } of toRoot) {
+                obj.layerID = undefined;
+                const entry = { type: 'annotation', id: String(obj.incrementId) };
+                if (oldBoardIndex >= 0 && oldBoardIndex <= this._boardOrder.length) {
+                    this._boardOrder.splice(oldBoardIndex, 0, entry);
+                } else {
+                    this._boardOrder.push(entry);
+                }
+                this._applyAnnotationVisibilityState(obj);
+            }
+            notify(null);
         };
 
         APPLICATION_CONTEXT.history.push(
@@ -1639,6 +1814,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!Array.isArray(matching) || matching.length === 0 || !target) {
             return { moved: 0, targetLayerId: null };
         }
+        // No layers in this deployment: same answer as a target that does not exist.
+        if (!this.module.layersEnabled) return null;
 
         // Resolve / create the target layer.
         let targetLayerId;
@@ -1686,6 +1863,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     this.upsertBoardItem('annotation', obj.incrementId);
                 }
             }
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             // Tell the panel its row data is stale. addObject/removeObject on
             // a Layer otherwise emits no events, so a panel that re-rendered
@@ -1716,6 +1894,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         oldBoardIndex >= 0 ? oldBoardIndex : undefined);
                 }
             }
+            this._reportLayerOf(snapshot.map(entry => entry.obj));
             this.canvas.requestRenderAll();
             try {
                 this.raiseEvent('layer-objects-changed', { layerId: null });
@@ -1820,6 +1999,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // passing skipGuards inside the closures) keeps guards from re-firing
         // on every undo/redo replay, and prevents a mid-loop refusal from
         // leaving a half-applied grouped entry.
+        if (!this._outboxTakes(targetAnnots.length)) return false;
         for (const annot of targetAnnots) {
             // `surface: true`: this aborts a user gesture, so the refusal is the
             // only feedback the user gets. Probes are silent by default so that
@@ -2451,10 +2631,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const affectedObjects = layer.getObjects?.() || [];
 
         if (!nextVisible) {
+            // One selection update for the whole layer (it may hold thousands
+            // of selected members after a "select all in layer").
             const selected = this.getSelectedAnnotations?.() || [];
-            for (const obj of affectedObjects) {
-                if (selected.some(sel => sel.internalID === obj.internalID)) {
-                    this.deselectAnnotation(obj, true);
+            if (selected.length) {
+                const hiding = new Set(affectedObjects.map(obj => obj.internalID));
+                const remaining = selected.filter(sel => !hiding.has(sel.internalID));
+                if (remaining.length !== selected.length) {
+                    this.selectAnnotations(remaining, { clearPrevious: true, fromCanvas: true });
                 }
             }
 
@@ -2483,7 +2667,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 visible: nextVisible
             });
             this.raiseEvent('layer-objects-changed', {
-                layerId: String(layer.id)
+                layerId: String(layer.id),
+                kind: 'visibility',
             });
         }
         return true;
@@ -2565,14 +2750,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // import and edit paths already call this, the create path did not.
         this.module.getAnnotationObjectFactory(annotation.factoryID)?.renderAllControls?.(annotation);
         this._applyAnnotationVisibilityState(annotation);
-        // The other half of the helper freeze: a real annotation is mutated
-        // through fabric setters, so it may cache its render again. Paths that
-        // promote the very object they had added as a helper (free-form tool,
-        // magic wand, viewport segmentation) would otherwise keep caching off
-        // for the rest of its life.
-        annotation.objectCaching = true;
+        // The other half of the helper freeze: drop the helper's own
+        // `objectCaching` override so the object follows the prototype default
+        // again (off, see the fabric overlay). Do NOT force it on: a cached
+        // annotation is rasterised into a size-capped bitmap that fabric then
+        // stretches — large or rotated shapes come out blocky — and the cache
+        // buys nothing, since every zoom step rewrites strokeWidth and
+        // invalidates it.
+        delete annotation.objectCaching;
         if (Array.isArray(annotation._objects)) {
-            for (const child of annotation._objects) child.objectCaching = true;
+            for (const child of annotation._objects) delete child.objectCaching;
         }
 
         // todo needed?
@@ -2680,6 +2867,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     _createLayer(layerData) {
+        // The one place a layer comes into being, so the one place that has to
+        // hold when layers are disabled. Every caller that could carry members
+        // (`createLayer`, a load) has already stood down by then.
+        if (!this.module.layersEnabled) return;
         const restoredLayer = new OSDAnnotations.Layer(this.module, layerData.id);
 
         for (let [key, value] of Object.entries(layerData)) {
@@ -2706,6 +2897,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             this._deleteAnnotation(obj, false);
         }
 
+        // A deleted layer must not stay the drawing target.
+        if (this._layer === layer) this.unsetActiveLayer();
         this.removeBoardItem('layer', layer.id);
         delete this._layers[layerId];
         this._selectedLayers.delete(layerId);
@@ -2758,9 +2951,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * Lock an annotation, or release it.
      *
      * This is the **user's** lock, behind the padlock in the annotation's toolbar. By
-     * default it means "stop responding to the canvas": the annotation is no longer
-     * hit-tested or selectable — so the user can draw straight over it — and every
-     * mutation is refused by the module's lock guard. What it means is overridable per
+     * default it means "get out of the way": the annotation is no longer hit-tested, so
+     * the user can draw straight over it, a plain click still selects it (see
+     * {@link _resolveLockedReleaseTarget}), and every mutation is refused by the
+     * module's lock guard. What it means is overridable per
      * deployment, see {@link OSDAnnotations#registerLockPolicy}.
      *
      * Routed through `annotationResource.update` rather than written directly, because
@@ -2905,32 +3099,20 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     /**
      * Build the per-item CRUD dispatcher for {@link addAnnotationsBulk}.
      *
-     * Returns a no-op unless the caller asked to persist AND the batch fits the
-     * resource's outbox. A batch that does not fit would enqueue thousands of ops
-     * only for the tail to be refused with `W_IO_OUTBOX_FULL` and rolled back —
-     * a partially-stored import is worse than a clearly-unstored one, and the
-     * bundle path (`exportBundle`, one payload) is the right primitive at that size.
+     * Returns a no-op unless the caller asked to persist. Batch size is not this
+     * function's concern: {@link addAnnotationsBulk} paces itself against the
+     * outbox (`whenHeadroom`), so a batch of any size is dispatched in full
+     * instead of overflowing and having its tail refused.
      *
-     * @param {number} count batch size
      * @param {boolean} wanted caller's `persist` flag
      * @return {(item: fabric.Object) => void}
      * @private
      */
-    _bulkPersister(count, wanted) {
+    _bulkPersister(wanted) {
         const noop = () => {};
         if (!wanted) return noop;
         const resource = this.module.annotationResource;
         if (!resource) return noop;
-
-        const capacity = this.module.getStaticMeta?.("crudOutboxMaxEntries", 5000) ?? 5000;
-        if (count > capacity) {
-            console.warn(
-                `[annotations] bulk add of ${count} exceeds the CRUD outbox capacity (${capacity}); ` +
-                `items were added to the canvas but NOT dispatched per-item. They are still covered ` +
-                `by the bundle export.`,
-            );
-            return noop;
-        }
 
         return (item) => {
             if (!item) return;
@@ -2948,6 +3130,30 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             // stayed unaddressable — no delete, no update — until a reload.
             this._settleAnnotationSync(item, result);
         };
+    }
+
+    /**
+     * All-or-nothing capacity check for a bulk gesture that dispatches `count`
+     * ops through `annotationResource` in one synchronous frame.
+     *
+     * Such a gesture cannot wait for the outbox to drain, and letting it run
+     * into the cap refuses and reverts its tail item by item — half a delete.
+     * Says why, once, and returns `false` so the caller aborts before touching
+     * anything. Always `true` when no destination is bound (nothing is owed).
+     *
+     * @param {number} count
+     * @return {boolean}
+     * @private
+     */
+    _outboxTakes(count) {
+        const room = this.module.annotationResource?.headroom?.() ?? Infinity;
+        if (count <= room) return true;
+        const cap = this.module.getStaticMeta?.("crudOutboxMaxEntries", 5000) ?? 5000;
+        Dialogs.show(count > cap
+            ? $.t('error.ioOutboxBatchTooLarge', { count, cap })
+            : $.t('error.ioOutboxFull', { pending: Math.max(0, cap - room), cap }),
+        8000, Dialogs.MSG_WARN);
+        return false;
     }
 
     /**
@@ -2980,6 +3186,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   Return `false` to mark an item as skipped.
      * @param {(item:fabric.Object)=>void} [options.deleteOne]
      *   Used by the history undo. Defaults to `_deleteAnnotation(a, false)`.
+     * @param {string}  [options.reason='bulk-add'] `reason` on the `annotation-loaded`
+     *   event. Hydration (`_loadObjects`) passes `'load-objects'`; anything else is
+     *   user work (scripting, job results) and marks the slide unsaved. Undo / redo
+     *   of the batch raise `'bulk-add-undo'` / `'bulk-add-redo'`.
      * @param {boolean} [options.persist=false]
      *   Also dispatch each item through `annotationResource.create`, so a bound
      *   `crud:annotation` sink stores it. Default OFF, and that default is load-
@@ -2987,9 +3197,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      *   FROM a sink, and persisting those would post the whole slide straight back.
      *   User-driven adds (file import, scripting) pass `true` — otherwise they are
      *   canvas-only and vanish on reload against a CRUD-bound deployment.
-     *   Ignored (with a warning) above the resource's outbox capacity; use the
-     *   bundle path for batches that large.
-     * @returns {Promise<{added:number, cancelled:boolean, annotations:fabric.Object[]}>}
+     *   Any batch size: the loop waits for outbox room (`whenHeadroom`) between
+     *   chunks. If that room cannot come (offline, destination not connected)
+     *   the add stops there and the result reports `cancelled: true`.
+     * @returns {Promise<{added:number, cancelled:boolean, stalled:boolean, annotations:fabric.Object[]}>}
+     *   `stalled` (which also sets `cancelled`) means the batch stopped early
+     *   because the bound destination could take no more ops and cannot drain
+     *   right now (offline / sink not registered); the user has been told.
      */
     async addAnnotationsBulk(annotations, options = {}) {
         const items = Array.isArray(annotations) ? annotations.filter(Boolean) : [];
@@ -3010,27 +3224,39 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // The batch's own history entry covers undo, so each item skips its own
         // push — but still supplies an inverse, so a per-item refusal reverts
         // exactly that item instead of the whole import.
-        const persistOne = this._bulkPersister(items.length, opts.persist === true);
+        const resource = opts.persist === true ? this.module.annotationResource : undefined;
+        const persistOne = this._bulkPersister(!!resource);
+        // Backpressure. A scripted or imported batch produces ops far faster than
+        // any destination stores them; without pacing, the outbox hit its cap and
+        // the rest of the batch was refused and removed again. `false` means the
+        // room will not come (offline, destination not connected): stop there.
+        const roomFor = async (count) =>
+            !resource?.whenHeadroom || await resource.whenHeadroom(count);
+
+        const reason = opts.reason || 'bulk-add';
+        const raiseLoaded = (added, why = reason) => {
+            try { this.raiseEvent('annotation-loaded', { objects: added, bulk: true, reason: why }); }
+            catch (e) { /* non-fatal */ }
+        };
 
         const pushHistory = (added) => {
             if (!recordHistory || !added.length) return;
             const hist = APPLICATION_CONTEXT?.history;
             if (!hist?.pushExecuted) return;
             const snapshot = added.slice();
+            // The per-item callbacks raise nothing: say once that the batch
+            // came back / went away, so listeners (unsaved state, the board)
+            // see undo and redo like the original add.
             hist.pushExecuted(
-                () => snapshot.forEach((a) => addOne(a)),
-                () => snapshot.forEach((a) => deleteOne(a)),
+                () => { snapshot.forEach((a) => addOne(a)); raiseLoaded(snapshot, 'bulk-add-redo'); },
+                () => { snapshot.forEach((a) => deleteOne(a)); raiseLoaded(snapshot, 'bulk-add-undo'); },
                 { name: historyName }
             );
         };
 
-        const raiseLoaded = (added) => {
-            try { this.raiseEvent('annotation-loaded', { objects: added, bulk: true }); }
-            catch (e) { /* non-fatal */ }
-        };
-
-        // Sync fast path
-        if (items.length < threshold) {
+        // Sync fast path — only when the whole batch fits the outbox right now;
+        // otherwise the chunked path below paces it.
+        if (items.length < threshold && items.length <= (resource?.headroom?.() ?? Infinity)) {
             const added = [];
             for (let i = 0; i < items.length; i++) {
                 const a = items[i];
@@ -3038,7 +3264,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
             pushHistory(added);
             raiseLoaded(added);
-            return { added: added.length, cancelled: false, annotations: added };
+            return { added: added.length, cancelled: false, stalled: false, annotations: added };
         }
 
         // Async chunked path with progress + cancel
@@ -3071,10 +3297,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         };
 
         const added = [];
+        let stalled = false;
         try {
             for (let i = 0; i < items.length; i += chunkSize) {
                 if (ctrl.signal.aborted) break;
                 const end = Math.min(i + chunkSize, items.length);
+                if (!(await roomFor(end - i))) { stalled = true; break; }
+                if (ctrl.signal.aborted) break;
                 for (let j = i; j < end; j++) {
                     const a = items[j];
                     if (addOne(a, j) !== false) { added.push(a); persistOne(a); }
@@ -3092,7 +3321,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (dialog && !dialog.isError) dialog.done();
 
-        return { added: added.length, cancelled: ctrl.signal.aborted, annotations: added };
+        // The batch was cut short by the destination, not by the user: say how
+        // far it got. A generic "outbox full" left a file import looking
+        // complete with part of the file silently missing from the canvas.
+        if (stalled) {
+            Dialogs.show($.t('error.ioBulkStalled', { added: added.length, total: items.length }),
+                10000, Dialogs.MSG_WARN);
+        }
+
+        return {
+            added: added.length, cancelled: ctrl.signal.aborted || stalled, stalled, annotations: added,
+        };
     }
 
     /**
@@ -3514,6 +3753,75 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
+     * Select many annotations at once: one selection update and ONE
+     * `annotation-selection-changed`, however long the array. Use this for any
+     * bulk selection — calling {@link selectAnnotation} in a loop raises an
+     * event (and a full board rebuild) per object and freezes the viewer.
+     * The last object becomes fabric's active object.
+     * @param {fabric.Object[]} annotations
+     * @param {object} [options]
+     * @param {boolean} [options.clearPrevious=true] replace the selection, or extend it
+     * @param {boolean} [options.fromCanvas=false] if the selection event originates on canvas
+     * @returns {number} size of the resulting selection
+     * @event annotation-selection-changed
+     */
+    selectAnnotations(annotations, { clearPrevious = true, fromCanvas = false } = {}) {
+        if (!Array.isArray(annotations)) return 0;
+
+        const previous = [...this.getSelectionSnapshot()];
+        const next = clearPrevious ? [] : [...previous];
+        const members = new Set(next);
+        for (const obj of annotations) {
+            if (!obj || obj.isHelperAnnotation || members.has(obj)) continue;
+            members.add(obj);
+            next.push(obj);
+        }
+        const deselected = clearPrevious ? previous.filter(obj => !members.has(obj)) : [];
+        if (next.length === previous.length && !deselected.length) return next.length;
+
+        if (clearPrevious && previous.length) {
+            this.removeHighlight();
+            this.clearSelectionSnapshot();
+            this.__programmaticClear = true;
+            this.canvas.discardActiveObject();
+        }
+        this._applySelection(next);
+        this._emitAnnotationSelectionChanged(next, deselected, fromCanvas);
+        return next.length;
+    }
+
+    /**
+     * Select every annotation the user can currently see and touch: hidden,
+     * hidden-layer and filtered-out annotations are skipped.
+     * @param {object} [options]
+     * @param {string|null} [options.layerId] restrict to one layer; `null` = annotations in no layer
+     * @param {boolean} [options.clearPrevious=true]
+     * @returns {number} size of the resulting selection
+     */
+    selectAllAnnotations({ layerId = undefined, clearPrevious = true } = {}) {
+        const scoped = layerId !== undefined;
+        const wanted = scoped && layerId !== null ? String(layerId) : null;
+        const hiddenLayer = new Map();
+        const targets = [];
+        for (const obj of this.canvas.getObjects()) {
+            if (!this.isAnnotation(obj) || obj.isHelperAnnotation || obj.visible === false) continue;
+            const own = obj.layerID ? String(obj.layerID) : null;
+            if (scoped && own !== wanted) continue;
+            if (own) {
+                let hidden = hiddenLayer.get(own);
+                if (hidden === undefined) {
+                    hidden = this.getLayer(own)?.visible === false;
+                    hiddenLayer.set(own, hidden);
+                }
+                if (hidden) continue;
+            }
+            if (this.module.isAnnotationFilteredOut?.(obj)) continue;
+            targets.push(obj);
+        }
+        return this.selectAnnotations(targets, { clearPrevious });
+    }
+
+    /**
      * Deselect an annotation by incrementId.
      * Handles single and multi-selection.
      * @param {fabric.Object|string|number} annotation object or incrementId of the annotation to deselect
@@ -3677,6 +3985,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // All-or-nothing pre-delete guard checkpoint for the annotation items
         // (layers have no CRUD resource). Abort the whole gesture on any veto
         // so no partial state is committed.
+        if (!this._outboxTakes(annToDelete.length)) return;
         for (const obj of annToDelete) {
             const veto = this.module.annotationResource.canDelete(obj.incrementId, {
                 kind: 'delete', object: obj, viewerId: this.viewer?.uniqueId,
@@ -3870,6 +4179,27 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return this.viewer.scalebar.getReferencedTiledImage()?.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
         }.bind(this);
 
+        // The mode, the cursor and the factories are shared by every viewport and
+        // act on `module.viewer` — the viewer that owns the current gesture, which
+        // a mode may pin (`locksViewer`: a held press, an unfinished polygon).
+        // Whatever reaches the mode from this wrapper must therefore be expressed
+        // in that viewer's image space, or it lands on another viewport's canvas.
+
+        // A release ends the gesture of the owning viewer even when the pointer
+        // was let go over a different viewport.
+        let gestureToPixelCoords = function (x, y) {
+            return this.module.viewer.scalebar.getReferencedTiledImage()?.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+        }.bind(this);
+
+        // Input arriving here means the pointer is over this viewport, so this
+        // viewer asks for the gesture — from the event's own source, not from
+        // whichever viewer the manager currently calls active (this listener can
+        // run before that activation, e.g. on touch). A mode that keeps another
+        // viewer pinned refuses, and the input is then not ours to handle.
+        function inputBelongsElsewhere() {
+            return !_this.module.claimGestureViewer(_this.viewer);
+        }
+
         //prevents event bubling if the up event was handled by annotations
         function handleRightClickUp(event, fabricEvent) {
             if (_this.module.disabledInteraction) return;
@@ -3900,7 +4230,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             let factory = _this.module.presets.right ? _this.module.getActiveFactory(false) : undefined;
-            let point = screenToPixelCoords(event.x, event.y);
+            let point = gestureToPixelCoords(event.x, event.y);
             // Record whether a mode consumed this right-release so the canvas
             // context-menu provider can open only when the event was NOT handled
             // (parity with the legacy nonprimary-release-not-handled gating).
@@ -3923,11 +4253,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
             // Reset per-interaction so a stale value never suppresses a later menu.
             _this.module.cursor.rightClickHandled = false;
+            if (inputBelongsElsewhere()) return;
 
             if (_this._isFabricControlInteraction(fabricEvent)) {
                 _this._abortForControlInteraction(event, true);
                 return;
             }
+            if (_this._lastPressRepeated) return;
 
             _this.module.cursor.mouseTime = Date.now();
 
@@ -3963,14 +4295,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             let factory = _this.module.presets.left ? _this.module.getActiveFactory(true) : undefined;
-            let point = screenToPixelCoords(event.x, event.y);
-            if (_this.module.mode.handleClickUp(event, point, true, factory)) {
+            let point = gestureToPixelCoords(event.x, event.y);
+            // Read by the `mouse:dblclick` handler: a double-click whose first click
+            // already did something must not go on to cycle the selection.
+            _this._lastReleaseConsumed = !!_this.module.mode.handleClickUp(event, point, true, factory);
+            if (_this._lastReleaseConsumed) {
                 event.preventDefault();
             } else /*if (!_this.isModeAuto())*/ {
                 // left click up handles selection for all modes if mode did not handle the event
                 // (a creation mode that discarded its gesture reports CLICK_NOT_CONSUMED, so a
                 // too-short click on an existing annotation selects it instead of doing nothing)
-                const releaseTarget = _this._resolveReleaseTarget(fabricEvent);
+                const releaseTarget = _this._resolveReleaseTarget(fabricEvent)
+                    || _this._resolveLockedReleaseTarget(fabricEvent);
                 if (releaseTarget) {
                     _this._objectClicked(fabricEvent, point, releaseTarget);
                 } else {
@@ -3989,11 +4325,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         function handleLeftClickDown(event, fabricEvent) {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
+            if (inputBelongsElsewhere()) return;
 
             if (_this._isFabricControlInteraction(fabricEvent)) {
                 _this._abortForControlInteraction(event, true);
                 return;
             }
+            if (_this._lastPressRepeated) return;
 
             _this.module.cursor.mouseTime = Date.now();
             // Auto-select a preset on click-down when none is bound to the left
@@ -4012,6 +4350,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         // annotationCanvas.addEventListener("mousedown", function (event) {
         this.canvas.on('mouse:down', function(e) {
+            // Asked once per press and remembered: the release cannot answer it (it is
+            // a `pointerup`, whose `detail` is always 0), and the check keeps state.
+            _this._lastPressRepeated = _this._isRepeatedPress(e.e);
             if (_this.module.disabledInteraction || (!_this.module.mode.supportsZoomAnimation() && _this.module.mode.isZooming)) return;
             const event = e.e;
             if (event.which === 1) handleLeftClickDown(event, e);
@@ -4053,6 +4394,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 if (_this.viewer !== _this.module.viewer) return;
                 _this.module.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
             } else {
+                // Same rule without a held press: an unfinished multi-click shape
+                // pins its viewer, and its preview must not follow this viewport.
+                if (inputBelongsElsewhere()) return;
                 _this.module.mode.handleMouseHover(o.e, screenToPixelCoords(o.e.x, o.e.y));
             }
         });
@@ -4066,9 +4410,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.canvas.on('mouse:dblclick', function (o) {
             if (_this.module.disabledInteraction) return;
             // A double-click while manually drawing a polygon/polyline commits
-            // it (the constituent single clicks drop duplicate end vertices that
-            // simplify() collapses); skip the selection-cycling below.
+            // it. Its first click placed the end vertex; the second press never
+            // reached the mode (see `_isRepeatedPress`), so there is no duplicate.
             if (_this.module.mode.finishCurrentCreation?.()) return;
+            // The first click created or advanced something: the double-click was
+            // a "confirm" habit, not a request to dig through what lies beneath.
+            if (_this._lastReleaseConsumed) return;
             const pointer = o.pointer || _this.canvas.getPointer(o.e);
             const active = _this.canvas.getActiveObject();
             const next = _this.canvas.findNextObjectUnderMousePrecise?.(pointer, active);
@@ -4463,8 +4810,45 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // wrapper). fabric.util.enlivenObjects can't recover any of that on
         // its own — initializeBeforeImport is the factory's chance to
         // rebuild the blueprint so the enlivened object is renderable.
-        for (const raw of input.objects) {
+        // Layers to bring in, id -> descriptor. Two sources, the explicit list first
+        // so it wins: `input.layers` (a native file, a history state) and the
+        // `layer` descriptor each object carries (every other format and sink —
+        // layers have no IO resource of their own, see OSDAnnotations#externalizeLayer).
+        // Both are outside data: only sanitized fields reach a Layer.
+        // With layers disabled nothing is planned and every binding is dropped
+        // below: the annotations of a layered file still load, flat.
+        const layersEnabled = this.module.layersEnabled;
+        const layerPlan = new Map();
+        const rawObjects = [...input.objects];
+        for (const layerData of Array.isArray(input.layers) ? input.layers : []) {
+            const descriptor = this.module.sanitizeLayerDescriptor(layerData);
+            if (!descriptor || layerPlan.has(descriptor.id)) continue;
+            if (layersEnabled) layerPlan.set(descriptor.id, descriptor);
+            // A history state (`_captureImportState`) files a layer's members
+            // under the layer instead of in `objects`. They used to be left
+            // there, so undoing an import lost every annotation that had a layer.
+            for (const member of Array.isArray(layerData._objects) ? layerData._objects : []) {
+                if (member && typeof member === 'object') rawObjects.push({ ...member, layerID: descriptor.id });
+            }
+        }
+
+        for (const raw of rawObjects) {
             if (!raw || typeof raw !== 'object') continue;
+            if (!layersEnabled) {
+                delete raw.layer;
+                delete raw.layerID;
+            } else if ("layer" in raw) {
+                // Inbound half of the `layerID` <-> `layer` swap. A record with a
+                // bare `layerID` (written before layers were persisted) keeps it.
+                // The key goes either way — the whitelist trim leaves it behind
+                // as `undefined`, and a live object must not carry it.
+                const descriptor = this.module.sanitizeLayerDescriptor(raw.layer);
+                delete raw.layer;
+                if (descriptor) {
+                    raw.layerID = descriptor.id;
+                    if (!layerPlan.has(descriptor.id)) layerPlan.set(descriptor.id, descriptor);
+                }
+            }
             this._migrateRetiredFactory(raw);
             const factory = this.module.getAnnotationObjectFactory(raw.factoryID || raw.type);
             if (factory && typeof factory.initializeBeforeImport === 'function') {
@@ -4474,7 +4858,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
 
         return new Promise((resolve, reject) => {
-            fabric.util.enlivenObjects(input.objects, async (objects) => {
+            fabric.util.enlivenObjects(rawObjects, async (objects) => {
                 try {
                     if (clear) {
                         this.canvas.clear();
@@ -4493,19 +4877,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         this.clearLayerSelection(true);
                     }
 
-                    const explicitLayers = Array.isArray(input?.layers) ? [...input.layers] : [];
-                    explicitLayers
-                        .sort((a, b) => (a?.position ?? 0) - (b?.position ?? 0))
-                        .forEach(layerData => {
-                            if (!layerData?.id) return;
-                            const id = String(layerData.id);
-                            if (self.getLayer(id)) return;
-
-                            self._createLayer({
-                                ...OpenSeadragon.extend(true, {}, layerData),
-                                id,
-                                _objects: []
-                            });
+                    [...layerPlan.values()]
+                        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                        .forEach(descriptor => {
+                            // Merging into a canvas that has this layer: its own state stands.
+                            if (self.getLayer(descriptor.id)) return;
+                            self._createLayer({ ...descriptor, _objects: [] });
                         });
 
                     let insertion = 0;
@@ -4568,6 +4945,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         title: 'Loading annotations',
                         recordHistory: false,
                         historyName: 'Load annotations',
+                        reason: 'load-objects',
                         // OFF for every restore/hydration path (the default): those
                         // objects came from a destination, and dispatching them back
                         // would duplicate the slide. Only a user-driven file import
@@ -4584,7 +4962,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     }
 
                     touchedLayers.forEach(layerId => {
-                        self.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
+                        self.raiseEvent('layer-objects-changed', { layerId: String(layerId), kind: 'load' });
                     });
 
                     self.raiseEvent('annotation-loaded', {
@@ -4661,6 +5039,73 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (!cached.isHelperAnnotation && !cached.isHighlight) return cached;
         const fresh = this.canvas.findTarget?.(fabricEvent.e, false) || null;
         return (fresh && !fresh.isHelperAnnotation && !fresh.isHighlight) ? fresh : null;
+    }
+
+    /**
+     * The locked annotation a plain click landed on, when it landed on nothing else.
+     *
+     * A non-interactive lock is out of fabric's hit-test so a press over it draws
+     * instead of grabbing it. Left at that, clicking a locked annotation does nothing
+     * at all, which reads as a broken canvas: the user cannot tell a lock from a bug,
+     * and cannot reach the padlock that would release it. So a release that no mode
+     * consumed and that was a click rather than a drag selects it — the toolbar comes
+     * up with its closed padlock, and the lock explains itself. The annotation stays
+     * out of the press path, so drawing over it is unaffected.
+     *
+     * @param {object} fabricEvent the fabric `mouse:up` options object
+     * @return {fabric.Object|null}
+     * @private
+     */
+    _resolveLockedReleaseTarget(fabricEvent) {
+        if (!fabricEvent || fabricEvent.isClick === false) return null;
+        const hit = this.canvas.findBlockedObjectUnderMouse?.(fabricEvent.pointer);
+        return (hit && this.isAnnotation(hit) && hit.visible) ? hit : null;
+    }
+
+    /**
+     * Longest gap between two presses on one spot that still makes them a double-click,
+     * for presses that carry no click count of their own (see {@link _isRepeatedPress}).
+     * The Windows default.
+     * @type {number}
+     */
+    static DOUBLE_PRESS_MS = 500;
+
+    /**
+     * Whether a press is the second (or later) half of a multi-click.
+     *
+     * Such a press is not a new gesture and must not reach the active mode. Users
+     * double-click to "confirm" out of desktop habit, and every press used to be
+     * handed on as its own: a point tool left two points stacked on one spot, a text
+     * tool two labels, the angle tool burnt two of its three steps, and closing a
+     * polygon on its start point began a second polygon. What a double-click is
+     * *meant* to do lives in the `mouse:dblclick` handler, which still fires.
+     *
+     * Presses reach the canvas as two different events. In a drawing mode it is a
+     * `mousedown`, whose `detail` is the browser's own click count: the speed and
+     * distance that make two presses a double-click are then the ones the user
+     * configured in their OS. While navigating it is a `pointerdown`, whose `detail`
+     * is always 0, so the same question is answered here from the previous press:
+     * same button, same spot, within the default double-click interval. A press
+     * somewhere else is a new gesture either way, so placing vertices quickly is
+     * unaffected.
+     *
+     * Stateful — call it once per press. The `mouse:down` listener does, and keeps
+     * the answer in `_lastPressRepeated` for whoever handles the release.
+     *
+     * @param {MouseEvent|PointerEvent} event the original DOM event
+     * @return {boolean}
+     * @private
+     */
+    _isRepeatedPress(event) {
+        if (!event) return false;
+        const previous = this._lastPress;
+        const press = this._lastPress = {
+            time: Date.now(), x: event.clientX, y: event.clientY, button: event.button,
+        };
+        if (event.detail > 0) return event.detail > 1;
+        return !!previous && previous.button === press.button
+            && press.time - previous.time < this.constructor.DOUBLE_PRESS_MS
+            && Math.hypot(press.x - previous.x, press.y - previous.y) < 5;
     }
 
     _isFabricControlInteraction(fabricEvent) {

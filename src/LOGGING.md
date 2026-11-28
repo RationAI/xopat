@@ -62,6 +62,7 @@ Conventions, matching the server's:
 | `session` | the session timeline — boot, slides opened, auth, end |
 | `module.<id>`, `plugin.<id>` | a module or plugin (`:sub` for a subsystem) |
 | `console` | stray `console.*`, captured |
+| `telemetry` | aggregated usage/system metrics from [`modules/telemetry`](../modules/telemetry/README.md) — one record per flush interval, exported as OTLP by a `format: "otlp"` stream (server/LOGGING.md) |
 
 `log("module.chat").child("llm")` logs on `module.chat:llm`. A level configured
 for `module.chat` applies to every channel beneath it unless one of them is

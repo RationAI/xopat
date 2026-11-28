@@ -46,6 +46,8 @@ type XOpatErrorEvent = {
     code: string;
     message: string;
     error?: any;
+    /** Handlers for `<a data-action="key">` links in `message` (user-facing events only). */
+    actions?: Record<string, (ev: Event, dialogs: unknown) => void>;
 };
 
 // ── Store options ─────────────────────────────────────────────────────────────
@@ -177,6 +179,19 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
          *  - `all` — global + per-viewer + per-viewer-background.
          */
         bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+        /**
+         * Set when the bundle state lives per VIEWPORT (a canvas, an overlay)
+         * and not per document. `ctx.viewerId` is derived from the slide, so two
+         * viewports showing the same slide share it and `ctx.key`: with this set,
+         * a restore is delivered to each of them (`ctx.viewportId` names which),
+         * each hydrated once. Leave it unset when the state is keyed by
+         * `ctx.key` / `ctx.viewerId` — one copy serves every viewport, and a
+         * second delivery would overwrite what the user changed since the first.
+         * See src/IO_PIPELINE.md.
+         */
+        perViewport?: boolean;
+        /** See `IOOwnerBundleHooks.defaultFormat`. */
+        defaultFormat?: (ctx?: IOContext) => string | undefined;
         ignore?: boolean;
     }): Promise<void>;
 
@@ -196,6 +211,16 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
         flush(scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
         capabilities(): IOCapability[];
         isEnabled(capabilityId?: string): boolean;
+        /**
+         * Mark this element's state unsaved for one document (a viewer, its
+         * current slide) or globally. Owners whose persistence needs an
+         * explicit Save call it on every user edit; the pipeline clears it when
+         * the bundle reaches a persisting sink. See "Dirty state" in
+         * src/IO_PIPELINE.md.
+         */
+        markDirty(where?: IODirtyWhere): void;
+        markClean(where?: IODirtyWhere): void;
+        isDirty(where?: IODirtyScope): boolean;
     };
 
     /** Get the viewer-specific context map for the given viewer session ID. */

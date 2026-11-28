@@ -110,6 +110,10 @@ class Dropdown extends BaseSelectableComponent {
         this.headerButton.iconOnly();
         if (this._useActiveSelection) {
             this.headerButton.setExtraProperty("style", this._compactHeader ? "" : "min-width:58px;")
+            // Two actions in one icon-only button: give each an exact cell (65% icon,
+            // 35% caret) instead of two padded glyphs with dead space around them.
+            // Layout in `.dropdown-header-split` (custom.css).
+            if (this.splitHeader) this.headerButton.setClass("split", "dropdown-header-split");
         }
         this._iconOnly = true;
     }

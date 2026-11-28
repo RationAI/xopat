@@ -343,11 +343,8 @@ class LogStreamDestination {
         const batch = this.queue;
         this.queue = [];
         this.flushing = true;
-        const body = `${batch.map(record => safeJsonLine(record)).join("\n")}\n`;
 
-        const targets = [];
-        if (this.config.url) targets.push(this.transports.http(this.config.url, body, this.config));
-        if (this.config.file) targets.push(this.transports.file(this.filePath(), body));
+        const targets = this.config.format === "otlp" ? this.otlpTargets(batch) : this.ndjsonTargets(batch);
 
         this.pending = Promise.allSettled(targets)
             .then(results => {
@@ -373,6 +370,41 @@ class LogStreamDestination {
                 else this.arm();
             });
         return this.pending;
+    }
+
+    /** The default wire format: one JSON record per line, to every target. */
+    ndjsonTargets(batch) {
+        const body = `${batch.map(record => safeJsonLine(record)).join("\n")}\n`;
+        const targets = [];
+        if (this.config.url) targets.push(this.transports.http(this.config.url, body, this.config));
+        if (this.config.file) targets.push(this.transports.file(this.filePath(), body));
+        return targets;
+    }
+
+    /**
+     * OpenTelemetry: metric records (`fields.kind === "metrics"`, emitted by
+     * modules/telemetry) become OTLP metrics, everything else OTLP logs. A `url`
+     * is the collector's OTLP/HTTP base (`…:4318`), posted to `/v1/metrics` and
+     * `/v1/logs`; a `file` gets one ExportRequest JSON per line — the layout the
+     * collector's `otlpjsonfile` receiver reads. Encoding happens here, in the
+     * async flush, never on the request that emitted the record.
+     */
+    otlpTargets(batch) {
+        const { encodeOtlp, otlpEndpoints } = require("./otlp-encode");
+        const encoded = encodeOtlp(batch, { deployment: this.config.otlpDeployment || undefined });
+        if (encoded.skipped) this.stats.otlpSkipped = (this.stats.otlpSkipped || 0) + encoded.skipped;
+        const targets = [];
+        if (this.config.url) {
+            const endpoints = otlpEndpoints(this.config.url);
+            const opts = { ...this.config, contentType: "application/json" };
+            if (encoded.metrics) targets.push(this.transports.http(endpoints.metrics, safeJson(encoded.metrics), opts));
+            if (encoded.logs) targets.push(this.transports.http(endpoints.logs, safeJson(encoded.logs), opts));
+        }
+        if (this.config.file) {
+            const lines = [encoded.metrics, encoded.logs].filter(Boolean).map(safeJson);
+            if (lines.length) targets.push(this.transports.file(this.filePath(), `${lines.join("\n")}\n`));
+        }
+        return targets;
     }
 
     /**
@@ -469,6 +501,7 @@ class LogStreamDestination {
         return {
             ...(this.config.url ? { url: this.config.url } : {}),
             ...(this.config.file ? { file: this.config.file, resolvedFile: this.filePath() } : {}),
+            format: this.config.format,
             ...(this.config.channels.length ? { channels: this.config.channels } : {}),
             ...(this.config.attachments ? { attachmentDir: this.attachmentDir() } : {}),
             minLevel: levelName(this.config.minLevel),
@@ -500,6 +533,11 @@ function channelMatches(channel, wanted) {
     return wanted.some(prefix => name === prefix || name.startsWith(`${prefix}:`));
 }
 
+/** An encoded OTLP body; the encoder emits plain data, so this only guards the impossible. */
+function safeJson(value) {
+    try { return JSON.stringify(value); } catch (e) { return "{}"; }
+}
+
 /** A record that cannot be serialized must not take the whole batch down. */
 function safeJsonLine(record) {
     try {
@@ -528,7 +566,7 @@ async function defaultHttpTransport(url, body, config) {
     const { safeRequest } = require("./ssrf-guard");
     const res = await safeRequest(url, {
         method: "POST",
-        headers: { "Content-Type": "application/x-ndjson", ...(config.headers || {}) },
+        headers: { "Content-Type": config.contentType || "application/x-ndjson", ...(config.headers || {}) },
         body,
         timeoutMs: config.timeoutMs,
     });
@@ -621,6 +659,12 @@ function normalizeStreamConfigs(value) {
             file,
             headers: raw.headers && typeof raw.headers === "object" ? { ...raw.headers } : null,
             rotate: String(raw.rotate ?? "daily").toLowerCase() === "none" ? "none" : "daily",
+            // Wire format. "ndjson" (default) = the records as-is; "otlp" =
+            // OpenTelemetry OTLP/HTTP JSON (server/node/otlp-encode.js).
+            format: String(raw.format ?? "ndjson").toLowerCase() === "otlp" ? "otlp" : "ndjson",
+            // Value for the OTLP `deployment.environment` resource attribute.
+            otlpDeployment: typeof raw.otlpDeployment === "string" && raw.otlpDeployment.trim()
+                ? raw.otlpDeployment.trim().slice(0, 100) : null,
             perProcess: raw.perProcess === true,
             minLevel: normalizeLevel(raw.minLevel, LEVELS.info),
             // Never defaults to true, and never reads a request-supplied value.
@@ -647,7 +691,7 @@ function normalizeStreamConfigs(value) {
 /** Two stream configs are the same destination when every knob matches. */
 function sameStreamConfig(a, b) {
     if (!a || !b) return false;
-    const keys = ["url", "file", "rotate", "perProcess", "minLevel", "includeSensitive",
+    const keys = ["url", "file", "rotate", "format", "otlpDeployment", "perProcess", "minLevel", "includeSensitive",
         "batchSize", "flushIntervalMs", "queueLimit", "timeoutMs", "attachments", "maxAttachmentBytes"];
     if (keys.some(key => a[key] !== b[key])) return false;
     if ((a.channels || []).join("|") !== (b.channels || []).join("|")) return false;

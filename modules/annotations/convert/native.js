@@ -19,6 +19,10 @@ IO_PIPELINE.formats.register({
                 created: Date.now(),
             },
             objects: model.objects,
+            // Each object already names its layer; this list is for what objects
+            // cannot carry — a layer with nothing in it, and which one is active.
+            layers: model.layers,
+            activeLayerId: model.activeLayerId,
             presets: withPresets
                 ? OSDAnnotations.Convertor.filterUnusedPresets(model.objects, model.presets)
                 : undefined,

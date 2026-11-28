@@ -1,6 +1,68 @@
 # Changelog
 
 
+### 3.3.1
+
+Unsaved-work tracking, storage that copes with large annotation sets, and saved annotation layers.
+
+**Features**:
+
+* **Unsaved changes** — the viewer knows which slides hold work that is not stored yet: Save is
+  highlighted and leaving the page asks first. Plugins mark edits with `this.io.markDirty(viewer)`.
+* **Saving data** — changes of any size reach the storage, sent in groups where the destination
+  supports it (`createMany` / `updateMany` / `deleteMany`); the same slide open in several viewports
+  is handled as one document (`ctx.viewportId`, `IO_PIPELINE.viewerFor(ctx)`).
+* **Annotation layers** — layers are saved and restored with their names and order; click a layer to
+  draw into it, select all with `Ctrl+A`, move a selection to a layer at once. Deployments whose
+  storage cannot keep layers turn them off (`layers: false`).
+* **Annotation classes** — one class picker in the side panel and the toolbar; `1`–`9` pick a class,
+  `Shift+1`–`9` assign it to the selection.
+* **Annotation tools** — magic wand works by strokes (drag to add, right-drag to remove); locked
+  annotations can be drawn over and unlocked from their toolbar; a double-click is one action.
+  Annotation modes provide their options as components (`customControls()`).
+* **Viewport sync** — a synced viewport can be paused, adjusted and resumed with the new alignment;
+  `Alt+L` links, `Alt+P` pauses.
+* **Notifications** — a message can be shown inside the viewport it concerns (`Dialogs.forViewer`).
+* **Auth** — `APPLICATION_CONTEXT.auth` raises `auth-settled` / `auth-changed` events.
+* **Logging** — logs can be exported as OpenTelemetry (`format: "otlp"`).
+
+**Breaking changes**:
+
+* The leave-page prompt is on by default; `bypassCloseConfirmation: true` turns it off.
+* `APPLICATION_CONTEXT.setDirty()` and `APPLICATION_CONTEXT.__cache.dirty` are deprecated (still work through
+  the IO pipeline, warn once).
+* Security: text given to menus, tabs, the status bar and `DropDown` titles is shown as text, and HTML
+  strings given to panels and windows are sanitized — form controls, inline handlers, `style` and `id` are
+  removed, and a `core.ui` warning names the caller once. Pass nodes or UI components instead
+  (`ui/classes/README.md`). Annotation modes: `customHtml()` is removed, use `customControls()`.
+* Removed internals that now warn once and do nothing (one release): the annotations plugin's
+  `updatePresetsMouseButtons` (refreshes the class picker), `getPresetControlHTML`, `getMissingPresetHTML`,
+  `RightSideMenuVisibleControls`; `DropDown.init` / `_toggle`; viewport sync `__ui`. Its `points` /
+  `transforms` are read-only snapshots.
+* Annotation records carry `layer: {id, name, position}` instead of `layerID` (still read on import),
+  and one-by-one annotation storage receives `{layer}` updates.
+* Scripting: zero-size annotations are not created — `createAnnotation()` throws for one,
+  `createAnnotations()` leaves them out of the returned array; `createAnnotations(inputs, {report: true})`
+  says which were skipped.
+* `PolygonUtilities.simplify(points, imagePixelOnScreen, highestQuality)` takes the on-screen pixel size;
+  the old `simplify(points, highestQuality)` still works with the focused viewer and warns once.
+* GitHub / MLflow storage error codes are the bare HTTP status, or `W_IO_HTTP_NETWORK` for no answer.
+* New default shortcuts `1`–`9`, `Shift+1`–`9`, `Ctrl+A`, `Alt+L`, `Alt+P`; all can be remapped.
+
+**Bugfixes**:
+
+* Storage: unanswered items are no longer counted as saved; discarded changes are not replayed after
+  a reload; retries re-send only what failed.
+* Recorder step edits are saved, and Export exports the recordings.
+* EMPAIA: a failed annotation query is reported instead of looking like an empty slide.
+* GitHub / MLflow: a timeout is reported as a network failure, not as "HTTP 500".
+* Annotations no longer turn blocky when large, zoomed in or rotated; class and layer selection fixes.
+* Viewport sync calibration and alignment fixes.
+* Notifications no longer block clicks around the message.
+* File browser slide listing (HTTP 422) and navigation tracker trail fixes.
+* `npm run up` picker crash on an unset variable.
+
+
 ### 3.3.0
 
 **Features**:

@@ -156,6 +156,29 @@ export class AppBar {
             user.addHandler('logout', setTitle);
         }
 
+        // Unsaved-changes cue on Save, driven by the IO pipeline's dirty state
+        // ("Dirty state" in src/IO_PIPELINE.md).
+        const pipeline = window.IO_PIPELINE;
+        if (pipeline?.addHandler) {
+            const renderSaveState = (dirty) => {
+                const label = $.t(dirty ? 'main.bar.saveUnsaved' : 'main.bar.save');
+                const tab = this.rightMenu.getTab('save');
+                if (tab) {
+                    tab.headerButton?.setClass?.("dirty", dirty ? "text-warning" : "");
+                    tab.setTitle?.(label);
+                }
+                // Mobile layout: the Save row inside the collapsed "Menu" dropdown.
+                const menu = this.rightMenuCollapsed?.getTab?.('Menu');
+                const item = menu?.getItem?.('save');
+                if (item) {
+                    menu.setItemLabel('save', label);
+                    item._node?.classList?.toggle('text-warning', dirty);
+                }
+            };
+            pipeline.addHandler('io:dirty-changed', (e) => renderSaveState(!!e?.anyDirty));
+            renderSaveState(!!pipeline.isDirty?.());
+        }
+
         // Hide-chrome button — toggles every component registered with AppBar.Chrome.
         // Components opt in via AppBar.Chrome.register(id, vm) (or get auto-enrolled
         // by AppBar.View.append / View.registerViewComponent). No hardcoded IDs here.

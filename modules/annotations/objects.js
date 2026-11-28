@@ -136,6 +136,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Properties copied with 'necessary' (+exports()), subset of copiedProperties
+     * — except `layer`, which exists on serialized records only: it is what
+     * `layerID` becomes when a record leaves the module (see
+     * OSDAnnotations#externalizeLayer), and must survive a trim of such a record.
      * @type {string[]}
      */
     static necessaryProperties = [
@@ -146,6 +149,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "meta",
         "presetID",
         "layerID",
+        "layer",
         "color",
         "author",
         "created",
@@ -309,6 +313,28 @@ OSDAnnotations.AnnotationObjectFactory = class {
     hitTolerancePx() {
         const value = this._context?.hitTolerancePx;
         return Number.isFinite(value) ? value : 5;
+    }
+
+    /**
+     * Smallest on-screen extent (screen px) a hand-drawn shape must reach to be
+     * kept. Anything smaller is an accidental press, not an annotation.
+     * @return {number}
+     */
+    minCreateExtentPx() {
+        return 4;
+    }
+
+    /**
+     * True when an image-space length spans fewer than `screenPx` screen pixels
+     * at the current zoom of the viewer the shape is being drawn in.
+     * @param {number} imageLength length in image pixels
+     * @param {number} [screenPx=this.minCreateExtentPx()]
+     * @return {boolean}
+     */
+    _isBelowScreenExtent(imageLength, screenPx = this.minCreateExtentPx()) {
+        const scale = this._context?.viewer?.scalebar?.imagePixelSizeOnScreen?.();
+        if (!(scale > 0)) return !(imageLength > 0);
+        return !(imageLength * scale >= screenPx); // negated so NaN counts as too small
     }
 
     /**
@@ -752,6 +778,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
             slots.push({
                 id: 'lock',
                 icon: lock.locked ? 'ph-lock' : 'ph-lock-open',
+                // A closed padlock is the answer to "why does this not respond",
+                // so it must not read as one more neutral glyph in the row.
+                color: lock.locked ? '#dc2626' : undefined,
                 countText: '',
                 onClick: (lock.locked && !lock.releasable) ? null : () => {
                     const wrapper = self._context.fabric;
@@ -960,8 +989,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     ctx.font = `400 ${ICON_SIZE}px "Phosphor-Light"`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
+                    ctx.fillStyle = s.color || 'black';
                     ctx.fillText(self._resolveControlGlyph(s.icon), s._start + ICON_SIZE / 2, 1);
+                    ctx.fillStyle = 'black';
                     if (s.countText) {
                         ctx.font = `600 ${METRIC_FONT}px Arial`;
                         ctx.textAlign = 'left';
@@ -989,6 +1019,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 wrapper.module.cursor.isDown = false;
                 wrapper.module.cursor.mouseTime = Infinity;
             }
+
+            // The release of a double-click's second press: the first one already
+            // acted. Dispatching again would undo it — a double-clicked padlock
+            // locked and unlocked in one gesture. Asked of the wrapper, which noted
+            // it on the press: this release is a pointer event and carries no count.
+            if (wrapper?._lastPressRepeated) return true;
 
             const zones = control._zones;
             if (!zones || !zones.length || control._lastLeft == null) return true;
@@ -1280,6 +1316,17 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Constant-cost check that an object has no extent at all (image space,
+     * zoom-independent) and would therefore be invisible. Types without a
+     * cheap test (anything point-list based) return false.
+     * @param {fabric.Object} theObject
+     * @return {boolean}
+     */
+    isDegenerate(theObject) {
+        return false;
+    }
+
+    /**
      * Whether a measurement label should be offered for this object type at all.
      * Types whose extent carries no meaning for the user (a pointer arrow), or
      * which render their own measurement on canvas (angle), return false and are
@@ -1395,6 +1442,20 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
      * @param {number} realZoom real zoom value of the viewer (real zoom, linearly keep scale consistent, for example text)
      */
+    /**
+     * Stroke width, in image space, that a base width takes at a zoom. The ONE
+     * definition per factory: {@link onZoom} and {@link updateRendering} both
+     * go through it, so a border changed in the UI looks the same before and
+     * after the next zoom. Override it rather than computing a width inline.
+     * @param {number} originalStrokeWidth base (zoom-independent) width
+     * @param {number} graphicZoom see fabric.Canvas.computeGraphicZoom: sqrt(realZoom) / 2
+     * @param {number} [realZoom] screen pixels per image pixel, derived from graphicZoom if omitted
+     * @return {number}
+     */
+    zoomedStrokeWidth(originalStrokeWidth, graphicZoom, realZoom = 4 * graphicZoom * graphicZoom) {
+        return originalStrokeWidth / graphicZoom;
+    }
+
     onZoom(ofObject, graphicZoom, realZoom) {
         //todo try to use iterate method :D
 
@@ -1403,7 +1464,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         // otherwise walk toward bottom-right as strokeWidth is rescaled per zoom.
         const anchorCenter = ofObject.getCenterPoint();
         ofObject.set({
-            strokeWidth: ofObject.originalStrokeWidth/graphicZoom
+            strokeWidth: this.zoomedStrokeWidth(ofObject.originalStrokeWidth, graphicZoom, realZoom)
         });
         this._reanchorAfterStrokeChange(ofObject, anchorCenter);
         // // Update object properties to reflect zoom
@@ -1646,7 +1707,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
             // reverts the UI-chosen thickness to the stale per-object value.
             ofObject.originalStrokeWidth = visualProperties.originalStrokeWidth;
             const canvas = targetCanvas || this.canvasOf(ofObject);
-            props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+            props.strokeWidth = this.zoomedStrokeWidth(
+                visualProperties.originalStrokeWidth, canvas.computeGraphicZoom(canvas.getZoom()));
         }
 
         // Apply opacity from the global visuals — drives the opacity slider
@@ -1862,12 +1924,31 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, highestQuality = true) {
+    /**
+     * @param {Array} points
+     * @param {number} imagePixelOnScreen size of one image pixel on screen in the
+     *   viewer the points were drawn in (`viewer.scalebar.imagePixelSizeOnScreen()`);
+     *   the tolerance is a screen distance, so it has no meaning without it
+     * @param {boolean} [highestQuality=true]
+     */
+    simplify: function (points, imagePixelOnScreen, highestQuality = true) {
+        // Deprecated `simplify(points, highestQuality)`: the boolean used to be the
+        // second argument and the pixel size was read from the focused viewer.
+        // Keep that behaviour (it is wrong for a non-focused viewport) and warn once.
+        if (typeof imagePixelOnScreen === "boolean" || arguments.length < 2) {
+            if (!this._warnedLegacySimplify) {
+                this._warnedLegacySimplify = true;
+                console.warn("OSDAnnotations.PolygonUtilities.simplify(points, highestQuality) is deprecated: "
+                    + "use simplify(points, viewer.scalebar.imagePixelSizeOnScreen(), highestQuality).");
+            }
+            if (typeof imagePixelOnScreen === "boolean") highestQuality = imagePixelOnScreen;
+            imagePixelOnScreen = globalThis.VIEWER_MANAGER?.active?.scalebar?.imagePixelSizeOnScreen?.();
+        }
         if (points.length <= 2) return points;
 
         // desired visual tolerance in screen pixels
         const desiredScreenTol = 15;
-        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+        let pxSize = imagePixelOnScreen || 1;
 
         // convert to image coords
         let tolerance = desiredScreenTol / pxSize;

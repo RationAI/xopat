@@ -990,6 +990,7 @@ OpenSeadragon.Tools = class {
         self.removeHandler('pan', self.__sync_handler);
         self.removeHandler('rotate', self.__sync_handler);
         self.removeHandler('flip', self.__sync_handler);
+        self.removeHandler('z-depth-changed', self.__sync_handler);
         delete self.__sync_handler;
         delete self.__sync_mapper;
         delete self.__sync_canLead;
@@ -1008,6 +1009,7 @@ OpenSeadragon.Tools = class {
             v.removeHandler('pan', v.__sync_handler);
             v.removeHandler('rotate', v.__sync_handler);
             v.removeHandler('flip', v.__sync_handler);
+            v.removeHandler('z-depth-changed', v.__sync_handler);
             delete v.__sync_handler;
         }
         delete contextData.subscribed;

@@ -104,12 +104,17 @@ previous state and its history entry was dropped.
 The viewer-scoped events are emitted on contextualized instance of particular
 canvas that belongs to a specific viewer.
 
-##### `annotation-loaded` | `{ viewer: OpenSeadragon.Viewer, clear: boolean, reason: 'import' | 'load-objects' }`
-Raised when the annotations were imported/loaded in a bigger chunk.
+##### `annotation-loaded` | `{ viewer?: OpenSeadragon.Viewer, clear?: boolean, objects?: fabric.Object[], bulk?: true, reason: 'import' | 'import-undo' | 'load-objects' | 'bulk-add' | 'bulk-add-undo' | 'bulk-add-redo' }`
+Raised when the annotations were imported/loaded in a bigger chunk. `addAnnotationsBulk` raises it
+with `bulk: true` and its `reason` option (default `'bulk-add'`), and again on undo/redo of the
+batch. Every reason except `load-objects` is user work and marks the slide unsaved.
 
 ##### `annotation-board-save-request` | `{ viewer: OpenSeadragon.Viewer }`
 
 ##### `active-layer-changed` | `{ layer: OSDAnnotations.Layer | undefined }`
+The active layer is the one newly created annotations land in — nothing more. It does not
+restrict which annotations can be selected. `createLayer()` makes the new layer active;
+deleting or hiding the active layer releases it.
 
 ##### `layer-selection-changed` | `{ selected: OSDAnnotations.Layer[], deselected: OSDAnnotations.Layer[] }`
 
@@ -117,10 +122,16 @@ Raised when the annotations were imported/loaded in a bigger chunk.
 
 ##### `layer-removed` | `{ layer: OSDAnnotations.Layer }`
 
-##### `layer-objects-changed` | `{ layerId: string }`
-Raised after loading/import changes the object set of a layer.
+##### `layer-objects-changed` | `{ layerId: string | null, kind?: 'load' | 'visibility' }`
+Raised after the object set of a layer changes (loading/import, moving annotations between
+layers, `renameLayer()`). A batch move (`setAnnotationsLayer`) raises it once; `layerId` is
+`null` when several layers or the root level are affected. `kind` marks the two emitters that
+are not edits — a load and a visibility toggle; every other one marks the slide unsaved.
 
 ##### `annotation-selection-changed` | `{ selected: fabric.Object[], deselected: fabric.Object[], fromCanvas: boolean }`
+`selected` is the whole resulting selection. Bulk changes — `selectAnnotations(objects)`,
+`selectAllAnnotations({layerId})` — raise it **once** for the whole batch; never call
+`selectAnnotation` in a loop, each call raises its own event.
 
 ##### `annotation-before-create` | `{ object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void }`
 Cancelable event raised before promoting/inserting an annotation.
@@ -157,8 +168,8 @@ Cancelable event raised before changing an annotation preset.
 
 ##### `annotation-lock-change` | `{ object: fabric.Object, locked: boolean, state: AnnotationLockState }`
 The **user's** lock was placed or released from the padlock in the annotation's toolbar (or from
-the board row's menu). By default a locked annotation stops responding to the canvas entirely —
-not hit-tested, not selectable, so the user can draw over it — and every `pre-update` /
+the board row's menu). By default a locked annotation leaves the press path — not hit-tested, so
+the user can draw over it, though a plain click still selects it — and every `pre-update` /
 `pre-delete` is refused by the module's IO guard (`W_ANNOTATION_LOCKED`), except the lock toggle
 itself. `state` is the resolved descriptor from `getAnnotationLockState`, so it already reflects
 any `registerLockPolicy` override; read it rather than the raw flag. Set it with
