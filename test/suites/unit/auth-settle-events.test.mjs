@@ -13,7 +13,7 @@
  * stay flagged forever, and replacing a broker must re-initialize its contexts
  * rather than leave them bound to the object that no longer serves them.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, importWithTestEventSource } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -75,7 +75,7 @@ function installUser() {
 }
 
 async function freshAuth() {
-    const mod = await import(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`);
+    const mod = await importWithTestEventSource(new URL(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`, import.meta.url).href);
     return new mod.XOpatAuth();
 }
 
@@ -103,6 +103,56 @@ test("the authenticated verdict reaches subscribers, and only once across many w
     expect(seen[0].contextId).toBe("core");
     // It also rides the XOpatUser surface (bare name for the main context).
     expect(user.raised.filter((e) => e.event === "auth-settled").length).toBe(1);
+});
+
+test("the auth instance is itself an EventSource: auth-settled / auth-changed reach addHandler", async () => {
+    const user = installUser();
+    const auth = await freshAuth();
+
+    auth.registerBroker("oidc", { init() {}, login() {} });
+    await auth.configureContext({ contextId: "archive", method: "oidc", secretTypes: ["jwt"] });
+
+    const changed = [];
+    auth.addHandler("auth-changed", (e) => changed.push(e.contextId));
+    signIn(user, "archive");
+    expect(changed).toContain("archive");
+
+    const settled = [];
+    auth.addHandler("auth-settled", (e) => settled.push(e));
+    for (let i = 0; i < 3; i++) await auth.whenContextSettled("archive");
+
+    // One event name for every context — the id rides in the payload.
+    expect(settled.length).toBe(1);
+    expect(settled[0]).toMatchObject({ contextId: "archive", authenticated: true, reason: "authenticated" });
+});
+
+test("a throwing onSettled / onChange callback does not starve the next one", async () => {
+    const user = installUser();
+    const auth = await freshAuth();
+
+    auth.registerBroker("oidc", { init() {}, login() {} });
+    await auth.configureContext({ contextId: "core", method: "oidc", secretTypes: ["jwt"] });
+
+    const seenChange = [];
+    auth.onChange(() => { throw new Error("boom"); });
+    auth.onChange((ctx) => seenChange.push(ctx));
+    const seenSettle = [];
+    auth.onSettled(() => { throw new Error("boom"); });
+    const off = auth.onSettled((r) => seenSettle.push(r));
+
+    signIn(user, "core");
+    await auth.whenContextSettled("core");
+
+    expect(seenChange).toContain("core");
+    expect(seenSettle.map((r) => r.reason)).toEqual(["authenticated"]);
+    // Callbacks get the verdict only, not the EventSource envelope.
+    expect(Object.keys(seenSettle[0]).sort()).toEqual(["authenticated", "contextId", "reason"]);
+
+    // The returned disposer actually unsubscribes.
+    off();
+    auth.markNeedsInteraction("core", { reason: "session-expired", force: true });
+    await auth.whenContextSettled("core");
+    expect(seenSettle.length).toBe(1);
 });
 
 test("the unconfigured verdict is delivered too — an auth-less deployment is a verdict, not silence", async () => {

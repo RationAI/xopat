@@ -50,6 +50,8 @@ export function makePostDataSink(opts: PostDataSinkOptions): IOSink {
         id: "post-data",
         label: "Session export (HTML form)",
         supports: ["bundle"],
+        // In-page only: gone with the tab, so a write here is not a save.
+        persists: false,
 
         async writeBundle(ctx, payload) {
             if (payload === undefined || payload === null) return { ok: true };

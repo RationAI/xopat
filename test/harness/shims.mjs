@@ -198,6 +198,36 @@ class TestEventSource {
 }
 
 /**
+ * Import a module whose classes extend `OpenSeadragon.EventSource` (`XOpatAuth`, …)
+ * without the real OpenSeadragon, binding them to the shared {@link TestEventSource}.
+ *
+ * The base is read once, when the module is first evaluated — Playwright caches
+ * modules by path, so later imports in the worker reuse that binding — and the
+ * global is restored right after. Leaving a `TileSource`-less `OpenSeadragon`
+ * behind broke every neighbour suite that keeps an existing global
+ * (`OpenSeadragon || {TileSource: …}`) and only then extends `TileSource`.
+ *
+ * @param {string} specifier absolute URL / path of the module to import
+ * @returns {Promise<object>} the module namespace
+ */
+export async function importWithTestEventSource(specifier) {
+    globalThis.window = globalThis.window ?? globalThis;
+    const hadWindow = Object.prototype.hasOwnProperty.call(globalThis.window, "OpenSeadragon");
+    const hadGlobal = Object.prototype.hasOwnProperty.call(globalThis, "OpenSeadragon");
+    const prevWindow = globalThis.window.OpenSeadragon;
+    const prevGlobal = globalThis.OpenSeadragon;
+    const osd = { ...(prevWindow || prevGlobal || {}), EventSource: TestEventSource };
+    globalThis.window.OpenSeadragon = osd;
+    globalThis.OpenSeadragon = osd;
+    try {
+        return await import(specifier);
+    } finally {
+        if (hadWindow) globalThis.window.OpenSeadragon = prevWindow; else delete globalThis.window.OpenSeadragon;
+        if (hadGlobal) globalThis.OpenSeadragon = prevGlobal; else delete globalThis.OpenSeadragon;
+    }
+}
+
+/**
  * The pristine values of the tunable statics, captured on the first import —
  * i.e. before any suite has had a chance to write them. Restored on every call so
  * a suite that overrides them cannot decide the next suite's breaker thresholds.

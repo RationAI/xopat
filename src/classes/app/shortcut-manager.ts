@@ -409,7 +409,22 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             viewer: opts?.viewer ?? this._resolveViewer(null),
             shortcutId: id,
         });
+        this._raiseInvoked(id, "invoke");
         return true;
+    }
+
+    /**
+     * Announce that a shortcut ran. One event per user action — never per
+     * key-repeat — so observers (usage telemetry) can count what is actually
+     * used without attaching their own key listeners.
+     * @event shortcut-invoked e: `{ id: string, source: "key" | "invoke" }`
+     */
+    private _raiseInvoked(id: string, source: "key" | "invoke"): void {
+        try {
+            this.raiseEvent("shortcut-invoked", { id, source });
+        } catch (e) {
+            // An observer must never break the shortcut that already ran.
+        }
     }
 
     /** Ids of shortcuts whose effective binding contains `combo` (excluding `excludeId`). */
@@ -534,11 +549,13 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
             if ((e as any).repeat || this._activeHolds.has(spec.id)) return;
             this._activeHolds.set(spec.id, ctx);
             spec.onPress?.(ctx);
+            this._raiseInvoked(spec.id, "key");
             return;
         }
         if ((spec.trigger || "down") !== "down") return;
         if (spec.preventDefault !== false) e.preventDefault();
         spec.handler?.(ctx);
+        this._raiseInvoked(spec.id, "key");
     }
 
     private _onKeyUp(e: KeyboardEvent & { focusCanvas?: any }): void {
@@ -558,6 +575,7 @@ export class ShortcutManager extends OpenSeadragon.EventSource {
         if (!spec || spec.type !== "press" || (spec.trigger || "down") !== "up") return;
         if (spec.preventDefault !== false) e.preventDefault();
         spec.handler?.({ event: e, viewer: this._resolveViewer(e), shortcutId: spec.id });
+        this._raiseInvoked(spec.id, "key");
     }
 
     /** Match an event to a dispatchable (non-binding-only) shortcut, applying scope gates. */

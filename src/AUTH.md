@@ -616,8 +616,13 @@ await APPLICATION_CONTEXT.auth.whenContextSettled("core", { timeoutMs: 3000 });
 // The same for several contexts under one deadline (defaults to all autoLogin ones).
 const verdicts = await APPLICATION_CONTEXT.auth.whenAllSettled();       // { core: true }
 
-// React to verdicts (also raised on XOpatUser as `auth-settled` / `auth-settled:<ctx>`).
+// React to verdicts. `onSettled` isolates a throwing callback; the auth broker is
+// also an OpenSeadragon.EventSource, so the raw event works too (one name for every
+// context — the id is in the payload). `auth-changed` {contextId} / `onChange` report
+// login/logout/secret transitions the same way.
 const off = APPLICATION_CONTEXT.auth.onSettled(({ contextId, authenticated, reason }) => { … });
+APPLICATION_CONTEXT.auth.addHandler("auth-settled", ({ contextId, authenticated, reason }) => { … });
+// Compatibility mirror on XOpatUser: `auth-settled` (core) / `auth-settled:<ctx>`.
 ```
 
 **Settled means *finished trying*, not *succeeded*.** A context whose IdP is

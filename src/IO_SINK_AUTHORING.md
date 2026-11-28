@@ -55,6 +55,7 @@ interface IOSink {
     label?: string;
     supports: IOCapabilityKind[] | IOSinkSupport;
     route?: "sink" | "local";
+    persists?: boolean;                   // default true; false = in-page only, a write is not a save
     formats?: Record<string, string[]>;   // bundle formats you take, per domain — see §7
     accepts?(ctx: IOContext): boolean | IOAcceptDecision;
 
@@ -66,6 +67,7 @@ interface IOSink {
     update?(ctx, patch): Promise<IOResult> | IOResult;
     delete?(ctx): Promise<IOResult> | IOResult;
     createMany?(ctxs, items): Promise<IOResult[]> | IOResult[];   // optional bulk forms
+    updateMany?(ctxs, patches): Promise<IOResult[]> | IOResult[];
     deleteMany?(ctxs): Promise<IOResult[]> | IOResult[];
     maxBatch?: number;                                            // default 200
     query?(ctx, params): AsyncIterable<unknown>;
@@ -75,10 +77,13 @@ interface IOSink {
 Only `id` and `supports` are required — implement the methods your kinds need.
 Full types in [`src/types/io.d.ts`](types/io.d.ts).
 
-**Implement `createMany` / `deleteMany` if your platform will ever receive many
-records at once** (an import, a scripted batch, "delete all"). Without them every
-record is its own call, strictly one after another, and a large batch outruns the
-outbox. The contract: one result per input, in input order; each item succeeds or
+**Implement `createMany` / `updateMany` / `deleteMany` if your platform will ever
+receive many records at once** (an import, a scripted batch, reclassifying a
+selection, "delete all"). They are optional: without them every record is its own
+call, strictly one after another — nothing is lost or refused for it (the outbox
+takes a change of any size), it is only slow, and the slide counts as unsaved
+until the queue has drained. Nothing else is asked of a sink for large changes;
+in particular it need not implement bundles. The contract: one result per input, in input order; each item succeeds or
 is refused on its own; `ctxs[i]` is that item's context (a batch may span viewers,
 so do not read the slide from `ctxs[0]`). A platform with a real list route sends
 one request; one without it can still run its single-record route a few at a time
@@ -235,7 +240,7 @@ IO_PIPELINE.registerSink(
 
 Feature-test `withRetry` — it is typed optional on the pipeline. Note it passes
 `query` through unwrapped, because retrying a stream would re-yield items.
-`createMany` / `deleteMany` follow `create` / `delete`: retried when their single
+`createMany` / `updateMany` / `deleteMany` follow `create` / `update` / `delete`: retried when their single
 form is, and only the slots that failed are sent again. They are invoked on the
 inner sink, so a bulk method written as `this.create(...)` per item reaches your
 own `create`, not the retrying wrapper.
@@ -337,6 +342,7 @@ still overrides it, and `disabledCapabilities` still silences it.
 - [ ] Payload round-trips byte-for-byte; empty read is a success.
 - [ ] README documents the exact `io.bindings` block an operator must write.
 - [ ] Paths built with `IO_PIPELINE.formatPath`.
+- [ ] `persists: false` only if what you store dies with the tab: a successful write to a persisting sink clears the owner's unsaved-changes state (`IO_PIPELINE.md` → *Dirty state*).
 
 ## See also
 

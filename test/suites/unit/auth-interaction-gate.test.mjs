@@ -14,7 +14,7 @@
  *  - `login()` answers as soon as the broker reports a definitive failure, rather
  *    than holding its caller for the interactive-login timeout.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, importWithTestEventSource } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -93,7 +93,7 @@ function watchInteraction(user) {
 
 async function freshAuth() {
     // Fresh module instance per test: XOpatAuth keeps per-context state.
-    const mod = await import(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`);
+    const mod = await importWithTestEventSource(new URL(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`, import.meta.url).href);
     return new mod.XOpatAuth();
 }
 

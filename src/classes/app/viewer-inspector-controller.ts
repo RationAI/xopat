@@ -46,7 +46,6 @@ export class ViewerInspectorController {
                 : !!enabled;
 
             this.appContext.setOption("visualizationInspectorEnabled", next);
-            this.appContext.setDirty();
             this.refreshVisualizationInspector();
             UTILITIES.syncSessionToUrl(false);
             return next;
@@ -59,7 +58,6 @@ export class ViewerInspectorController {
             );
 
             this.appContext.setOption("visualizationInspectorRadiusPx", next);
-            this.appContext.setDirty();
             this.refreshVisualizationInspector();
             UTILITIES.syncSessionToUrl(false);
             return next;
@@ -75,7 +73,6 @@ export class ViewerInspectorController {
                 : "reveal-inside";
 
             this.appContext.setOption("visualizationInspectorMode", next);
-            this.appContext.setDirty();
             this.refreshVisualizationInspector();
             UTILITIES.syncSessionToUrl(false);
             return next;
@@ -87,7 +84,6 @@ export class ViewerInspectorController {
                 : !!enabled;
 
             this.appContext.setOption("valueInspectorEnabled", next);
-            this.appContext.setDirty();
             this.refreshValueInspector();
             UTILITIES.syncSessionToUrl(false);
             return next;

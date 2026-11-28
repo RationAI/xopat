@@ -13,7 +13,7 @@
 // that dedups server-side opts in with `methods: [..., "create"]`.
 //
 // The bulk forms follow their single counterparts: `deleteMany` is retried
-// where `delete` is, `createMany` where `create` is — and only the slots that
+// where `delete` is, `createMany` where `create` is, `updateMany` where `update` is — and only the slots that
 // failed are sent again. NOTE the bulk methods are invoked on the INNER sink,
 // so a `createMany` written as `this.create(...)` per item reaches the inner
 // `create`, not the retrying wrapper; the wrapper's own slot retry covers it.
@@ -154,6 +154,7 @@ export function withRetry(inner: IOSink, options: WithRetryOptions = {}): IOSink
         // properties only, so a class-based sink would lose these — and with
         // them batching, or its format pin — the moment it was wrapped.
         createMany:  wrapBulk("create", inner.createMany as any),
+        updateMany:  wrapBulk("update", inner.updateMany as any),
         deleteMany:  wrapBulk("delete", inner.deleteMany as any),
         maxBatch:    inner.maxBatch,
         preferredFormat: inner.preferredFormat ? inner.preferredFormat.bind(inner) : undefined,

@@ -20,7 +20,7 @@
  *  - `login`'s wait is bounded by `timeoutMs`, so the boot barrier cannot be held
  *    for the five-minute interactive default.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, importWithTestEventSource } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -88,7 +88,7 @@ function watchInteraction(user) {
 }
 
 async function freshAuth() {
-    const mod = await import(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`);
+    const mod = await importWithTestEventSource(new URL(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`, import.meta.url).href);
     return new mod.XOpatAuth();
 }
 

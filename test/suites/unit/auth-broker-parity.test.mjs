@@ -8,7 +8,7 @@
  *
  * These vectors pin the capabilities core now provides on every broker's behalf.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, importWithTestEventSource } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -70,7 +70,7 @@ function installUser() {
 }
 
 async function freshAuth() {
-    const mod = await import(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`);
+    const mod = await importWithTestEventSource(new URL(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`, import.meta.url).href);
     return new mod.XOpatAuth();
 }
 

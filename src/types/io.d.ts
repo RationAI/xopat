@@ -490,6 +490,15 @@ interface IOSink {
      */
     route?: "sink" | "local";
     /**
+     * Does a successful `writeBundle` put the data somewhere the user can get it
+     * back from after closing the page? Default `true`. In-page stores
+     * (`session-memory`, `post-data`) declare `false`, so writing to them does
+     * not clear the owner's unsaved-changes state ("Dirty state" in
+     * src/IO_PIPELINE.md). Not the same question as "remote": a downloaded file
+     * persists.
+     */
+    persists?: boolean;
+    /**
      * Bundle formats this sink takes, per domain (owner id; `"*"` for any):
      * `{ annotations: ["dicom"] }`. The pipeline asks the owner for the first
      * one that is registered and hands the sink that payload, with
@@ -518,7 +527,7 @@ interface IOSink {
     update?(ctx: IOContext, patch: unknown): Promise<IOResult> | IOResult;
     delete?(ctx: IOContext): Promise<IOResult> | IOResult;
     /**
-     * Optional bulk forms of `create` / `delete`. When a bound sink implements
+     * Optional bulk forms of `create` / `update` / `delete`. When a bound sink implements
      * one, the resource outbox hands it a run of consecutive same-direction ops
      * (at most `maxBatch`) in ONE call instead of one call per op — the
      * difference between a 10 000-annotation import draining in seconds and
@@ -529,7 +538,9 @@ interface IOSink {
      * rest stay). `ctxs[i]` is that item's own context (`itemId`,
      * `meta.localId`, `meta.clientOpId`, viewer scope) — a batch may span
      * viewers. A throw refuses the whole batch. Sinks without these methods are
-     * called per item as before; there is no `updateMany`.
+     * called per item as before. `updateMany` gets one patch per ctx
+     * (`ctxs[i].itemId`); a resource that coalesces never hands it two patches
+     * of one item in a run, one that does not may — they are in issue order.
      *
      * The contract is enforced: a slot with no result object (no array, a
      * short one, a hole) is refused with `W_IO_BULK_RESULT` and reverted — it
@@ -537,8 +548,9 @@ interface IOSink {
      * lone op then arrives as a batch of one.
      */
     createMany?(ctxs: IOContext[], items: unknown[]): Promise<IOResult[]> | IOResult[];
+    updateMany?(ctxs: IOContext[], patches: unknown[]): Promise<IOResult[]> | IOResult[];
     deleteMany?(ctxs: IOContext[]): Promise<IOResult[]> | IOResult[];
-    /** Largest batch `createMany` / `deleteMany` accept. Default 200. */
+    /** Largest batch `createMany` / `updateMany` / `deleteMany` accept. Default 200. */
     maxBatch?: number;
     /**
      * Streamed parameterised read. The owner sends `params` (free-form,
@@ -687,13 +699,20 @@ interface IOResourceDef<T = unknown> {
      */
     persistOutbox?: boolean;
     /**
-     * Maximum entries kept in the persistent outbox before refusing new
-     * enqueues with `code: "W_IO_OUTBOX_FULL"`. Default 5000. Counted as ops
-     * still owed to a destination, so it applies only while one is bound (or
-     * bound and not registered yet): with nothing bound nothing is owed and
-     * local editing is not limited.
+     * Maximum entries kept in the persistent outbox at a time. Default 5000.
+     * It bounds what is *stored*, not what is accepted: ops past it keep their
+     * place in the queue and get their crash-recovery record as the head
+     * drains. Until then `hasUnsavedWork()` is true — a reload would lose them.
+     * Counted as ops still owed to a destination, so it applies only while one
+     * is bound (or bound and not registered yet).
      */
     persistMaxEntries?: number;
+    /**
+     * Most ops the queue holds at all, persisted or not, before new ones are
+     * refused with `code: "W_IO_OUTBOX_FULL"` (and reverted). A memory ceiling,
+     * not a pacing device. Default 1 000 000; never below `persistMaxEntries`.
+     */
+    maxPending?: number;
     /**
      * Drop persisted entries older than this (ms) on boot. Default 7 days.
      * Stale ops are unlikely to be
@@ -833,11 +852,11 @@ interface IOResource<T = unknown> {
      */
     flush(): Promise<IOResult[]>;
     /**
-     * How many more ops the outbox takes before refusing with
-     * `W_IO_OUTBOX_FULL`. `Infinity` for a resource without `persistOutbox`,
-     * and while no destination is bound (the cap counts ops owed to one).
-     * A synchronous bulk gesture checks this once up front instead of letting
-     * the tail of the batch be refused and rolled back item by item.
+     * How many more ops fit under the persisted cap (`persistMaxEntries`), i.e.
+     * are reload-safe as soon as they are written. `Infinity` for a resource
+     * without `persistOutbox`, and while no destination is bound (the cap
+     * counts ops owed to one). Advisory: ops past it are still accepted and
+     * dispatched, they are just not crash-safe until the queue drains.
      */
     headroom(): number;
     /**
@@ -847,6 +866,13 @@ interface IOResource<T = unknown> {
      * now (offline, or the bound sink has not registered) — never hangs.
      */
     whenHeadroom(count?: number): Promise<boolean>;
+    /**
+     * Ops owed to a destination that would be lost if the page closed now:
+     * pending ops of a resource without `persistOutbox` (or whose IndexedDB
+     * store is unavailable), or of a persisted one whose queue is stalled.
+     * Feeds `IO_PIPELINE.isDirty()`.
+     */
+    hasUnsavedWork(): boolean;
     /**
      * Abandon any pending (unstarted) ops in the outbox queue. Their
      * `.settled` Promises resolve to a refusal with `code: "W_IO_QUEUE_DROPPED"`.
@@ -1330,6 +1356,31 @@ interface IOPipelineLike {
      * channel report success.
      */
     hasRemoteBundleSinks(ownerUid?: string, capabilityId?: string): boolean;
+
+    // -- dirty state (unsaved changes) ---------------------------------
+    /**
+     * Record unsaved changes of `ownerUid` for one document: a viewer (resolved
+     * to the slide it shows), an explicit `{viewerId, backgroundId}`, or
+     * nothing for the owner's global state. Cleared automatically when a
+     * bundle export for that document reaches a sink with `persists !== false`,
+     * or by the file Export. Ignored while the pipeline hydrates the owner.
+     */
+    markDirty(ownerUid: string, where?: IODirtyWhere): void;
+    /** Forget unsaved changes: all of them, an owner's, or one document's. */
+    markClean(ownerUid?: string, where?: IODirtyWhere): void;
+    /** Anything unsaved? Includes CRUD resources with at-risk queued ops. */
+    isDirty(filter?: { ownerUid?: string } & IODirtyScope): boolean;
+    /** What is unsaved, for UI that names it. */
+    dirtyEntries(): IODirtyEntry[];
+    /** Owners with a failure and no successful write among `results`; `undefined` if a failure names no owner. */
+    ownersLeftOut(results?: IOResult[]): Set<string> | undefined;
+    /** Current dirty generation; pair with {@link markCleanUpTo}. */
+    dirtyMark(): number;
+    /**
+     * Clear everything marked at or before `mark`, except owners named by a
+     * refusal in `results`. For a save that is not a sink write (file Export).
+     */
+    markCleanUpTo(mark: number, results?: IOResult[]): void;
     /**
      * Stream raw items from the first bound sink whose `query` method
      * exists and `accepts(ctx)` (if defined) passes. `ctx.direction` is
@@ -1491,4 +1542,22 @@ interface IOPipelineLike {
      * `IO_PIPELINE.registerSink(IO_PIPELINE.withRetry(mySink, { attempts: 3 }))`.
      */
     withRetry?(inner: IOSink, options?: Record<string, unknown>): IOSink;
+}
+
+/** A document an owner's unsaved changes belong to. */
+interface IODirtyScope {
+    viewerId?: string;
+    backgroundId?: string;
+}
+
+/** Where an owner's changes live: a viewer (its current slide), or an explicit scope. */
+type IODirtyWhere = IODirtyScope | OpenSeadragon.Viewer;
+
+/** One unsaved item, as listed by `IO_PIPELINE.dirtyEntries()`. */
+interface IODirtyEntry {
+    ownerUid: string;
+    viewerId?: string;
+    backgroundId?: string;
+    /** Set for a CRUD resource whose queued ops are at risk. */
+    resourceName?: string;
 }

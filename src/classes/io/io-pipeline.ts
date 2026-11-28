@@ -494,6 +494,22 @@ export class IOPipeline implements IOPipelineLike {
     /** Tracked CRUD resources — populated via `registerResource(...)` from
      *  `defineResource()`. Drained collectively by `flushAllResources()`. */
     private readonly resources: Set<IOResource<any>> = new Set();
+    /**
+     * Unsaved-changes registry: `ownerUid` -> bundle key -> generation stamp.
+     * Key `""` is the owner's global document. See "Dirty state" in
+     * src/IO_PIPELINE.md. A stamp lets a save clear only what it actually
+     * captured: an edit landing while a slow sink is writing keeps the key dirty.
+     */
+    private readonly dirty: Map<string, Map<string, number>> = new Map();
+    private dirtyGeneration = 0;
+    /**
+     * Owners currently hydrating from a sink: `ownerUid` -> viewerId (`""` =
+     * owner-wide) -> nesting count. Their change events on THAT viewer are not
+     * user work; an edit on another viewer meanwhile still is.
+     */
+    private readonly restoring: Map<string, Map<string, number>> = new Map();
+    /** Last `hasUnsavedWork()` answer per resource, to emit transitions only. */
+    private readonly resourceDirty: WeakMap<IOResource<any>, boolean> = new WeakMap();
     /** Guards keyed by resource name; `"*"` is the wildcard bucket. */
     private readonly guards: Map<string, IOGuardSpec[]> = new Map();
     /** Resolved per-owner bindings cache (invalidated on registerOwner / config change). */
@@ -1969,6 +1985,204 @@ export class IOPipeline implements IOPipelineLike {
         return false;
     }
 
+    // -- dirty state (unsaved changes) ---------------------------------
+
+    /**
+     * Resolve where-ish input to the bundle key the owner's export writes under,
+     * so a successful write clears exactly the mark it covers. A viewer resolves
+     * to the document it shows; the owner's `bundleScope` decides how much of
+     * that identifies its document — mirroring the keys `flushBundleExport`
+     * dispatches: `uniqueId::background` (slide-aware), `uniqueId` (per-viewer)
+     * or `""` (global). An unregistered owner keeps the most specific key.
+     */
+    private dirtyKeyOf(ownerUid: string | undefined, where?: IODirtyWhere): string {
+        if (!where) return "";
+        const isViewer = typeof (where as any).uniqueId === "string";
+        let viewerId: string | undefined = isViewer ? (where as any).uniqueId : (where as IODirtyScope).viewerId;
+        let backgroundId: string | undefined = isViewer
+            ? this.resolveCurrentBackgroundId(where)
+            : (where as IODirtyScope).backgroundId;
+        const scope = ownerUid ? this.owners.get(ownerUid)?.bundleScope : undefined;
+        if (scope && !isViewerBackgroundScoped(scope)) {
+            backgroundId = undefined;
+            if (!isViewerScoped(scope)) viewerId = undefined;
+        }
+        return this.composeBundleKey(viewerId, backgroundId);
+    }
+
+    /** Is `ownerUid` hydrating owner-wide, or on `viewerId`? */
+    private isRestoring(ownerUid: string, viewerId: string | undefined): boolean {
+        const views = this.restoring.get(ownerUid);
+        if (!views) return false;
+        if (views.has("")) return true;
+        // No viewer named: the mark cannot be told apart from the restore.
+        return viewerId === undefined ? views.size > 0 : views.has(viewerId);
+    }
+
+    private splitBundleKey(key: string): { viewerId?: string; backgroundId?: string } {
+        if (!key) return {};
+        const i = key.indexOf("::");
+        return i < 0 ? { viewerId: key } : { viewerId: key.slice(0, i), backgroundId: key.slice(i + 2) };
+    }
+
+    private emitDirtyChanged(ownerUid: string, key: string, dirty: boolean) {
+        this.emitQueueEvent_("io:dirty-changed", {
+            ownerUid, ...this.splitBundleKey(key), dirty, anyDirty: this.isDirty(),
+        });
+    }
+
+    /**
+     * Record that `ownerUid` holds changes not yet stored anywhere the user can
+     * get them back from. Ignored while the pipeline itself hydrates the owner
+     * on that viewer (a restore is not user work).
+     */
+    markDirty(ownerUid: string, where?: IODirtyWhere): void {
+        if (!ownerUid) return;
+        const viewerId = !where ? undefined
+            : typeof (where as any).uniqueId === "string" ? (where as any).uniqueId : (where as IODirtyScope).viewerId;
+        if (this.isRestoring(ownerUid, viewerId)) return;
+        const key = this.dirtyKeyOf(ownerUid, where);
+        let keys = this.dirty.get(ownerUid);
+        if (!keys) this.dirty.set(ownerUid, keys = new Map());
+        const was = keys.has(key);
+        keys.set(key, ++this.dirtyGeneration);
+        if (!was) this.emitDirtyChanged(ownerUid, key, true);
+    }
+
+    /**
+     * Forget unsaved changes. No owner clears everything (the user chose to
+     * discard); no `where` clears every key of that owner.
+     */
+    markClean(ownerUid?: string, where?: IODirtyWhere): void {
+        if (!ownerUid) {
+            const all = Array.from(this.dirty.entries());
+            this.dirty.clear();
+            for (const [uid, keys] of all) for (const key of keys.keys()) this.emitDirtyChanged(uid, key, false);
+            return;
+        }
+        const keys = this.dirty.get(ownerUid);
+        if (!keys) return;
+        if (where === undefined) {
+            this.dirty.delete(ownerUid);
+            for (const key of keys.keys()) this.emitDirtyChanged(ownerUid, key, false);
+            return;
+        }
+        this.clearDirtyKey(ownerUid, this.dirtyKeyOf(ownerUid, where));
+    }
+
+    /** Clear one key, but only if nothing re-dirtied it after `upTo`. */
+    private clearDirtyKey(ownerUid: string, key: string, upTo = Infinity): void {
+        const keys = this.dirty.get(ownerUid);
+        const stamp = keys?.get(key);
+        if (!keys || stamp === undefined || stamp > upTo) return;
+        keys.delete(key);
+        if (!keys.size) this.dirty.delete(ownerUid);
+        this.emitDirtyChanged(ownerUid, key, false);
+    }
+
+    /** Current generation: pair with {@link markCleanUpTo} around a save that is not a sink write. */
+    dirtyMark(): number { return this.dirtyGeneration; }
+
+    /**
+     * Clear every key stamped at or before `mark`, except for owners that
+     * {@link ownersLeftOut} names. Used by the file Export: the HTML form IS the
+     * persisted copy, although it rides on the in-memory `post-data` sink.
+     */
+    markCleanUpTo(mark: number, results?: IOResult[]): void {
+        const refused = this.ownersLeftOut(results);
+        // A refusal that names nobody may concern anyone: keep everything.
+        if (!refused) return;
+        for (const [uid, keys] of Array.from(this.dirty.entries())) {
+            if (refused.has(uid)) continue;
+            for (const key of Array.from(keys.keys())) this.clearDirtyKey(uid, key, mark);
+        }
+    }
+
+    /**
+     * Owners whose data did not get written anywhere in a flush: at least one
+     * failure and no success among `results`. A remote sink refusing while the
+     * in-page copy (`post-data`) or the local fallback took the payload is not
+     * "left out" — the file has it. `undefined` when a failure names no owner,
+     * so it cannot be attributed.
+     */
+    ownersLeftOut(results?: IOResult[]): Set<string> | undefined {
+        const failed = new Set<string>(), written = new Set<string>();
+        for (const r of results ?? []) {
+            if (!r) continue;
+            const uid = (r as any).ownerUid;
+            if (r.ok) { if (uid) written.add(uid); continue; }
+            if (!uid) return undefined;
+            failed.add(uid);
+        }
+        for (const uid of written) failed.delete(uid);
+        return failed;
+    }
+
+    /**
+     * Does anything hold unsaved changes? Covers explicit marks and CRUD
+     * resources whose queued ops would be lost on close
+     * (`IOResource.hasUnsavedWork`). A scoped filter asks about marks only:
+     * resource queues are not keyed by document. With an owner named, the
+     * scope is resolved to that owner's document key like `markDirty` does.
+     */
+    isDirty(filter?: { ownerUid?: string } & IODirtyScope): boolean {
+        const scoped = !!filter && (filter.viewerId !== undefined || filter.backgroundId !== undefined);
+        const wantKey = scoped ? this.dirtyKeyOf(filter!.ownerUid, filter!) : undefined;
+        for (const [uid, keys] of this.dirty) {
+            if (filter?.ownerUid && uid !== filter.ownerUid) continue;
+            if (wantKey === undefined ? keys.size > 0 : keys.has(wantKey)) return true;
+        }
+        if (scoped) return false;
+        for (const r of this.resources) {
+            if (filter?.ownerUid && (r as any).ownerUid !== filter.ownerUid) continue;
+            if (r.hasUnsavedWork?.() === true) return true;
+        }
+        return false;
+    }
+
+    /** What is unsaved, for UI that names it. Resources report under their owner, without a scope. */
+    dirtyEntries(): IODirtyEntry[] {
+        const out: IODirtyEntry[] = [];
+        for (const [uid, keys] of this.dirty) {
+            for (const key of keys.keys()) out.push({ ownerUid: uid, ...this.splitBundleKey(key) });
+        }
+        for (const r of this.resources) {
+            if (r.hasUnsavedWork?.() === true) out.push({ ownerUid: (r as any).ownerUid, resourceName: r.name });
+        }
+        return out;
+    }
+
+    /** Called by `IOResource` whenever its queue changes shape. Emits transitions only. */
+    resourceDirtyChanged_(resource: IOResource<any>, ownerUid: string): void {
+        const now = resource.hasUnsavedWork?.() === true;
+        const was = this.resourceDirty.get(resource) === true;
+        if (now === was) return;
+        this.resourceDirty.set(resource, now);
+        this.emitQueueEvent_("io:dirty-changed", {
+            ownerUid, resourceName: resource.name, dirty: now, anyDirty: this.isDirty(),
+        });
+    }
+
+    /**
+     * Run an owner's hydration with `markDirty` suppressed for it on the viewer
+     * being restored (`viewerId` unset = owner-wide, e.g. a global bundle).
+     * Keyed by viewer rather than the full document key: the background a viewer
+     * reports can still be settling while it opens.
+     */
+    private async asRestore<T>(uid: string, viewerId: string | undefined, fn: () => Promise<T> | T): Promise<T> {
+        const view = viewerId ?? "";
+        let views = this.restoring.get(uid);
+        if (!views) this.restoring.set(uid, views = new Map());
+        views.set(view, (views.get(view) ?? 0) + 1);
+        try {
+            return await fn();
+        } finally {
+            const n = (views.get(view) ?? 1) - 1;
+            if (n <= 0) views.delete(view); else views.set(view, n);
+            if (!views.size && this.restoring.get(uid) === views) this.restoring.delete(uid);
+        }
+    }
+
     private resolveCurrentBackgroundId(viewer: any): string | undefined {
         const utils = (window as any).UTILITIES;
         return utils && typeof utils.currentBackgroundIdFor === "function"
@@ -2020,6 +2234,9 @@ export class IOPipeline implements IOPipelineLike {
         viewportId?: string,
     ): Promise<void> {
         const ctx: IOContext = this.bundleCtx(uid, owner, cap, viewerId, backgroundId, trigger, viewportId);
+        // What this write captures: an edit landing while the sinks run is newer
+        // than the payload and must keep the key dirty.
+        const dirtyMark = this.dirtyGeneration;
         // Veto phase, asked once per route (see IOContext.route). Both run
         // before `exportBundle`, so a fully denied export never materializes a
         // payload at all.
@@ -2134,7 +2351,18 @@ export class IOPipeline implements IOPipelineLike {
         );
         const dispatchResults: IOResult[] = [...pass.results];
         let succeeded = pass.succeeded;
-        results.push(...pass.results);
+        // Stored somewhere the user can get it back from: no longer unsaved.
+        // `pass.results` is index-aligned with `picked`. An in-memory sink
+        // (`persists: false`: session-memory, post-data) keeps the key dirty.
+        if (pass.results.some((r, i) => r?.ok && picked[i]?.sink.persists !== false)) {
+            this.clearDirtyKey(uid, ctx.key, dirtyMark);
+        }
+        // Each sink's answer carries the owner, ok or not: a caller aggregating
+        // a flush (Export's `markCleanUpTo`) needs to tell "this owner was
+        // written somewhere" from "this owner was left out", and a bare sink
+        // result cannot say which owner it belongs to.
+        const stamped = (r: IOResult): IOResult => (r && !(r as any).ownerUid ? { ...r, ...ownerOf(ctx) } : r);
+        results.push(...pass.results.map(stamped));
         if (!sinkVerdict.ok) results.push({ ...sinkVerdict, ...ownerOf(ctx) });
 
         // Last-resort local copy. Runs when nothing was stored AND the local
@@ -2168,7 +2396,7 @@ export class IOPipeline implements IOPipelineLike {
                 // bound destination.
                 const localCtx: IOContext = { ...ctx, route: "local" };
                 try {
-                    const r = await fallback.writeBundle(localCtx, own.payload);
+                    const r = stamped(await fallback.writeBundle(localCtx, own.payload));
                     results.push(r);
                     dispatchResults.push(r);
                     if (r.ok) {
@@ -2177,6 +2405,7 @@ export class IOPipeline implements IOPipelineLike {
                             "warn",
                         );
                         succeeded++;
+                        if (fallback.persists !== false) this.clearDirtyKey(uid, ctx.key, dirtyMark);
                     } else if (r.refused) {
                         this.surfaceRefusal(localCtx, r);
                     }
@@ -2561,7 +2790,7 @@ export class IOPipeline implements IOPipelineLike {
             : [];
         for (const target of targets) {
             try {
-                await owner.importBundle!(target.ctx, target.payload);
+                await this.asRestore(uid, target.ctx.viewerId, () => owner.importBundle!(target.ctx, target.payload));
                 if (target.payload !== undefined) {
                     results.push({ ok: true });
                     dispatchResults.push({ ok: true });
@@ -2607,8 +2836,8 @@ export class IOPipeline implements IOPipelineLike {
             && dispatchResults.some(r => !r.ok && r.code !== "W_IO_CANCELLED")) {
             if (!targets.length && !this.restoreFailedKeys.has(guardKey)) {
                 try {
-                    await owner.importBundle!(
-                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined);
+                    await this.asRestore(uid, ctxBase.viewerId, () => owner.importBundle!(
+                        { ...ctxBase, capabilityId: importCapability, meta: {} } as IOContext, undefined));
                 } catch (e) {
                     console.warn(`[IO] owner "${uid}" failed to clear state after an unreadable restore:`, e);
                 }
@@ -3314,11 +3543,11 @@ export class IOPipeline implements IOPipelineLike {
      * of being dropped from the outbox as done. A throw propagates.
      */
     private async callBulk(
-        sink: IOSink, many: "createMany" | "deleteMany", ctxs: IOContext[], payloads: unknown[],
+        sink: IOSink, many: "createMany" | "updateMany" | "deleteMany", ctxs: IOContext[], payloads: unknown[],
     ): Promise<IOResult[]> {
-        const raw: unknown = many === "createMany"
-            ? await sink.createMany!(ctxs, payloads)
-            : await sink.deleteMany!(ctxs);
+        const raw: unknown = many === "createMany" ? await sink.createMany!(ctxs, payloads)
+            : many === "updateMany" ? await sink.updateMany!(ctxs, payloads)
+                : await sink.deleteMany!(ctxs);
         const usable = Array.isArray(raw);
         const list = usable ? raw as unknown[] : [];
         if (!usable || list.length !== ctxs.length) {
@@ -3375,8 +3604,10 @@ function mergeByPriority(a: IOGuardSpec[], b: IOGuardSpec[]): IOGuardSpec[] {
     return out;
 }
 
-function bulkMethodName(direction: IODirection): "createMany" | "deleteMany" | undefined {
-    return direction === "create" ? "createMany" : direction === "delete" ? "deleteMany" : undefined;
+function bulkMethodName(direction: IODirection): "createMany" | "updateMany" | "deleteMany" | undefined {
+    return direction === "create" ? "createMany"
+        : direction === "update" ? "updateMany"
+            : direction === "delete" ? "deleteMany" : undefined;
 }
 
 function pickMethod(t: IOSink, direction: IODirection):

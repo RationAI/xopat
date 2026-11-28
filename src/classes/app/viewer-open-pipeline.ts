@@ -172,6 +172,24 @@ export class ViewerOpenPipeline {
         ) || [];
         if (slot < activeBackground.length) activeBackground.splice(slot, 1);
 
+        // Leaving the slide, like a slide swap does (see `openIntoViewer`):
+        // snapshot it to the bound sinks while the viewer still exists, so its
+        // work is stored and a persisting sink clears its unsaved mark. Without
+        // this the closed slide's mark is unreachable by Save for the session.
+        const previousBackgroundId = (window as any).UTILITIES?.currentBackgroundIdFor?.(viewer);
+        if (viewer?.uniqueId && previousBackgroundId) {
+            try {
+                await (window as any).IO_PIPELINE?.flushBundleExport?.({
+                    viewerId: viewer.uniqueId,
+                    viewportId: viewer.id,
+                    backgroundId: previousBackgroundId,
+                    trigger: "system",
+                });
+            } catch (e) {
+                console.warn("IO flush for closed viewer failed:", e);
+            }
+        }
+
         // Eager cell removal, before the reopen: the reopen's own viewer-count
         // reconciliation does not know WHICH cell went away — this one did.
         viewerManager.delete(slot);
@@ -2511,7 +2529,6 @@ export class ViewerOpenPipeline {
             await this.deps.runLoaderOnce();
 
             USER_INTERFACE.Loading.show(false);
-            appContext.setDirty();
             UTILITIES.updateTheme(null);
             UTILITIES.syncOpenedViewersToSession();
             UTILITIES.syncSessionToUrl(false);

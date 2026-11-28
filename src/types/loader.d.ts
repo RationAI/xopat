@@ -211,6 +211,16 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
         flush(scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
         capabilities(): IOCapability[];
         isEnabled(capabilityId?: string): boolean;
+        /**
+         * Mark this element's state unsaved for one document (a viewer, its
+         * current slide) or globally. Owners whose persistence needs an
+         * explicit Save call it on every user edit; the pipeline clears it when
+         * the bundle reaches a persisting sink. See "Dirty state" in
+         * src/IO_PIPELINE.md.
+         */
+        markDirty(where?: IODirtyWhere): void;
+        markClean(where?: IODirtyWhere): void;
+        isDirty(where?: IODirtyScope): boolean;
     };
 
     /** Get the viewer-specific context map for the given viewer session ID. */

@@ -188,7 +188,7 @@ The sync core (validate → guards → apply → history push) still runs in the
 
 #### Batched drain
 
-One call per op is the limit on throughput: a scripted batch of 10 000 creates is produced in a second and stored at the destination's per-request rate. When a bound sink implements `createMany` / `deleteMany`, the worker takes the head entry **plus the consecutive unstarted entries of the same direction behind it** (up to the smallest `maxBatch` among those sinks, default 200) and dispatches them through `IO_PIPELINE.dispatchMany` — one sink call for the run. Updates never batch.
+One call per op is the limit on throughput: a scripted batch of 10 000 creates is produced in a second and stored at the destination's per-request rate. When a bound sink implements `createMany` / `updateMany` / `deleteMany`, the worker takes the head entry **plus the consecutive unstarted entries of the same direction behind it** (up to the smallest `maxBatch` among those sinks, default 200) and dispatches them through `IO_PIPELINE.dispatchMany` — one sink call for the run. A run never contains an entry whose crash-recovery record is still waiting for room under the cap (see *Bounded by design*), so with a persisted outbox a run is also at most `persistMaxEntries` long.
 
 The bulk contract is **enforced**: a slot the sink left unanswered (no array, a short one, a hole, a bare `true`) is refused with `W_IO_BULK_RESULT` and reverted, never recorded as stored. A sink may implement the bulk form alone — a lone op reaches it as a batch of one. Two things differ from the one-op path and are worth knowing: every entry of a batch is *started* together, so a later op on the same identity can no longer coalesce with any of them; and with several sinks bound, a batch goes sink by sink (sink A receives the whole run, then sink B) rather than op by op.
 
@@ -198,9 +198,18 @@ The bulk contract is **enforced**: a slot the sink left unanswered (no array, a 
 - `io:refused` fires per item; the **dialog** appears once per distinct refusal in a batch.
 - With no bulk-capable sink bound, the limit is 1 and the worker runs exactly the one-op path above.
 
-#### Backpressure for bulk producers
+#### Changes of any size
 
-`resource.headroom()` is how many more ops the outbox takes before the cap (below); `await resource.whenHeadroom(n)` resolves `true` once `n` fit, or `false` when they do not and the queue cannot drain right now (offline, sink not registered) — it never hangs. A producer that can wait (an import, a scripted batch — see `addAnnotationsBulk`) paces itself with `whenHeadroom`; a synchronous gesture (delete a selection) checks `headroom()` once and aborts whole rather than have its tail refused item by item.
+A producer does not pace itself and does not check for room: it calls `create` / `update` / `delete` once per record, for as many records as the change has, and the change goes through whole. The cap (`persistMaxEntries`, below) bounds what the outbox keeps **on disk** at a time, not what it accepts. Ops past it keep their place in the queue; their crash-recovery records are written as the head drains.
+
+Two things follow, both through surface that already existed:
+
+- While more is queued than the cap lets on disk, `hasUnsavedWork()` is true — a reload would lose that tail — so `IO_PIPELINE.isDirty()` and the leave-page prompt cover it (see *Dirty state*).
+- Enqueueing is cheap. Nothing is serialized or written in the producer's frame: `def.serialize` and the IndexedDB writes happen afterwards in runs, **one transaction per run** (up to 500 records, time-boxed), and removals of a tick share one transaction too. `serialize` therefore sees the item some time after the call — hand the resource a snapshot, not a live object you go on mutating.
+
+`resource.headroom()` is how many more ops fit under the cap, i.e. are reload-safe as soon as they are written; `await resource.whenHeadroom(n)` resolves `true` once `n` fit, or `false` when they do not and the queue cannot drain right now (offline, sink not registered) — it never hangs. Both are **advisory**: a producer that wants every op of a long import to be crash-safe before issuing the next chunk may still wait on `whenHeadroom` (`addAnnotationsBulk` does); nothing is refused if it does not.
+
+The only refusal on size is the memory ceiling `maxPending` (default 1 000 000 queued ops): past it `W_IO_OUTBOX_FULL`, see *Bounded by design*.
 
 #### Coalescing
 
@@ -268,7 +277,8 @@ this.annotationResource = this.defineResource({
     coalesce: true,
     merge: (prev, next) => ({ ...prev, ...next }),
     persistOutbox: true,                              // <-- enables IDB persistence
-    persistMaxEntries: 5000,                           // refuse new ops past this cap
+    persistMaxEntries: 5000,                           // at most this many pending ops on disk at a time
+    maxPending: 1_000_000,                             // memory ceiling: refuse new ops past this many queued
     persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,          // prune entries older than this on boot/sweep
     serialize, deserialize, validate,
 });
@@ -284,7 +294,7 @@ this.annotationResource = this.defineResource({
 
 Three layers prevent runaway storage:
 
-1. **Per-resource entry cap** (`persistMaxEntries`, default 5000). Pre-flight check before persisting. On overflow: refuse the new op with `code: "W_IO_OUTBOX_FULL"`, emit `io:outbox-full` (`{ ownerUid, resourceName, pending }`), and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.** The event and the revert are per op; the dialog is shown once per full episode. The cap applies only while a destination is bound (or awaited) — with nothing bound nothing is owed, and a large local gesture is not a backlog. Bulk producers avoid the cap altogether with `whenHeadroom` (see *Backpressure* above).
+1. **Per-resource entry cap** (`persistMaxEntries`, default 5000) on what is *stored*. Past it an op is still accepted and dispatched in order; its record is written once the head of the queue has drained below the cap, and until then the resource reports unsaved work. The cap applies only while a destination is bound (or awaited) — with nothing bound nothing is owed and nothing is persisted. Above the cap sits a **memory ceiling** (`maxPending`, default 1 000 000 queued ops, never below the cap): past *that* a new op is refused with `code: "W_IO_OUTBOX_FULL"`, `io:outbox-full` (`{ ownerUid, resourceName, pending }`) fires, and unless the caller set `rollbackOnAsyncRefuse: false` the local apply is reverted through the call's own `inverseApply`. **Never silently drops user work.** The event and the revert are per op; the dialog is shown once per full episode.
 2. **Age-based eviction** (`persistMaxAgeMs`, default 7 days). Sweep runs on boot. Stale ops are unlikely to be acceptable to the server anyway; emits `io:outbox-pruned` with the count.
 3. **Quota awareness** via `navigator.storage.estimate()`. At 80% of available storage, emit `io:outbox-quota-warn` so the UI can surface a "your sync queue is filling up" banner.
 
@@ -326,9 +336,11 @@ A missing **kv driver** keeps the old loud treatment: KV has no queue to wait in
 | IndexedDB unavailable (private mode, very old browser, opaque origin) | Resource degrades to in-memory queue (Phase 9 behavior). Emits `io:outbox-unavailable` (`{ ownerUid, resourceName, reason }`) once per persisted resource, and records the verdict on `XOpatStorageAvailability` so nothing else rediscovers it. Logged at `info`: a sandboxed iframe is a supported deployment, not a fault. App still works in-session; reload loses pending ops. |
 | `def.serialize` throws | Op refused with `code: "W_IO_SERIALIZE_THREW"`, logged as an error, rolled back like any post-commit refusal. Deliberately **not** a stall signal — it is a local defect, not the network. (Before this, the throw escaped the worker: the entry was never settled and never removed, so every later write for that resource queued behind it forever.) |
 | IDB quota exceeded mid-write | Op refused with `code: "W_IO_OUTBOX_WRITE"`; local commit reverted unless `rollbackOnAsyncRefuse: false`. |
-| Per-resource cap reached | Op refused with `code: "W_IO_OUTBOX_FULL"`; `io:outbox-full` fires; auto-rollback if opted in. |
+| Per-resource cap reached | Op accepted; it waits for its crash-recovery record until the queue drains below the cap. `hasUnsavedWork()` is true meanwhile. |
+| Memory ceiling (`maxPending`) reached | Op refused with `code: "W_IO_OUTBOX_FULL"`; `io:outbox-full` fires; auto-rollback if opted in. |
+| One record of a write run cannot be stored (not cloneable) | The run is written again one record at a time: only that record loses crash-recovery (`io:outbox-write-failed`), and it is still dispatched. |
 | Stale persisted op (server returns 4xx because the entity changed elsewhere) | Existing post-commit `io:refused` flow handles it; entry removed from IDB; rollback fires if opted in. |
-| User navigates away mid-flush | Persisted entries remain; they replay on next boot. `await resource.flush()` resolves only when IDB is fully drained — call it from `beforeunload` if you need certainty. |
+| User navigates away mid-flush | Persisted entries remain; they replay on next boot. Ops that would be lost instead (no `persistOutbox`, store unavailable, queue stalled) make `IOResource.hasUnsavedWork()` true, which arms the core leave-page prompt — see *Dirty state*. Do not add your own `beforeunload`. |
 
 #### Cross-tab coordination (deferred)
 
@@ -828,6 +840,47 @@ if (IO_PIPELINE.hasRemoteBundleSinks()) {
 ```
 
 `IO_PIPELINE.flushAllResources()` iterates every resource registered through `XOpatElement.defineResource(...)`. Resources self-register with the pipeline on construction so callers don't have to track them.
+
+### Dirty state (unsaved changes)
+
+The pipeline keeps track of which owners hold work that is not stored anywhere the user can get it back from. This drives the leave-page prompt (`beforeunload`, on unless `bypassCloseConfirmation`), the "unsaved changes" cue on the app-bar **Save** button, the `refreshPage` warning, and the auth broker's `unsaved-work` verdict. `APPLICATION_CONTEXT.isDirty()` is the app-wide answer.
+
+Dirty state is kept **per owner document**: the same key the owner's bundle is stored under. `markDirty(viewer)` resolves it from the owner's `bundleScope` — `viewerId::backgroundId` for slide-aware owners, `viewerId` for `per-viewer`, the global key `""` for `global` — so the write that stores the document clears exactly its mark. An explicit `{viewerId, backgroundId}` (in `markDirty`, `markClean` or an owner-scoped `isDirty`) is reduced the same way.
+
+**Marking.** An owner whose persistence needs an explicit Save marks a document on every user edit:
+
+```js
+this.io.markDirty(viewer);              // the slide this viewer shows now
+this.io.markDirty({ viewerId, backgroundId });
+this.io.markDirty();                    // the owner's global state
+this.io.isDirty(); this.io.markClean(viewer);
+```
+
+The pipeline-level equivalents are `IO_PIPELINE.markDirty(ownerUid, where?)`, `markClean(ownerUid?, where?)`, `isDirty(filter?)` and `dirtyEntries()`. Calling `markClean()` with no owner discards everything; that is what "reload anyway" does.
+
+**Clearing is the pipeline's job, not yours.** A document is clean again when one of these happens:
+- Its bundle export succeeds on a sink that `persists` (§ `IOSink.persists`, default `true`).
+  - The in-page `session-memory` and `post-data` sinks declare `persists: false`. Flushing to them, which is what happens when the user switches slides, does **not** clear anything: that data dies with the tab.
+  - A `file-download` write does clear it, because the user holds the file.
+- `UTILITIES.export()` writes its file. The form is the persisted copy, even though it rides on `post-data`. Owners with a refusal and **no** successful write stay dirty (`IO_PIPELINE.ownersLeftOut(results)`); a remote sink refusing while the file still took the payload does not. Without server POST support the file carries no owner data and clears nothing.
+- A user picks "reload anyway" in `refreshPage` — `UTILITIES.refreshPage(list, {discard: true})`, which also stands the leave-page prompt down (CRUD queues still count as unsaved after `markClean()`).
+
+A partial Save keeps exactly the refused documents dirty. Each mark carries a generation stamp, so an edit made while a slow sink is still writing keeps the document dirty: the payload being written predates that edit.
+
+**What is never dirty:**
+- Hydration. While the pipeline runs an owner's `importBundle` for a restore (boot, slide-in, retry), `markDirty` for that owner **on the viewer being restored** is ignored (owner-wide for a global restore), so owners can mark on their ordinary change events without special-casing loads. An edit on another viewer meanwhile is still marked.
+- Session configuration (viewer options, visualization params). It is synced to the URL/session, not owned by an IO owner.
+
+**CRUD resources** report through `IOResource.hasUnsavedWork()`: pending ops count as unsaved only when they would be lost on close. That covers:
+- a resource without `persistOutbox`
+- a resource whose IndexedDB store is unavailable
+- a persisted resource whose queue is stalled or held (offline, 5xx, sink not registered)
+
+A healthy persisted outbox replays on the next boot, so it does not prompt. An owner whose edits already go to a bound `crud:*` sink should not mark its bundle as well, because that mark would only clear on an explicit Save. The annotations module checks `IO_PIPELINE.isEnabled(uid, "crud:annotation")` before marking.
+
+**Event.** `io:dirty-changed { ownerUid, viewerId?, backgroundId?, resourceName?, dirty, anyDirty }` fires on transitions only. It is raised on `IO_PIPELINE` and mirrored on `VIEWER_MANAGER`.
+
+Never add your own `beforeunload` handler or keep a private dirty flag: the prompt, the Save cue and the reload warning must agree. `APPLICATION_CONTEXT.setDirty()` is deprecated; it marks a `core` owner that nothing but Export clears.
 
 ---
 

@@ -164,7 +164,10 @@ shortcuts.resetAllToDefaults()
 ```
 
 Events (OpenSeadragon.EventSource): `shortcut-registered`,
-`shortcut-unregistered`, `binding-changed`, `bindings-reset`.
+`shortcut-unregistered`, `binding-changed`, `bindings-reset`, and
+`shortcut-invoked` (`{id, source: "key" | "invoke"}` — once per action that
+ran, never per key-repeat; usage telemetry counts this instead of listening to
+keys itself).
 
 ## Scope gating
 

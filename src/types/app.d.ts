@@ -584,6 +584,9 @@ interface ApplicationContext {
     isUiBootComplete(): boolean;
     /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
     setUiBootComplete(): void;
+    /** Is there work the user would lose by leaving? Answered by `IO_PIPELINE.isDirty()`. */
+    isDirty(): boolean;
+    /** @deprecated Mark the owning element instead: `this.io.markDirty(viewer)`. */
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -618,7 +621,6 @@ interface ApplicationContext {
     closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
-    __cache: { dirty: boolean };
 }
 
 // ── APPLICATION_CONTEXT ───────────────────────────────────────────────────────
@@ -713,6 +715,9 @@ interface ApplicationContext {
     isUiBootComplete(): boolean;
     /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
     setUiBootComplete(): void;
+    /** Is there work the user would lose by leaving? Answered by `IO_PIPELINE.isDirty()`. */
+    isDirty(): boolean;
+    /** @deprecated Mark the owning element instead: `this.io.markDirty(viewer)`. */
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -747,7 +752,6 @@ interface ApplicationContext {
     closeViewer(viewer: OpenSeadragon.Viewer, opts?: ViewerOpenOptions): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
-    __cache: { dirty: boolean };
 }
 
 /**
@@ -889,8 +893,11 @@ interface ShortcutManagerLike {
  * login context with {@link configureContext}, then gates on {@link isAuthenticated}
  * / triggers {@link login}. Auth methods (OIDC now, SAML later) register via
  * {@link registerBroker}. See src/AUTH.md.
+ *
+ * An EventSource: `auth-settled` `{contextId, authenticated, reason}` and
+ * `auth-changed` `{contextId}`, one event name for every context.
  */
-interface XOpatAuthLike {
+interface XOpatAuthLike extends OpenSeadragon.EventSource {
     registerBroker(method: string, broker: any): void;
     hasBroker(method: string): boolean;
     /** Every registered broker method — for diagnostics that must not hardcode a list. */
@@ -936,6 +943,7 @@ interface XOpatAuthLike {
      */
     loginSilent(contextId: string | null | undefined, opts?: { force?: boolean }): Promise<boolean>;
     logout(contextId: string | null | undefined): Promise<void>;
+    /** Callback-isolating wrapper over the `auth-changed` event. Returns an unsubscribe fn. */
     onChange(cb: (contextId: string) => void): () => void;
     /** Every configured context, as snapshots — for UI that renders per-context rows. */
     listContexts(): Array<{ contextId: string; method: string; serviceName?: string; isMain?: boolean; [k: string]: any }>;
@@ -981,6 +989,7 @@ interface XOpatAuthLike {
     /** Wait (bounded, never throws) for every announced context discovery. */
     whenContextsDiscovered(opts?: { timeoutMs?: number }): Promise<void>;
     getLastSettleResult(contextId: string | null | undefined): { contextId: string; authenticated: boolean; reason: string } | undefined;
+    /** Callback-isolating wrapper over the `auth-settled` event. Returns an unsubscribe fn. */
     onSettled(cb: (result: { contextId: string; authenticated: boolean; reason: string }) => void): () => void;
 
     /**

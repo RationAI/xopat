@@ -79,6 +79,8 @@ export class AppBarActions {
         this._providerSubs = new Map();
         this._custom = new Map();
         this._subs = new Set();
+        /** @type {Set<function(string): void>} */
+        this._invokeSubs = new Set();
         this._raf = 0;
     }
 
@@ -193,7 +195,22 @@ export class AppBarActions {
         } catch (e) {
             console.error(`AppBar.Actions: action "${key}" threw`, e);
         }
+        for (const cb of this._invokeSubs) {
+            try { cb(key); } catch (e) { /* an observer must not break the action */ }
+        }
         return true;
+    }
+
+    /**
+     * Observe action invocations (catalogue key only). For usage counting —
+     * called synchronously after the action ran, once per invocation.
+     * @param {function(string): void} cb
+     * @returns {function(): void} unsubscribe
+     */
+    onInvoke(cb) {
+        if (typeof cb !== "function") return () => {};
+        this._invokeSubs.add(cb);
+        return () => this._invokeSubs.delete(cb);
     }
 
     // ── Change notification (rAF-coalesced) ─────────────────────────────────
@@ -232,6 +249,7 @@ export class AppBarActions {
         this._providerSubs.clear();
         this._providers.clear();
         this._subs.clear();
+        this._invokeSubs.clear();
     }
 
     // ── Built-in providers ──────────────────────────────────────────────────

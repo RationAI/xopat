@@ -13,7 +13,7 @@
  *    still allowed to run it.
  * Plus: `gesture` defaults to true, so every UI caller keeps today's behaviour.
  */
-import { test, expect } from "@xopat/test-harness";
+import { test, expect, importWithTestEventSource } from "@xopat/test-harness";
 
 globalThis.window = globalThis.window ?? globalThis;
 
@@ -81,7 +81,7 @@ function watchInteraction(user) {
 }
 
 async function freshAuth() {
-    const mod = await import(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`);
+    const mod = await importWithTestEventSource(new URL(`../../../src/classes/auth/xopat-auth.ts?t=${Math.random()}`, import.meta.url).href);
     return new mod.XOpatAuth();
 }
 
