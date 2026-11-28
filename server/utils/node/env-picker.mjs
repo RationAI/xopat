@@ -40,6 +40,7 @@ const c = {
     bold: (s) => (tty ? `\x1b[1m${s}\x1b[0m` : s),
     cyan: (s) => (tty ? `\x1b[36m${s}\x1b[0m` : s),
     green: (s) => (tty ? `\x1b[32m${s}\x1b[0m` : s),
+    yellow: (s) => (tty ? `\x1b[33m${s}\x1b[0m` : s),
 };
 
 /**

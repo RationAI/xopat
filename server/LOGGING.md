@@ -169,6 +169,38 @@ restart (the core Node server itself still needs a restart for code changes).
   Queued records are flushed on shutdown (`server/node/index.js`), so the records
   describing a restart are not the ones that get lost.
 
+### OpenTelemetry — `format: "otlp"`
+
+A stream destination speaks NDJSON by default. With `format: "otlp"` the same
+batch is encoded as OpenTelemetry OTLP/HTTP JSON (`server/node/otlp-encode.js`,
+hand-written: the packaged binary has no runtime `node_modules`, and the schema
+subset is small and stable):
+
+```jsonc
+"stream": [{
+  "url": "<% OTLP_URL %>",            // collector base, e.g. http://otel:4318
+  "format": "otlp",
+  "channels": ["client:telemetry", "rpc", "core"],
+  "minLevel": "info",
+  "otlpDeployment": "prod-eu"          // optional `deployment.environment` resource attr
+}]
+```
+
+- Records with `fields.kind === "metrics"` (emitted by
+  [`modules/telemetry`](../modules/telemetry/README.md)) become OTLP **metrics**:
+  delta monotonic Sums and explicit-bucket Histograms, posted to `<url>/v1/metrics`.
+- Every other record becomes an OTLP **LogRecord** (severity from the level;
+  channel, request id, hashed principal, client session, pid and deployment as
+  attributes; `fields` as one JSON attribute), posted to `<url>/v1/logs`.
+- A `url` ending in `/v1/logs` or `/v1/metrics` is read as its base.
+- A `file` destination gets one ExportRequest per line, which is what the
+  collector's `otlpjsonfile` receiver reads.
+- Everything else is the stream sink as above: same queue, the same SSRF guard
+  (a collector on a private address needs `XOPAT_SSRF_ALLOWED_HOSTS`), the same
+  counters (`otlpSkipped` counts malformed metrics dropped by the encoder).
+
+The `telemetry/otlp` env fragment wires the whole path.
+
 ## Redaction and sensitive payloads
 
 Redaction happens in the formatter, not at call sites — a call site that must
